@@ -1,0 +1,15 @@
+{
+  "collectedAt": "2026-09-23T12:24:32.250046+00:00",
+  "clientLabel": "Local Mac",
+  "cpu": "Apple M2 Max",
+  "memoryBytes": 68719476736,
+  "physicalCores": 12,
+  "logicalCores": 12,
+  "macOS": "26.6.2",
+  "note": "Existing workstation with other applications and sessions running. Network conditions and remote workload were not controlled.",
+  "node": "v22.23.1",
+  "arch": "arm64",
+  "werift": "0.24.4",
+  "backendOverrideInEnvironment": false,
+  "cliDotenvPresent": false
+}

@@ -1,0 +1,1901 @@
+{
+  "schema": 4,
+  "success": true,
+  "startedAt": "2026-09-23T11:55:34.232Z",
+  "label": "office",
+  "sourceRevision": "15a2c874",
+  "boundary": "client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input",
+  "client": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "transportImplementation": "isolated production RemoteRelayPool from source; loopback client and relay share one Node process",
+    "installedDaemonVersionNotOnMeasuredPath": "0.2.99"
+  },
+  "samplesPerWorkload": 5,
+  "warmupsPerWorkload": 10,
+  "controlSamples": 3,
+  "controlObservations": [
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 417.2713330000006,
+      "terminalModeBefore": "turn",
+      "terminalModeAfter": "turn"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 401.41733399999976,
+      "terminalModeBefore": "turn",
+      "terminalModeAfter": "turn"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 399.8354589999999,
+      "terminalModeBefore": "turn",
+      "terminalModeAfter": "turn"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 399.50654099999883,
+      "terminalModeBefore": "turn",
+      "terminalModeAfter": "turn"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 402.0725419999999,
+      "terminalModeBefore": "turn",
+      "terminalModeAfter": "turn"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 412.680957999999,
+      "terminalModeBefore": "turn",
+      "terminalModeAfter": "turn"
+    }
+  ],
+  "observations": [
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 0,
+      "elapsedMs": 127.39141600000039,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 2,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 5,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 3,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 6,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 1,
+      "elapsedMs": 124.9639589999988,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 3,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 6,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 4,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 7,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 2,
+      "elapsedMs": 124.13150000000132,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 4,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 7,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 5,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 8,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 3,
+      "elapsedMs": 131.4755409999998,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 5,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 8,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 6,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 9,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 4,
+      "elapsedMs": 121.34875000000102,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 6,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 9,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 7,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 10,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 5,
+      "elapsedMs": 122.17695800000001,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 7,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 10,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 8,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 11,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 6,
+      "elapsedMs": 121.19904200000019,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 8,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 12,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 9,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 13,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 7,
+      "elapsedMs": 126.83866699999999,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 9,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 13,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 10,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 14,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 8,
+      "elapsedMs": 120.36283299999923,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 10,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 14,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 11,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 15,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 9,
+      "elapsedMs": 127.36966699999903,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 11,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 15,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 12,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 16,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 10,
+      "elapsedMs": 125.33099999999831,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 12,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 16,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 13,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 17,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 11,
+      "elapsedMs": 123.04387499999939,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 13,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 17,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 14,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 18,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 12,
+      "elapsedMs": 121.55825000000004,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 14,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 18,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 15,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 19,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 13,
+      "elapsedMs": 139.7123329999995,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 15,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 19,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 16,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 20,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 14,
+      "elapsedMs": 132.48633299999892,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 16,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 20,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 17,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 21,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 15,
+      "elapsedMs": 140.2135419999995,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 18,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 28,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 19,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 33,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 16,
+      "elapsedMs": 118.3916250000002,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 19,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 34,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 20,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 39,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 17,
+      "elapsedMs": 121.19641600000068,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 20,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 41,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 21,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 46,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 18,
+      "elapsedMs": 119.8809999999994,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 21,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 46,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 22,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 52,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 19,
+      "elapsedMs": 133.47575000000143,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 22,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 52,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 23,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 58,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 20,
+      "elapsedMs": 117.23608299999978,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 23,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 58,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 24,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 63,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 21,
+      "elapsedMs": 132.1582500000004,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 24,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 64,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 25,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 70,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 22,
+      "elapsedMs": 120.52620799999931,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 25,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 70,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 26,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 75,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 23,
+      "elapsedMs": 121.90070799999921,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 26,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 77,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 27,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 82,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 24,
+      "elapsedMs": 116.75462499999958,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 27,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 83,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 28,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 89,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 25,
+      "elapsedMs": 118.08729200000016,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 28,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 89,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 29,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 94,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 26,
+      "elapsedMs": 121.98887500000092,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 29,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 96,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 30,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 101,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 27,
+      "elapsedMs": 120.4917919999989,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 30,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 102,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 31,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 108,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 28,
+      "elapsedMs": 118.7484999999997,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 31,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 108,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 32,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 113,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 29,
+      "elapsedMs": 118.35670799999934,
+      "success": true,
+      "modeBefore": "turn",
+      "modeAfter": "turn",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 32,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 115,
+          "relay": 0
+        }
+      },
+      "routeAfter": {
+        "route": "turn",
+        "ready": true,
+        "migrating": false,
+        "pair": {
+          "local": {
+            "type": "relay",
+            "protocol": "udp"
+          },
+          "remote": {
+            "type": "srflx",
+            "protocol": "udp"
+          }
+        },
+        "sent": {
+          "p2p": 33,
+          "relay": 0
+        },
+        "received": {
+          "p2p": 120,
+          "relay": 0
+        }
+      },
+      "routeVerified": true
+    }
+  ],
+  "stagesMs": {
+    "select": 1262.056333,
+    "readyForRequests": 1682.708417,
+    "createTerminal": 709.4842499999997,
+    "attach": 1762.4757090000003,
+    "startProbe": 333.56083300000046,
+    "waitForRequestedRoute": 0.4174590000002354
+  },
+  "cleanup": {
+    "created": true,
+    "deleted": true
+  },
+  "linkModes": [
+    {
+      "atMs": 4464.866834,
+      "mode": "turn"
+    },
+    {
+      "atMs": 14305.257834,
+      "mode": "turn"
+    }
+  ],
+  "requestedRoute": "turn",
+  "routeVerification": "nominated ICE pair, stream membership, and both binary wire directions for each echo",
+  "targetProtocolVersion": 3,
+  "target": "Darwin:x86_64",
+  "routeAtStart": {
+    "route": "turn",
+    "ready": true,
+    "migrating": false,
+    "pair": {
+      "local": {
+        "type": "relay",
+        "protocol": "udp"
+      },
+      "remote": {
+        "type": "srflx",
+        "protocol": "udp"
+      }
+    },
+    "sent": {
+      "p2p": 2,
+      "relay": 0
+    },
+    "received": {
+      "p2p": 5,
+      "relay": 0
+    }
+  },
+  "negotiation": "answer=yes ours=relay peer=host/srflx/relay ice=connected",
+  "turnHosts": [
+    "turn.cloudflare.com"
+  ],
+  "idleAchieved": {
+    "bytes": 737,
+    "durationMs": 2297.5867500000004
+  },
+  "redraw_20hzAchieved": {
+    "bytes": 180559,
+    "durationMs": 2225.020917
+  },
+  "reattach": {
+    "totalMs": 273.65220899999986,
+    "firstEchoMs": 127.2791670000006,
+    "sameProbeSequence": 30,
+    "mode": "turn",
+    "boundary": "new local client socket, existing daemon route and same running PTY; not a network outage"
+  },
+  "failedControlRequests": 0,
+  "finishedAt": "2026-09-23T11:55:49.092Z",
+  "summaries": [
+    {
+      "load": "idle",
+      "samples": 5,
+      "failures": 0,
+      "p50Ms": 125.33099999999831,
+      "p95Ms": 139.7123329999995,
+      "p99Ms": 139.7123329999995,
+      "maxMs": 139.7123329999995
+    },
+    {
+      "load": "redraw_20hz",
+      "samples": 5,
+      "failures": 0,
+      "p50Ms": 118.7484999999997,
+      "p95Ms": 121.98887500000092,
+      "p99Ms": 121.98887500000092,
+      "maxMs": 121.98887500000092
+    }
+  ],
+  "controlSummaries": [
+    {
+      "route": "machine",
+      "samples": 3,
+      "failures": 0,
+      "p50Ms": 402.0725419999999,
+      "p95Ms": 412.680957999999,
+      "p99Ms": 412.680957999999,
+      "maxMs": 412.680957999999
+    }
+  ],
+  "summariesByTerminalMode": [
+    {
+      "load": "idle",
+      "mode": "turn",
+      "samples": 5,
+      "p50Ms": 125.33099999999831,
+      "p95Ms": 139.7123329999995,
+      "p99Ms": 139.7123329999995,
+      "maxMs": 139.7123329999995
+    },
+    {
+      "load": "redraw_20hz",
+      "mode": "turn",
+      "samples": 5,
+      "p50Ms": 118.7484999999997,
+      "p95Ms": 121.98887500000092,
+      "p99Ms": 121.98887500000092,
+      "maxMs": 121.98887500000092
+    }
+  ]
+}

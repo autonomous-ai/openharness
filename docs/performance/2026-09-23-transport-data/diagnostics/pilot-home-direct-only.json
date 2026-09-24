@@ -1,0 +1,101 @@
+{
+  "schema": 4,
+  "success": false,
+  "startedAt": "2026-09-23T11:56:43.795Z",
+  "label": "home",
+  "sourceRevision": "15a2c874",
+  "boundary": "client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input",
+  "client": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "transportImplementation": "isolated production RemoteRelayPool from source; loopback client and relay share one Node process",
+    "installedDaemonVersionNotOnMeasuredPath": "0.2.99"
+  },
+  "samplesPerWorkload": 5,
+  "warmupsPerWorkload": 10,
+  "controlSamples": 3,
+  "controlObservations": [],
+  "observations": [],
+  "stagesMs": {
+    "select": 1318.636375,
+    "readyForRequests": 1708.2541660000002,
+    "createTerminal": 546.553292,
+    "attach": 2897.941084,
+    "startProbe": 507.4742500000002,
+    "waitForRequestedRoute": 35081.398209
+  },
+  "cleanup": {
+    "created": true,
+    "deleted": true
+  },
+  "linkModes": [
+    {
+      "atMs": 5468.561375,
+      "mode": "relay"
+    }
+  ],
+  "requestedRoute": "p2p",
+  "routeVerification": "nominated ICE pair, stream membership, and both binary wire directions for each echo",
+  "targetProtocolVersion": 3,
+  "target": "Darwin:x86_64",
+  "routeAtStart": {
+    "route": "relay",
+    "ready": false,
+    "migrating": false,
+    "pair": null,
+    "sent": {
+      "p2p": 0,
+      "relay": 2
+    },
+    "received": {
+      "p2p": 0,
+      "relay": 9
+    }
+  },
+  "negotiation": "no data channel",
+  "turnHosts": [],
+  "error": "Requested p2p unavailable; actual route relay",
+  "failureDiagnostics": {
+    "outputBytes": 6541,
+    "keyframes": 1,
+    "mode": "relay",
+    "inputSeq": 0
+  },
+  "finishedAt": "2026-09-23T11:57:25.170Z",
+  "summaries": [
+    {
+      "load": "idle",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    },
+    {
+      "load": "redraw_20hz",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    }
+  ],
+  "controlSummaries": [
+    {
+      "route": "machine",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    }
+  ],
+  "summariesByTerminalMode": [],
+  "publicationRedactions": [
+    "failureDiagnostics.outputTail"
+  ]
+}

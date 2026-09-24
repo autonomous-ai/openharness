@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
@@ -1828,6 +1829,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // How long the RPCs gate on an attempt, and how many attempts there are, live in the runner —
   // `lib/gridAttach.ts`, beside the reconcile itself, so the coordination has a unit test rather
   // than only a comment. Everything below is the daemon-shaped half: what one attempt actually does.
+  try { ensureBundledModelManager() }
+  catch (error) { console.warn('[model-manager] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
+
   const gridAttach = createGridAttachRunner({
     maxAttempts: GRID_ATTACH_MAX_ATTEMPTS,
     minIntervalMs: GRID_ATTACH_MIN_INTERVAL_MS,

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/cli.js",
     "test": "vitest run",
+    "test:local-models": "vitest run src/lib/localModels.spec.ts src/lib/localModels.integration.spec.ts src/dsh/builtins.spec.ts src/lib/gridFleetRpc.spec.ts --coverage --coverage.include=src/lib/localModels.ts --coverage.include=src/dsh/builtins.ts --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.functions=100 --coverage.thresholds.branches=100 --coverage.reporter=text --coverage.reporter=json-summary --coverage.reportsDirectory=coverage/local-models",
     "test:orchestrator": "vitest run src/orchestrator --maxWorkers=1 --coverage --coverage.include='src/orchestrator/**' --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.functions=100 --coverage.thresholds.branches=100 --coverage.reporter=text --coverage.reporter=json --coverage.reportsDirectory=coverage/orchestrator",
     "test:dsh-updates": "vitest run --config vitest.dsh-updates.config.ts",
     "test:sharing": "vitest run src/sharing --coverage --coverage.include='src/sharing/**' --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.functions=100",

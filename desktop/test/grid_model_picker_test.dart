@@ -9,10 +9,8 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/theme/app_theme.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/widgets/model_picker_chrome.dart';
-import 'package:harness/widgets/pane_menu.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 /// A connection that answers the picker's one RPC immediately. Without it the menu waits out the
@@ -133,7 +131,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     // The menu waits on the grid read AND the usage read; settle covers both plus the open animation.
     await tester.pumpAndSettle();
   }
@@ -154,7 +152,7 @@ void main() {
     // is always the first row. It is named the way the window's own Models menu names it — by
     // PROVIDER ('Anthropic'), not by engine ('Claude') — so the two controls agree about what the
     // thing is called, and it carries that menu's status text beside it.
-    expect(find.text('Anthropic'), findsOneWidget);
+    expect(find.text('Anthropic').last, findsOneWidget);
     expect(find.textContaining('usage'), findsOneWidget);
   });
 
@@ -187,7 +185,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final trigger = Focus.of(tester.element(find.byIcon(Icons.tune)));
+    final trigger = Focus.of(tester.element(find.text('fixture-model')));
     trigger.requestFocus();
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -226,7 +224,11 @@ void main() {
       // has not been found. Left failing-and-named rather than deleted, because deleting it would
       // turn a regression into an absence nobody would notice.
       var ownLogin = 0;
-      build(models: const [{'id': 'Qwen-Test', 'node': 'macbook'}]);
+      build(
+        models: const [
+          {'id': 'Qwen-Test', 'node': 'macbook'},
+        ],
+      );
       await open(tester, onOwnLogin: () => ownLogin++);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
@@ -259,7 +261,10 @@ void main() {
     tester,
   ) async {
     await open(tester);
-    expect(find.text('No local models on this account yet.'), findsOneWidget);
+    expect(
+      find.text('Set up your first local model on this computer.'),
+      findsOneWidget,
+    );
     // The user's vocabulary is "Local models", never "grid" — the grid is how a Local model is
     // served, not a thing the picker asks anyone to know about.
     expect(find.textContaining('grid'), findsNothing);
@@ -274,10 +279,13 @@ void main() {
       build(gridName: 'someone-7f3a91c4', gridCli: 'missing');
       await open(tester);
       expect(
-        find.text("Harness Compute isn't installed on this machine."),
+        find.text('Model Manager can finish setting up this computer.'),
         findsOneWidget,
       );
-      expect(find.text('No local models on this account yet.'), findsNothing);
+      expect(
+        find.text('Set up your first local model on this computer.'),
+        findsNothing,
+      );
       expect(find.textContaining('grid'), findsNothing);
     },
   );
@@ -289,7 +297,7 @@ void main() {
       await open(tester);
       expect(find.text('Nothing is being served yet.'), findsNothing);
       expect(find.text('Could not reach this machine.'), findsNothing);
-      expect(find.text('Manage in Grid'), findsOneWidget);
+      expect(find.text('Local models'), findsOneWidget);
     },
   );
 
@@ -321,13 +329,40 @@ void main() {
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
     served.add({'id': 'LFM2.5-8B', 'node': 'macbook'});
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
 
     expect(find.text('Qwen3.5-4B'), findsOneWidget);
     expect(find.text('LFM2.5-8B'), findsOneWidget);
     // Still one menu, redrawn — not a second one over the first.
     expect(find.text('ON YOUR MACHINES'), findsOneWidget);
+  });
+
+  testWidgets('shared model changes refresh the open picker', (tester) async {
+    final grids = <Map<String, Object?>>[
+      {'name': 'home', 'own': true, 'models': <Object?>[]},
+      {
+        'name': 'Team',
+        'own': false,
+        'models': <Object?>[
+          {'id': 'Old model', 'node': 'Team computer'},
+        ],
+      },
+    ];
+    notifier.dispose();
+    build(gridName: 'home', grids: grids);
+    await open(tester);
+    expect(find.text('Old model'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+    grids[1]['models'] = <Object?>[
+      {'id': 'New model', 'node': 'Team computer'},
+    ];
+    await tester.tap(find.byType(GridModelPicker));
+    await tester.pumpAndSettle();
+    expect(find.text('Old model'), findsNothing);
+    expect(find.text('New model'), findsOneWidget);
+    expect(find.text('SHARED · TEAM'), findsOneWidget);
   });
 
   testWidgets(
@@ -467,7 +502,7 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Model'));
+      await tester.tap(find.byType(GridModelPicker));
       await tester.pumpAndSettle();
       expect(find.text('SUBSCRIPTION'), findsOneWidget);
 
@@ -587,13 +622,13 @@ void main() {
       var calls = 0;
       // Already on its own login: re-selecting it would respawn the pane for nothing.
       await open(tester, currentModel: null, onOwnLogin: () => calls++);
-      await tester.tap(find.text('Anthropic'));
+      await tester.tap(find.text('Anthropic').last);
       await tester.pumpAndSettle();
       expect(calls, 0);
 
       // On a grid model: now it has somewhere to go.
       await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => calls++);
-      await tester.tap(find.text('Anthropic'));
+      await tester.tap(find.text('Anthropic').last);
       await tester.pumpAndSettle();
       expect(calls, 1);
     },
@@ -696,10 +731,12 @@ void main() {
       await open(tester);
 
       expect(find.text('1 model available'), findsOneWidget);
-      expect(find.text('Manage in Grid'), findsOneWidget);
+      expect(find.text('Local models'), findsOneWidget);
     });
 
-    testWidgets('is never the marked row, whatever is selected', (tester) async {
+    testWidgets('is never the marked row, whatever is selected', (
+      tester,
+    ) async {
       build(models: served);
       await open(tester, currentModel: 'Qwen-Test');
 
@@ -708,7 +745,7 @@ void main() {
       final titles = tester
           .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
           .map((r) => r.title);
-      expect(titles, isNot(contains('Manage in Grid')));
+      expect(titles, isNot(contains('Local models')));
       expect(find.byIcon(Icons.check), findsOneWidget);
     });
 
@@ -721,7 +758,7 @@ void main() {
         onRunLocalModel: () => ran++,
         onSelected: (model) => picked = model,
       );
-      await tester.tap(find.text('Manage in Grid'));
+      await tester.tap(find.text('Local models'));
       await tester.pumpAndSettle();
       expect(ran, 1);
       expect(picked, isNull);
@@ -753,7 +790,7 @@ void main() {
                   .first,
             )
             .message,
-        'Where this agent runs',
+        'Model: Qwen-Test · Click to switch',
       );
     });
 
@@ -776,22 +813,22 @@ void main() {
         // Under the CURRENT model, not every model: the status is about this agent's launch, and the
         // other rows are places it could go, about which nothing is yet known.
         final subtitle = tester.getTopLeft(find.text('Web search unavailable'));
-        final current = tester.getTopLeft(find.text('Qwen-Test'));
+        final current = tester.getTopLeft(find.text('Qwen-Test').last);
         final other = tester.getTopLeft(find.text('Other-Model'));
         expect(subtitle.dy, greaterThan(current.dy));
         expect(subtitle.dy, lessThan(other.dy));
         expect(
           tester
-            .widget<Tooltip>(
-              find
-                  .ancestor(
-                    of: find.text('Qwen-Test'),
-                    matching: find.byType(Tooltip),
-                  )
-                  .first,
-            )
-            .message,
-          'Where this agent runs\nWeb search unavailable',
+              .widget<Tooltip>(
+                find
+                    .ancestor(
+                      of: find.text('Qwen-Test'),
+                      matching: find.byType(Tooltip),
+                    )
+                    .first,
+              )
+              .message,
+          'Model: Qwen-Test · Click to switch\nWeb search unavailable',
         );
       },
     );
@@ -820,7 +857,7 @@ void main() {
                   .first,
             )
             .message,
-        'Where this agent runs\nWeb search not supported by this engine',
+        'Model: Qwen-Test · Click to switch\nWeb search not supported by this engine',
       );
     });
 
@@ -895,7 +932,9 @@ void main() {
       .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
       .firstWhere((r) => r.title == title);
 
-  testWidgets('exactly one row is marked, and it carries the tick', (tester) async {
+  testWidgets('exactly one row is marked, and it carries the tick', (
+    tester,
+  ) async {
     build(
       models: [
         {'id': 'Qwen-Test', 'node': 'macbook'},
@@ -913,7 +952,11 @@ void main() {
   testWidgets('the subscription row is the marked one when no model is set', (
     tester,
   ) async {
-    build(models: [{'id': 'Qwen-Test', 'node': 'macbook'}]);
+    build(
+      models: [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
     await open(tester);
 
     expect(rowFor(tester, 'Anthropic').selected, isTrue);
@@ -927,40 +970,45 @@ void main() {
   // changes once the daemon has done the work. The menu reopened with the tick still on the row
   // the person had just left, which reads as the click having done nothing.
 
-  testWidgets('a fresh currentModel while the menu is open does not crash the frame', (tester) async {
-    // The first attempt at this redrew the overlay from `didUpdateWidget`, which runs mid-build:
-    // "setState() or markNeedsBuild() called during build" across the whole window.
-    build(models: [
-      {'id': 'Qwen-Test', 'node': 'macbook'},
-      {'id': 'DeepSeek-Test', 'node': 'zeus'},
-    ]);
+  testWidgets(
+    'a fresh currentModel while the menu is open does not crash the frame',
+    (tester) async {
+      // The first attempt at this redrew the overlay from `didUpdateWidget`, which runs mid-build:
+      // "setState() or markNeedsBuild() called during build" across the whole window.
+      build(
+        models: [
+          {'id': 'Qwen-Test', 'node': 'macbook'},
+          {'id': 'DeepSeek-Test', 'node': 'zeus'},
+        ],
+      );
 
-    Widget app(String? current) => MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: GridModelPicker(
-            notifier: notifier,
-            machineId: 'local',
-            engineLabel: 'claude',
-            currentModel: current,
+      Widget app(String? current) => MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              engineLabel: 'claude',
+              currentModel: current,
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    tester.view.physicalSize = const Size(1200, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(app(null));
-    await tester.tap(find.text('Model'));
-    await tester.pumpAndSettle();
-    expect(find.text('Qwen-Test'), findsOneWidget);
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(app(null));
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(find.text('Qwen-Test'), findsOneWidget);
 
-    // The daemon's frame lands while the menu is still open.
-    await tester.pumpWidget(app('Qwen-Test'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-  });
+      // The daemon's frame lands while the menu is still open.
+      await tester.pumpWidget(app('Qwen-Test'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   /// Open the picker as a rebuildable host, so a test can change `currentModel` under it the way
   /// the daemon's frames do.
@@ -996,7 +1044,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
     return (String? next) => setHost(() => current = next);
   }
@@ -1005,25 +1053,33 @@ void main() {
       .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
       .any((r) => r.title == title && r.selected);
 
-  testWidgets('the tick stays on the picked model through the respawn', (tester) async {
+  testWidgets('the tick stays on the picked model through the respawn', (
+    tester,
+  ) async {
     // A retarget restarts the pane, and a restarting pane reports NO model for a moment. Taking
     // that null as the answer put the tick back on Subscription mid-move, and the row the person
     // clicked only claimed it once the respawn finished — the flicker between two answers.
-    build(models: [
-      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
-    ]);
+    build(
+      models: [
+        {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+      ],
+    );
     final report = await openLive(tester, currentModel: 'Qwen-Old');
 
     await tester.tap(find.text('gemma-4-31B-it'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
     expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
 
     // The pane goes down: no model at all.
     report(null);
     await tester.pumpAndSettle();
-    expect(ticked(tester, 'gemma-4-31B-it'), isTrue, reason: 'a restarting pane is not an answer');
+    expect(
+      ticked(tester, 'gemma-4-31B-it'),
+      isTrue,
+      reason: 'a restarting pane is not an answer',
+    );
     expect(ticked(tester, 'Anthropic'), isFalse);
 
     // And comes back up on what was asked for.
@@ -1032,11 +1088,15 @@ void main() {
     expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
   });
 
-  testWidgets('a model the menu did not ask for wins over the guess', (tester) async {
-    build(models: [
-      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
-      {'id': 'Qwen-Test', 'node': 'macbook'},
-    ]);
+  testWidgets('a model the menu did not ask for wins over the guess', (
+    tester,
+  ) async {
+    build(
+      models: [
+        {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
     // Starts on the engine's own login, so the report below is a real CHANGE. A daemon that
     // re-sends the value it already held is not a new answer, and the guess then waits out its
     // own timer rather than being contradicted.
@@ -1044,7 +1104,7 @@ void main() {
 
     await tester.tap(find.text('gemma-4-31B-it'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
     expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
 
@@ -1055,29 +1115,34 @@ void main() {
     expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
   });
 
-  testWidgets('choosing the own login is confirmed BY a null, not broken by one', (tester) async {
-    build(models: [
-      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
-    ]);
-    final report = await openLive(tester, currentModel: 'gemma-4-31B-it');
+  testWidgets(
+    'choosing the own login is confirmed BY a null, not broken by one',
+    (tester) async {
+      build(
+        models: [
+          {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+        ],
+      );
+      final report = await openLive(tester, currentModel: 'gemma-4-31B-it');
 
-    await tester.tap(find.text('Anthropic'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Model'));
-    await tester.pumpAndSettle();
-    expect(ticked(tester, 'Anthropic'), isTrue);
+      await tester.tap(find.text('Anthropic').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(ticked(tester, 'Anthropic'), isTrue);
 
-    report(null);
-    await tester.pumpAndSettle();
-    expect(ticked(tester, 'Anthropic'), isTrue);
-    expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
+      report(null);
+      await tester.pumpAndSettle();
+      expect(ticked(tester, 'Anthropic'), isTrue);
+      expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
 
-    // And the guess is RELEASED by that confirmation, not merely agreed with: the next thing the
-    // machine says has to land. A guess that only ever expired on its clock would hold the tick on
-    // Subscription for another half minute after the agent had moved on.
-    report('gemma-4-31B-it');
-    await tester.pumpAndSettle();
-    expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
-    expect(ticked(tester, 'Anthropic'), isFalse);
-  });
+      // And the guess is RELEASED by that confirmation, not merely agreed with: the next thing the
+      // machine says has to land. A guess that only ever expired on its clock would hold the tick on
+      // Subscription for another half minute after the agent had moved on.
+      report('gemma-4-31B-it');
+      await tester.pumpAndSettle();
+      expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
+      expect(ticked(tester, 'Anthropic'), isFalse);
+    },
+  );
 }

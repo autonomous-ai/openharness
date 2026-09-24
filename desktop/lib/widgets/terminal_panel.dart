@@ -1903,12 +1903,10 @@ class _TerminalHeader extends StatelessWidget {
             !isTerminalEngine(session.engineId)
         ? onToggleComposer
         : null;
-    // The icon cluster, plus the model picker that now sits at its left — without the extra the
-    // constraint clips the picker rather than the details it was measured for. Zero on an engine
-    // that gets no picker, so those headers keep the width they always had.
-    final showModelPicker =
-        status == null && !readOnly && modelPickerSupports(session.engineId);
-    final pickerWidth = showModelPicker ? 72.0 : 0.0;
+    // Reserve space for the visible model name and the pane controls.
+    // Engines without a picker keep their existing header width.
+    final showModelPicker = !readOnly && modelPickerSupports(session.engineId);
+    final pickerWidth = showModelPicker ? 170.0 : 0.0;
     final actionsWidth =
         (remoteComposer == null ? 148.0 : 178.0) +
         pickerWidth +
@@ -2093,10 +2091,8 @@ class _TerminalHeader extends StatelessWidget {
                             )
                           : null,
                       compact: narrow,
-                      // Where this agent runs, with the controls rather than beside the name — the
-                      // header has room for one of the two, and this is the half you only read while
-                      // reaching for it. Absent while a notice is showing: a header asking to
-                      // reconnect is not the moment to offer a menu.
+                      // Keep the current model visible, including while the
+                      // terminal reconnects, without shifting the other controls.
                       modelPicker: showModelPicker
                           ? GridModelPicker(
                               compact: narrow,
@@ -2119,9 +2115,8 @@ class _TerminalHeader extends StatelessWidget {
                                   session.agentId,
                                 ),
                               ),
-                              // The pane's own context, because the door opens New Agent — and
-                              // the pane's own MACHINE, because a picker on a remote agent's pane
-                              // is asking about the models that computer can serve, not this one's.
+                              // Discovery opens the local Models popover. Selection above
+                              // continues to target this pane's existing session.
                               onRunLocalModel: () => unawaited(
                                 notifier.runLocalModel(
                                   context,

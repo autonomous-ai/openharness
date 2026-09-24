@@ -33,6 +33,29 @@ describe('namingTitle: the engine’s title, when it names the session', () => {
     expect(namingTitle('Working | harness-36', codex)).toBeNull()
     expect(namingTitle('codex | Ready', codex)).toBeNull()
   })
+
+  it.each([
+    'renaming',
+    'renaming...',
+    'Renaming…',
+    'renaming... ⠹',
+    'renaming... ⠴',
+    'renaming… ⠦',
+    'renaming ⠋',
+    'Working... ⠹',
+    '[ ! ] Action Required…',
+    'renaming... ⠹ | golden-koala',
+  ])('ignores the temporary Codex status %s', (title) => {
+    expect(namingTitle(title, { engine: 'codex', cwd: '/src/golden-koala' })).toBeNull()
+  })
+
+  it('keeps conversation titles about renaming and strips only the separate status', () => {
+    const codex = { engine: 'codex', cwd: '/src/golden-koala' }
+    expect(namingTitle('Renaming branches safely', codex)).toBe('Renaming branches safely')
+    expect(namingTitle('Working with multiple machines', codex)).toBe('Working with multiple machines')
+    expect(namingTitle('renaming... ⠹ | Improve multiple-machine experience | golden-koala', codex))
+      .toBe('Improve multiple-machine experience')
+  })
 })
 
 describe('cleanCodexTitle', () => {

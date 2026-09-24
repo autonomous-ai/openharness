@@ -19,6 +19,53 @@ import * as storeCatalog from './dsh/catalog.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
+import { LocalModels } from './lib/localModels.js'
+
+describe('local model lifecycle RPCs', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it.each(['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop'])('dispatches %s and returns its correlated result', async type => {
+    const socket = new BackendSocket('fixture')
+    socket.setHarnessGridName('home')
+    const frames: any[] = []
+    socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    const list = vi.spyOn(LocalModels.prototype, 'list').mockResolvedValue({ models: [], busy: false, observedAt: 'fixture' })
+    const act = vi.spyOn(LocalModels.prototype, 'act').mockResolvedValue({ error: 'fixture refusal' })
+    socket.handleLocalFrame('local:models', { type, payload: { requestId: 'models-rpc', modelId: 'fixture/model', refresh: true } })
+    await vi.waitFor(() => expect(frames.some(frame => frame.type === `${type}_result`)).toBe(true))
+    expect(frames.find(frame => frame.type === `${type}_result`).payload.requestId).toBe('models-rpc')
+    if (type === 'grid_fleet_models_list') expect(list).toHaveBeenCalledWith('home', true)
+    else expect(act).toHaveBeenCalledWith('home', 'fixture/model', type.endsWith('start') ? 'start' : 'stop')
+    await socket.stop()
+  })
+
+  it('a slow catalog never blocks terminal or agent inventory, and errors stay redacted', async () => {
+    const socket = new BackendSocket('fixture')
+    socket.setHarnessGridName('home')
+    const frames: any[] = []
+    socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    let reject!: (cause: Error) => void
+    vi.spyOn(LocalModels.prototype, 'list').mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
+    socket.handleLocalFrame('local:models', { type: 'grid_fleet_models_list', payload: { requestId: 'catalog' } })
+    socket.handleLocalFrame('local:models', { type: 'agents_list', payload: { requestId: 'agents' } })
+    await vi.waitFor(() => expect(frames.some(frame => frame.type === 'agents_list_result')).toBe(true))
+    expect(frames.some(frame => frame.type === 'grid_fleet_models_list_result')).toBe(false)
+    reject(new Error('private-token'))
+    await vi.waitFor(() => expect(frames.some(frame => frame.type === 'grid_fleet_models_list_result')).toBe(true))
+    expect(frames.find(frame => frame.type === 'grid_fleet_models_list_result').payload).toMatchObject({ requestId: 'catalog', error: 'Models are unavailable. Try again.' })
+    expect(JSON.stringify(frames)).not.toContain('private-token')
+    await socket.stop()
+  })
+
+  it('rejects unencrypted remote lifecycle requests before reaching the model service', async () => {
+    const socket = new BackendSocket('fixture')
+    const act = vi.spyOn(LocalModels.prototype, 'act')
+    for (const type of ['grid_fleet_model_start', 'grid_fleet_model_stop']) {
+      await (socket as any).dispatchDown({ type, payload: { requestId: 'unsafe', modelId: 'fixture/model' } }, 'remote')
+    }
+    expect(act).not.toHaveBeenCalled()
+    await socket.stop()
+  })
+})
 
 describe('confirmed harness pause replies', () => {
   it.each(['unsupported', 'unconfirmed', 'confirmed'] as const)('%s stop never sends a false success', async state => {

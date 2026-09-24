@@ -1,0 +1,70 @@
+{
+  "sourceRevision": "0ee69791370f4c34402d17c70fdde5144f6af35d",
+  "trials": [
+    {
+      "trial": "home-p2p-1.json",
+      "error": "Requested p2p unavailable; actual route relay",
+      "sanitizedTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +1ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +350ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +817ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +820ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25003ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    },
+    {
+      "trial": "home-p2p-2.json",
+      "error": "Requested p2p unavailable; actual route relay",
+      "sanitizedTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +80ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +570ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +573ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25002ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    },
+    {
+      "trial": "home-p2p-3.json",
+      "error": "Requested p2p unavailable; actual route relay",
+      "sanitizedTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +84ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +581ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +587ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25001ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    },
+    {
+      "trial": "office-p2p-1.json",
+      "error": "Requested p2p unavailable; actual route relay",
+      "sanitizedTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +90ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +640ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +645ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25002ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    },
+    {
+      "trial": "office-p2p-3.json",
+      "error": "Requested p2p unavailable; actual route relay",
+      "sanitizedTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +333ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +879ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +884ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25001ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    }
+  ]
+}
