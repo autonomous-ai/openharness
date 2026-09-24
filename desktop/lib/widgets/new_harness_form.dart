@@ -7,12 +7,15 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart' show describeKeyBinding;
+import '../core/dsh_catalog.dart';
+import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import 'box_chrome.dart';
+import 'dsh_install_panel.dart' show describeInstallFailure;
 
 /// Every answer a new harness needs, on one screen, changed where it stands.
 ///
@@ -73,11 +76,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   final _itemKeys = {for (final row in _Row.values) row: GlobalKey()};
   final _choiceKey = GlobalKey();
 
-  static const _advancedRows = {
-    _Row.worktree,
-    _Row.approvals,
-    _Row.profile,
-  };
+  static const _advancedRows = {_Row.worktree, _Row.approvals, _Row.profile};
   List<_Row> get _rows => [
     for (final row in _Row.values)
       if ((!_advancedRows.contains(row) || box.advancedOpen) &&
@@ -805,9 +804,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(
-                        child: _picking ? _sidePane(compact: true) : _items(),
+                        child: _picking
+                            ? _sidePane(compact: true)
+                            : _installing != null
+                            ? _installPane(_installing!)
+                            : _items(),
                       ),
                       if (!_picking &&
+                          _installing == null &&
                           (box.error != null || box.status != null))
                         Padding(
                           padding: EdgeInsets.fromLTRB(
@@ -826,7 +830,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   children: [
                     Expanded(flex: 55, child: _items()),
                     VerticalDivider(width: 1, thickness: 1, color: _rule),
-                    Expanded(flex: 45, child: _sidePane()),
+                    Expanded(
+                      flex: 45,
+                      child: _installing != null
+                          ? _installPane(_installing!)
+                          : _sidePane(),
+                    ),
                   ],
                 );
               },
@@ -1013,6 +1022,114 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       ),
     ),
   );
+
+  /// The install start is waiting on, while the list is not in use: once
+  /// someone opens a list again, its choices matter more than the narration.
+  DshInstallRun? get _installing => _picking ? null : box.installRun;
+
+  /// What the machine says while it installs the harness start asked for —
+  /// fetch, set up, check — drawn on the grid like every other line here:
+  /// one glyph in the pointer column, text on the text column, one row each.
+  /// The machine's words, never a progress bar, because it gives no percent.
+  Widget _installPane(DshInstallRun run) {
+    final name = box.harnessLabel;
+    final steps = [
+      ('clone', 'Fetch $name'),
+      ('setup', 'Set up the toolchain'),
+      ('doctor', 'Check this machine'),
+    ];
+    final failedPhase = run.failed && run.phases.length >= 2
+        ? run.phases[run.phases.length - 2].phase
+        : null;
+    final failure = run.failed ? describeInstallFailure(run, name) : null;
+    Widget line(String? glyph, String text, {Color? color, Widget? end}) =>
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: _margin),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _inGutter(
+                glyph == null ? null : _oneRow(Text(glyph, style: _ink(color))),
+              ),
+              Expanded(child: Text(text, style: _ink(color))),
+              ?end,
+            ],
+          ),
+        );
+    final tail = run.log.length > 6
+        ? run.log.sublist(run.log.length - 6)
+        : run.log;
+    return Semantics(
+      key: const ValueKey('new-harness-install'),
+      container: true,
+      liveRegion: true,
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: _rowHeight),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              line(
+                null,
+                run.done
+                    ? '$name installed on ${box.machineLabel}'
+                    : run.failed
+                    ? '$name did not install on ${box.machineLabel}'
+                    : 'Installing $name on ${box.machineLabel}',
+                end: _Elapsed(run: run, style: _ink(kBoxFaint)),
+              ),
+              SizedBox(height: _rowHeight),
+              for (final (phase, label) in steps) ...[
+                if (failedPhase == phase)
+                  line('✗', label, color: Colors.orangeAccent)
+                else if (run.done || (run.reached(phase) && run.phase != phase))
+                  line(
+                    '✓',
+                    label,
+                    end: run.took(phase) == null
+                        ? null
+                        : Text(_took(run.took(phase)!), style: _ink(kBoxFaint)),
+                  )
+                else if (run.phase == phase && run.inProgress) ...[
+                  line('>', label),
+                  if (run.line ?? run.detail case final now?)
+                    line(null, now, color: kBoxFaint),
+                ] else
+                  line(' ', label, color: kBoxFaint),
+              ],
+              if (tail.isNotEmpty && !run.done && failure == null) ...[
+                SizedBox(height: _rowHeight),
+                for (final entry in tail) line(null, entry, color: kBoxFaint),
+              ],
+              if (failure != null) ...[
+                SizedBox(height: _rowHeight),
+                line(null, failure.title, color: Colors.orangeAccent),
+                if (failure.body case final body?)
+                  line(null, body, color: kBoxFaint),
+                if (failure.command case final command?) line(null, command),
+                if (failure.hint case final hint?)
+                  line(null, hint, color: kBoxFaint),
+              ],
+              SizedBox(height: _rowHeight),
+              line(
+                null,
+                run.failed
+                    ? 'What was downloaded is kept. $_startKeyLabel tries again.'
+                    : run.done
+                    ? 'Starting the harness…'
+                    : 'The first install takes a few minutes.',
+                color: kBoxFaint,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _took(Duration d) => d.inSeconds < 60
+      ? '${d.inSeconds}s'
+      : '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 
   Widget _status() => Semantics(
     liveRegion: true,
@@ -1392,6 +1509,54 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           },
         ),
       ),
+    );
+  }
+}
+
+/// An install's running clock, ticking itself so the form does not rebuild
+/// every second. Frozen under test, where a periodic timer never settles.
+class _Elapsed extends StatefulWidget {
+  const _Elapsed({required this.run, required this.style});
+
+  final DshInstallRun run;
+  final TextStyle style;
+
+  @override
+  State<_Elapsed> createState() => _ElapsedState();
+}
+
+class _ElapsedState extends State<_Elapsed> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = kUnderTest ? null : _startClock();
+  }
+
+  // coverage:ignore-start
+  // Never runs under flutter test (see initState), where coverage is measured.
+  Timer _startClock() => Timer.periodic(const Duration(seconds: 1), (_) {
+    if (mounted && widget.run.inProgress) setState(() {});
+  });
+  // coverage:ignore-end
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final run = widget.run;
+    final end = run.inProgress || run.phases.isEmpty
+        ? DateTime.now()
+        : run.phases.last.at;
+    final d = end.difference(run.startedAt);
+    return Text(
+      '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}',
+      style: widget.style,
     );
   }
 }

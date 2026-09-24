@@ -52,7 +52,18 @@ while a pending start needs confirmation.
 
 ## Harness and agent choices
 
-Harness contains Coding and domain harnesses, plus Browse Harness Store. Agent
+Harness lists every harness in the selected machine's catalog, installed or
+not, in this order: recent harnesses, Coding, installed harnesses, then the rest
+of the Store, followed by Browse Harness Store. All of them are searchable. The
+form opens on the last harness used with the last agent used on it; with no
+history it opens on Coding and Claude Code. Once the machine's catalog has
+answered, a remembered harness it no longer lists (or a viewer package) is not
+offered as recent and does not open; the form falls back to Coding. A harness
+opened by name, from a pane or the Store, keeps its row. A harness that is not installed
+installs when it starts. While it installs, and after a failed install, the
+right pane shows the machine's fetch / set up / check steps on the form's grid.
+Choosing another harness or machine clears it; an open list covers it while
+choosing. Agent
 contains compatible engines only. Coding sends no `dsh` and does not remove any
 existing instructions or skills from the project. Changing an engine preserves
 the selected harness and its generated project name. Machine changes re-evaluate
