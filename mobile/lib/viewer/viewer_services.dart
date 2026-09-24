@@ -6,6 +6,7 @@ import 'direct_auth.dart';
 import 'direct_auth_api.dart';
 import 'direct_link.dart';
 import 'direct_login.dart';
+import 'email_code_login.dart';
 import 'e2ee_relay_codec.dart';
 import 'viewer_key_store.dart';
 
@@ -25,6 +26,7 @@ class ViewerServices {
     required this.keys,
     required this.auth,
     required this.login,
+    required this.emailLogin,
     required this.links,
     required this.relayCodecs,
     required this.transportPlugins,
@@ -45,6 +47,7 @@ class ViewerServices {
       keys: store,
       auth: auth,
       login: DirectLogin(auth: auth),
+      emailLogin: EmailCodeLogin(auth: auth),
       links: DirectLink(keys: store, auth: auth, config: config),
       relayCodecs: viewerRelayCodecs(store),
       transportPlugins: transportPlugins ?? harnessTransportPlugins,
@@ -54,6 +57,9 @@ class ViewerServices {
   final ViewerKeyStore keys;
   final DirectAuth auth;
   final DirectLogin login;
+
+  /// How a phone signs in — an emailed code, never the browser. See `email_code_api.dart`.
+  final EmailCodeLogin emailLogin;
   final DirectLink links;
   final RelayCodecFactory relayCodecs;
   final TerminalTransportPluginFactory? transportPlugins;

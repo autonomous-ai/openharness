@@ -1,6 +1,20 @@
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 
+/// Who issued a session — and therefore who renews it.
+///
+/// Both hand out the SAME kind of token, an Autonomous account's access token
+/// (the Harness backend checks either against `apiv2`'s `/me` endpoints), but
+/// their refresh tokens only work where they came from.
+enum SessionIssuer {
+  /// The browser SSO flow, renewed through the Harness backend's `/api/auth/refresh`.
+  sso,
+
+  /// A code emailed to the person, renewed through the Autonomous account API
+  /// itself — see `viewer/email_code_api.dart`.
+  emailCode,
+}
+
 /// Persists the SSO access + refresh tokens in the Desktop Harness state file.
 class AuthSession {
   final LocalKeyValueStore _storage;
@@ -8,6 +22,7 @@ class AuthSession {
   static const _refresh = 'auth_refresh_token';
   static const _env = 'auth_autonomous_env';
   static const _expiresAt = 'auth_access_token_expires_at';
+  static const _issuer = 'auth_session_issuer';
 
   AuthSession({LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared;
@@ -19,8 +34,10 @@ class AuthSession {
     String? refreshToken,
     String autonomousEnv = 'prod',
     int? expiresIn,
+    SessionIssuer issuer = SessionIssuer.sso,
   }) async {
     await _storage.write(_access, token);
+    await _storage.write(_issuer, issuer.name);
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await _storage.write(_refresh, refreshToken);
     } else {
@@ -49,6 +66,15 @@ class AuthSession {
   Future<String?> accessToken() => _storage.read(_access);
   Future<String?> refreshToken() => _storage.read(_refresh);
   Future<String> autonomousEnv() async => (await _storage.read(_env)) ?? 'prod';
+
+  /// A session saved before this was recorded came from the SSO flow — the only
+  /// one there was.
+  Future<SessionIssuer> issuer() async {
+    final saved = await _storage.read(_issuer);
+    return SessionIssuer.values.where((i) => i.name == saved).firstOrNull ??
+        SessionIssuer.sso;
+  }
+
   Future<DateTime?> accessTokenExpiresAt() async =>
       _expiryFrom(await _storage.read(_expiresAt));
 
@@ -95,5 +121,6 @@ class AuthSession {
     await _storage.delete(_refresh);
     await _storage.delete(_env);
     await _storage.delete(_expiresAt);
+    await _storage.delete(_issuer);
   }
 }

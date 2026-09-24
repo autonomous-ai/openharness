@@ -1,15 +1,23 @@
 import '../api/access_token_source.dart';
 import '../auth/auth_session.dart';
 import 'direct_auth_api.dart';
+import 'email_code_api.dart';
 
 /// A viewer build's SSO session — authSession.ts's `AuthSessionManager`, moved into the app because
 /// a device with no harness CLI has nobody else to hold it: the tokens `/api/auth/exchange` issued,
 /// kept in [AuthSession], refreshed [_refreshSkew] before they lapse, one refresh at a time.
 class DirectAuth implements AccessTokenSource {
-  DirectAuth({required this.session, required this.api});
+  DirectAuth({
+    required this.session,
+    required this.api,
+    EmailCodeApi? emailCodes,
+  }) : emailCodes = emailCodes ?? EmailCodeApi(config: api.config);
 
   final AuthSession session;
   final DirectAuthApi api;
+
+  /// Where a session signed in with an emailed code is renewed — see [SessionIssuer].
+  final EmailCodeApi emailCodes;
   Future<String>? _refreshing;
 
   static const _refreshSkew = Duration(seconds: 60);
@@ -17,11 +25,15 @@ class DirectAuth implements AccessTokenSource {
   Future<bool> hasSession() async =>
       ((await session.accessToken()) ?? '').isNotEmpty;
 
-  Future<void> signIn(IssuedTokens tokens) => session.saveLogin(
+  Future<void> signIn(
+    IssuedTokens tokens, {
+    SessionIssuer issuer = SessionIssuer.sso,
+  }) => session.saveLogin(
     token: tokens.token,
     refreshToken: tokens.refreshToken,
     autonomousEnv: tokens.autonomousEnv ?? api.config.autonomousEnv,
     expiresIn: tokens.expiresIn,
+    issuer: issuer,
   );
 
   Future<void> signOut() => session.clear();
@@ -62,7 +74,14 @@ class DirectAuth implements AccessTokenSource {
     }
     try {
       final autonomousEnv = await session.autonomousEnv();
-      final tokens = await api.refresh(refreshToken, autonomousEnv: autonomousEnv);
+      // A refresh token only renews where it was issued.
+      final tokens = switch (await session.issuer()) {
+        SessionIssuer.emailCode => await emailCodes.refresh(refreshToken),
+        SessionIssuer.sso => await api.refresh(
+          refreshToken,
+          autonomousEnv: autonomousEnv,
+        ),
+      };
       await session.saveRefresh(
         token: tokens.token,
         refreshToken: tokens.refreshToken,

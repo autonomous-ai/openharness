@@ -5,6 +5,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../widgets/login_relay_diagram.dart';
 import '../widgets/welcome_workspace_preview.dart';
+import 'email_code_form.dart';
 
 /// The sign-in screen.
 ///
@@ -92,12 +93,28 @@ class LoginScreen extends StatelessWidget {
                       SizedBox(height: gap),
                       const WelcomeWorkspacePreview(),
                       SizedBox(height: gap),
-                      _Action(notifier: notifier, waiting: waiting),
+                      // A phone never goes to the browser to sign in — see
+                      // `viewer/email_code_api.dart` for the review that
+                      // failed on it.
+                      if (notifier.signsInWithEmailCode)
+                        EmailCodeForm(
+                          sendCode: notifier.sendLoginCode,
+                          signIn: (email, code) => notifier.signInWithCode(
+                            email: email,
+                            code: code,
+                          ),
+                        )
+                      else
+                        _Action(notifier: notifier, waiting: waiting),
                       if (notifier.lastError != null) ...[
                         const SizedBox(height: 16),
                         _ErrorTile(
                           message: notifier.lastError!,
-                          onRetry: notifier.login,
+                          // The form above IS the way on for a phone; a retry
+                          // here would start the browser sign-in it replaced.
+                          onRetry: notifier.signsInWithEmailCode
+                              ? null
+                              : notifier.login,
                         ),
                       ],
                       SizedBox(height: gap),
@@ -291,7 +308,9 @@ class _ErrorTile extends StatelessWidget {
   const _ErrorTile({required this.message, required this.onRetry});
 
   final String message;
-  final VoidCallback onRetry;
+
+  /// Null leaves the button off — see where the tile is built.
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -330,14 +349,16 @@ class _ErrorTile extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           SelectableText(message, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton(
-              onPressed: onRetry,
-              child: const Text('Try again'),
+          if (onRetry case final retry?) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton(
+                onPressed: retry,
+                child: const Text('Try again'),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

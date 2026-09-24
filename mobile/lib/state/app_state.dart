@@ -2704,15 +2704,7 @@ class AppNotifier extends ChangeNotifier {
       pendingAuthorizeUrl = null;
       _resetLoginBrowser();
       notifyListeners();
-      await _finishBootstrapSignedIn();
-      if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) {
-        return;
-      }
-      analytics.signedIn();
-      // Restarts the clock even if `_trackAppOpened` already started one: this
-      // person met the login screen, so their wait begins where the launch's
-      // did not.
-      _armFirstMessage('sign_in');
+      await _enterSignedIn(revision);
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       status = AppStatus.unauthenticated;
@@ -2740,6 +2732,71 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     if (_authWorkCurrent(revision)) notifyListeners();
+  }
+
+  /// A session was just saved: load everything behind the login screen, and
+  /// count the sign-in. The one road in for every way of signing in.
+  Future<void> _enterSignedIn(int revision) async {
+    await _finishBootstrapSignedIn();
+    if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) {
+      return;
+    }
+    analytics.signedIn();
+    // Restarts the clock even if `_trackAppOpened` already started one: this
+    // person met the login screen, so their wait begins where the launch's
+    // did not.
+    _armFirstMessage('sign_in');
+  }
+
+  /// Whether this build signs in with an emailed code rather than the browser
+  /// — a phone. See `viewer/email_code_api.dart`.
+  bool get signsInWithEmailCode => viewer != null;
+
+  /// The phone's sign-in, first step: email [email] a one-time code. Throws the
+  /// service's own reason ("Email is invalid") for the form to show.
+  Future<void> sendLoginCode(String email) {
+    final login = viewer?.emailLogin;
+    if (login == null) throw StateError('This build signs in with a browser.');
+    return login.sendCode(email);
+  }
+
+  /// The phone's sign-in, second step: trade the emailed [code] for a session
+  /// and go in.
+  ///
+  /// A wrong or expired code is thrown for the form to show beside the field —
+  /// never raised to [lastError], which would put a second, generic error under
+  /// the one the person is already reading. The login card stays up throughout:
+  /// [signingIn] keeps it there (see `RootShell`), so the form keeps what was
+  /// typed into it.
+  Future<void> signInWithCode({
+    required String email,
+    required String code,
+  }) async {
+    final login = viewer?.emailLogin;
+    if (_disposed || signingIn || login == null) return;
+    final revision = _invalidateAuthWork();
+    _closedHistory.clear();
+    _lastError = null;
+    signingIn = true;
+    notifyListeners();
+    try {
+      await login.signIn(email: email, code: code);
+      if (!_authWorkCurrent(revision)) return;
+      status = AppStatus.bootstrapping;
+      notifyListeners();
+      await _enterSignedIn(revision);
+    } catch (_) {
+      if (_authWorkCurrent(revision)) {
+        status = AppStatus.unauthenticated;
+        analytics.signInFailed('failed');
+      }
+      rethrow;
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        signingIn = false;
+        notifyListeners();
+      }
+    }
   }
 
   void _resetLoginBrowser() {
