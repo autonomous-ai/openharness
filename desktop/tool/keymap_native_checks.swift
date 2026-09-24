@@ -31,6 +31,7 @@ for (key, command) in [
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
   ("cmd+n", "agent.new"),
   ("cmd+m", "machines.list"),
+  ("cmd+i", "models.list"),
   ("cmd+h", "pane.focus_left"), ("cmd+j", "pane.focus_below"),
   ("cmd+k", "pane.focus_above"), ("cmd+l", "pane.focus_right"),
 ] {
@@ -46,6 +47,9 @@ try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
 for context in HarnessNativeKeymap.contexts {
   try checkKeymap(defaults.match([stroke("cmd+m")], context: context).binding?.command == "machines.list",
     "Command-M opens Machines from \(context)")
+  let models = defaults.match([stroke("cmd+i")], context: context).binding
+  try checkKeymap(models?.command == "models.list" && models?.menuAction == "models" && models?.hint == "⌘I",
+    "Command-I opens Models with the matching native action and hint from \(context)")
   try checkKeymap(defaults.match([stroke("cmd+u")], context: context).binding == nil,
     "The former Machines shortcut is unbound")
   try checkKeymap(defaults.match([stroke("cmd+shift+p")], context: context).binding == nil,
@@ -74,8 +78,8 @@ try checkKeymap(changed.match([stroke("down")], context: "picker").binding == ni
   "Picker unbinding removes the original arrow action")
 try checkKeymap(changed.match([stroke("ctrl+j")], context: "picker").binding?.command == "picker.previous",
   "Picker remapping wins")
-try checkKeymap(defaults.match([stroke("cmd+i")], context: "picker").binding == nil,
-  "Always-on preview does not consume a hide-preview shortcut")
+try checkKeymap(defaults.match([stroke("ctrl+slash")], context: "picker").binding?.command == "picker.toggle_preview",
+  "Preview visibility stays on Control-/ while Command-I opens Models")
 for (key, command) in [("pageup", "picker.preview_page_up"), ("pagedown", "picker.preview_page_down")] {
   try checkKeymap(defaults.match([stroke(key)], context: "picker").binding?.command == command,
     "Preview paging follows the exported Search binding")

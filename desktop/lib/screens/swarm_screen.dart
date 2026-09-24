@@ -241,7 +241,11 @@ class _SwarmScreenState extends State<SwarmScreen>
   String? _commandCatalogMachine;
   final _newTabSources = <String, TerminalPane>{};
 
-  Widget _startGuide() => WorkspaceWelcome(onCommand: _runShortcut);
+  Widget _startGuide() => WorkspaceWelcome(
+    key: ValueKey('welcome:${app.activeSwarmId}'),
+    onboarding: _onboarding,
+    onCommand: _runShortcut,
+  );
 
   void _showKeyboardShortcuts() {
     if (_newHarness?.requestDismiss() == false) return;
@@ -449,7 +453,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       _machinesPanel?.close(restoreFocus: false);
     }
     if (_sessionsOverlay != null) _closeSessions(restoreFocus: false);
-    if (_modelsOverlay != null) _closeModels(restoreFocus: false);
+    if (id != 'models.list' && _modelsOverlay != null) {
+      _closeModels(restoreFocus: false);
+    }
     if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
@@ -2354,16 +2360,19 @@ class _SwarmScreenState extends State<SwarmScreen>
                       ),
                     ],
                   ),
-                  child: ModelsPanel(
-                    newModelIds: _toolbarNotices.newModelIds,
-                    showOnboarding: _onboarding.next == OnboardingStep.models,
-                    onDismissOnboarding: () =>
-                        _onboarding.dismiss(OnboardingStep.models),
-                    controller: app.modelManager,
-                    subscriptions: _modelsMenu!,
-                    initialTab: initialTab,
-                    onClose: _closeModels,
-                    onManage: () => unawaited(_openModelManager()),
+                  child: KeymapProvider(
+                    keymap: _keymap,
+                    child: ModelsPanel(
+                      newModelIds: _toolbarNotices.newModelIds,
+                      showOnboarding: _onboarding.next == OnboardingStep.models,
+                      onDismissOnboarding: () =>
+                          _onboarding.dismiss(OnboardingStep.models),
+                      controller: app.modelManager,
+                      subscriptions: _modelsMenu!,
+                      initialTab: initialTab,
+                      onClose: _closeModels,
+                      onManage: () => unawaited(_openModelManager()),
+                    ),
                   ),
                 ),
               ),
@@ -2453,37 +2462,41 @@ class _SwarmScreenState extends State<SwarmScreen>
                   ),
                   child: Padding(
                     padding: const EdgeInsets.all(1),
-                    child: HarnessSessionManager(
-                      app: app,
-                      introduction: _onboarding.next == OnboardingStep.harnesses
-                          ? OnboardingCard(
-                              title: 'Run your first harness',
-                              description:
-                                  'Give an agent a task. Watch it get to work.',
-                              action: 'New harness',
-                              onAction: () {
-                                _closeSessions(restoreFocus: false);
-                                _runShortcut('agent.new');
-                              },
-                              onDismiss: () =>
-                                  _onboarding.dismiss(OnboardingStep.harnesses),
-                            )
-                          : null,
-                      initialFilter: filter ?? SessionFilter.all,
-                      recent: _navigation.recent,
-                      onClose: _closeSessions,
-                      onOpen: (row) async {
-                        final destination = swarmDestinations(app)
-                            .where((item) => item.id == row.id)
-                            .firstOrNull;
-                        if (destination == null) return false;
-                        final opened = await activateSwarmDestination(
-                          app,
-                          destination,
-                          destinationSwarmId: app.activeSwarmId,
-                        );
-                        return opened;
-                      },
+                    child: KeymapProvider(
+                      keymap: _keymap,
+                      child: HarnessSessionManager(
+                        app: app,
+                        introduction:
+                            _onboarding.next == OnboardingStep.harnesses
+                            ? OnboardingCard(
+                                title: 'Run your first harness',
+                                description: 'Give an agent a task. Watch it get to work.',
+                                action: 'New harness',
+                                onAction: () {
+                                  _closeSessions(restoreFocus: false);
+                                  _runShortcut('agent.new');
+                                },
+                                onDismiss: () => _onboarding.dismiss(
+                                  OnboardingStep.harnesses,
+                                ),
+                              )
+                            : null,
+                        initialFilter: filter ?? SessionFilter.all,
+                        recent: _navigation.recent,
+                        onClose: _closeSessions,
+                        onOpen: (row) async {
+                          final destination = swarmDestinations(app)
+                              .where((item) => item.id == row.id)
+                              .firstOrNull;
+                          if (destination == null) return false;
+                          final opened = await activateSwarmDestination(
+                            app,
+                            destination,
+                            destinationSwarmId: app.activeSwarmId,
+                          );
+                          return opened;
+                        },
+                      ),
                     ),
                   ),
                 ),
@@ -3179,6 +3192,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     'machine.link': _openMachines,
     'machines.manage': _manageMachines,
     'machines.list': _openMachines,
+    'models.list': _toggleModels,
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
     'keyboard.quick_start': _startQuickStart,
@@ -4073,7 +4087,7 @@ class _SwarmScreenState extends State<SwarmScreen>
             ),
             IconButton(
               key: const ValueKey('swarm-models-button'),
-              tooltip: 'Models',
+              tooltip: 'Models ${_keymap.hint('models.list') ?? ''}'.trim(),
               onPressed: _toggleModels,
               isSelected: _modelsOverlay != null,
               style: _toolbarIconStyle(_toolbarNotices.modelCount),

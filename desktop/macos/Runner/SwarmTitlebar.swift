@@ -166,6 +166,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Mouse controls teach the effective shortcuts, including user remaps.
     strip.newButton.toolTip = "New Tab " + (map.hint(for: "swarm.new", context: "workspace") ?? "")
     strip.machinesButton.toolTip = "Machines " + (map.hint(for: "machines.list", context: "workspace") ?? "")
+    strip.modelsButton.toolTip = "Models " + (map.hint(for: "models.list", context: "workspace") ?? "")
     strip.storeButton.toolTip = "Harness Store " + (map.hint(for: "app.store", context: "workspace") ?? "")
     if let main = NSApp.mainMenu, let window {
       let menu = main as? HarnessKeymapMenu ?? HarnessKeymapMenu.replacing(main)
@@ -1535,7 +1536,6 @@ private final class SwarmTabStrip: NSView {
     modelsButton.isEnabled = actionsEnabled
     modelsButton.state = state["modelsOpen"] as? Bool == true ? .on : .off
     modelsButton.attention = max(0, state["modelNotices"] as? Int ?? 0)
-    modelsButton.toolTip = "Models"
     let modelExpanded = modelsButton.state == .on ? "Expanded" : "Collapsed"
     modelsButton.setAccessibilityValue(modelsButton.attention > 0
       ? "\(modelExpanded), \(modelsButton.attention) \(modelsButton.attention == 1 ? "model" : "models") ready to use" : modelExpanded)

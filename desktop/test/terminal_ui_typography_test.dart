@@ -129,10 +129,10 @@ void main() {
 
   /// The welcome page is terminal text: the terminal's face at its size.
   void checkWelcome(WidgetTester tester) {
-    final line = tester.widget<Text>(find.text('Follow your curiosity.'));
-    final style = DefaultTextStyle.of(
-      tester.element(find.text('Follow your curiosity.')),
-    ).style.merge(line.style);
+    final tagline = find.byKey(const ValueKey('welcome-tagline'));
+    final line = tester.widget<Text>(tagline);
+    final style = DefaultTextStyle.of(tester.element(tagline)).style
+        .merge(line.style);
     expect(style.fontSize, terminalFontStore.size);
     expect(style.fontFamily, terminalFontStore.value.fontFamily);
   }

@@ -587,6 +587,10 @@ private extension SwarmTitlebar {
     try checkTitlebar(!main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P is unbound")
     try checkTitlebar(main.defersToInput(event("o", 31, .command)), "Command-O reaches Open Harness")
     try checkTitlebar(strip.machinesButton.toolTip == "Machines ⌘M", "Machines advertises its effective shortcut")
+    try checkTitlebar(strip.modelsButton.toolTip == "Models ⌘I", "Models advertises its effective shortcut")
+    try checkTitlebar(main.defersToInput(event("i", 34, .command)) &&
+      !main.performKeyEquivalent(with: event("i", 34, .command)),
+      "Command-I reaches Flutter exactly once")
     try checkTitlebar(main.defersToInput(event("m", 46, .command)) &&
       !main.performKeyEquivalent(with: event("m", 46, .command)),
       "Command-M reaches Flutter exactly once instead of invoking a native window action")
