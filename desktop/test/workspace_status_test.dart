@@ -47,7 +47,80 @@ class _PRConnection extends WsConn {
   }
 }
 
+class _PaneModelConnection extends _PRConnection {
+  final retargets = <Map<String, dynamic>>[];
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type == 'agent_retarget') {
+      retargets.add(payload);
+      return {};
+    }
+    if (type == 'grid_models_list') {
+      return {
+        'gridName': 'fixture',
+        'models': [
+          {'id': 'Local-Test-Model', 'node': 'local', 'grid': 'fixture'},
+        ],
+      };
+    }
+    return super.request(type, payload: payload, timeout: timeout);
+  }
+}
+
 void main() {
+  testWidgets(
+    'each pane model selector targets its own harness and stays off the tab bar',
+    (tester) async {
+      final connection = _PaneModelConnection();
+      final app = createApp(connectionForTest: (_) => connection);
+      addTearDown(app.dispose);
+      app.machineStates['m']!.nodeOnline = true;
+      app.machineStates['m']!.agents = [
+        Agent.fromJson({
+          'id': 'a0',
+          'engine': 'claude',
+          'selectedModel': 'runtime-v1:a0:claude:fable@high',
+          'terminal': {'available': true},
+        }),
+        Agent.fromJson({
+          'id': 'a1',
+          'engine': 'codex',
+          'selectedModel': 'runtime-v1:a1:codex:gpt-6-astra@high',
+          'terminal': {'available': true},
+        }),
+      ];
+      final first = app.adoptSessionForTest(terminal('a0', []));
+      final second = app.adoptSessionForTest(terminal('a1', []));
+      await mount(tester, app);
+      expect(app.focusedPane, same(second));
+      final selectors = find.byType(GridModelPicker);
+      expect(selectors, findsNWidgets(2));
+      expect(find.text('Fable'), findsOneWidget);
+      expect(find.text('GPT-6 Astra'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('workspace-status-bar')),
+          matching: selectors,
+        ),
+        findsNothing,
+      );
+      final own = find.byKey(const ValueKey(('pane-model', 'm', 'a0')));
+      await tester.tap(own);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Local-Test-Model'));
+      await tester.pumpAndSettle();
+      expect(connection.retargets.single['agentId'], 'a0');
+      expect(connection.retargets.single['gridModel'], 'Local-Test-Model');
+      expect(app.panes, containsAll([first, second]));
+      expect(second.session!.agentId, 'a1');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   for (final native in [false, true]) {
     testWidgets(
       'focused PR uses every selected theme without duplicate pane lookups (native=$native)',
@@ -96,7 +169,7 @@ void main() {
           await tester.pump();
           if (native) {
             final pr = updates.last['pullRequest'] as Map;
-            expect(pr['text'], 'PR #298 · Merged');
+            expect(pr['text'], '#298 Merged');
             expect(pr['url'], 'https://github.com/acme/repo/pull/298');
             expect(pr['segmented'], style.segmented);
             expect(
@@ -111,7 +184,7 @@ void main() {
               find.descendant(of: badge, matching: find.byType(StatusLine)),
             );
             expect(rendered.parts.style, style);
-            expect(rendered.parts.text, 'PR #298 · Merged');
+            expect(rendered.parts.text, '#298 Merged');
             for (final width in [520.0, 1280.0]) {
               tester.view.physicalSize = Size(width, 800);
               await tester.pump(const Duration(milliseconds: 100));
@@ -226,7 +299,7 @@ void main() {
       );
       app.activeSwarm.focusedPaneId = 1;
       final context = WorkspacePaneContext.focused(app)!;
-      expect(context.text, 'OpenAI  Test host:api  (fix)');
+      expect(context.text, 'Test host:api  (fix)');
       expect(context.detail, contains('/worktrees/random-name'));
       for (final style in StatusLineStyle.values) {
         final text = context.format(PromptPrefs(statusStyle: style)).text;
@@ -461,12 +534,12 @@ void main() {
     ]);
     tab.focusedPaneId = 1;
     final owner = WorkspacePaneContext.focused(app)!;
-    expect(owner.text, 'Anthropic  Test host:scene  (lighting)');
+    expect(owner.text, 'Test host:scene  (lighting)');
     tab.focusedPaneId = 2;
     expect(WorkspacePaneContext.focused(app)!.text, owner.text);
     expect(WorkspacePaneContext.focused(app)!.agentId, 'a');
     tab.focusedPaneId = 3;
-    expect(WorkspacePaneContext.focused(app)!.text, 'OpenAI  Test host:notes');
+    expect(WorkspacePaneContext.focused(app)!.text, 'Test host:notes');
     tab.panes.clear();
     expect(WorkspacePaneContext.focused(app), isNull);
   });
@@ -498,7 +571,7 @@ void main() {
           of: find.byType(TerminalPanel),
           matching: find.byType(GridModelPicker),
         ),
-        findsNothing,
+        findsOneWidget,
       );
       await tester.tap(find.text('1:code'));
       await tester.pump(const Duration(milliseconds: 350));
@@ -536,14 +609,8 @@ void main() {
       await mount(tester, app, nativeTabs: true);
       final tab = (updates.last['tabs'] as List).single as Map;
       expect(tab['label'], '1:code');
-      expect(
-        (updates.last['focusedContext'] as Map)['text'],
-        'OpenAI  Test host',
-      );
-      expect(
-        updates.last['terminalStyle'],
-        containsPair('family', isA<String>()),
-      );
+      expect((updates.last['focusedContext'] as Map)['text'], 'Test host');
+      expect(updates.last['barStyle'], containsPair('family', isA<String>()));
       final originalPrefs = appearancePrefsStore.value;
       addTearDown(() => appearancePrefsStore.value = originalPrefs);
       appearancePrefsStore.value = originalPrefs.copyWith(
@@ -554,8 +621,8 @@ void main() {
         ),
       );
       await tester.pump();
-      expect((updates.last['focusedContext'] as Map)['text'], 'OpenAI');
-      final colors = updates.last['terminalStyle'] as Map;
+      expect((updates.last['focusedContext'] as Map)['text'], '');
+      final colors = updates.last['barStyle'] as Map;
       final segments =
           (updates.last['focusedContext'] as Map)['segments'] as List;
       expect(

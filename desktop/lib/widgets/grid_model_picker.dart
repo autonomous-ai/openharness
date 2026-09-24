@@ -1,6 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../shared/theme/workspace_bar_style.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
+
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
@@ -68,6 +74,9 @@ class GridModelPicker extends StatefulWidget {
   /// filled row, so the menu answers "where am I" as well as "where could I go".
   final String? currentModel;
 
+  /// Observed subscription model for the label. Does not select a Local row.
+  final String? subscriptionModel;
+
   /// Whether the agent can search the web on [currentModel], as the daemon decided when it built
   /// the launch. Shown as a subtitle under the current Local row and in the control's tooltip —
   /// only for the two degraded values; `on` and null (nothing said) show nothing. Read only when
@@ -78,9 +87,11 @@ class GridModelPicker extends StatefulWidget {
   /// The agent's engine, for the subscription row's icon and label.
   final String? engineLabel;
   final bool compact;
+  final bool paneHeader;
+  final bool enabled;
 
-  /// Native workspace chrome opens the same picker without duplicating its
-  /// label in every pane. The menu anchors to the top of the Flutter surface.
+  /// An optional programmatic trigger without a visible label. The menu anchors
+  /// to the top of the Flutter surface; pane headers use the normal trigger.
   final bool menuOnly;
   final GridModelPickerController? controller;
 
@@ -92,9 +103,12 @@ class GridModelPicker extends StatefulWidget {
     this.onUseOwnLogin,
     this.onRunLocalModel,
     this.currentModel,
+    this.subscriptionModel,
     this.webSearch,
     this.engineLabel,
     this.compact = false,
+    this.paneHeader = false,
+    this.enabled = true,
     this.menuOnly = false,
     this.controller,
   });
@@ -132,15 +146,17 @@ class _GridModelPickerState extends State<GridModelPicker> {
     // a header do nothing. Fire-and-forget: nothing here waits on it, and a failure just means the
     // first open pays what it used to. Not while the app is in the background: a pane restored
     // behind a minimised window asks nothing until somebody can see it.
-    if (widget.notifier.inForeground) {
-      unawaited(_prefetch());
-    } else {
-      _prefetchOwed = true;
-    }
+    _prefetchOwed = true;
+    _foregroundChanged();
   }
 
   void _foregroundChanged() {
-    if (!mounted || !_prefetchOwed || !widget.notifier.inForeground) return;
+    if (!mounted ||
+        !widget.enabled ||
+        !_prefetchOwed ||
+        !widget.notifier.inForeground) {
+      return;
+    }
     _prefetchOwed = false;
     unawaited(_prefetch().then((_) => _refreshOpenMenu()));
   }
@@ -208,6 +224,14 @@ class _GridModelPickerState extends State<GridModelPicker> {
   @override
   void didUpdateWidget(GridModelPicker oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.enabled != oldWidget.enabled) {
+      _foregroundChanged();
+      if (!widget.enabled) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !widget.enabled) _close?.call();
+        });
+      }
+    }
     if (widget.controller != oldWidget.controller) {
       oldWidget.controller?.removeListener(_openFromController);
       widget.controller?.addListener(_openFromController);
@@ -297,7 +321,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
   void _openFromController() => unawaited(_open());
 
   Future<void> _open() async {
-    if (_loading) return;
+    if (_loading || !widget.enabled) return;
     // A warm answer opens the menu with no wait at all. It is at most seconds old — the daemon's own
     // memo is what bounds that — and the refresh below lands in time for the next open.
     final GridModels answer;
@@ -328,7 +352,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// Draw the menu for an answer already in hand. Split from [_open] so a warm open shares exactly
   /// the same menu as a cold one rather than a second copy of it.
   Future<void> _show(GridModels answer) async {
-    if (!mounted) return;
+    if (!mounted || !widget.enabled) return;
     _shown = answer;
 
     final box = context.findRenderObject() as RenderBox?;
@@ -359,7 +383,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
         close: close,
       ),
     );
-    if (chosen == null) return;
+    if (chosen == null || !mounted || !widget.enabled) return;
     if (chosen.runLocalModel) {
       widget.onRunLocalModel?.call();
       return;
@@ -500,6 +524,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
     final sentence = _webSearchSentence;
     final current =
         widget.currentModel ??
+        widget.subscriptionModel ??
         switch (widget.engineLabel?.toLowerCase()) {
           'codex' => 'OpenAI',
           'claude' => 'Anthropic',
@@ -507,29 +532,43 @@ class _GridModelPickerState extends State<GridModelPicker> {
           _ => 'Model',
         };
     final label = _expecting ? 'Switching…' : current;
+    final foreground = widget.paneHeader
+        ? terminalThemeFor(
+            grid.AppTheme.palette.value,
+            terminalThemeStore.value,
+          ).foreground.withValues(alpha: .65)
+        : AppColors.textSoft;
     return Tooltip(
       // The same sentence the menu shows, one line under the control's own — so a person can learn
       // the agent has no web search without opening the menu at all.
-      message: sentence == null
-          ? 'Model: $current · Click to switch'
-          : 'Model: $current · Click to switch\n$sentence',
+      message: [
+        'Model: $current',
+        if (widget.enabled) 'Switch model · Subscription or local models',
+        ?sentence,
+      ].join('\n'),
       waitDuration: const Duration(milliseconds: 700),
       child: MouseRegion(
         // Stated rather than inherited. The pane header sits over a terminal, and the cursor a
         // person sees while hovering this was whatever the surface underneath asked for — so a
         // control that opens a menu did not look like one until you clicked it.
-        cursor: SystemMouseCursors.click,
+        cursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         // Its own ink surface: an InkWell needs a Material above it, and a pane header is not
         // always inside one — every test that drew a header threw "No Material widget found".
         child: Material(
           type: MaterialType.transparency,
           child: InkWell(
-            onTap: _open,
+            onTap: widget.enabled ? _open : null,
             // Stated on the InkWell as well as on the MouseRegion above it. The cursor a person sees is
             // the INNERMOST annotation under the pointer, and InkWell installs one of its own — so an
             // ancestor asking for a hand is not, by itself, the thing that decides.
-            mouseCursor: SystemMouseCursors.click,
+            mouseCursor: widget.enabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
             borderRadius: BorderRadius.circular(4),
+            hoverColor: foreground.withValues(alpha: 0.10),
+            focusColor: foreground.withValues(alpha: 0.10),
             child: Padding(
               padding: EdgeInsets.symmetric(
                 horizontal: widget.compact ? 3 : 6,
@@ -544,28 +583,32 @@ class _GridModelPickerState extends State<GridModelPicker> {
                   Flexible(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxWidth: widget.compact ? 44 : 220,
+                        maxWidth: widget.compact && !widget.paneHeader
+                            ? 44
+                            : 220,
                       ),
                       child: Text(
                         label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: AppType.monoLabel(
-                          fontWeight: FontWeight.w400,
-                          color: AppColors.textSoft,
-                        ),
+                        style: widget.paneHeader
+                            ? workspaceBarTextStyle(color: foreground)
+                            : AppType.monoLabel(
+                                fontWeight: FontWeight.w400,
+                                color: AppColors.textSoft,
+                              ),
                       ),
                     ),
                   ),
                   // Replace the arrow while loading so a read cannot squeeze
                   // the session name or move the pane's other controls.
-                  if (_loading)
+                  if (_loading && !widget.paneHeader)
                     const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 1.5),
                     )
-                  else
+                  else if (!widget.paneHeader)
                     Icon(
                       Icons.arrow_drop_down,
                       size: 14,

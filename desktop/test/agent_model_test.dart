@@ -3,6 +3,39 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 
 void main() {
+  test('observed model survives renames and updates the roster independently of local routing', () {
+    final raw = {
+      'id': 'a',
+      'engine': 'codex',
+      'selectedModel': 'runtime-v1:a:codex:gpt-6-astra@high',
+    };
+    final agent = Agent.fromJson(raw);
+    expect(agent.modelName, 'GPT-6 Astra');
+    expect(agent.gridModel, isNull);
+    expect(agent.copyWith(name: 'Renamed').modelName, 'GPT-6 Astra');
+    expect(AppNotifier.agentsEqual([agent], [Agent.fromJson(raw)]), isTrue);
+    expect(
+      AppNotifier.agentsEqual(
+        [agent],
+        [
+          Agent.fromJson({
+            ...raw,
+            'selectedModel': 'runtime-v1:a:codex:gpt-5.6-sol@high',
+          }),
+        ],
+      ),
+      isFalse,
+    );
+    expect(
+      AppNotifier.agentsEqual(
+        [agent],
+        [
+          Agent.fromJson({...raw, 'selectedModel': null}),
+        ],
+      ),
+      isFalse,
+    );
+  });
   test(
     'cached output stats survive renames and participate in roster equality',
     () {

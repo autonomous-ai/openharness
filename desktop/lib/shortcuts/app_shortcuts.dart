@@ -428,7 +428,11 @@ const kSwarmShortcuts = [
   ),
   AppShortcut(
     action: ShortcutAction.closeSwarm,
-    activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyW,
+      meta: true,
+      shift: true,
+    ),
     label: 'Close Tab',
     group: ShortcutGroup.navigate,
   ),
@@ -490,11 +494,7 @@ const kSwarmShortcuts = [
   ),
   AppShortcut(
     action: ShortcutAction.closePane,
-    activator: SingleActivator(
-      LogicalKeyboardKey.keyW,
-      meta: true,
-      shift: true,
-    ),
+    activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
     label: 'Close the focused pane',
     group: ShortcutGroup.panes,
   ),

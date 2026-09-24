@@ -144,7 +144,7 @@ StatusLineParts pullRequestStatusLineParts({
   if (style.segmented) {
     return StatusLineParts(style, [
       StatusLineSegment(
-        'PR #$number · $state',
+        '#$number $state',
         foreground: state == 'Open' || state == 'Draft'
             ? StatusLineTone.black
             : StatusLineTone.white,
@@ -154,7 +154,7 @@ StatusLineParts pullRequestStatusLineParts({
   }
   return StatusLineParts(style, [
     StatusLineSegment(
-      'PR #$number · ',
+      '#$number ',
       foreground: switch (style) {
         StatusLineStyle.robbyrussell => StatusLineTone.blue,
         StatusLineStyle.pure => StatusLineTone.muted,

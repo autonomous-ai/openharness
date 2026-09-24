@@ -47,6 +47,25 @@ Future<void> key(
 }
 
 void main() {
+  test('saved close shortcuts override the new pane and tab defaults', () {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    map.apply(
+      '{"bindings":[{"keys":"cmd+w","command":"swarm.close"},{"keys":"cmd+shift+w","command":"pane.close"}]}',
+    );
+    expect(
+      map.current.match(KeymapContext.terminal, [
+        KeyStroke.parse('cmd+w'),
+      ]).command,
+      'swarm.close',
+    );
+    expect(
+      map.current.match(KeymapContext.terminal, [
+        KeyStroke.parse('cmd+shift+w'),
+      ]).command,
+      'pane.close',
+    );
+  });
   test('the command catalog retains the current direct workspace keys', () {
     String? command(
       String keys, [
@@ -80,8 +99,8 @@ void main() {
       ('cmd+i', 'models.list'),
       ('cmd+shift+l', 'pane.layout'),
       ('cmd+b', 'task.route'),
-      ('cmd+shift+w', 'pane.close'),
-      ('cmd+w', 'swarm.close'),
+      ('cmd+w', 'pane.close'),
+      ('cmd+shift+w', 'swarm.close'),
       ('ctrl+tab', 'swarm.next'),
     ]) {
       expect(command(keys), expected, reason: keys);

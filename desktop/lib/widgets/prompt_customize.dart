@@ -31,7 +31,7 @@ class PromptCustomize extends StatelessWidget {
         final style = terminalContentStyle(color: theme.foreground);
         void choose(PromptPrefs next) => unawaited(store.setPrompt(next));
         StatusLineParts example(StatusLineStyle format) => statusLineParts(
-          provider: 'OpenAI',
+          provider: '',
           machine: prefs.machine ? 'M2' : '',
           project: prefs.project ? 'app' : '',
           branch: prefs.branch ? 'main' : null,

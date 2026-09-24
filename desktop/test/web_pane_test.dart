@@ -327,9 +327,9 @@ void main() {
     expect(find.text('http://127.0.0.1:4179/'), findsOneWidget);
     // Its own close control, and no way to end an agent from it.
     expect(find.byTooltip('Close viewer'), findsOneWidget);
-    // The ASCII stop control belongs only to the harness. Viewer visibility
+    // Stop remains a command, not a pane-header control. Viewer visibility
     // is also available through View and command search.
-    expect(find.byTooltip('Stop Harness'), findsOneWidget);
+    expect(find.byTooltip('Stop Harness'), findsNothing);
     expect(
       find.descendant(
         of: find.byType(WebPanePanel),
@@ -371,7 +371,7 @@ void main() {
     expect(find.text('1 warning'), findsNothing, reason: 'the phase wins');
     expect(find.textContaining('·  Viewer'), findsNothing);
     await tester.tap(find.byTooltip('Close viewer'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(_viewers(app), isEmpty);
     expect(tester.takeException(), isNull);
   });

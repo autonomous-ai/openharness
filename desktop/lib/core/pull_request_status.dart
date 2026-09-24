@@ -5,7 +5,7 @@ class PullRequestStatus {
   final int number;
   final String state;
   final Uri url;
-  String get label => 'PR #$number · $state';
+  String get label => '#$number $state';
 
   static PullRequestStatus? fromResult(Map<String, dynamic>? result) {
     final number = result?['number'];

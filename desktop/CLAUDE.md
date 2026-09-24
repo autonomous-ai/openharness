@@ -263,8 +263,9 @@ its headless debug timings do not establish native display or network latency.
   `appTextScaleOf` for geometry. The terminal grid, composer, find field, empty tab's welcome
   page, and terminal-workspace dialogs follow the selected terminal size (⌘+/⌘−). Dialogs use
   `terminalContentStyle()` and `terminalCellSizeOf(context)` for the exact font and character grid;
-  see [the dialog guide](design/terminal-dialogs.md). Native tabs get the terminal face at
-  `AppType.chromeSize`; native menus keep the system menu font.
+  see [the dialog guide](design/terminal-dialogs.md). Workspace tabs, status text, pane
+  titles, and model selectors use `workspaceBarTextStyle()`: fixed 13 pt SF Mono regular
+  on macOS, platform monospace elsewhere. Native menus keep the system menu font.
 - `ThemeModeStore` and `TerminalFontStore` are `ValueNotifier` singletons (they must resolve above the
   provider scope and before sign-in).
 

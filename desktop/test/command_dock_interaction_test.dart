@@ -88,10 +88,12 @@ void main() {
           of: row,
           matching: find.byWidgetPredicate(
             (widget) =>
-                widget is SearchResultText && widget.text.contains('git:'),
+                widget is SearchResultText &&
+                widget.text.contains('(feature/login-redirect)'),
           ),
         ),
       );
+      expect(detail.text, 'M2:openharness  (feature/login-redirect)');
       for (final label in ['M2', 'openharness', 'feature/login-redirect']) {
         expect(detail.text, contains(label));
       }

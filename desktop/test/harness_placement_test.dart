@@ -902,7 +902,8 @@ void main() {
           var inside = false;
           element.visitAncestorElements((ancestor) {
             final key = ancestor.widget.key;
-            inside = key is ValueKey<String> &&
+            inside =
+                key is ValueKey<String> &&
                 app.swarms.any((swarm) => swarm.id == key.value);
             return !inside;
           });
@@ -917,7 +918,7 @@ void main() {
         await tester.pump();
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyW);
+          await chord(tester, LogicalKeyboardKey.keyW, shift: true);
         }
         expect(app.swarms, [original]);
         await chord(tester, key);

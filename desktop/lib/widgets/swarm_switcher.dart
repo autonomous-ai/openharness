@@ -11,6 +11,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import 'box_chrome.dart';
 import 'prompt_context.dart';
+import '../shared/theme/status_line_style.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -1132,12 +1133,14 @@ class _SearchRowContentState extends State<_SearchRowContent> {
       final detail = data == null
           ? row.terminalDetail ?? row.detail
           : [
-              if (data.harness?.isNotEmpty == true) data.harness!,
+              statusLineParts(
+                provider: '',
+                machine: data.machine ?? '',
+                project: data.project ?? '',
+                branch: data.branch,
+              ).text,
               if (data.leading?.isNotEmpty == true) data.leading!,
-              if (data.machine?.isNotEmpty == true) '@ ${data.machine}',
-              if (data.project?.isNotEmpty == true) '/ ${data.project}',
-              if (data.branch?.isNotEmpty == true) 'git: ${data.branch}',
-            ].join('  ');
+            ].where((part) => part.isNotEmpty).join('  ');
       return Semantics(
         label: row.isCreate
             ? 'New Harness'
