@@ -147,7 +147,16 @@ try {
     }
     // `full` unless someone deliberately narrows it: see gridSwitchDriver.createAgent for why the
     // MCP steps depend on it.
-    const made = await driver.createAgent(engine, cwd, `e2e ${engine} ${version}`, permissionMode)
+    // REGISTRATION_FAILED right after the daemon starts is not the test's to report: the saved
+    // registry still holds an agent from before the restart (a container, a reboot), tmux numbers
+    // the new pane %0 again, and the stale row owns that key until discovery confirms it gone —
+    // measured on grid-dev: refused at 07:41:11, the stale row forgotten at 07:41:20. Wait it out.
+    let made = await driver.createAgent(engine, cwd, `e2e ${engine} ${version}`, permissionMode)
+    for (let retry = 1; !made.ok && made.error === 'REGISTRATION_FAILED' && retry <= 3; retry++) {
+      console.error(`[grid-e2e] agent_create REGISTRATION_FAILED — a stale agent from before the daemon restart still holds the pane; retry ${retry}/3 in 15s`)
+      await new Promise((r) => setTimeout(r, 15_000))
+      made = await driver.createAgent(engine, cwd, `e2e ${engine} ${version}`, permissionMode)
+    }
     if (!made.ok) throw new Error(`${made.error}: ${made.detail ?? ''}`)
     agentId = made.agentId
     pane = made.pane ?? (await waitForPane(agentId))
