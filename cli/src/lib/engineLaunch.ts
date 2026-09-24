@@ -901,6 +901,13 @@ export function permissionFlagToVerify(engine: AgentEngine, choice: PermissionLa
  *
  * `null` means "launch as asked": either nothing is being added, or the engine takes it, or the
  * probe could not tell (`unknown` never refuses — see `commandSupportsFlagInInteractiveShell`).
+ *
+ * Best-effort by construction, and that is the right way round. The probe needs an interactive
+ * shell to resolve the engine the way a launch will, so a machine that offers none answers
+ * `unknown` and nothing is refused. A daemon started by systemd or in a container has no `SHELL`
+ * in its environment — measured on a Linux container here — but `currentUserShell` falls back to
+ * the passwd entry, which on a normal account is a real shell, so the check does reach the boxes
+ * openharness#285 came from.
  */
 async function unsupportedPermissionFlag(
   engine: AgentEngine,

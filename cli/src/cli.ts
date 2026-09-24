@@ -4550,6 +4550,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
           // it did not know, and the only trace was one line saying the pane had become a terminal.
           // `describeAgentCreateFailure` was written for this and had no caller.
+          // `dead: true` describes the ENGINE, which is what the diagnosis is about, not the pane —
+          // the pane is alive and about to become a terminal. That is the sentence this state
+          // selects ("started and exited with status N"), and it is the true one here.
           const captured = await captureTerminal(pending.agentId, 40)
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
             + describeAgentCreateFailure({
