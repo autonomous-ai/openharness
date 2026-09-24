@@ -1830,8 +1830,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     if let cachedLabel { return cachedLabel }
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
+    // One weight for every tab: the selected one is already told apart by its
+    // fill and its brighter ink, and a bold name also changes width, so the
+    // strip re-truncated whenever the selection moved (owner, 2026-09-24).
     let label = NSAttributedString(string: name,
-      attributes: [.font: selected ? NSFontManager.shared.convert(labelFont, toHaveTrait: .boldFontMask) : labelFont,
+      attributes: [.font: labelFont,
         .foregroundColor: selected ? NSColor.white : NSColor(white: 0.76, alpha: 1), .paragraphStyle: paragraph])
     cachedLabel = label
     return label
