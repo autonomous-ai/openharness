@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 
 import 'floating_glass.dart';
+import 'terminal_header.dart';
 import 'voice_input_controller.dart';
 import 'voice_mic_button.dart';
 import 'voice_mic_face.dart';
@@ -45,6 +46,7 @@ class TerminalActionColumn extends StatefulWidget {
     required this.session,
     required this.onSearch,
     this.unread,
+    this.searchOnly = false,
   });
 
   final VoiceInputController voice;
@@ -60,6 +62,16 @@ class TerminalActionColumn extends StatefulWidget {
 
   final VoidCallback onSearch;
 
+  /// Search alone, with no mic over it — what is left while the keyboard is up.
+  ///
+  /// ⚠️ **The mic does not merely hide here, it has nothing to do.** Typing is
+  /// the other way of saying what the mic says, so with a keyboard on screen
+  /// the two are the same errand and one of them is already under the thumb.
+  /// Search is not: what it reaches — another harness, another machine — has no
+  /// equivalent on the key bar, and being unable to reach it without first
+  /// putting the keyboard away was the whole of the complaint.
+  final bool searchOnly;
+
   /// The column's width: the mic's slot, which the smaller buttons centre under.
   static const double width = VoiceMicButton.extent;
 
@@ -69,6 +81,17 @@ class TerminalActionColumn extends StatefulWidget {
   /// How far the column sits above the terminal's bottom edge — higher than
   /// [inset], so Search clears the agent's own status line under it.
   static const double bottomInset = 172;
+
+  /// How far Search sits from the terminal's TOP edge while the keyboard is up
+  /// — see [searchOnly].
+  ///
+  /// ⚠️ **Below the header's own height, not at the top of the box.** The
+  /// header floats over these same rows and slides away on a scroll; measured
+  /// from the box, Search sat under it whenever it was shown. Below it, the two
+  /// never meet — and the rows Search now covers are the OLDEST on screen,
+  /// which is the opposite end of the pane from the prompt being typed into.
+  /// That is the whole reason it moves rather than staying where it was.
+  static const double topInset = TerminalHeader.height + 8;
 
   /// The DRAWN gap between one circle and the next, the same all the way down.
   ///
@@ -129,12 +152,15 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        if (session != null)
+        if (widget.searchOnly)
+          const SizedBox.shrink()
+        else if (session != null)
           _capsule(context, session)
         else
           // Still attaching: the mic in its place, dimmed and dead.
           const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null),
-        const SizedBox(height: TerminalActionColumn._underMic),
+        if (!widget.searchOnly)
+          const SizedBox(height: TerminalActionColumn._underMic),
         _centred(
           _withUnread(
             TerminalRoundAction(
