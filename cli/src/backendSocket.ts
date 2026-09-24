@@ -367,7 +367,13 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
 
 export class BackendSocket {
   private readonly gridFleet = new GridFleetRpc()
-  private readonly localModels = new LocalModels({ stateDir: join(env.ADAPTER_DATA_DIR, 'local-models') })
+  private readonly localModels = new LocalModels({
+    stateDir: join(env.ADAPTER_DATA_DIR, 'local-models'),
+    machineName: () => this.machineDisplayName,
+  })
+  /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
+   *  until the first one arrives. */
+  private machineDisplayName: string | null = null
   private readonly apiConnections = new ApiConnections(env.ADAPTER_DATA_DIR)
   private ws: WebSocket | null = null
   private connecting = false
@@ -758,6 +764,9 @@ export class BackendSocket {
 
   /** Which grid this machine's agents can be pointed at — for `harness status` and the models RPC. */
   gridName(): string | null { return this.harnessGridName }
+
+  /** This machine's name as the Machines list shows it — what a model it serves is labelled with. */
+  machineName(): string | null { return this.machineDisplayName }
 
   /** The account's private grid, resolved the way the models RPC resolves it — for a harness
    *  workspace that must be told which grid is "yours" rather than work it out or ask. */
@@ -1504,6 +1513,8 @@ export class BackendSocket {
       if ('gridName' in meta) {
         this.harnessGridName = typeof meta.gridName === 'string' && meta.gridName.trim() ? meta.gridName.trim() : null
       }
+      // The same rule for the name: a frame that does not carry it leaves it as it was.
+      if ('name' in meta) this.machineDisplayName = typeof name === 'string' && name.trim() ? name.trim() : null
       this.onMachineMeta?.(typeof name === 'string' && name.trim() ? name.trim() : null)
       return
     }

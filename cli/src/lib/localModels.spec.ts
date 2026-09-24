@@ -924,3 +924,26 @@ describe('stepping down to the context that actually runs', () => {
     expect(joinedAt()).toEqual([262144])
   })
 })
+
+describe("a model is labelled with the machine's name as Harness shows it", () => {
+  // ⚠️ REGRESSION. Started from the Models modal, a model joined with no `--name`, so Grid labelled
+  // it with the host name: `mac.lan` under "On your machines" while Machines called it `M2`.
+  const joined = () => calls.find(args => args.includes('join'))!
+
+  it('joins under the Harness name', async () => {
+    const named = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, machineName: () => ' M2 ' })
+    await named.act('home', 'org/Small-GGUF', 'start'); await named.settled()
+    expect(joined().slice(joined().indexOf('--name'), joined().indexOf('--name') + 2)).toEqual(['--name', 'M2'])
+  })
+
+  it.each([
+    ['is not known yet', () => null],
+    ['would read as a flag', () => '--all'],
+    ['carries a control character', () => 'M2\nevil'],
+  ])('leaves --name off when the name %s, rather than pass it', async (_case, machineName) => {
+    const named = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, machineName })
+    await named.act('home', 'org/Small-GGUF', 'start'); await named.settled()
+    expect(joined()).not.toContain('--name')
+    expect((await named.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+})
