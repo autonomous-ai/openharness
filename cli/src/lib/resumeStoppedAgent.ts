@@ -16,6 +16,10 @@ export interface ResumeStoppedDeps {
   launch: (saved: RegisteredSession, resumeSessionId: string | undefined) => Promise<RestartAgentReply>
 }
 
+/** The longest a resume waits for its replacement process before giving up — and so the longest one
+ *  can legitimately hold the reservation `stoppedAgents.beginResume` takes for it. */
+export const RESUME_READINESS_BUDGET_MS = 10 * 60_000
+
 export const resumeChanged = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed while opening. Select it again.' } as const
 export const resumeUnconfirmed = { ok: false, error: 'RESUME_UNCONFIRMED', detail: 'The saved conversation has not been confirmed yet. Check the terminal, then select the harness again to check its status.' } as const
 
@@ -36,9 +40,13 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
       if (runtime.state === 'unknown') return resumeUnconfirmed
       if (runtime.state === 'alive') {
         if (existing.resumeOnly && existing.launch?.state === 'failed') {
-          // Still running and never disproved — only never confirmed (its startup hook was dropped).
-          // Selecting it again asks for confirmation again rather than repeating the old verdict.
-          return existing.launch.error === 'RESUME_UNCONFIRMED' ? deps.waitForReady(existing) : resumeUnconfirmed
+          // Never confirmed is not the same as disproved: the engine is running, so ask for
+          // confirmation again rather than repeating the old verdict.
+          if (existing.launch.error === 'RESUME_UNCONFIRMED') return deps.waitForReady(existing)
+          // Any other verdict is reported as ITSELF. Relabelling them all "not confirmed yet" told
+          // somebody whose resume had reopened the wrong conversation to go and check the terminal,
+          // and hid the one fact that would have explained what they were looking at.
+          return { ok: false, error: existing.launch.error, detail: existing.launch.detail }
         }
         return { ok: true, session: existing, resumed: true }
       }
@@ -84,7 +92,7 @@ export interface ResumeReadinessDeps {
  */
 export async function waitForResumedAgent(saved: RegisteredSession, deps: ResumeReadinessDeps): Promise<RestartAgentReply> {
   const now = deps.now ?? Date.now
-  const until = now() + (deps.budgetMs ?? 10 * 60_000)
+  const until = now() + (deps.budgetMs ?? RESUME_READINESS_BUDGET_MS)
   while (now() < until) {
     if (!deps.current()) return resumeChanged
     const process = await deps.process()

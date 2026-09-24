@@ -1,5 +1,5 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { closeSync, constants, fsyncSync, openSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, openSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -99,6 +99,18 @@ export class StoppedAgentStore {
     try { writeFileSync(fd, JSON.stringify({ token })); fsyncSync(fd) } finally { closeSync(fd) }
     this.syncDirectory()
     return token
+  }
+
+  /**
+   * When the reservation for this agent was taken, or null if there is none.
+   *
+   * The reservation's whole job is to outlive a crash, so the caller needs to know how long it has
+   * been held: one taken by an operation that cannot still be running is protecting nothing, and a
+   * harness whose reservation is never released can never be resumed again.
+   */
+  resumeReservedAt(agentId: string): number | null {
+    if (!SAFE_ID.test(agentId)) return null
+    try { return statSync(join(this.directory, `${agentId}.resume`)).mtimeMs } catch { return null }
   }
 
   /** Clear only a verified outcome. Unknown allocation/readiness keeps its reservation. */

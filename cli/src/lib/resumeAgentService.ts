@@ -3,7 +3,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
-import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed } from './resumeStoppedAgent.js'
+import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
@@ -39,6 +39,30 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
+
+  /**
+   * A reservation nothing can still be using, taken over.
+   *
+   * `beginResume` reserves an agent before tmux allocation so that a crash in the window between
+   * allocating a pane and persisting its row cannot be followed by a second process for the same
+   * conversation. It is deliberately NOT released on an unverified outcome — which is right, and
+   * which also means a reservation whose owner died leaves the harness unresumable for good: every
+   * later Enter is refused before it looks at anything, with "the saved conversation has not been
+   * confirmed yet" over a harness nobody is confirming.
+   *
+   * Age settles it. The readiness wait is the longest a resume can legitimately hold this, so an
+   * older reservation belongs to an operation that is over. By then the crash window it guards is
+   * closed too: a pane that outlived it has had many reconcile passes to be discovered, given a row
+   * and bound to its conversation, and `canLaunch` — which has already returned true to get here —
+   * checks both the registry and the saved process before any of this runs.
+   */
+  const retakeStaleReservation = (agentId: string): string | null => {
+    const heldSince = stoppedAgents.resumeReservedAt(agentId)
+    if (heldSince === null || Date.now() - heldSince <= RESUME_READINESS_BUDGET_MS) return null
+    console.log(`[resume] ${sid(agentId)} taking over a reservation held since ${new Date(heldSince).toISOString()} · its owner is gone`)
+    stoppedAgents.finishResume(agentId)
+    return stoppedAgents.beginResume(agentId)
+  }
   const waitForResume = async (entry: RegisteredSession, current: () => boolean) => {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
@@ -148,6 +172,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         // Reserve before preparing history or rewriting launch configuration: an unknown previous
         // allocation may still have a writer using those files.
         token = stoppedAgents.beginResume(agentId)
+        if (!token) token = retakeStaleReservation(agentId)
         if (!token) return resumeUnconfirmed
         const built = await relaunchOverrides(saved)
         if (!built.ok) return { ok: false, error: built.error, detail: built.detail }

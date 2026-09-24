@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
+import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { registry, validTranscriptPath, type RegisteredSession } from './registry.js'
 import { env } from '../config/env.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
@@ -150,6 +151,18 @@ describe('production resume handler', () => {
     expect(await start()).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
     expect(deps.relaunchOverrides).not.toHaveBeenCalled(); expect(deps.prepareSessionResume).not.toHaveBeenCalled()
   })
+  // The other half of the rule: a reservation older than the readiness budget cannot still belong to
+  // a running resume, and leaving it in place made the harness permanently unresumable — every Enter
+  // refused before it looked at anything.
+  it('takes over a reservation older than the readiness budget', async () => {
+    deps.stoppedAgents.beginResume(saved.agentId)
+    const held = join(dir, 'saved', `${saved.agentId}.resume`)
+    const stale = Date.now() - RESUME_READINESS_BUDGET_MS - 60_000
+    utimesSync(held, new Date(stale), new Date(stale))
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create).toHaveBeenCalled()
+  })
+
   it.each(['provider', 'prepare', 'cancel', 'conversation'] as const)('releases the reservation before allocation after %s failure', async reason => {
     if (reason === 'provider') vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'PROVIDER_FAILED', detail: 'fixture' })
     if (reason === 'prepare') vi.mocked(deps.prepareSessionResume).mockImplementation(() => { throw new Error('fixture') })
@@ -256,7 +269,7 @@ describe('existing runtime and readiness verification', () => {
   it('does not re-verify a live process that reported another conversation', async () => {
     live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } })
     vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
-    expect(await start()).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+    expect(await start()).toMatchObject({ error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' })
     expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_SESSION_MISMATCH' })
     expect(deps.announceSession).not.toHaveBeenCalled()
   })

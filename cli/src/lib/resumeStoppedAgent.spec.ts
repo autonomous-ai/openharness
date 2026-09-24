@@ -263,9 +263,11 @@ describe('resume refusal and readiness edge cases', () => {
     expect(deps.waitForReady).toHaveBeenCalledWith(existing)
     expect(deps.launch).not.toHaveBeenCalled(); expect(deps.retain).not.toHaveBeenCalled()
   })
-  it('does not call a live process that reported another conversation ready', async () => {
-    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
-    expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+  // Reported as itself, not as "not confirmed yet": the verdict is the only thing that explains the
+  // pane the person is looking at, and relabelling it sent them to check a terminal that is fine.
+  it('repeats the real verdict of a live process that reported another conversation', async () => {
+    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture detail' } })
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: false, error: 'RESUME_SESSION_MISMATCH', detail: 'fixture detail' })
     expect(deps.waitForReady).not.toHaveBeenCalled(); expect(deps.launch).not.toHaveBeenCalled()
   })
   it.each(['cancelled', 'removed', 'failed', 'different engine', 'no process', 'different start', 'missing launch'] as const)('handles readiness: %s', async mode => {
