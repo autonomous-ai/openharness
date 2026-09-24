@@ -608,6 +608,41 @@ describe('TerminalStreamManager', () => {
     })
   })
 
+  // The phone opens politely (`takeover: false`) and watches a terminal the desktop is driving. Its
+  // banner says WHO has it — the desktop names a taker the same way — so the ready carries the
+  // holder's own introduction, and nothing when the holder never gave one.
+  it('names the holder on a watcher\'s ready', async () => {
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+      client: { kind: 'desktop', name: 'MacBookPro2021.local', machineId: 'ab12ab12ab12ab12' },
+    })
+    await manager.handleFrame('phone-1', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30, takeover: false,
+      client: { kind: 'phone', name: 'iPhone' },
+    })
+    const ready = sent.find((frame) => frame.connId === 'phone-1' && frame.type === 'terminal_ready')
+    expect(ready?.payload).toMatchObject({
+      readOnly: true,
+      heldBy: { kind: 'desktop', name: 'MacBookPro2021.local', machineId: 'ab12ab12ab12ab12' },
+    })
+    // The holder keeps the terminal, and a controller's own ready never names anybody.
+    expect(sent.some((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')).toBe(false)
+    expect(sent.find((frame) => frame.connId === 'web-1' && frame.type === 'terminal_ready')?.payload)
+      .not.toHaveProperty('heldBy')
+  })
+
+  it('says nothing about a holder that never introduced itself', async () => {
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await manager.handleFrame('phone-1', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30, takeover: false,
+    })
+    const ready = sent.find((frame) => frame.connId === 'phone-1' && frame.type === 'terminal_ready')
+    expect(ready?.payload.readOnly).toBe(true)
+    expect(ready?.payload).not.toHaveProperty('heldBy')
+  })
+
   it('falls back to what the daemon can say about a silent winner, and says nothing over a bad claim', async () => {
     manager = newManager({
       describeClient: (connId) => connId === 'local-2' ? { kind: 'desktop', name: 'This Mac' } : null,
