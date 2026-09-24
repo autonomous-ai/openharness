@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/phone/phone_search_field.dart';
 import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/terminal_action_column.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
@@ -155,6 +156,16 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('terminal-search')));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    // The sheet opens on its tabs; a tap on its field is what starts a search
+    // and brings the keyboard.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(SheetSearchField),
+        matching: find.byType(TextField),
+      ),
+    );
+    await tester.pump();
     addTearDown(tester.view.resetViewInsets);
     for (final inset in const [300.0, 600.0, 900.0]) {
       tester.view.viewInsets = FakeViewPadding(bottom: inset);
@@ -173,7 +184,16 @@ void main() {
     // inset it reports falls over ~0.5s — past the end of search's fade. Every
     // frame, through the fade AND after it, shows the terminal search opened
     // over; releasing it with the fade let the falling inset raise its key bar.
-    await tester.tap(find.bySemanticsLabel('Back'));
+    //
+    // The sheet has no chevron: it is flung shut from its grip, the one close
+    // that leaves with the keyboard still up. The grip is the strip directly
+    // above the field.
+    final field = tester.getRect(find.byType(SheetSearchField));
+    await tester.flingFrom(
+      field.topCenter - const Offset(0, 8),
+      const Offset(0, 300),
+      2000,
+    );
     await tester.pump();
     for (var ms = 0; ms <= 700; ms += 16) {
       tester.view.viewInsets = FakeViewPadding(
@@ -184,6 +204,7 @@ void main() {
     }
     await tester.pump(const Duration(seconds: 1));
     expect(find.byType(PhoneSearchResults), findsNothing);
+    expect(find.byType(SheetSearchField), findsNothing);
     expectUntouched();
     expect(resizes, isEmpty);
   });

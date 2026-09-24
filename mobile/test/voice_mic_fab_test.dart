@@ -111,11 +111,20 @@ void main() {
     session.notifyListeners();
     await tester.pump();
     await tester.tap(mic);
-    await tester.pumpAndSettle();
+    // Timed pumps, not `pumpAndSettle`: the capsule animates for as long as
+    // the notice is up, so settling would run the clock past
+    // [VoiceInputController.noticeLinger] and read the row after it cleared.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(sentTurns(), isEmpty);
     expect(voice.transcript, 'ship it');
     expect(voice.notice, VoiceNotice.notSent);
+
+    // The notice goes by itself; the words it was about stay for the retry.
+    await tester.pump(VoiceInputController.noticeLinger);
+    expect(voice.notice, isNull);
+    expect(voice.transcript, 'ship it');
 
     session.status = TerminalSessionStatus.controlling;
     session.notifyListeners();

@@ -1192,6 +1192,10 @@ void main() {
       addTearDown(app.dispose);
       await tester.pumpWidget(MaterialApp(home: field(app)));
       await tester.pump();
+      // The terminal's sheet opens on its tabs, and a tap on the field is what
+      // brings the keyboard there — so the field is tapped on both.
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
       return tester.testTextInput.setClientArgs!;
     }
 
@@ -1222,7 +1226,10 @@ void main() {
     }
   });
 
-  testWidgets('terminal search: the same one bar, its chevron closes it', (
+  // ⚠️ **The sheet's own bar, not the page's.** No chevron in it: Cancel ends
+  // the SEARCH and leaves the sheet up on its tabs, and Back steps out of the
+  // search first and closes the sheet only after — never leaves the agent.
+  testWidgets('terminal search: Cancel ends the search, Back then the sheet', (
     tester,
   ) async {
     final app = _app([
@@ -1242,11 +1249,37 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(PhoneSearchField), findsOneWidget);
+    expect(find.byType(SheetSearchField), findsOneWidget);
+    expect(find.byType(PhoneSearchField), findsNothing);
     expect(find.text('Cancel'), findsNothing);
 
-    await tester.tap(find.bySemanticsLabel('Back'));
+    // A tap on the field starts a search; Cancel slides in over 250ms.
+    Future<void> search() async {
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Cancel'), findsOneWidget);
+    }
+
+    Future<void> back() async {
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    await search();
+    await tester.tap(find.text('Cancel'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Cancel'), findsNothing);
+    expect(closed, 0);
+
+    await search();
+    await back();
+    expect(find.text('Cancel'), findsNothing);
+    expect(closed, 0);
+
+    await back();
     expect(closed, 1);
   });
 

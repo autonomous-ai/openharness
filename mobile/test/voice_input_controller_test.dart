@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
+import 'package:harness_mobile/phone/voice_mic_mode.dart';
 import 'package:harness_mobile/phone/voice_notice.dart';
 
 import 'voice_fakes.dart';
@@ -214,6 +215,14 @@ void main() {
   });
 
   group('the retry face, held to talk', () {
+    // ⚠️ **A tap is a brushed button only when the mic is held to talk** —
+    // [VoiceInputController.minTake] is zero in tap mode, the mode the app is
+    // built in ([voiceMicMode]), because a short "yes" IS the message there. In
+    // that mode the 120ms takes below are judged as speech (silence, here), and
+    // the retry face sends its held words on a plain tap instead — `_tapAction`,
+    // covered in `voice_mic_fab_test.dart`.
+    final holdOnly = micHoldsToTalk ? null : 'hold-to-talk only';
+
     Future<void> failOneSend() async {
       backend.replies.add('deploy');
       await voice.startListening();
@@ -242,7 +251,7 @@ void main() {
       expect(delivered, ['deploy']);
       expect(voice.isIdle, isTrue);
       expect(backend.calls, hasLength(1), reason: 'a tap is not uploaded');
-    });
+    }, skip: holdOnly);
 
     test('a take that failed still sends none of the message', () async {
       await failOneSend();
@@ -269,7 +278,7 @@ void main() {
 
       expect(delivered, isFalse);
       expect(voice.notice, isNull, reason: 'a brushed button is not reported');
-    });
+    }, skip: holdOnly);
   });
 
   test('clearing mid-transcription drops the words when they arrive', () async {

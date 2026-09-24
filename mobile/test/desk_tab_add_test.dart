@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_tile.dart';
+import 'package:harness_mobile/phone/desk_groups.dart';
+import 'package:harness_mobile/phone/desk_tabs_panel.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
@@ -50,11 +52,14 @@ void main() {
     return app;
   }
 
+  /// Open the tabs from the floating Search button — the one door to them
+  /// since the header's grid mark went (see [TerminalSearchOverlay]).
+  ///
   /// ⚠️ Timed pumps, never `pumpAndSettle`: these pages draw the "Attaching…"
   /// skeleton, which breathes for ever. The waits are the sheets' own
   /// animations.
   Future<void> openPanel(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('Tabs'));
+    await tester.tap(find.byKey(const ValueKey('terminal-search')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
@@ -80,9 +85,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// An agent's row, wherever it is drawn.
+  /// An agent's row, wherever it is drawn: a [DeskAgentRow] in the tabs, an
+  /// [AgentTile] in the sheet that adds one to a tab.
   Finder row(String agent) => find.byWidgetPredicate(
-    (widget) => widget is AgentTile && widget.agent.id == agent,
+    (widget) =>
+        (widget is DeskAgentRow && widget.entry.agent.id == agent) ||
+        (widget is AgentTile && widget.agent.id == agent),
   );
 
   testWidgets('the + on the tab row opens a tab holding the agent picked', (
@@ -192,10 +200,12 @@ void main() {
   ) async {
     await pumpHome(tester, tabs: [deskTab('t1', 'Empty', [])]);
 
+    // Every agent is outside this tab, so the one on screen is in none — and
+    // the panel falls back to the first tab, this one.
+    //
+    // ⚠️ Not tapped to: a tap on the tab already shown arms the rename
+    // double-tap, whose timer outlives the test.
     await openPanel(tester);
-    // The panel opens on the group holding the agent on screen, which is the
-    // leftover one — every agent is outside this tab.
-    await showTab(tester, 'Empty');
 
     expect(find.text('This tab has no harnesses yet.'), findsOneWidget);
     expect(
@@ -223,7 +233,8 @@ void main() {
     await showTab(tester, 'Docker');
     await doubleTap(tester, 'Docker');
 
-    await tester.enterText(find.byType(TextField), 'Servers');
+    // The dialog's field: the sheet's own search field is under it.
+    await tester.enterText(find.byType(TextField).last, 'Servers');
     await tester.tap(find.text('Save'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
@@ -250,7 +261,8 @@ void main() {
     await openPanel(tester);
     await doubleTap(tester, 'Desktop');
 
-    await tester.enterText(find.byType(TextField), '   ');
+    // The dialog's field: the sheet's own search field is under it.
+    await tester.enterText(find.byType(TextField).last, '   ');
     await tester.tap(find.text('Save'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
@@ -259,42 +271,35 @@ void main() {
     expect(find.text('Desktop'), findsOneWidget);
   });
 
-  testWidgets('the agents no tab holds cannot be renamed', (tester) async {
-    final app = await pumpHome(
-      tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a']),
-      ],
-    );
+  // ⚠️ The agents no tab holds are no group any more (see [deskGroups]); the
+  // one group that is not a tab is the single one of an account with no tabs.
+  testWidgets('the one group of an account with no tabs cannot be renamed', (
+    tester,
+  ) async {
+    final app = await pumpHome(tester, tabs: []);
 
     await openPanel(tester);
-    await showTab(tester, 'Other');
-    await doubleTap(tester, 'Other');
+    await doubleTap(tester, kEveryAgentGroupName);
 
-    // "Other" is not a tab on the desk — there is no name to write.
-    expect(find.byType(TextField), findsNothing);
+    // Not a tab on the desk — there is no name to write.
+    expect(find.text('Save'), findsNothing);
     expect(deskApiOf(app).written, isEmpty);
   });
 
-  testWidgets('the agents no tab holds are offered no + of their own', (
-    tester,
-  ) async {
-    await pumpHome(
-      tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a']),
-      ],
-    );
+  testWidgets('an account with no tabs is offered a new harness, not a + '
+      'into a tab', (tester) async {
+    await pumpHome(tester, tabs: []);
 
     await openPanel(tester);
-    await showTab(tester, 'Other');
 
-    // "Other" is not a tab — there is nothing on the desk to add an agent to.
+    // Not a tab — there is nothing on the desk to add an agent to...
     expect(find.textContaining('Add harness to'), findsNothing);
+    // ...but a harness can still be started from it.
+    expect(find.bySemanticsLabel('New harness, in no tab'), findsOneWidget);
     expect(
       find.bySemanticsLabel('New tab'),
       findsOneWidget,
-      reason: 'the tab row keeps its own +, whichever group is being read',
+      reason: 'the tab row keeps its own +, so the first tab can be made',
     );
   });
 }
