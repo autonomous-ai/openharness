@@ -77,7 +77,14 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
           .where((row) => row.matches(query))
           .toList();
       final presets = controller.presets
-          .where((row) => row.matches(query))
+          // Subscription providers remain usable through Custom API and any
+          // saved connections, without suggesting a second setup here.
+          .where(
+            (row) =>
+                row.provider != 'openai' &&
+                row.provider != 'anthropic' &&
+                row.matches(query),
+          )
           .toList();
       final customMatches = 'custom api'.contains(query);
       return Column(

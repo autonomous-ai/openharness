@@ -690,6 +690,44 @@ void main() {
     },
   );
 
+  testWidgets('subscription providers stay editable without API suggestions', (
+    tester,
+  ) async {
+    final (app, controller) = await mount(tester);
+    app.allPresets = true;
+    app.rows = [
+      {
+        ...preset,
+        'id': 'openai',
+        'provider': 'openai',
+        'name': 'OpenAI',
+        'baseUrl': 'https://api.openai.com/v1',
+      },
+      {
+        ...preset,
+        'id': 'anthropic',
+        'provider': 'anthropic',
+        'name': 'Anthropic',
+        'baseUrl': 'https://api.anthropic.com/v1',
+      },
+    ];
+    await controller.apis.refresh();
+    await tester.pumpAndSettle();
+    for (final provider in ['OpenAI', 'Anthropic']) {
+      expect(find.byTooltip('Add $provider'), findsNothing);
+      await tester.tap(find.byTooltip('Edit $provider'));
+      await tester.pumpAndSettle();
+      expect(find.text('Leave blank to keep saved key'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back to APIs'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.byTooltip('Add OpenRouter'), findsOneWidget);
+    expect(find.byTooltip('Add fal.ai'), findsOneWidget);
+    expect(find.byTooltip('Add Replicate'), findsOneWidget);
+    expect(find.byTooltip('Add Custom API'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('API list and editor render in the Models panel', (tester) async {
     tester.view.physicalSize = const Size(760, 920);
     tester.view.devicePixelRatio = 1;
@@ -754,6 +792,8 @@ void main() {
       });
     }
 
+    expect(find.byTooltip('Add OpenAI'), findsNothing);
+    expect(find.byTooltip('Add Anthropic'), findsNothing);
     await capture('apis-list');
     await tester.tap(find.byTooltip('Add Custom API'));
     await tester.pumpAndSettle();
