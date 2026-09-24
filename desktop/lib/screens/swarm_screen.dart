@@ -3664,13 +3664,6 @@ class _SwarmScreenState extends State<SwarmScreen>
                           // Last in the stack, so a banner is never painted
                           // under a pane, a tab or the palette. It takes
                           // pointers only on the banners themselves.
-                          if (!_commandBarOpen && _newHarness == null)
-                            LocalModelInvitation(
-                              controller: app.modelManager,
-                              showIntroduction: false,
-                              onOpen: () =>
-                                  _toggleModels(initialTab: ModelsTab.local),
-                            ),
                           AgentAlertBanners(notifier: app),
                         ],
                       ),

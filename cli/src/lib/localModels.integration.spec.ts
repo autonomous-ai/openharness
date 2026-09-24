@@ -20,7 +20,7 @@ it('discovers, downloads, starts, verifies, stops and restarts across real subpr
       expect(body.device.usable_bytes).toBe(16 * 1024 ** 3)
       catalogReads++
       res.end(JSON.stringify({ models: [{ repo_id: modelId, runnable: true, task: 'text-generation', format: 'GGUF',
-        fit: { version: 'Q4', ctx: 4096 }, versions: [{ version: 'Q4', size_bytes: 64, pull_spec: `${modelId}:tiny.gguf` }] }] }))
+        fit: { version: 'Q4', ctx: 131072 }, versions: [{ version: 'Q4', size_bytes: 64, pull_spec: `${modelId}:tiny.gguf` }] }] }))
     } else {
       expect(req.url).toBe('/v1/chat/completions')
       expect(req.headers.authorization).toBe('Bearer inference-fixture')
