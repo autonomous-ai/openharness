@@ -3018,7 +3018,12 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     if (from != null) {
-      await _reseatDesk(from: from, to: current, dropOthers: isGuest);
+      await _reseatDesk(
+        from: from,
+        to: current,
+        dropOthers: isGuest,
+        revision: revision,
+      );
       if (!_authWorkCurrent(revision)) return;
     }
     // ONLY ONCE THE DESK REALLY NAMES THIS MACHINE.
@@ -3091,7 +3096,7 @@ class AppNotifier extends ChangeNotifier {
     // Every connection goes: the daemon this window was talking to is being
     // replaced by one with a different identity, and a remote lane was borrowed
     // from the account that is changing hands.
-    await _pool?.closeAll();
+    if (_pool case final pool?) await _trackWorkspaceCleanup(pool.closeAll());
     if (!_authWorkCurrent(revision)) return;
     machines = [];
     machinesAreStale = false;
@@ -3125,7 +3130,12 @@ class AppNotifier extends ChangeNotifier {
       // Remote tiles leave with the account — a guest has no machine to attach
       // them to, and a tile waiting forever reads as broken rather than as
       // signed out. This computer's follow it to the id the daemon serves now.
-      await _reseatDesk(from: before ?? after, to: after, dropOthers: true);
+      await _reseatDesk(
+        from: before ?? after,
+        to: after,
+        dropOthers: true,
+        revision: revision,
+      );
       if (!_authWorkCurrent(revision)) return;
       await _paneLayout?.saveLocalMachineId(after);
       if (!_authWorkCurrent(revision)) return;
@@ -3147,10 +3157,16 @@ class AppNotifier extends ChangeNotifier {
   /// the file is rewritten, and the cold-start restore reads it back; tiles whose
   /// machines are already connected are attached straight away rather than
   /// waiting for a connect event that already happened.
+  ///
+  /// The tiles detaching is teardown a sign-in waits for, and a sign-in that
+  /// started meanwhile ([revision] superseded) owns the grid from there: this
+  /// leaves it empty rather than restoring the desk this re-seat was for, and
+  /// that sign-in's own bootstrap restores the file and follows the id.
   Future<void> _reseatDesk({
     required String from,
     required String to,
     required bool dropOthers,
+    required int revision,
   }) async {
     final store = _paneLayout;
     if (store == null) return;
@@ -3158,7 +3174,11 @@ class AppNotifier extends ChangeNotifier {
     await store.flushSwarms();
     await store.rekeyMachine(from: from, to: to, dropOthers: dropOthers);
     if (_disposed) return;
-    await _closeAllPanes(persist: false);
+    // The file and the id it is keyed by move together, whatever happens next:
+    // a sign-in that overtakes this re-seat finds the desk through that id.
+    await store.saveLocalMachineId(to);
+    if (_disposed) return;
+    await _trackWorkspaceCleanup(_closeAllPanes(persist: false));
     if (_disposed) return;
     _closedHistory.clear();
     final starter = Swarm(id: 'swarm-${_nextSwarmId++}');
@@ -3166,6 +3186,7 @@ class AppNotifier extends ChangeNotifier {
       ..clear()
       ..add(starter);
     _activeSwarmId = starter.id;
+    if (!_authWorkCurrent(revision)) return;
     await _restorePaneLayout();
     if (_disposed) return;
     for (final machine in machineStates.values) {
@@ -3461,25 +3482,32 @@ class AppNotifier extends ChangeNotifier {
       ..add(starter);
     _activeSwarmId = starter.id;
     _autoPickedAgent = false;
+    _trackWorkspaceCleanup(
+      Future.wait<void>([panesClosed, if (pool != null) pool.closeAll()]),
+    );
+  }
+
+  /// The old account's terminals detaching and its connections closing, which
+  /// a sign-in waits for (see [login]) so it cannot overtake them: a new
+  /// session must not be set up while the last one is still being torn down.
+  /// Joins any teardown already in flight; completes when all of it has, and
+  /// never with an error.
+  Future<void> _trackWorkspaceCleanup(Future<void> work) {
     late final Future<void> cleanup;
-    cleanup =
-        Future.wait<void>([
-              ?_workspaceCleanup,
-              panesClosed,
-              if (pool != null) pool.closeAll(),
-            ])
-            .then<void>(
-              (_) {},
-              onError: (Object error) {
-                debugPrint('account connection cleanup failed: $error');
-              },
-            )
-            .whenComplete(() {
-              if (identical(_workspaceCleanup, cleanup)) {
-                _workspaceCleanup = null;
-              }
-            });
+    cleanup = Future.wait<void>([?_workspaceCleanup, work])
+        .then<void>(
+          (_) {},
+          onError: (Object error) {
+            debugPrint('account connection cleanup failed: $error');
+          },
+        )
+        .whenComplete(() {
+          if (identical(_workspaceCleanup, cleanup)) {
+            _workspaceCleanup = null;
+          }
+        });
     _workspaceCleanup = cleanup;
+    return cleanup;
   }
 
   void _startUpdateChecking() {

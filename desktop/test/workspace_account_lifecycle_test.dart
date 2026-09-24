@@ -77,6 +77,28 @@ class WorkspaceAccountFixture extends AppNotifier {
   final WorkspaceAccountLogin cli;
   int get inventoryRequests => (api as _Api).inventoryRequests;
 
+  /// The id a signed-out daemon serves this computer under, for a test whose
+  /// guest window should find this computer in its machine list and re-seat
+  /// the desk onto it. Left null, the guest's list names no machine, and the
+  /// desk is not re-seated at all.
+  String? guestComputerId;
+
+  @override
+  Future<bool> refreshMachines() async {
+    final id = guestComputerId;
+    if (signedIn || id == null) return super.refreshMachines();
+    final machine = Machine(
+      machineId: id,
+      authMode: MachineAuthMode.remote,
+      name: 'This computer',
+    );
+    machines = [machine];
+    machineStates
+      ..clear()
+      ..[id] = (MachineState(machine)..localOnly = true);
+    return true;
+  }
+
   var expiring = false;
   @override
   Future<void> ensureCliDaemonReady() async {
@@ -258,7 +280,11 @@ void main() {
       'sign-in ${cancel ? 'can be cancelled while waiting for' : 'waits for'} expired terminal cleanup',
       () async {
         final cli = WorkspaceAccountLogin();
-        final app = WorkspaceAccountFixture(MemoryStore(), cli);
+        // The guest daemon names this computer, so the expiry re-seats the
+        // desk: the tile on the other machine leaves with the account, and its
+        // terminal detaching is the cleanup a sign-in must not overtake.
+        final app = WorkspaceAccountFixture(MemoryStore(), cli)
+          ..guestComputerId = 'computer-abc';
         addTearDown(app.dispose);
         final closed = Completer<bool>();
         app.adoptSessionForTest(
