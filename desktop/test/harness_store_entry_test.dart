@@ -55,7 +55,7 @@ void main() {
         await openStore();
         expect(app.activeSwarm, same(store));
         expect(app.swarms, hasLength(2));
-        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
         expect(app.activeSwarm, same(work));
         expect(tester.state(view), same(terminalState));
         await key(tester, LogicalKeyboardKey.arrowLeft);

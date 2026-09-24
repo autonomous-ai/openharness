@@ -137,7 +137,7 @@ void main() {
         if (entry == 'new tab') {
           expect(app.swarms, hasLength(2));
           expect(app.panes, isEmpty);
-          await chord(tester, LogicalKeyboardKey.keyW);
+          await chord(tester, LogicalKeyboardKey.keyW, shift: true);
         }
         expect(app.focusedPane, same(pane));
         expect(app.activeSwarmId, original);

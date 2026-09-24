@@ -107,7 +107,7 @@ void main() {
       expect(sharedTab.name, 'openharness');
       expect(sharedTab.panes.single.session, same(claude));
       expect(source.panes, [firstPane, secondPane]);
-      await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
       expect(app.activeSwarm, same(source));
       expect(secondPane.session, same(claude));
       await command('reopen tab');
@@ -125,7 +125,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter, cmd: true);
       expect(app.zoomedPaneId, isNull);
       await key(tester, LogicalKeyboardKey.keyL, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true);
       expect(source.panes, [firstPane]);
       expect(
         app.swarms

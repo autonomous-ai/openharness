@@ -65,7 +65,7 @@ void main() {
         ].every((frames) => frames.isEmpty),
         isTrue,
       );
-      await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
       await visible();
       app.reorderSwarm(app.activeSwarmId, 0);
       await tester.pump();

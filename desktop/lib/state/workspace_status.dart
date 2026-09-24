@@ -139,9 +139,9 @@ class WorkspacePaneContext {
   String? get agentId => pane.isWeb ? pane.ownerAgentId : pane.agentId;
   String? get engine => agent?.engine ?? pane.session?.engineId;
   String get suffix => branch == null ? '' : '  ($branch)';
-  String get text => '${provider.isEmpty ? '' : '$provider  '}$location$suffix';
+  String get text => '$location$suffix';
   StatusLineParts format(PromptPrefs prefs) => statusLineParts(
-    provider: provider,
+    provider: '',
     machine: prefs.machine ? machineName : '',
     project: prefs.project ? projectName : '',
     branch: prefs.branch ? branch : null,

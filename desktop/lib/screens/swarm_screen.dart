@@ -21,6 +21,7 @@ import '../models/models_panel.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/workspace_bar_style.dart';
 import '../sharing/share_harness_dialog.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
@@ -53,7 +54,6 @@ import '../widgets/transient_menus.dart';
 import '../widgets/layout_palette.dart';
 import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
-import '../widgets/grid_model_picker.dart';
 import '../widgets/status_line.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
@@ -157,7 +157,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
   final _paneContextAnchor = GlobalKey();
-  final _focusedModel = GridModelPickerController();
   late final WorkspacePullRequest _pullRequest;
   MachinesPanelHandle? _machinesPanel;
   final _toolbarNotices = ToolbarNotices();
@@ -411,7 +410,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     _navigation.dispose();
     _searchFocus.dispose();
     _searchText.dispose();
-    _focusedModel.dispose();
     _tabScroll.dispose();
     _canvasFocus.dispose();
     _shellFocus.dispose();
@@ -834,14 +832,15 @@ class _SwarmScreenState extends State<SwarmScreen>
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
     );
+    final barStyle = workspaceBarTextStyle();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
       'palette': grid.AppTheme.palette.value.nativeColors,
-      'terminalStyle': {
-        'family': terminalFontStore.value.fontFamily,
-        'fallback': terminalFontStore.value.fontFamilyFallback,
-        'size': terminalFontStore.size,
+      'barStyle': {
+        'family': barStyle.fontFamily,
+        'fallback': barStyle.fontFamilyFallback,
+        'size': workspaceBarFontSize,
         'foreground': terminalTheme.foreground.toARGB32(),
         'selection': terminalTheme.selection.toARGB32(),
       },
@@ -850,7 +849,7 @@ class _SwarmScreenState extends State<SwarmScreen>
           : {
               ..._nativeStatusLine(parts!, terminalTheme),
               'detail': focused.detail,
-              'canSelectModel': _canSelectFocusedModel(focused),
+              'interactive': false,
             },
       'pullRequest': _pullRequest.value == null
           ? null
@@ -866,7 +865,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               ),
               'url': _pullRequest.value!.url.toString(),
               'detail': '${_pullRequest.value!.label} — Open on GitHub',
-              'canSelectModel': true,
+              'interactive': true,
             },
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
@@ -1176,11 +1175,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     // event any Flutter overlay can see itself.
     dismissTransientMenus();
     switch (call.method) {
-      case 'focusedModel':
-        final focused = WorkspacePaneContext.focused(app);
-        if (focused != null && _canSelectFocusedModel(focused)) {
-          _focusedModel.open();
-        }
       case 'focusedPullRequest':
         await _openFocusedPullRequest(args['url'] as String?);
       case 'store':
@@ -3635,8 +3629,8 @@ class _SwarmScreenState extends State<SwarmScreen>
                 backgroundColor: grid.AppPalette.swarmField,
                 body: Column(
                   children: [
-                    _focusedModelPicker(),
-                    if (!_native) _tabStrip(),
+                    if (!_native)
+                      MediaQuery.withNoTextScaling(child: _tabStrip()),
                     if (_learning.active && app.viewer == null)
                       WorkspaceQuickStart(
                         learning: _learning,
@@ -3946,54 +3940,14 @@ class _SwarmScreenState extends State<SwarmScreen>
     });
   }
 
-  bool _canSelectFocusedModel(WorkspacePaneContext data) {
-    final machine = app.stateOf(data.pane.machineId);
-    return data.agent != null &&
-        data.agentId != null &&
-        modelPickerSupports(data.engine) &&
-        data.pane.session?.readOnly != true &&
-        machine?.needsLink != true &&
-        machine?.nodeOnline != false;
-  }
-
-  Widget _focusedModelPicker() {
-    final data = WorkspacePaneContext.focused(app);
-    if (data == null || !_canSelectFocusedModel(data)) {
-      return const SizedBox.shrink();
-    }
-    final machineId = data.pane.machineId;
-    final agentId = data.agentId!;
-    return GridModelPicker(
-      key: ValueKey(('workspace-model', machineId, agentId)),
-      notifier: app,
-      machineId: machineId,
-      controller: _focusedModel,
-      menuOnly: true,
-      engineLabel: data.engine,
-      currentModel: data.agent?.gridModel,
-      webSearch: data.agent?.gridWebSearch,
-      onSelected: (model) => unawaited(
-        app.retargetAgentToGridModel(
-          machineId,
-          agentId,
-          model.id,
-          gridName: model.grid,
-        ),
-      ),
-      onUseOwnLogin: () => unawaited(app.clearAgentGrid(machineId, agentId)),
-      onRunLocalModel: () =>
-          unawaited(app.runLocalModel(context, machineId: machineId)),
-    );
-  }
-
   Widget _tabStrip() => LayoutBuilder(
     builder: (context, constraints) {
-      final cell = terminalCellSizeOf(context);
+      final cell = workspaceBarCellSizeOf(context);
       final theme = terminalThemeFor(
         grid.AppTheme.palette.value,
         terminalThemeStore.value,
       );
-      final style = terminalContentStyle(color: theme.foreground);
+      final style = workspaceBarTextStyle(color: theme.foreground);
       final names = workspaceTabNames(app);
       final labels = [
         for (var index = 0; index < app.swarms.length; index++)
@@ -4033,7 +3987,6 @@ class _SwarmScreenState extends State<SwarmScreen>
               segmentOffset: parts.segments.length,
             ).first.background
           : null;
-      final canSelectModel = focused != null && _canSelectFocusedModel(focused);
       _revealSelectedTab(tabsWidth);
       return Material(
         key: const ValueKey('workspace-status-bar'),
@@ -4138,13 +4091,13 @@ class _SwarmScreenState extends State<SwarmScreen>
                   child: Tooltip(
                     key: _paneContextAnchor,
                     message: focused?.detail ?? '',
-                    child: InkWell(
+                    child: SizedBox(
                       key: const ValueKey('workspace-pane-context'),
-                      onTap: canSelectModel ? _focusedModel.open : null,
                       child: parts == null
                           ? const SizedBox.shrink()
                           : StatusLine(
                               parts: parts,
+                              workspaceBar: true,
                               color: prefs.color,
                               nextBackground: prBackground,
                             ),
@@ -4165,6 +4118,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                       onTap: () => _openFocusedPullRequest(pr.url.toString()),
                       child: StatusLine(
                         parts: prParts!,
+                        workspaceBar: true,
                         color: prefs.color,
                         segmentOffset: parts?.segments.length ?? 0,
                       ),

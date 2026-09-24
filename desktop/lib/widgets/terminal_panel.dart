@@ -33,6 +33,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
 import 'grid_model_picker.dart';
@@ -1876,7 +1877,7 @@ class _TerminalHeader extends StatelessWidget {
 
   Widget _buildHeader(BuildContext context) {
     TerminalFontScope.watch(context);
-    final titleStyle = terminalContentStyle(
+    final titleStyle = workspaceBarTextStyle(
       color: terminalThemeFor(
         grid.AppTheme.palette.value,
         terminalThemeStore.value,
@@ -1955,14 +1956,12 @@ class _TerminalHeader extends StatelessWidget {
       if (profile != null) 'Codex profile: $profile',
       'Double-click to rename',
     ].join('\n');
-    // Reserve space for the visible model name and the pane controls.
+    // Reserve space for the pane-local model selector.
     // Engines without a picker keep their existing header width.
-    final showModelPicker =
-        !compact && !readOnly && modelPickerSupports(session.engineId);
-    // The picker: a model id up to 220px, its arrow and padding.
+    final showModelPicker = modelPickerSupports(session.engineId);
+    // The picker: a model id up to 220px and its padding.
     final pickerWidth = showModelPicker ? 250.0 : 0.0;
-    // Reserve the same measured columns used by the three ASCII controls.
-    final actionsWidth = PaneHeaderActions.widthOf(context) + pickerWidth;
+    final actionsWidth = pickerWidth;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
@@ -2002,9 +2001,7 @@ class _TerminalHeader extends StatelessWidget {
 
             final desiredRightWidth = narrow
                 ? math.max(
-                    PaneHeaderActions.widthOf(context) +
-                        (showModelPicker ? 64.0 : 0.0) +
-                        badgeWidth,
+                    (showModelPicker ? 96.0 : 0.0) + badgeWidth,
                     constraints.maxWidth * .36,
                   )
                 : math.max(
@@ -2016,10 +2013,7 @@ class _TerminalHeader extends StatelessWidget {
             // The name/status retain space while model and project text yield.
             final rightWidth = math.min(
               desiredRightWidth,
-              math.max(
-                PaneHeaderActions.widthOf(context),
-                constraints.maxWidth - 99,
-              ),
+              math.max(0.0, constraints.maxWidth - 99),
             );
             return Row(
               children: [
@@ -2178,10 +2172,18 @@ class _TerminalHeader extends StatelessWidget {
                     // terminal reconnects, without shifting the other controls.
                     modelPicker: showModelPicker
                         ? GridModelPicker(
+                            key: ValueKey((
+                              'pane-model',
+                              session.machineId,
+                              session.agentId,
+                            )),
+                            paneHeader: true,
+                            enabled: !readOnly && !session.readOnly,
                             compact: narrow,
                             notifier: notifier,
                             machineId: session.machineId,
                             currentModel: agent?.gridModel,
+                            subscriptionModel: agent?.modelName,
                             webSearch: agent?.gridWebSearch,
                             engineLabel: session.engineId,
                             onSelected: (model) => unawaited(
@@ -2208,11 +2210,6 @@ class _TerminalHeader extends StatelessWidget {
                             ),
                           )
                         : null,
-                    zoomed: zoomed,
-                    onZoom: onToggleZoom,
-                    onDelete: onDelete,
-                    onClose: onClose,
-                    terminal: isTerminalEngine(session.engineId),
                     details: compact || narrow
                         ? null
                         : Tooltip(
@@ -2249,7 +2246,7 @@ class _TerminalHeader extends StatelessWidget {
         ),
       ),
     );
-    final strip = PaneHeaderHover(child: header);
+    final strip = header;
     final handle = paneDrag;
     if (handle == null) return strip;
 

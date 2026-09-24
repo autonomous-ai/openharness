@@ -45,7 +45,7 @@ void main() {
               state: state,
               style: style,
             );
-            expect(pr.text, 'PR #298 · $state');
+            expect(pr.text, '#298 $state');
             expect(
               statusLinePaintSegments(
                 pr,

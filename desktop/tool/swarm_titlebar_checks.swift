@@ -117,10 +117,10 @@ private extension SwarmTabStrip {
     update(["tabs": [["id": "font-tab", "name": "Typography", "label": "1:code"],
                     ["id": "other", "name": "Other", "label": "2:blender"]],
             "activeId": "font-tab", "enabled": true,
-            "terminalStyle": ["family": "Menlo", "size": 16.0,
+            "barStyle": ["family": ".AppleSystemUIFontMonospaced", "size": 13.0,
                               "foreground": Int64(0xffd0d0d0), "selection": Int64(0xff444444)]])
-    try checkTitlebar(tabs[0].labelFont.pointSize == 16 && tabs[0].labelFont.familyName == "Menlo",
-      "Numbered tabs follow the selected terminal font and size")
+    try checkTitlebar(tabs[0].labelFont == NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+      "Numbered tabs use 13 pt SF Mono regular")
     try checkTitlebar(tabs[0].drawnFont == tabs[1].drawnFont && contextButton.font == tabs[0].labelFont,
       "Active tabs, inactive tabs, and pane context share one font")
     try checkTitlebar(tabs[0].frame.width < tabs[1].frame.width,
@@ -168,12 +168,12 @@ private extension SwarmTabStrip {
       ["tabs": rows, "activeId": active, "enabled": enabled,
        "focusedContext": ["text": "OpenAI  M2:~/code/harness  (main)",
                           "segments": [["text": "OpenAI  M2:~/code/harness  (main)", "foreground": Int64(0xffdddddd)]],
-                          "detail": "Full project context", "canSelectModel": true]]
+                          "detail": "Full project context", "interactive": false]]
     }
     var prState = state(rows, active: "swarm-11")
-    prState["pullRequest"] = ["text": "PR #298 · Merged", "segmented": true,
-      "segments": [["text": "PR #298 · Merged", "foreground": Int64(0xffeeeeee), "background": Int64(0xffbc3fbc)]],
-      "url": "https://github.com/acme/repo/pull/298", "canSelectModel": true]
+    prState["pullRequest"] = ["text": "#298 Merged", "segmented": true,
+      "segments": [["text": "#298 Merged", "foreground": Int64(0xffeeeeee), "background": Int64(0xffbc3fbc)]],
+      "url": "https://github.com/acme/repo/pull/298", "interactive": true]
     update(prState)
     try checkTitlebar(!pullRequestButton.isHidden && pullRequestButton.isEnabled,
       "A focused PR has a separate enabled action")
@@ -184,7 +184,7 @@ private extension SwarmTabStrip {
         ["text": "OpenAI M2", "foreground": Int64(0xffeeeeee), "background": Int64(0xff000000)],
         ["text": "app", "foreground": Int64(0xffeeeeee), "background": Int64(0xff3465a4)],
         ["text": "main", "foreground": Int64(0xff000000), "background": Int64(0xff4e9a06)],
-      ], "canSelectModel": true]
+      ], "interactive": false]
     let originalSize = frame.size
     for width in [CGFloat(520), CGFloat(1280)] {
       setFrameSize(NSSize(width: width, height: originalSize.height))
@@ -199,7 +199,7 @@ private extension SwarmTabStrip {
     setFrameSize(originalSize)
     update(prState)
     let mergedPixels = pullRequestButton.renderedPixels()
-    try checkTitlebar(!mergedPixels.isEmpty && pullRequestButton.accessibilityValue() as? String == "PR #298 · Merged",
+    try checkTitlebar(!mergedPixels.isEmpty && pullRequestButton.accessibilityValue() as? String == "#298 Merged",
       "Segmented PR renders and exposes its full state")
     pullRequestButton.performClick(nil)
     try checkTitlebar(events.last == "focusedPullRequest", "PR opens its own action rather than the model picker")
@@ -259,7 +259,7 @@ private extension SwarmTabStrip {
     contextButton.performClick(nil)
     newButton.performClick(nil)
     original.clickBothActions()
-    try checkTitlebar(events == ["focusedModel", "new", "select", "close"], "Visible controls dispatch their actions once")
+    try checkTitlebar(events == ["new", "select", "close"], "Visible controls dispatch their actions once")
     events.removeAll()
     update(state(rows, active: "swarm-0", enabled: false))
     try checkTitlebar(!contextButton.isEnabled && !newButton.isEnabled, "Modal state disables status-bar actions")
@@ -710,6 +710,10 @@ private extension SwarmTitlebar {
     canFind = true
     try checkTitlebar(validateMenuItem(movePane), "Move Pane to Tab is available with a focused pane")
     try checkTitlebar(agent.items.contains { $0.title == "Close Tab" && $0.representedObject as? String == "closeActive" }, "Close Tab preserves its command")
+    let closeTabShortcut = agent.items.first { $0.representedObject as? String == "closeActive" }!
+    let closePaneShortcut = agent.items.first { $0.representedObject as? String == "closePane" }!
+    try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command, .shift], "Close Tab defaults to Command-Shift-W")
+    try checkTitlebar(closePaneShortcut.keyEquivalent == "w" && closePaneShortcut.keyEquivalentModifierMask == [.command], "Close Pane defaults to Command-W")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
     try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command], "Command search keeps its native menu owner")
     try checkTitlebar(edit.submenu!.items.allSatisfy { $0.representedObject as? String != "jump" }, "Edit has no Navigate action")

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/status_line_style.dart';
+import '../shared/theme/workspace_bar_style.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -17,6 +18,7 @@ class StatusLine extends StatelessWidget {
     this.textAlign = TextAlign.right,
     this.nextBackground,
     this.segmentOffset = 0,
+    this.workspaceBar = false,
   });
   final StatusLineParts parts;
   final bool color;
@@ -25,6 +27,7 @@ class StatusLine extends StatelessWidget {
   /// Fill behind the final arrow to join a separately clickable next segment.
   final Color? nextBackground;
   final int segmentOffset;
+  final bool workspaceBar;
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +40,9 @@ class StatusLine extends StatelessWidget {
           grid.AppTheme.palette.value,
           terminalThemeStore.value,
         );
-        final style = terminalContentStyle(color: theme.foreground);
+        final style = workspaceBar
+            ? workspaceBarTextStyle(color: theme.foreground)
+            : terminalContentStyle(color: theme.foreground);
         final segments = statusLinePaintSegments(
           parts,
           theme,
@@ -62,7 +67,9 @@ class StatusLine extends StatelessWidget {
             textAlign: textAlign,
           );
         }
-        final cell = terminalCellSizeOf(context);
+        final cell = workspaceBar
+            ? workspaceBarCellSizeOf(context)
+            : terminalCellSizeOf(context);
         final scaler = MediaQuery.textScalerOf(context);
         return Semantics(
           label: parts.text,

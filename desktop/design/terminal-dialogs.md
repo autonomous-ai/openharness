@@ -58,8 +58,9 @@ when using custom row widgets.
 
 - No provider logos, avatars, decorative emoji, image assets, or icon-font
   glyphs in dialog chrome. Write `Codex`, `Claude`, or the harness name.
-- Use plain markers when useful: `>` for the search prompt, `@` for a machine,
-  `/` for a project, and `git:` for a branch. Keep identity readable as text.
+- Use `>` for the search prompt. Harness result subtitles use the compact
+  Standard status format: `machine:project  (branch)`. Omit missing fields and
+  redundant provider/engine labels; preserve important state such as Offline.
 - Boolean controls use `[x]` and `[ ]`; Enter and Space toggle them.
 - Actions use concise text, such as `[ New Harness ]`. Shortcut hints are text
   beside the action, resolved from the live keymap.
@@ -74,10 +75,10 @@ For example, a result is two text lines followed by one blank row:
 > Find a harness...
 
   Checkout retries                         5m
-  Codex  @ M2  / storefront  git: fix/retry
+  M2:storefront  (fix/retry)
 
   Search experience                        1h
-  Claude  @ M2  / storefront  git: main
+  M2:storefront  (main)
 ```
 
 The highlight covers only the selected title line.

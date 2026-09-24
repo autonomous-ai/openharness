@@ -180,7 +180,7 @@ void main() {
           if (name == 'cmd_n' || name == 'cmd_o') {
             await key(tester, LogicalKeyboardKey.escape);
           } else if (name == 'cmd_t') {
-            await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+            await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
             expect(app.swarms.length, tabCount);
             app.selectSwarm(before);
           }

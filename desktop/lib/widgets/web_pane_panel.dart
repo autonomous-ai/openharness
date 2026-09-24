@@ -8,6 +8,7 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/workspace_bar_style.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
 import '../theme/app_theme.dart';
@@ -247,7 +248,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
                         key: const ValueKey('viewer-pane-title'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: terminalContentStyle(color: AppColors.text),
+                        style: workspaceBarTextStyle(color: AppColors.text),
                       ),
                     ),
                     if (widget.verdict case final verdict?) ...[

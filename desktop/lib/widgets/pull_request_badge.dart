@@ -71,9 +71,9 @@ class _PullRequestBadgeState extends State<PullRequestBadge> {
     final pr = PullRequestStatus.fromResult(_result);
     if (pr == null) return const SizedBox.shrink();
     final number = pr.number, state = pr.state, uri = pr.url;
-    final label = '${widget.compact ? '' : 'PR '}#$number · $state';
+    final label = pr.label;
     return Tooltip(
-      message: 'PR #$number · $state — Open on GitHub',
+      message: '#$number $state — Open on GitHub',
       child: TextButton(
         style: TextButton.styleFrom(
           minimumSize: const Size(0, 28),

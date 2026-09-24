@@ -84,7 +84,7 @@ TerminalSession terminal(String id, List<TerminalBinaryFrame> input) =>
 
 void main() {
   testWidgets(
-    'tabs omit close buttons and Command-W still closes the active tab',
+    'tabs omit close buttons and Command-Shift-W closes the active tab',
     (tester) async {
       final app = createApp();
       final first = app.activeSwarm;
@@ -102,7 +102,7 @@ void main() {
       );
       Focus.of(tester.element(label)).requestFocus();
       await tester.pumpAndSettle();
-      await chord(tester, LogicalKeyboardKey.keyW);
+      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
       await tester.pumpAndSettle();
       expect(app.swarms.map((swarm) => swarm.id), [first.id]);
       await tester.pumpWidget(const SizedBox());

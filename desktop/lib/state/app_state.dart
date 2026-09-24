@@ -4551,6 +4551,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
+          prev.modelName != agent.modelName ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.lastActivityAt != agent.lastActivityAt ||

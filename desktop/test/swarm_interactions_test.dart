@@ -5,7 +5,6 @@ import 'dart:async';
 
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -21,7 +20,6 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/codex_profile_field.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
-import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
@@ -151,7 +149,7 @@ void main() {
           await tester.pump();
           expect(input, findsNothing);
           expect(app.activeSwarmId, created);
-          await chord(tester, LogicalKeyboardKey.keyW);
+          await chord(tester, LogicalKeyboardKey.keyW, shift: true);
           expect(app.swarms, hasLength(2));
         }
         await newFromChrome();
@@ -221,11 +219,11 @@ void main() {
       app.newSwarm();
       await app.addAgentToSwarm('m', 'a0');
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyW);
       expect(app.swarms.length, 2);
       expect(app.panes, isEmpty);
       expect(original.panes.single.session, same(session));
-      await chord(tester, LogicalKeyboardKey.keyW);
+      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
       expect(app.swarms.single, same(original));
       expect(app.panes.single.session, same(session));
       await tester.pumpWidget(const SizedBox());
@@ -233,82 +231,47 @@ void main() {
     },
   );
 
-  testWidgets('pane controls zoom, confirm stopping and close only this view', (
-    tester,
-  ) async {
-    final app = createApp();
-    app.machineStates['m']!.nodeOnline = true;
-    final input = <TerminalBinaryFrame>[];
-    final session = terminal('a0', input);
-    app.adoptSessionForTest(session);
-    final original = app.activeSwarm;
-    app.newSwarm();
-    await app.addAgentToSwarm('m', 'a0');
-    final pane = app.panes.single;
-    app.adoptSessionForTest(terminal('a1', []));
-    await mount(tester, app);
+  testWidgets(
+    'keyboard pane actions replace header controls and keep other views alive',
+    (tester) async {
+      final app = createApp();
+      app.machineStates['m']!.nodeOnline = true;
+      final input = <TerminalBinaryFrame>[];
+      final session = terminal('a0', input);
+      app.adoptSessionForTest(session);
+      final original = app.activeSwarm;
+      app.newSwarm();
+      await app.addAgentToSwarm('m', 'a0');
+      final pane = app.panes.single;
+      app.adoptSessionForTest(terminal('a1', []));
+      await mount(tester, app);
 
-    final controls = find.byType(PaneHeaderActions).first;
-    expect(
-      tester
-          .widgetList<Text>(
-            find.descendant(of: controls, matching: find.byType(Text)),
-          )
-          .map((text) => text.data),
-      ['-', '[]', 'x'],
-    );
-    expect(find.byTooltip('Stop Harness').first.hitTestable(), findsNothing);
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await mouse.addPointer(location: const Offset(1, 1));
-    Future<void> hover() async {
-      await mouse.moveTo(tester.getCenter(controls));
-      await tester.pump(const Duration(milliseconds: 120));
-    }
-
-    await hover();
-    expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
-    await tester.tap(find.byTooltip('Zoom Pane').first);
-    await tester.pump();
-    expect(app.zoomedPaneId, pane.id);
-    await hover();
-    await tester.tap(find.byTooltip('Restore Pane'));
-    await tester.pump();
-    expect(app.zoomedPaneId, isNull);
-    await hover();
-
-    await tester.tap(
-      find.descendant(of: controls, matching: find.byTooltip('Stop Harness')),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Stop Harness'), findsOneWidget);
-    expect(find.text('Stop'), findsOneWidget);
-    expect(app.panes, contains(pane));
-    expect(original.panes.single.session, same(session));
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(app.panes, contains(pane));
-    await hover();
-
-    await tester.tap(
-      find.descendant(of: controls, matching: find.byTooltip('Close Pane')),
-    );
-    await tester.pump();
-    await mouse.removePointer();
-    expect(app.panes.single.agentId, 'a1');
-    expect(original.panes.single.session, same(session));
-    app.selectSwarm(original.id);
-    await tester.pump();
-    tester.testTextInput.enterText('x');
-    await tester.pump(const Duration(milliseconds: 20));
-    expect(
-      String.fromCharCodes(
-        input.where((f) => f.kind == TerminalBinaryKind.input).single.bytes,
-      ),
-      'x',
-    );
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+      app.focusPane(pane.id);
+      await tester.pump();
+      for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+        expect(find.byTooltip(label), findsNothing);
+      }
+      await chord(tester, LogicalKeyboardKey.enter);
+      expect(app.zoomedPaneId, pane.id);
+      await chord(tester, LogicalKeyboardKey.enter);
+      expect(app.zoomedPaneId, isNull);
+      await chord(tester, LogicalKeyboardKey.keyW);
+      expect(app.panes.single.agentId, 'a1');
+      expect(original.panes.single.session, same(session));
+      app.selectSwarm(original.id);
+      await tester.pump();
+      tester.testTextInput.enterText('x');
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(
+        String.fromCharCodes(
+          input.where((f) => f.kind == TerminalBinaryKind.input).single.bytes,
+        ),
+        'x',
+      );
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   testWidgets(
     'native tab replies wait for destination focus and allow rename input',

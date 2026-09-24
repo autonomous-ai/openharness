@@ -464,7 +464,7 @@ void main() {
         expectGuideFixed(find.byKey(const ValueKey('new-harness-form')));
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pump();
-        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
         await tester.pump();
         expect(app.swarms, [first, second]);
         app.selectSwarm(first.id);

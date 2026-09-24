@@ -1,13 +1,14 @@
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/widgets/pane_header_actions.dart';
+import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:xterm/xterm.dart';
 
 import 'support/real_fonts.dart';
@@ -48,18 +49,12 @@ void main() {
       await tester.pump();
       revision.value = 1;
       await tester.pump();
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: const Offset(1, 100));
-      await mouse.moveTo(tester.getCenter(find.byType(PaneHeaderActions)));
-      await tester.pump();
-      addTearDown(mouse.removePointer);
       for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
-        await tester.tap(find.byTooltip(label));
-        await tester.pumpAndSettle();
+        expect(find.byTooltip(label), findsNothing);
       }
-      expect(closed, [1]);
-      expect(deleted, [1]);
-      expect(zoomed, [1]);
+      expect(closed, isEmpty);
+      expect(deleted, isEmpty);
+      expect(zoomed, isEmpty);
       expect(find.byTooltip('Pane actions'), findsNothing);
       expect(find.byTooltip('Restart Harness'), findsNothing);
       expect(find.byTooltip('Share harness'), findsNothing);
@@ -171,7 +166,7 @@ void main() {
       );
       revision.value = 2;
       await tester.pump();
-      expect(find.byTooltip('Restore Pane'), findsOneWidget);
+      expect(find.byTooltip('Restore Pane'), findsNothing);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
@@ -193,7 +188,7 @@ void main() {
       await tester.pump();
       expect(
         tester.widget<Text>(find.text('Renamed terminal')).style!.fontFamily,
-        'Monaco',
+        workspaceBarTextStyle().fontFamily,
       );
       await tester.pumpWidget(const SizedBox());
       revision.dispose();
@@ -203,7 +198,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} compact controls reveal on header hover without moving the title or terminal',
+      '${local ? 'local' : 'remote'} compact model selectors stay visible without moving the title or terminal',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -262,8 +257,9 @@ void main() {
                 ),
               )
               .length,
-          3,
+          0,
         );
+        expect(find.text('OpenAI').hitTestable(), findsOneWidget);
         for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
@@ -273,14 +269,10 @@ void main() {
         await mouse.moveTo(tester.getCenter(title));
         await tester.pump();
         for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
-          expect(find.byTooltip(label).hitTestable(), findsOneWidget);
+          expect(find.byTooltip(label), findsNothing);
         }
         expect(tester.getRect(title), titleBounds);
         expect(tester.getRect(controls), controlsBounds);
-        await mouse.moveTo(tester.getCenter(find.byTooltip('Zoom Pane')));
-        await mouse.down(tester.getCenter(find.byTooltip('Zoom Pane')));
-        await mouse.up();
-        await tester.pump();
         await mouse.moveTo(tester.getCenter(find.byType(TerminalView)));
         await tester.pump();
         for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
@@ -294,8 +286,8 @@ void main() {
           same(terminalWidget),
         );
         final titleStyle = tester.widget<Text>(title).style!;
-        expect(titleStyle.fontFamily, terminalFontStore.value.fontFamily);
-        expect(titleStyle.fontSize, terminalFontStore.size);
+        expect(titleStyle.fontFamily, workspaceBarTextStyle().fontFamily);
+        expect(titleStyle.fontSize, 13);
         expect(titleStyle.fontWeight, FontWeight.normal);
         await mouse.removePointer();
         await tester.pumpWidget(const SizedBox());
@@ -305,7 +297,7 @@ void main() {
     );
   }
   testWidgets(
-    'narrow headers preserve identity and keyboard actions at large text',
+    'narrow headers preserve identity and model selection at large text',
     (tester) async {
       final app = createApp();
       final session = terminal('a0', []);
@@ -324,7 +316,6 @@ void main() {
           ),
         ),
       ];
-      var zooms = 0;
       final revision = ValueNotifier(0);
       tester.view.devicePixelRatio = 1;
       tester.platformDispatcher.textScaleFactorTestValue = 1.7;
@@ -341,7 +332,6 @@ void main() {
                 session: session,
                 focused: false,
                 compactHeader: true,
-                onToggleZoom: () => zooms++,
                 onClose: () {},
                 onDelete: () {},
                 onToggleComposer: () {},
@@ -354,17 +344,11 @@ void main() {
         expect(tester.getSize(title).width, greaterThan(64));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
-        final zoom = find.byTooltip('Zoom Pane');
-        Focus.of(tester.element(find.text('[]'))).requestFocus();
-        await tester.pumpAndSettle();
-        expect(zoom.hitTestable(), findsOneWidget);
-        expect(find.byTooltip('Fork Harness'), findsNothing);
-        expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
+        final picker = find.byType(GridModelPicker);
+        expect(picker.hitTestable(), findsOneWidget);
+        expect(find.byTooltip('Stop Harness'), findsNothing);
+        expect(find.byTooltip('Zoom Pane'), findsNothing);
         expect(tester.getRect(title), titleBefore);
-        await tester.sendKeyEvent(LogicalKeyboardKey.space);
-        await tester.pumpAndSettle();
-        expect(zooms, [240.0, 280.0, 420.0].indexOf(width) + 1);
-        expect(tester.takeException(), isNull);
         for (final status in [
           TerminalSessionStatus.opening,
           TerminalSessionStatus.takenOver,

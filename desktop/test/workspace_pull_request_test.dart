@@ -20,7 +20,7 @@ void main() {
     for (final state in ['Draft', 'Open', 'Merged', 'Closed']) {
       expect(
         PullRequestStatus.fromResult(found(298, state))!.label,
-        'PR #298 · $state',
+        '#298 $state',
       );
     }
     for (final invalid in [

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
@@ -63,12 +64,16 @@ void main() {
     grid.AppType.captionSize,
   };
 
-  /// General UI keeps its fixed scale; workspace chrome follows the terminal.
+  /// General UI and workspace bars keep their fixed scales during terminal zoom.
   /// Return general UI sizes for comparisons across a terminal zoom.
   Map<String, double> checkText(WidgetTester tester, {int atLeast = 4}) {
     final sizes = <String, double>{};
     var checked = 0;
-    void check(InlineSpan span, TextStyle inherited, {bool terminal = false}) {
+    void check(
+      InlineSpan span,
+      TextStyle inherited, {
+      bool workspaceBar = false,
+    }) {
       final style = inherited.merge(span.style);
       if (span is TextSpan) {
         final text = span.text?.trim();
@@ -79,11 +84,11 @@ void main() {
               'LucideIcons',
             ].any((icon) => style.fontFamily?.contains(icon) == true)) {
           checked++;
-          if (terminal) {
-            expect(style.fontSize, terminalFontStore.size, reason: text);
+          if (workspaceBar) {
+            expect(style.fontSize, 13, reason: text);
             expect(
               style.fontFamily,
-              terminalFontStore.value.fontFamily,
+              workspaceBarTextStyle().fontFamily,
               reason: text,
             );
           } else {
@@ -97,7 +102,7 @@ void main() {
           }
         }
         for (final child in span.children ?? <InlineSpan>[]) {
-          check(child, style, terminal: terminal);
+          check(child, style, workspaceBar: workspaceBar);
         }
       }
     }
@@ -124,7 +129,7 @@ void main() {
       check(
         (element.widget as RichText).text,
         const TextStyle(),
-        terminal: find
+        workspaceBar: find
             .descendant(
               of: find.byWidgetPredicate(
                 (widget) =>
@@ -378,7 +383,7 @@ void main() {
   });
 
   testWidgets(
-    'native tabs receive the same live font and size as the terminal',
+    'native tabs keep 13 pt platform monospace during terminal font changes',
     (tester) async {
       final updates = <Map<dynamic, dynamic>>[];
       const channel = MethodChannel('harness/swarm_tabs');
@@ -402,15 +407,18 @@ void main() {
       await mount(tester, app, map, native: true);
       selectFont(22, TerminalFontChoice.monaco);
       await tester.pumpAndSettle();
-      expect(updates.last['terminalStyle'], containsPair('family', 'Monaco'));
-      expect(updates.last['terminalStyle'], containsPair('size', 22.0));
+      expect(
+        updates.last['barStyle'],
+        containsPair('family', workspaceBarTextStyle().fontFamily),
+      );
+      expect(updates.last['barStyle'], containsPair('size', 13.0));
       selectFont(14, TerminalFontChoice.sfMono);
       await tester.pumpAndSettle();
       expect(
-        updates.last['terminalStyle'],
-        containsPair('family', terminalFontStore.value.fontFamily),
+        updates.last['barStyle'],
+        containsPair('family', workspaceBarTextStyle().fontFamily),
       );
-      expect(updates.last['terminalStyle'], containsPair('size', 14.0));
+      expect(updates.last['barStyle'], containsPair('size', 13.0));
       expect(updates.last.containsKey('fontFallbacks'), isFalse);
       await tester.pumpWidget(const SizedBox());
     },

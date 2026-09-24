@@ -112,7 +112,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["focusedModel", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -287,13 +287,13 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
     add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
-    add(file, "Close Tab", "w", "closeActive")
+    add(file, "Close Tab", "w", "closeActive", [.command, .shift])
     file.addItem(.separator())
     add(file, "Split Right", "r", "splitRight")
     add(file, "Split Down", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
     add(file, "Move Pane to Tab", "m", "movePaneToTab", [.command, .shift])
-    add(file, "Close Pane", "w", "closePane", [.command, .shift])
+    add(file, "Close Pane", "w", "closePane")
     install(file, at: 1)
 
     historyMenu.delegate = self
@@ -952,7 +952,7 @@ private final class SwarmContextButton: NSButton {
     }
     actionURL = context?["url"] as? String
     toolTip = context?["detail"] as? String
-    isEnabled = enabled && context?["canSelectModel"] as? Bool == true
+    isEnabled = enabled && context?["interactive"] as? Bool == true
     setAccessibilityValue(text)
     setAccessibilityHelp(toolTip)
     needsDisplay = true
@@ -1031,7 +1031,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let newButton = SwarmIconButton()
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let pullRequestButton = SwarmContextButton()
-  private var terminalFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+  private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   private var terminalForeground = NSColor(white: 0.85, alpha: 1)
   private var terminalSelection = NSColor(white: 0.35, alpha: 1)
   private var tabs: [SwarmTabButton] = []
@@ -1073,7 +1073,6 @@ private final class SwarmTabStrip: NSView {
     contextButton.isBordered = false
     contextButton.alignment = .right
     contextButton.target = self
-    contextButton.action = #selector(openFocusedModel)
     contextButton.setAccessibilityLabel("Focused pane")
     addSubview(contextButton)
     pullRequestButton.isBordered = false
@@ -1101,20 +1100,20 @@ private final class SwarmTabStrip: NSView {
     // Workspace teardown clears its controls without changing appearance.
     if let palette = state["palette"] as? [String: Any] { updatePalette(palette) }
     actionsEnabled = state["enabled"] as? Bool == true
-    if let style = state["terminalStyle"] as? [String: Any] {
+    if let style = state["barStyle"] as? [String: Any] {
       let size = CGFloat(min(36, max(8, (style["size"] as? NSNumber)?.doubleValue ?? 13)))
       let families = [style["family"] as? String].compactMap { $0 } + (style["fallback"] as? [String] ?? [])
-      terminalFont = families.lazy.compactMap { NSFont(name: $0, size: size) }.first
+      barFont = families.lazy.compactMap { NSFont(name: $0, size: size) }.first
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
       terminalSelection = statusColor(style["selection"], fallback: terminalSelection)
     }
-    newButton.font = terminalFont
+    newButton.font = barFont
     newButton.contentTintColor = terminalForeground
-    contextButton.font = terminalFont
+    contextButton.font = barFont
     contextButton.foreground = terminalForeground
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
-    pullRequestButton.font = terminalFont
+    pullRequestButton.font = barFont
     pullRequestButton.foreground = terminalForeground
     pullRequestButton.update(state["pullRequest"] as? [String: Any], enabled: actionsEnabled)
     pullRequestButton.isHidden = state["pullRequest"] == nil
@@ -1133,7 +1132,7 @@ private final class SwarmTabStrip: NSView {
       tab.palette = palette
       tab.name = row["name"] as? String ?? "New Tab"
       tab.displayLabel = row["label"] as? String ?? tab.name
-      tab.labelFont = terminalFont
+      tab.labelFont = barFont
       tab.foreground = terminalForeground
       tab.selection = terminalSelection
       tab.selected = id == activeId
@@ -1174,7 +1173,7 @@ private final class SwarmTabStrip: NSView {
     let activeWasVisible = active.map { scroll.documentVisibleRect.intersects($0.frame) } ?? false
     let previousScrollSize = scroll.frame.size
     let previousDocumentSize = document.frame.size
-    let cell = ceil(("m" as NSString).size(withAttributes: [.font: terminalFont]).width)
+    let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
     // Compact windows keep a scrolling tab list; context never overlaps it.
     let available = max(0, bounds.width - trailing - cell * 5)
@@ -1237,9 +1236,6 @@ private final class SwarmTabStrip: NSView {
       hypot(event.locationInWindow.x - first.point.x,
             event.locationInWindow.y - first.point.y) <= 4
   }
-  @objc private func openFocusedModel() {
-    if actionsEnabled && contextButton.isEnabled { emit?("focusedModel", nil) }
-  }
   @objc private func openFocusedPullRequest() {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {
       emit?("focusedPullRequest", ["url": url])
@@ -1289,7 +1285,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private let selectButton = SwarmSelectButton()
   /// Whether the middle button went down on THIS tab — see otherMouseUp.
   private var middleDown = false
-  /// Status text and numbered tabs share the selected terminal face.
+  /// Status text and numbered tabs share the compact workspace face.
   var labelFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) {
     didSet { if oldValue != labelFont { invalidateLabel() } }
   }
