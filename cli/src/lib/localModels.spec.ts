@@ -206,6 +206,30 @@ describe('local model discovery and lifecycle', () => {
     expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
   })
 
+  it.each(['current', 'legacy', 'malformed'])('preserves imported routing names across restart with %s receipts', async scenario => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node',
+      engines: [{ models: ['Small-Q4.gguf'] }], advertise_as: ['team/my-model'] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const id = (await service.list('home')).models[0].id
+    await service.act('home', id, 'stop'); await service.settled()
+    const path = join(stateDir, (await readdir(stateDir)).find(name => name.endsWith('.known.json'))!)
+    const saved = JSON.parse(await readFile(path, 'utf8'))
+    expect(saved[0].aliases).toEqual(['team/my-model'])
+    if (scenario === 'legacy') delete saved[0].aliases
+    if (scenario === 'malformed') saved[0].aliases = [42, '', '--invalid', 'invalid\nname']
+    await writeFile(path, JSON.stringify(saved))
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    await fresh.act('home', id, 'start'); await fresh.settled()
+    const expectedAlias = scenario === 'current' ? 'team/my-model' : scenario === 'legacy' ? 'my-model' : null
+    const joined = calls.find(args => args.includes('join'))!
+    expect(joined.slice(11)).toEqual(expectedAlias ? ['--advertise-as', expectedAlias] : [])
+    const inference = request.mock.calls.find(([url]) => String(url).includes('chat/completions'))!
+    expect(JSON.parse(String(inference[1]?.body)).model).toBe(expectedAlias ?? 'Small-Q4.gguf')
+    expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
+  })
+
   it('reuses an already downloaded fitting quant of the same model', async () => {
     catalogCards[0].versions.push({ version: 'Q3', size_bytes: 48, pull_spec: 'org/Small-GGUF:Small-Q3.gguf', urls: ['https://example.test/Small-Q3.gguf'] })
     await writeFile(join(home, 'models', 'Small-Q3.gguf'), Buffer.alloc(48))

@@ -36,6 +36,7 @@ export interface LocalModelsSnapshot {
 }
 interface Candidate {
   id: string; name: string; pull: string; file: string; files: string[]; size: number; quant: string; context: number
+  aliases?: string[]
 }
 interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; context: number; siblings: number }
 interface Receipt { spec: 1; grid: string; operation?: ModelOperation }
@@ -216,7 +217,13 @@ export class LocalModels {
         known = rows(JSON.parse(await readFile(path, 'utf8'))).filter(c =>
           c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
           c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) && num(c.context) && c.context <= 16384 &&
-          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file) as Candidate[]
+          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(c => ({
+            ...c,
+            // Older receipts kept only the displayed alias. Preserve that name
+            // when upgrading, and never forward malformed saved argv values.
+            aliases: (Array.isArray(c.aliases) ? c.aliases : [c.name])
+              .filter((alias: unknown): alias is string => typeof alias === 'string' && validArg(alias)),
+          })) as Candidate[]
       } catch { known = [] }
       this.knownByGrid.set(grid, known)
     }
@@ -226,7 +233,8 @@ export class LocalModels {
       const file = await stat(join(this.home, 'models', instance.file)).catch(() => null)
       if (!file?.isFile() || !file.size) continue
       known.push({ id: `local:${instance.file}`, name: cleanName(instance.aliases[0]),
-        file: instance.file, files: [instance.file], pull: '', size: file.size, quant: '', context: instance.context })
+        file: instance.file, files: [instance.file], pull: '', size: file.size, quant: '', context: instance.context,
+        aliases: instance.aliases.filter(validArg) })
       changed = true
     }
     if (changed) {
@@ -407,11 +415,12 @@ export class LocalModels {
           await must(['engine', 'install', 'llama.cpp'], 'The model engine could not start. Try again.')
         }
         await must(['--remote', 'join', grid, '--serve', candidate.file,
-          '--max-concurrency', '1', '--ctx-size', String(candidate.context), '--reasoning-budget', '0'],
+          '--max-concurrency', '1', '--ctx-size', String(candidate.context), '--reasoning-budget', '0',
+          ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])],
         'The model could not start. Try again.')
       }
       await change('verifying')
-      await this.verify(grid, instance?.aliases[0] || candidate.file)
+      await this.verify(grid, instance?.aliases[0] || candidate.aliases?.[0] || candidate.file)
     }
     operation.phase = 'done'
     await this.save(grid, operation)
