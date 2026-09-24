@@ -2512,10 +2512,9 @@ class NewHarnessController extends ChangeNotifier {
           title: labelOf(id),
           engine: id,
           detail: [
-            // Terminal needs no gloss: its name says what it is.
-            if (isTerminalEngine(id))
-              null
-            else if (isHarnessId(id))
+            // Terminal is not a harness here — it moved to the Agent list — so
+            // only a harness row carries a description.
+            if (isHarnessId(id))
               machine?.dsh[id]?.tagline ??
                   engineIdentity(id).tagline ??
                   machine?.dsh[id]?.category ??

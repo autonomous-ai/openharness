@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PROCESS_ENGINES } from '../engines/types.js'
@@ -9,7 +9,7 @@ import { buildLaunchOverrides } from '../lib/launchOverrides.js'
 import type { InstalledDsh } from './installed.js'
 import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { compatibleHarnessEngines } from './compatibility.js'
-import { harnessRuntimeDir, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
+import { forkRuntimeKey, harnessLaunchOrRefusal, harnessRuntimeDir, incompatibleHarnessEngine, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
 
 let root: string
 let ws: string
@@ -268,7 +268,7 @@ describe('runtime validation and file ownership', () => {
   it('refuses missing skills and occupied skill paths without touching them', () => {
     const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
     const skill = join(launch.env.HARNESS_SKILLS_DIR!, 'draw')
-    rmSync(skill)
+    unlinkSync(skill)
     mkdirSync(skill)
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('already occupied')
     rmSync(skill, { recursive: true })
@@ -343,5 +343,50 @@ describe('non-destructive legacy migration', () => {
     symlinkSync(join(root, 'my-backup'), join(ws, '.harness/legacy-AGENTS.md'))
     migrateHarnessInstructions(ws, pkg)
     expect(readlinkSync(join(ws, '.harness/legacy-AGENTS.md'))).toBe(join(root, 'my-backup'))
+  })
+})
+
+// The decisions the daemon's create and fork handlers make about a harness launch. They live here,
+// not inline in cli.ts, because that file is never loaded by a unit test and these are the cases a
+// refused launch depends on.
+describe('create and fork decisions', () => {
+  it('names what WOULD run when an engine cannot run the harness', () => {
+    expect(incompatibleHarnessEngine('acme/draw', pkg.manifest, 'codex')).toBeNull()
+    expect(incompatibleHarnessEngine('acme/draw', pkg.manifest, 'claude')).toBeNull()
+    const refusal = incompatibleHarnessEngine('acme/draw', pkg.manifest, 'terminal')
+    expect(refusal).toMatch(/^acme\/draw supports claude, /)
+    expect(refusal).toMatch(/; terminal is not compatible$/)
+  })
+
+  it('refuses every engine for something that is not a runnable harness', () => {
+    for (const manifest of [{ kind: 'viewer', engine: 'claude' as const }, {}, { engine: 'terminal' as const }]) {
+      expect(incompatibleHarnessEngine('acme/view', manifest, 'claude')).toBe('acme/view cannot run as an agent')
+    }
+  })
+
+  it('forks the runtime the source recorded', () => {
+    expect(forkRuntimeKey({ cwd: ws, agentId: 'a1', dshRuntime: 'harness-claude-x' })).toBe('harness-claude-x')
+  })
+
+  it('forks a pre-key session from the bundle under its agent id, and otherwise starts fresh', () => {
+    const source = { cwd: ws, agentId: 'a1', dshRuntime: null }
+    expect(forkRuntimeKey(source)).toBeNull()
+    expect(forkRuntimeKey({ cwd: ws, agentId: 'a1' })).toBeNull()
+    prepareHarnessLaunch(pkg, ws, 'claude', 'a1')
+    expect(existsSync(join(harnessRuntimeDir(ws, 'a1'), 'runtime.json'))).toBe(true)
+    expect(forkRuntimeKey(source)).toBe('a1')
+    // An empty recorded key is no key: it must not shadow the bundle that exists.
+    expect(forkRuntimeKey({ ...source, dshRuntime: '' })).toBe('a1')
+  })
+
+  it('turns a runtime that cannot be prepared into a refusal, never a throw', () => {
+    const ok = harnessLaunchOrRefusal(() => prepareHarnessLaunch(pkg, ws, 'claude', 'k'))
+    expect(ok.ok).toBe(true)
+    rmSync(join(pkg.realDir, 'skills/draw/SKILL.md'))
+    const refused = harnessLaunchOrRefusal(() => prepareHarnessLaunch(pkg, ws, 'claude', 'fresh'))
+    expect(refused).toMatchObject({ ok: false, error: 'DSH_RUNTIME_FAILED' })
+    expect(refused.ok ? '' : refused.detail).not.toMatch(/^Error: /)
+    expect(harnessLaunchOrRefusal(() => { throw 'a bare string' })).toEqual(
+      { ok: false, error: 'DSH_RUNTIME_FAILED', detail: 'a bare string' })
   })
 })

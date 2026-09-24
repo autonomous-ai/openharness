@@ -54,6 +54,8 @@ void main() {
   Future<(NewHarnessController, _Daemon)> mount(
     WidgetTester tester, {
     String focus = 'agent',
+    double width = 820,
+    MemoryKeymap? keymap,
   }) async {
     final daemon = _Daemon();
     final app = createApp(connectionForTest: (_) => daemon);
@@ -65,7 +67,7 @@ void main() {
     );
     addTearDown(app.dispose);
     addTearDown(box.dispose);
-    final keymap = MemoryKeymap();
+    keymap ??= MemoryKeymap();
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData.dark(),
@@ -78,7 +80,7 @@ void main() {
             child: Scaffold(
               body: Center(
                 child: SizedBox(
-                  width: 820,
+                  width: width,
                   height: 450,
                   child: NewHarnessForm(
                     controller: box,
@@ -246,6 +248,119 @@ void main() {
     testWidgets('Terminal needs no gloss', (tester) async {
       await mount(tester);
       expect(find.text('A shell, no agent'), findsNothing);
+    });
+  });
+
+  // One test per behaviour a coverage run found untested among the lines this
+  // branch changed. Each names the behaviour, not the line.
+  group('reached only by less common paths', () {
+    testWidgets('a field the controller moves to opens Advanced to show it', (
+      tester,
+    ) async {
+      final (box, _) = await mount(tester);
+      expect(box.advancedOpen, isFalse);
+      box.focusField(NewHarnessField.mode);
+      await tester.pumpAndSettle();
+      expect(box.advancedOpen, isTrue);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-approvals')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the page keys open and close Advanced from its own row', (
+      tester,
+    ) async {
+      final (box, _) = await mount(tester, focus: 'advanced');
+      await key(tester, LogicalKeyboardKey.pageDown);
+      expect(box.advancedOpen, isTrue);
+      await key(tester, LogicalKeyboardKey.pageUp);
+      expect(box.advancedOpen, isFalse);
+    });
+
+    testWidgets('clicking the Advanced row opens and closes it', (
+      tester,
+    ) async {
+      final (box, _) = await mount(tester);
+      final advanced = find.byKey(const ValueKey('new-harness-field-advanced'));
+      await tester.tap(advanced);
+      await tester.pumpAndSettle();
+      expect(box.advancedOpen, isTrue);
+      await tester.tap(advanced);
+      await tester.pumpAndSettle();
+      expect(box.advancedOpen, isFalse);
+    });
+
+    testWidgets('⇧⏎ inside a door prompt finishes it, then starts', (
+      tester,
+    ) async {
+      final (box, daemon) = await mount(tester, focus: 'project');
+      box.focusField(NewHarnessField.projectName);
+      await tester.pumpAndSettle();
+      box.setQuery('ledger');
+      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      expect(
+        box.projectLabel,
+        contains('ledger'),
+        reason: 'The name typed in the prompt is the project it starts in.',
+      );
+      expect(daemon.requests, contains('agent_create'));
+    });
+
+    testWidgets(
+      'remapped next and previous keys move the rows, then the list',
+      (tester) async {
+        final keymap = MemoryKeymap()
+          ..apply(
+            '{"bindings":['
+            '{"keys":"ctrl+l","command":"picker.complete","when":"picker"},'
+            '{"keys":"ctrl+h","command":"picker.complete_back","when":"picker"}]}',
+          );
+        final (box, _) = await mount(tester, keymap: keymap);
+        expect(box.field, NewHarnessField.agent);
+        for (final (move, back) in [
+          (LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP),
+          (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
+        ]) {
+          // The list closed: they walk the rows.
+          await key(tester, move, ctrl: true);
+          expect(box.field, NewHarnessField.model);
+          await key(tester, back, ctrl: true);
+          expect(box.field, NewHarnessField.agent);
+          // The list open: they walk the choices, and the row stays put.
+          await key(tester, LogicalKeyboardKey.arrowRight);
+          final first = box.selected!.id;
+          await key(tester, move, ctrl: true);
+          expect(box.selected!.id, isNot(first));
+          expect(box.field, NewHarnessField.agent);
+          await key(tester, back, ctrl: true);
+          expect(box.selected!.id, first);
+          await key(tester, LogicalKeyboardKey.escape);
+        }
+      },
+    );
+
+    testWidgets('⌘. opens and closes Advanced from any field', (tester) async {
+      final (box, _) = await mount(tester);
+      await key(tester, LogicalKeyboardKey.period, cmd: true);
+      expect(box.advancedOpen, isTrue);
+      await key(tester, LogicalKeyboardKey.period, cmd: true);
+      expect(box.advancedOpen, isFalse);
+    });
+
+    testWidgets('a narrow window keeps a status line on the grid', (
+      tester,
+    ) async {
+      final (box, _) = await mount(tester, width: 600);
+      box.warn('Machine is busy');
+      await tester.pumpAndSettle();
+      final status = find.byKey(const ValueKey('new-harness-status'));
+      expect(status, findsOneWidget);
+      final row = tester
+          .getSize(find.byKey(const ValueKey('new-harness-field-agent')))
+          .height;
+      expect(tester.getSize(status).height / row, closeTo(1, .01));
     });
   });
 }

@@ -3,13 +3,14 @@
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { installedDsh, type InstalledDsh } from './installed.js'
 import { dshAccountEnv, dshLaunch, type DshAccount, type DshLaunch } from './launch.js'
+import { compatibleHarnessEngines } from './compatibility.js'
 import { skillDirsIn } from './materialize.js'
 
 const Snapshot = z.object({
@@ -84,7 +85,9 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
         for (const native of ['.claude/skills', '.agents/skills']) {
           if (isLink(join(workspace, native.split('/')[0]!)) || isLink(join(workspace, native))) continue
           const link = join(workspace, native, basename(skill))
-          if (isLink(link) && resolve(link, '..', readlinkSync(link)) === resolve(skill)) rmSync(link)
+          // unlinkSync, not rmSync: on current Node rmSync follows a link to a directory and
+          // throws EISDIR, which crashed the migration it exists to finish. A link is unlinked.
+          if (isLink(link) && resolve(link, '..', readlinkSync(link)) === resolve(skill)) unlinkSync(link)
         }
       }
     }
@@ -127,6 +130,43 @@ function snapshot(dsh: InstalledDsh, workspace: string, engine: AgentEngine): Ru
 /** Prepare before spawning any engine process. `sourceKey` is a fork's original bundle. A saved
  * bundle is authoritative: changing the store default or instructions cannot retarget a session.
  */
+/**
+ * Why `engine` cannot run the harness `id`, or null when it can. The words are what a refused
+ * create says, so they name what WOULD work rather than only what was wrong.
+ */
+export function incompatibleHarnessEngine(id: string, manifest: { kind?: string; engine?: AgentEngine },
+  engine: AgentEngine): string | null {
+  const supported = compatibleHarnessEngines(manifest)
+  if (supported.includes(engine)) return null
+  return supported.length
+    ? `${id} supports ${supported.join(', ')}; ${engine} is not compatible`
+    : `${id} cannot run as an agent`
+}
+
+/**
+ * The runtime bundle a fork copies. A session records its key when it is created; one created
+ * before keys were recorded still has a bundle under its agent id if it ran on this version, and
+ * that is the one to copy. Neither means the fork starts a fresh bundle rather than failing.
+ */
+export function forkRuntimeKey(source: { cwd: string; agentId: string; dshRuntime?: string | null }): string | null {
+  if (source.dshRuntime) return source.dshRuntime
+  return existsSync(join(harnessRuntimeDir(source.cwd, source.agentId), 'runtime.json')) ? source.agentId : null
+}
+
+/**
+ * `prepare`, refused rather than thrown. A runtime that cannot be prepared — a missing skill, a
+ * corrupt snapshot, an occupied path — has to fail the one create or fork that asked for it, never
+ * the daemon that is serving every other session.
+ */
+export function harnessLaunchOrRefusal(prepare: () => DshLaunch):
+  { ok: true; launch: DshLaunch } | { ok: false; error: 'DSH_RUNTIME_FAILED'; detail: string } {
+  try {
+    return { ok: true, launch: prepare() }
+  } catch (error) {
+    return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engine: AgentEngine,
   key: string, account: DshAccount = {}, sourceKey?: string | null): DshLaunch {
   const adapter = harnessAdapter(engine)

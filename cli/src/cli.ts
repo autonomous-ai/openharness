@@ -102,13 +102,13 @@ import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
-import { dshPinnedPermissionMode, dshSupportedEngines, dshVerdictPath, dshViewerName } from './dsh/manifest.js'
+import { dshPinnedPermissionMode, dshVerdictPath, dshViewerName } from './dsh/manifest.js'
 import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { materializeWorkspace } from './dsh/materialize.js'
 import { harnessEnvToClear, type DshAccount } from './dsh/launch.js'
-import { harnessRuntimeDir, prepareHarnessLaunch } from './dsh/runtime.js'
+import { forkRuntimeKey, harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from './dsh/runtime.js'
 import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
@@ -4636,8 +4636,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const installed = installedDsh(dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
       if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
-      if (!dshSupportedEngines(installed.manifest).includes(engine)) {
-        return { ok: false, error: 'INVALID_DSH', detail: `${dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${engine} is not compatible` }
+      const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
+      if (refusal) {
+        return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
       if (!(await tmuxSupportsSessionEnv())) {
         const detail = `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
@@ -4663,13 +4664,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      try {
-        const launch = prepareHarnessLaunch(installed, cwd, engine, label, dshAccount)
-        dshEnv = launch.env
-        dshArgs = launch.args
-      } catch (error) {
-        return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
-      }
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount))
+      if (!prepared.ok) return prepared
+      dshEnv = prepared.launch.env
+      dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
     // A grid is the user's answer to "where should this run", so every way of not honouring it is a
@@ -4825,14 +4823,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (source.dsh) {
       const installed = installedDsh(source.dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
-      try {
-        const sourceKey = source.dshRuntime ?? (existsSync(join(harnessRuntimeDir(source.cwd, source.agentId), 'runtime.json')) ? source.agentId : null)
-        const launch = prepareHarnessLaunch(installed, source.cwd, engine, label, { privateGrid: backend.gridName() }, sourceKey)
-        dshEnv = launch.env
-        dshArgs = launch.args
-      } catch (error) {
-        return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
-      }
+      // Narrowed above; a closure would lose that, so the checked values are named here.
+      const cwd = source.cwd
+      const sourceKey = forkRuntimeKey({ cwd, agentId: source.agentId, dshRuntime: source.dshRuntime })
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label,
+        { privateGrid: backend.gridName() }, sourceKey))
+      if (!prepared.ok) return prepared
+      dshEnv = prepared.launch.env
+      dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
