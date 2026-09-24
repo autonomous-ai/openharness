@@ -1669,6 +1669,10 @@ class AppNotifier extends ChangeNotifier {
     // before the colours the panes actually use have moved.
     grid.AppTheme.palette.addListener(_announceTerminalThemeEverywhere);
     terminalThemeStore.addListener(_announceTerminalThemeEverywhere);
+    // The active tab is set from a dozen places — a tab click, a number key,
+    // closing a tab, a restored layout, a reveal. Listening here catches all of
+    // them, and a clear that finds nothing to clear notifies nobody.
+    addListener(seeWatchedAgents);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -6189,46 +6193,54 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Put one agent's news on screen, named the way the window names it.
-  /// The agent the person is looking at RIGHT NOW, or null.
+  /// Every harness the person can see RIGHT NOW: each one with a pane on the tab
+  /// in front of them, while the window itself is in front.
   ///
-  /// Both halves matter. The pane has to be the focused one, and the window has
-  /// to be the front one — a pane keeps its focus while the app sits behind a
-  /// browser, and treating that as "being watched" would swallow exactly the
-  /// news this feature exists for.
+  /// The TAB, not the focused pane. A tab of three harnesses is three terminals
+  /// on screen at once, and the one holding the cursor is not the only one being
+  /// watched — a turn finishing in the pane beside it is visible the moment it
+  /// happens. The harnesses on other tabs are the ones nobody can see, and those
+  /// are what a notification is for.
   ///
-  /// A seam, because the alternative is not testable: reaching it through real
-  /// panes means `focusPane`, which announces the focus to the machine, which
-  /// dials it — and a test without a live connection hangs rather than fails.
-  late ({String machineId, String agentId})? Function() watchedAgent =
-      _watchedFromFocus;
+  /// The window has to be in front as well. Every pane keeps its place on the
+  /// tab while the app sits behind a browser, and treating that as "being
+  /// watched" would swallow exactly the news this feature exists for.
+  ///
+  /// A seam, because reaching it through real panes means `focusPane`, which
+  /// announces the focus to the machine, which dials it — and a test with no
+  /// live connection hangs rather than fails.
+  late Iterable<({String machineId, String agentId})> Function()
+  watchedAgents = _visibleOnTab;
 
   /// The real answer, reachable from a test without going through `focusPane`.
   @visibleForTesting
-  ({String machineId, String agentId})? watchedAgentFromFocusForTest() =>
-      _watchedFromFocus();
+  Iterable<({String machineId, String agentId})> visibleOnTabForTest() =>
+      _visibleOnTab();
 
-  ({String machineId, String agentId})? _watchedFromFocus() {
-    if (lifecycle() != AppLifecycleState.resumed) return null;
-    final pane = focusedPane;
-    final agentId = pane?.agentId;
-    if (pane == null || agentId == null) return null;
-    return (machineId: pane.machineId, agentId: agentId);
+  Iterable<({String machineId, String agentId})> _visibleOnTab() {
+    if (lifecycle() != AppLifecycleState.resumed) return const [];
+    return [
+      for (final pane in activeSwarm.panes)
+        if (pane.agentId case final agentId?)
+          (machineId: pane.machineId, agentId: agentId),
+    ];
   }
 
-  bool _isBeingWatched(String machineId, String agentId) {
-    final watched = watchedAgent();
-    return watched != null &&
-        watched.machineId == machineId &&
-        watched.agentId == agentId;
-  }
+  bool _isBeingWatched(String machineId, String agentId) => watchedAgents().any(
+    (w) => w.machineId == machineId && w.agentId == agentId,
+  );
 
-  /// Clear whatever the person is currently looking at. Every route into a
-  /// harness ends here, so none of them has to remember to.
-  @visibleForTesting
-  void seeWatchedAgent() {
-    final watched = watchedAgent();
-    if (watched != null) agentUnread.clear(watched.machineId, watched.agentId);
+  /// Clear the mark of every harness now on screen.
+  ///
+  /// The mark means "something happened on a harness you cannot see". Once it
+  /// is on screen that stops being true, however it got there — a tab switched
+  /// to, a pane opened onto this tab, the window brought back to the front. So
+  /// this runs on every change to the window rather than on each of those
+  /// routes, which are many and would each have to remember.
+  void seeWatchedAgents() {
+    for (final w in watchedAgents()) {
+      agentUnread.clear(w.machineId, w.agentId);
+    }
   }
 
   /// Where the app is. Injected so a test can say so without a real lifecycle.
@@ -6308,7 +6320,7 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Reads the focused pane rather than taking an id, so every route into a
   /// harness clears it without each one having to remember to.
-  void _seeFocusedAgent() => seeWatchedAgent();
+  void _seeFocusedAgent() => seeWatchedAgents();
 
   String? _eventAgentId(
     MachineState machine,

@@ -254,6 +254,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
+    // Coming back to the window puts the tab in front of the person again, and
+    // nothing in the app necessarily changes when that happens — so it is told.
+    _lifecycle = AppLifecycleListener(onResume: app.seeWatchedAgents);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _syncToolbarNotices();
@@ -350,6 +353,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
     app.agentUnread.removeListener(_unreadChanged);
+    _lifecycle?.dispose();
     if (widget.learning == null) _learning.dispose();
     FocusManager.instance.removeListener(_restoreEmptyFocus);
     FocusManager.instance.removeListener(_syncKeyContext);
@@ -606,6 +610,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (_native) _syncNative();
     setState(() {});
   }
+
+  AppLifecycleListener? _lifecycle;
 
   void _unreadChanged() {
     if (!mounted) return;
