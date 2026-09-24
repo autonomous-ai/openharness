@@ -58,6 +58,30 @@ final _choices = [
 ];
 
 void main() {
+  testWidgets('a missing selection has an accessible search label', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentPicker(
+            value: 'removed-engine',
+            choices: _choices,
+            onChanged: (_) {},
+            width: 600,
+          ),
+        ),
+      ),
+    );
+    expect(find.bySemanticsLabel(AgentPicker.hint), findsOneWidget);
+    await openAgentSearch(tester);
+    await tester.enterText(agentSearch, 'codex');
+    await tester.pump();
+    expect(agentRows(tester), ['codex']);
+    semantics.dispose();
+  });
+
   test(
     'remembers the agent across launches without replacing a newer choice',
     () async {
@@ -85,7 +109,8 @@ void main() {
       for (final id in ['codex', 'autonomous/marp', 'claude', 'codex']) {
         await preferences.remember(id);
       }
-      expect(preferences.recent, ['codex', 'claude', 'autonomous/marp']);
+      expect(preferences.recent, ['codex', 'claude']);
+      expect(preferences.recentHarnesses, ['autonomous/marp']);
       final restored = AgentPreference(store);
       await restored.remember('hermes');
       await restored.load();
@@ -93,7 +118,6 @@ void main() {
         'hermes',
         'codex',
         'claude',
-        'autonomous/marp',
       ], reason: 'one used while loading stays first; the stored ones follow');
       for (var i = 0; i < 20; i++) {
         await restored.remember('agent-$i');

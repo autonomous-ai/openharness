@@ -32,6 +32,7 @@ export interface CreateAgentPaneDeps {
     gridLaunchRecord?: GridLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
+    dshRuntime?: string | null
     agent?: string | null
     bypassPermission?: boolean
     permissionMode?: string | null
@@ -60,6 +61,7 @@ export interface CreateAgentPaneDeps {
   codexHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
+  dshRuntime?: string | null
   /** The engine's named agent the pane opens as (`agent_create`'s `agent`); kept on the row so a
    *  relaunch opens as it again. Already in `argv` — this is the record, not the launch. */
   agent?: string | null
@@ -99,6 +101,7 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       gridLaunchRecord: deps.gridLaunchRecord,
       codexHome: deps.codexHome,
       dsh: deps.dsh,
+      dshRuntime: deps.dshRuntime,
       agent: deps.agent,
       bypassPermission: deps.bypassPermission,
       permissionMode: deps.permissionMode,

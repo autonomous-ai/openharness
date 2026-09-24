@@ -5,9 +5,11 @@ Escape leaves that tab open. The command dock opens only after an explicit
 Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
 opening or cancelling the dock never starts a harness.
 
-The launch form starts on Project, followed by Agent, Machine, Branch,
-Worktree, Approvals, and Profile when the chosen agent uses Codex profiles.
-The separate **+ New Harness** action submits the draft. There is no heading,
+The launch form starts on Harness, followed by Agent and Model, then Machine
+and Project. Machine always stays visible. Advanced expands Branch, Worktree,
+Approvals, and Profile for Codex subscription sessions. Its expanded state is
+remembered. The **+ New Harness** action stays pinned below the scrolling fields
+and submits the draft. There is no heading,
 Task row, or Open In row. Cmd-O and Cmd-P also omit headings and counts.
 Tasks carried from search or Store examples remain part of the draft.
 
@@ -19,7 +21,7 @@ returns to its field. The three project actions have icons. Clone, folder path, 
 project prompts return to Project after acceptance; only New Harness starts.
 Project, machine, branch, and approval options occupy one line. Only the local
 machine has a note, **This machine**. Approvals come from the chosen agent's
-supported modes, and Profile disappears for agents that do not use it.
+supported modes, and Profile disappears for agents or model routes that do not use it.
 Narrow windows show the active list full-width with a back action.
 
 | Entry | Initial values | Destination after a successful start |
@@ -41,6 +43,49 @@ Cmd-O and Cmd-P open the same picker. Repeating either shortcut preserves the
 query, selection, highlighted result, and filters, then refocuses the input.
 Cmd-T closes the dock and opens a quiet blank tab. Creation remains blocked
 while a pending start needs confirmation.
+
+## Harness and agent choices
+
+Harness contains Coding and domain harnesses, plus Browse Harness Store. Agent
+contains compatible engines only. Coding sends no `dsh` and does not remove any
+existing instructions or skills from the project. Changing an engine preserves
+the selected harness and its generated project name. Machine changes re-evaluate
+compatibility; an incompatible selection cannot start, and is never silently
+replaced at launch. The selected machine's installed-package compatibility wins
+over a newer catalog listing. Current daemons expose every integrated agent
+engine; older daemons without compatibility metadata offer the manifest default.
+Wide pickers use the available height and show a scrollbar when choices overflow.
+
+The existing local state store keeps `new_harness_preferences_v1`: separate
+engine and harness recents, the last successful engine per harness (including
+Coding), and Advanced's expanded state. Legacy `new_agent_engine` and
+`new_agent_recent` are read and split by identity; package ids never appear in
+Agent history. Legacy keys and the app data directory stay in place. Explicit
+entry choices and pending receipts take priority over remembered defaults.
+
+## Model selection
+
+Agent and Model are adjacent because the agent determines which model routes
+are supported. The Model picker reuses the Models menu's subscription usage
+source and the selected machine's model catalog. It shows the relevant
+subscription/default login, running models on the person's machines, and shared
+models grouped by grid. Each model identifies its serving machine; search matches
+that machine too. Two grids serving the same model id remain distinct choices.
+
+Machine identifies where the agent, project and tools run. The model can be
+served from a different machine. Changing Machine or Agent preserves an explicit
+model, refreshes availability, and blocks Start with an explanation if the new
+combination is unavailable. It never substitutes a subscription. Refresh models
+updates the choices; Manage Models opens the existing Models panel for lifecycle
+management and preserves the launch draft. Choosing Terminal clears model routing;
+its Model row is disabled and explains that Terminal does not use a model.
+
+An explicit model survives draft dismissal/restoration and uncertain creation
+receipts. A new session starts with the selected engine's default subscription;
+model routing is not persisted as a global preference. Start refreshes availability
+and sends only `gridModel` and `gridName`; the selected machine resolves the endpoint
+and credentials. Older daemons without `supportsModelLaunch` explain that an update
+is needed while continuing to allow ordinary subscription launches.
 
 ## Git projects
 
@@ -126,8 +171,8 @@ worktree: the retry selects that worktree's branch with Worktree off.
 - Store drafts belong to the explicitly requested product and machine. Opening
   Blender cannot restore Workshop's agent, task, or generated project name.
 - Escape preserves edits. Reopening the same source without a new task resumes
-  its compatible draft. Store Open still wins if the agent or machine was
-  changed inside that saved draft.
+  its compatible draft, including the selected agent. Store Open still wins if the
+  harness or machine was changed inside that saved draft.
 - A newly typed search task or Store example starts from that entry's defaults.
   Repeating the same request while its draft is already open keeps its edits.
 - A request awaiting confirmation is an exception: restore its exact values and
@@ -169,6 +214,11 @@ never silently renamed, and existing files are never overwritten.
   and existing-pane actions after changing a picker's destination.
 - `test/models_menu_test.dart`: the native Models menu uses the product dock
   on its explicitly chosen machine; an uninstalled product opens its Store page.
+- `test/new_harness_models_test.dart`: subscription relevance, local/shared model
+  identity, independent agent/model machines, stopped models, old/offline daemons,
+  stale asynchronous responses, pending receipts, draft restoration, and wide and
+  compact keyboard/pointer flows. `cli/src/backendSocket.models.spec.ts` and
+  `cli/src/lib/newAgentModel.spec.ts` cover daemon resolution and receipt semantics.
 - `test/generated_project_launch_test.dart` and
   `test/new_harness_project_context_test.dart`: generated versus edited names,
   collisions, delayed replies, and machine-specific project choices.

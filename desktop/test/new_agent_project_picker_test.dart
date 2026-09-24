@@ -72,6 +72,7 @@ class _App extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -129,6 +130,7 @@ void main() {
     );
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
+    await expandNewAgentAdvanced(tester);
   }
 
   Future<void> recent(WidgetTester tester, String name) async {
@@ -200,6 +202,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
+    await expandNewAgentAdvanced(tester);
     expect(tester.widget<AppChoiceTile>(newProject).selected, isTrue);
     expect(
       tester.widget<AppSelectField<String>>(recentProject).selected,

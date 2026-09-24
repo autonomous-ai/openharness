@@ -187,3 +187,46 @@ Initial contract. Lifted from the `.board.json` (Circuit) and `.episode.json` (T
 - **Backward compatible:** all version fields are optional additions. Older records remain readable;
   older desktop clients ignore new fields, and newer clients show their existing actions for daemons
   without update metadata. Shared viewers update independently.
+
+## 2026-09-23 — choose an agent engine for a harness
+
+- **Change:** a package can opt into Claude and Codex with
+  `agent.env.DSH_SUPPORTED_ENGINES`, a comma-separated list including its default `engine`.
+  Multiple engines require engine-neutral instructions and no `agent.args`.
+  Catalog and `dsh_list` rows expose optional `engines`; installed metadata wins.
+- **Why:** Harness and Agent are separate choices. The selected engine determines launch,
+  instructions and skill placement; the package determines the workspace and tools.
+- **Backward compatible:** the manifest remains spec 1 and uses its existing env extension.
+  Older daemons keep the default engine; newer clients fall back to that engine when `engines`
+  is absent. Existing sessions keep their saved engine when resumed or forked.
+- **Mechanism:** `dshSupportedEngines`, create validation, engine-aware materialization and
+  launch arguments. Blender, Strudel, MuJoCo, RDKit, Typst and Jev Sheets opt in first.
+
+## 2026-09-23 — portable runtime for every harness and engine
+
+- **Change:** supersedes the six-package opt-in above. Every spec-1 harness is projected through
+  a shared runtime and one adapter per process engine; `DSH_SUPPORTED_ENGINES` is no longer used.
+  Harness content and engine identity are separate, including in session restore and fork.
+- **Why:** package authors ship domain instructions, skills, tools, viewers and checks once.
+  Engine discovery folders must not mix two sessions' harness content in a shared project.
+- **Backward compatible:** existing manifests and the app's preference folder remain readable.
+  Old daemons continue with the default engine. New session runtime keys are optional registry
+  fields; older rows get a context on their next launch. Legacy instruction migration backs up the
+  original file and removes only exact, known package text. Ambiguous edits are preserved and
+  reported for resolution. User-owned skill paths are never repointed.
+- **Mechanism:** `dsh/runtime.ts`, `dsh/adapters.ts`, portable skill indexes, session snapshots,
+  daemon-derived `engines`, and separate desktop harness/agent preference histories.
+
+## 2026-09-23 — choose a model when starting a harness
+
+- **Change:** New Harness shows Harness, Agent, Model, Machine and Project. Model includes the
+  relevant subscription/default login plus running owned and shared models supported by the engine.
+  The model's serving machine is independent of the machine running the agent and its project.
+- **Why:** model selection belongs beside Agent, and remote execution belongs beside Project.
+  Advanced contains Branch, Worktree, Approvals and subscription Profile; Machine stays visible.
+- **Backward compatible:** `grid_models_list.supportsModelLaunch` gates the new semantic
+  `agent_create.gridModel` / `gridName` pair. Ordinary launches and existing raw grid routes retain
+  their wire contracts. Older daemons explain the required update for explicit model launches.
+- **Mechanism:** the selected daemon validates compatibility, refreshes availability, and resolves
+  credentials after reserving the creation receipt and before preparing a project. Receipt identity
+  contains the model/grid pair, never a rotating credential. Unavailable models refuse launch.

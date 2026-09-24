@@ -121,6 +121,7 @@ class _App extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -188,8 +189,8 @@ Future<_App> _open(
 }
 
 Future<void> _search(WidgetTester tester, String query) async {
-  if (agentSearch.evaluate().isEmpty) await openAgentSearch(tester);
-  await tester.enterText(agentSearch, query);
+  if (harnessSearch.evaluate().isEmpty) await openHarnessSearch(tester);
+  await tester.enterText(harnessSearch, query);
   await tester.pump();
 }
 
@@ -206,11 +207,13 @@ Future<void> _create(WidgetTester tester) async {
   await tester.pump();
 }
 
-Finder _row(String id) => find.byKey(ValueKey('new-agent-agent-row-$id'));
+String _kind(String id) => id.contains('/') ? 'harness' : 'agent';
+Finder _row(String id) =>
+    find.byKey(ValueKey('new-agent-${_kind(id)}-row-$id'));
 
 /// The row's byline and the line under its name, as drawn.
 ({String? by, String? line}) _read(WidgetTester tester, String id) {
-  final by = find.byKey(ValueKey('new-agent-agent-row-by-$id'));
+  final by = find.byKey(ValueKey('new-agent-${_kind(id)}-row-by-$id'));
   final subtitle = tester.widget<ListTile>(_row(id)).subtitle;
   return (
     by: by.evaluate().isEmpty ? null : tester.widget<Text>(by).data,
@@ -254,7 +257,11 @@ void main() {
       await _search(tester, 'bare');
       expect(_read(tester, 'someone/bare'), (by: null, line: null));
 
-      await _search(tester, 'claude');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await openAgentSearch(tester);
+      await tester.enterText(agentSearch, 'claude');
+      await tester.pump();
       expect(_read(tester, 'claude'), (
         by: 'by Anthropic',
         line: 'Work with Claude directly in your codebase',
@@ -272,7 +279,7 @@ void main() {
       ));
       await _search(tester, 'earth');
       expect(
-        find.byKey(const ValueKey('new-agent-agent-row-someone/earth')),
+        find.byKey(const ValueKey('new-agent-harness-row-someone/earth')),
         findsNothing,
         reason: 'a harness this build has no face for waits for the machine',
       );
@@ -283,38 +290,35 @@ void main() {
       await _open(tester);
 
       // A name, then an author, then the line under a name.
-      // Among equals a harness before an engine: MuJoCo, then Antigravity,
-      // both by Google.
       await _search(tester, 'google');
-      expect(agentRows(tester), [
+      expect(harnessRows(tester), [
         'someone/earth',
         'autonomous/mujoco',
-        'agy',
         'someone/maps',
       ]);
 
       // The Store's Simulation shelf includes physics and robotics.
       await _search(tester, 'simulation');
-      expect(agentRows(tester), contains('autonomous/mujoco'));
-      expect(agentRows(tester), contains('someone/earth'));
+      expect(harnessRows(tester), contains('autonomous/mujoco'));
+      expect(harnessRows(tester), contains('someone/earth'));
       // The domain itself, where no line under a name says it.
       await _search(tester, 'documents');
-      expect(agentRows(tester), ['autonomous/typst']);
+      expect(harnessRows(tester), ['autonomous/typst']);
       // A package with no domain is on the Store's Other shelf.
       await _search(tester, 'other');
-      expect(agentRows(tester), contains('someone/maps'));
+      expect(harnessRows(tester), contains('someone/maps'));
       // An author the row draws.
       await _search(tester, 'gmbh');
-      expect(agentRows(tester), ['autonomous/typst']);
+      expect(harnessRows(tester), ['autonomous/typst']);
     });
 
     testWidgets('the preview names whose it is and what it is', (tester) async {
       await _open(tester);
       await _search(tester, 'deepmind');
-      expect(agentRows(tester), ['autonomous/mujoco']);
-      final preview = find.byKey(const ValueKey('new-agent-agent-preview'));
+      expect(harnessRows(tester), ['autonomous/mujoco']);
+      final preview = find.byKey(const ValueKey('new-agent-harness-preview'));
       expect(preview, findsNothing);
-      final input = tester.widget<TextField>(agentSearch);
+      final input = tester.widget<TextField>(harnessSearch);
       final value = input.controller!.value;
       await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.slash);
@@ -517,7 +521,7 @@ void main() {
       'pushing the button out of the footer', (tester) async {
     final app = await _open(tester, size: const Size(900, 720));
     app.pendingInstall = Completer<String?>();
-    await chooseAgent(tester, 'someone/long');
+    await chooseHarness(tester, 'someone/long');
     await _pickFolder(tester);
     await _create(tester);
     await tester.pump();

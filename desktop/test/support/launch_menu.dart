@@ -12,24 +12,35 @@ bool harnessChoicesActive(WidgetTester tester) {
 
 /// Open a launch row through the same navigation keys as the visible menu.
 Future<void> openLaunchRow(WidgetTester tester, String name) async {
-  // The setup screen starts at Project; its semantic selection also reports
-  // keyboard focus, so tests drive the visible rows rather than a controller.
-  final target = name == 'create' ? 'start' : name;
+  await focusLaunchRow(tester, name);
+  if (name != 'start' && name != 'create') {
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+  }
+}
+
+/// Focus a visible field without opening its list or changing its value.
+Future<void> focusLaunchRow(WidgetTester tester, String name) async {
+  final target = switch (name) {
+    'create' => 'start',
+    'mode' => 'approvals',
+    _ => name,
+  };
   for (var i = 0; i < 3 && harnessChoicesActive(tester); i++) {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
   }
   final row = find.byKey(ValueKey('new-harness-field-$target'));
-  for (var i = 0; i < 8; i++) {
+  if (row.evaluate().isEmpty &&
+      {'branch', 'worktree', 'approvals', 'profile'}.contains(target)) {
+    await openLaunchRow(tester, 'advanced');
+  }
+  for (var i = 0; i < 12; i++) {
     if (tester.widget<Semantics>(row).properties.selected == true) break;
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
   }
   expect(tester.widget<Semantics>(row).properties.selected, isTrue);
-  if (target != 'start') {
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-  }
   await tester.pumpAndSettle();
 }
 

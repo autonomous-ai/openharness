@@ -36,6 +36,24 @@ describe('the DSH requests on the local socket', () => {
   const ask = (type: string, payload: Record<string, unknown>): void => socket.handleLocalFrame('local:store', { type, payload })
   const replies = (type: string): Array<Record<string, unknown>> => frames.filter((frame) => frame.type === `${type}_result`).map((frame) => frame.payload)
 
+  it('agent_create accepts a legacy harness on another engine and refuses a terminal', async () => {
+    const dir = dshInstallDir('acme/thing')
+    mkdirSync(dir, { recursive: true })
+    const manifest = { spec: 1, id: 'acme/thing', name: 'Thing', engine: 'claude' }
+    writeFileSync(join(dir, 'harness.json'), JSON.stringify(manifest))
+    upsertInstalledRecord({ id: 'acme/thing', dir, source: dir, ref: null, commit: null, linked: true, installedAt: 1 })
+    const create = vi.fn<NonNullable<BackendSocket['onCreateAgent']>>(async () => ({ ok: false, error: 'TEST_STOP' }))
+    socket.onCreateAgent = create
+    ask('agent_create', { requestId: 'legacy', dsh: 'acme/thing', engine: 'terminal', cwd: root })
+    await vi.waitFor(() => expect(replies('agent_create')).toHaveLength(1))
+    expect(replies('agent_create')[0]).toMatchObject({ error: 'INVALID_DSH' })
+    expect(create).not.toHaveBeenCalled()
+    ask('agent_create', { requestId: 'compatible', dsh: 'acme/thing', engine: 'codex', cwd: root })
+    await vi.waitFor(() => expect(replies('agent_create')).toHaveLength(2))
+    expect(create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ engine: 'codex', dsh: 'acme/thing', cwd: root }))
+    expect(replies('agent_create')[1]).toMatchObject({ error: 'TEST_STOP' })
+  })
+
   it('dsh_list: what is installed here, then what the registry offers', async () => {
     vi.stubGlobal('__DSH_REGISTRY__', JSON.stringify([
       { id: 'acme/thing', name: 'Thing', repo: 'https://example.com/thing.git', engine: 'claude', verified: true },

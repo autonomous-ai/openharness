@@ -1637,11 +1637,12 @@ class _SwarmScreenState extends State<SwarmScreen>
       );
       return;
     }
-    final inherited = agent?.identityEngine;
+    final inherited = agent?.engine;
     _openNewHarness(
       machineId: id,
       // ⌘⇧T is how a shell is made; New Harness from a shell means an agent.
       engine: engine ?? (isTerminalEngine(inherited) ? null : inherited),
+      harnessId: engine == null ? agent?.dsh : null,
       folder: initialFolder,
       projectName: projectName,
       autoProject:
@@ -1726,6 +1727,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   void _openNewHarness({
     required String machineId,
     String? engine,
+    String? harnessId,
     String? folder,
     String? projectName,
     bool autoProject = false,
@@ -1756,7 +1758,10 @@ class _SwarmScreenState extends State<SwarmScreen>
         );
     bool matchesSelection(NewHarnessDraft candidate) =>
         origin.requestedEngine == null ||
-        (candidate.engine == origin.requestedEngine &&
+        ((isHarnessId(origin.requestedEngine)
+                ? candidate.harnessId == origin.requestedEngine
+                : candidate.engine == origin.requestedEngine &&
+                      candidate.harnessId == null) &&
             candidate.machineId == origin.machineId);
     final current = _newHarness;
     if (current != null) {
@@ -1804,6 +1809,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       app,
       machineId: machineId,
       engine: engine,
+      harnessId: harnessId,
       folder: folder,
       projectName: projectName,
       task: task,

@@ -5080,6 +5080,8 @@ class AppNotifier extends ChangeNotifier {
             ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
             : null,
         gridCli: GridCli.parse(response['gridCli']),
+        supportsModelLaunch: response['supportsModelLaunch'] == true,
+        reachable: response['error'] == null,
       );
     } catch (_) {
       // NOT `gridName: null` with an empty list — that is the shape of "this account has no grid",
@@ -6771,6 +6773,7 @@ class AppNotifier extends ChangeNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -6793,6 +6796,8 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
+      'gridModel': ?model?.id,
+      'gridName': ?model?.grid,
       // A first message the engine is opened with, and the pane's name before
       // the engine reports a session title. Both absent unless asked for: a
       // daemon that predates them ignores an unknown field, but one that knows
@@ -6973,6 +6978,29 @@ class AppNotifier extends ChangeNotifier {
       return 'Not connected to $machineName yet.';
     }
     final connection = _conn(machineId);
+    if (!creation.awaitingConfirmation && choices['gridModel'] != null) {
+      final models = await gridModels(machineId);
+      if (!models.reachable) {
+        return creation._complete(
+          'Could not verify models on $machineName. Refresh models or use your subscription.',
+        );
+      }
+      if (!models.supportsModelLaunch) {
+        return creation._complete(
+          'Update Harness CLI on $machineName to choose a model before starting.',
+        );
+      }
+      if (!models.canRunLocally(choices['engine'] as String) ||
+          !models.sections.any(
+            (section) =>
+                section.name == choices['gridName'] &&
+                section.models.any((model) => model.id == choices['gridModel']),
+          )) {
+        return creation._complete(
+          'The selected model is unavailable. Refresh models or use your subscription.',
+        );
+      }
+    }
     var launchChoices = choices;
     if (!creation.awaitingConfirmation &&
         choices['projectSource'] != null &&
@@ -7084,6 +7112,7 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_CWD',
         'INVALID_ENGINE',
         'INVALID_GRID',
+        'GRID_UNAVAILABLE',
         'INVALID_CODEX_HOME',
         'INVALID_DSH',
         'PROMPT_UNSUPPORTED',

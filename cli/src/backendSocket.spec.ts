@@ -1470,6 +1470,9 @@ describe('BackendSocket outbound queue', () => {
 })
 
 describe('desk_changed relay', () => {
+  // Other suites can leave closed sockets in the shared mock inventory. A
+  // shuffled run must send to this test's connection, not an earlier one.
+  beforeEach(() => { wsMock.instances.length = 0 })
   afterEach(() => {
     wsMock.instances.length = 0
     vi.restoreAllMocks()

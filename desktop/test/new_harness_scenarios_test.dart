@@ -172,6 +172,8 @@ Future<_Scenario> _mount(
     ),
   );
   await tester.pumpAndSettle();
+  await openLaunchRow(tester, 'advanced');
+  await focusLaunchRow(tester, 'project');
   return scenario;
 }
 
@@ -439,6 +441,7 @@ void main() {
     tester,
   ) async {
     final scenario = await _mount(tester, engine: 'claude');
+    await focusLaunchRow(tester, 'harness');
     await key(tester, LogicalKeyboardKey.tab, shift: true);
     expect(
       tester.widget<Semantics>(_field('start')).properties.selected,
@@ -492,7 +495,7 @@ void main() {
     'Store, profile linking and profile refresh are reachable by pointer',
     (tester) async {
       final scenario = await _mount(tester);
-      await openLaunchRow(tester, 'agent');
+      await openLaunchRow(tester, 'harness');
       await typeHarnessQuery(tester, 'nothing-installed-with-this-name');
       await tester.tap(_option(NewHarnessController.storeId));
       await tester.pump();
@@ -699,7 +702,7 @@ void main() {
     expect(_option(last.id).hitTestable(), findsOneWidget);
     await tester.tap(_option(last.id));
     await tester.pump();
-    expect(scenario.stores, 1);
+    expect(scenario.box.engine, last.id);
     expect(scenario.creates, 0);
   });
 
@@ -741,7 +744,7 @@ void main() {
         case NewHarnessController.existingProjectId:
           expect(scenario.box.project.folder, '/work/my project');
       }
-      await key(tester, LogicalKeyboardKey.arrowDown);
+      await focusLaunchRow(tester, 'agent');
       expect(scenario.box.field, NewHarnessField.agent);
       expect(scenario.creates, 0);
       expect(scenario.connections.values.expand((c) => c.starts), isEmpty);
@@ -759,7 +762,7 @@ void main() {
             call.method == 'Clipboard.getData' ? pending.future : null,
       );
       await key(tester, LogicalKeyboardKey.keyV, ctrl: true);
-      await key(tester, LogicalKeyboardKey.arrowDown);
+      await focusLaunchRow(tester, 'agent');
       pending.complete({'text': 'stale project'});
       await tester.pump();
       expect(scenario.box.field, NewHarnessField.agent);
@@ -865,7 +868,7 @@ void main() {
     expect(scenario.box.error, isNull);
     expect(scenario.box.field, NewHarnessField.projectMenu);
     expect(harnessChoicesActive(tester), isFalse);
-    await key(tester, LogicalKeyboardKey.arrowDown);
+    await focusLaunchRow(tester, 'agent');
     expect(scenario.box.field, NewHarnessField.agent);
     expect(scenario.creates, 0);
   });

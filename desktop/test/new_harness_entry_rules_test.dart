@@ -223,14 +223,14 @@ void main() {
           box(tester).task = 'Workshop task';
           if (closeFirst) await dismiss(tester);
           await product(tester, 'autonomous/blender', task: task);
-          expect(box(tester).engine, 'autonomous/blender');
+          expect(box(tester).harnessId, 'autonomous/blender');
           expect(box(tester).projectLabel, startsWith('~/harnesses/blender-'));
           expect(box(tester).project.generated, isNotNull);
           expect(box(tester).task, task ?? '');
           expect(box(tester).placement, HarnessPlacement.newTab);
           await dismiss(tester);
           await product(tester, 'autonomous/workshop');
-          expect(box(tester).engine, 'autonomous/workshop');
+          expect(box(tester).harnessId, 'autonomous/workshop');
           expect(box(tester).projectLabel, '~/harnesses/workshop-design');
           expect(box(tester).task, 'Workshop task');
           expect(connections.values.expand((c) => c.starts), isEmpty);
@@ -331,21 +331,56 @@ void main() {
     );
   }
 
-  testWidgets('Store Open overrides an agent changed inside its saved draft', (
+  testWidgets('Store Open restores its harness after switching to Coding', (
     tester,
   ) async {
     await mount(tester);
     await product(tester, 'autonomous/blender');
+    box(tester).focusField(NewHarnessField.harness);
+    box(tester).accept(
+      const NewHarnessOption(
+        id: NewHarnessController.codingId,
+        title: 'Coding',
+      ),
+    );
     box(tester).focusField(NewHarnessField.agent);
     box(tester).accept(const NewHarnessOption(id: 'codex', title: 'Codex'));
     expect(box(tester).engine, 'codex');
     await dismiss(tester);
     await product(tester, 'autonomous/blender');
-    expect(box(tester).engine, 'autonomous/blender');
+    expect(box(tester).harnessId, 'autonomous/blender');
     expect(box(tester).projectLabel, startsWith('~/harnesses/blender-'));
     await dismiss(tester);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'an explicit coding engine reopens its draft and overrides a different harness',
+    (tester) async {
+      await mount(tester);
+      await product(tester, 'codex');
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).harnessId, isNull);
+      box(tester).setFolder('/work/explicit-code');
+      await dismiss(tester);
+      await product(tester, 'codex');
+      expect(box(tester).project.folder, '/work/explicit-code');
+      box(tester).focusField(NewHarnessField.harness);
+      box(tester).applyOption(
+        box(tester).options
+            .singleWhere((option) => option.id == 'autonomous/blender'),
+      );
+      await dismiss(tester);
+      await product(tester, 'codex');
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).harnessId, isNull);
+      expect(
+        connections.values.expand((connection) => connection.starts),
+        isEmpty,
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'an in-flight or uncertain Store start cannot be replaced or retried as a new task',
@@ -370,7 +405,7 @@ void main() {
       expect(original.error, contains('Check the pending start'));
       await dismiss(tester);
       await product(tester, 'autonomous/blender');
-      expect(box(tester).engine, 'autonomous/blender');
+      expect(box(tester).harnessId, 'autonomous/blender');
       await dismiss(tester);
       await product(tester, 'autonomous/workshop', task: 'A different example');
       expect(box(tester).checking, isTrue);
@@ -476,7 +511,7 @@ void main() {
       await tester.pump();
       await key(tester, shortcut, cmd: true);
       await acceptSetupOrSearch(tester);
-      expect(box(tester).engine, 'autonomous/typst');
+      expect(box(tester).harnessId, 'autonomous/typst');
       expect(box(tester).project.folder, '/work/release-notes');
       expect(box(tester).task, isEmpty);
       await dismiss(tester);

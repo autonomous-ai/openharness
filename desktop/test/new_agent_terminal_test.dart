@@ -63,6 +63,7 @@ class _Notifier extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -138,8 +139,9 @@ void main() {
     await tester.pump();
   }
 
-  String engineField(WidgetTester tester) =>
-      tester.widget<AgentPicker>(find.byType(AgentPicker)).value;
+  String engineField(WidgetTester tester) => tester
+      .widget<AgentPicker>(find.byKey(const Key('new-agent-agent-picker')))
+      .value;
 
   testWidgets(
     'the terminal is listed with what the machine has, and never needs installing',
