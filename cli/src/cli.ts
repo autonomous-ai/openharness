@@ -105,7 +105,7 @@ import { dshPinnedPermissionMode, dshVerdictPath, dshViewerName } from './dsh/ma
 import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
-import { materializeWorkspace } from './dsh/materialize.js'
+import { materializeWorkspace, relinkSkills } from './dsh/materialize.js'
 import { dshLaunch, type DshAccount } from './dsh/launch.js'
 import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
@@ -4219,6 +4219,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!installed) {
         console.warn(`[dsh] ${id} is not installed on this machine · relaunching as its plain base engine`)
         return null
+      }
+      // Its skills as they are now, not as they were when the workspace was made — see relinkSkills.
+      try {
+        const relinked = relinkSkills(installed, workspace)
+        if (relinked.created.length) console.log(`[dsh] ${id} relaunch · skills repointed: ${relinked.created.join(', ')}`)
+      } catch (err) {
+        console.warn(`[dsh] ${id} relaunch · skills not repointed: ${(err as Error).message}`)
       }
       return dshLaunch(installed, workspace, { privateGrid: backend.gridName() })
     },

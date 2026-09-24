@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { InstalledDsh } from './installed.js'
 import { parseDshManifest, readDshManifest } from './manifest.js'
-import { dshMarkerLine, materializeWorkspace, resolveDshCommand, skillDirsIn } from './materialize.js'
+import { dshMarkerLine, materializeWorkspace, relinkSkills, resolveDshCommand, skillDirsIn } from './materialize.js'
 
 const STARTER = realpathSync(fileURLToPath(new URL('../../../store/starter', import.meta.url)))
 
@@ -92,6 +92,41 @@ describe('materializeWorkspace', () => {
     mkdirSync(join(workspace, '.claude', 'skills', 'hello'), { recursive: true })
     const result = await materializeWorkspace(starter(), workspace)
     expect(lstatSync(join(workspace, '.claude', 'skills', 'hello')).isSymbolicLink()).toBe(false)
+    expect(result.warnings.some((w) => w.includes('hello'))).toBe(true)
+  })
+})
+
+describe('relinkSkills', () => {
+  // ⚠️ REGRESSION. Every update installs a harness beside the last (its directory is named for its
+  // content), and a workspace linked its skills once, at create — so a Model Manager made in the
+  // morning read the morning's skill all day, through every fix to it. A relaunch repoints them.
+  let workspace: string, morning: string, evening: string
+  const installedAt = (dir: string): InstalledDsh => ({ ...starter('codex'), dir, realDir: dir })
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'dsh-ws-'))
+    morning = mkdtempSync(join(tmpdir(), 'dsh-v1-')); cpSync(STARTER, morning, { recursive: true })
+    evening = mkdtempSync(join(tmpdir(), 'dsh-v2-')); cpSync(STARTER, evening, { recursive: true })
+  })
+  afterEach(() => { for (const dir of [workspace, morning, evening]) rmSync(dir, { recursive: true, force: true }) })
+
+  it("points a workspace's skill links at the current install, and touches nothing else", async () => {
+    await materializeWorkspace(installedAt(morning), workspace)
+    const link = join(workspace, '.agents', 'skills', 'hello')
+    expect(readlinkSync(link)).toBe(join(morning, 'skills', 'hello'))
+    const agents = readFileSync(join(workspace, 'AGENTS.md'), 'utf8')
+    const result = relinkSkills(installedAt(evening), workspace)
+    expect(readlinkSync(link)).toBe(join(evening, 'skills', 'hello'))
+    expect(result.created).toEqual(['.agents/skills/hello'])
+    // Instructions a person may have edited are not rewritten by a relaunch.
+    expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8')).toBe(agents)
+    // Already current: nothing to do.
+    expect(relinkSkills(installedAt(evening), workspace)).toMatchObject({ created: [], kept: ['.agents/skills/hello'] })
+  })
+
+  it('leaves a real directory a person put in the skills folder alone', () => {
+    mkdirSync(join(workspace, '.agents', 'skills', 'hello'), { recursive: true })
+    const result = relinkSkills(installedAt(evening), workspace)
+    expect(lstatSync(join(workspace, '.agents', 'skills', 'hello')).isSymbolicLink()).toBe(false)
     expect(result.warnings.some((w) => w.includes('hello'))).toBe(true)
   })
 })

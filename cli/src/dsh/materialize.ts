@@ -138,6 +138,21 @@ function linkSkills(dsh: InstalledDsh, workspace: string, result: MaterializeRes
   }
 }
 
+/**
+ * Point the workspace's skill links at [dsh]'s CURRENT install, for a relaunch.
+ *
+ * ⚠️ Materialisation runs at create only, and a harness's skills live in a directory named for its
+ * content, so every update installs beside the last rather than over it. A workspace made before an
+ * update kept linking to the old one: the Model Manager in a morning's workspace read the morning's
+ * skill all day, through every fix to it. The links are ours (step 3), so this repoints them; a file
+ * a person put there instead is left alone, as at create.
+ */
+export function relinkSkills(dsh: InstalledDsh, workspace: string): MaterializeResult {
+  const result: MaterializeResult = { created: [], kept: [], warnings: [], initLines: [] }
+  if (dsh.manifest.kind !== 'viewer') linkSkills(dsh, workspace, result)
+  return result
+}
+
 /** A command that is a path inside the harness becomes that absolute path, shell-quoted. */
 export function resolveDshCommand(dsh: Pick<InstalledDsh, 'realDir'>, command: string): string {
   if (/[\s;&|<>$`'"\\]/.test(command)) return command
