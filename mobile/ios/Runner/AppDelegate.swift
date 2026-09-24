@@ -13,6 +13,40 @@ import UIKit
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     DeviceNameChannel.register(with: engineBridge.pluginRegistry)
+    ClipboardImageChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/clipboard_image` — the image on the clipboard, as PNG bytes (Dart:
+/// `lib/clipboard/native_clipboard.dart`). Flutter's own clipboard reads `text/plain` only, so a
+/// screenshot or a "Copy" from Photos was invisible to Paste. The same channel the desktop runners
+/// answer; only `readImagePng` is implemented here, since nothing on the phone writes an image.
+enum ClipboardImageChannel {
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessClipboardImage")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/clipboard_image", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "readImagePng" else { result(FlutterMethodNotImplemented); return }
+      // `hasImages` answers without the system's paste prompt, so an empty clipboard never asks.
+      let pasteboard = UIPasteboard.general
+      guard pasteboard.hasImages else { result(nil); return }
+      // An existing PNG is passed through untouched; anything else (a JPEG or HEIC from Photos) is
+      // re-encoded, which for a full-size photo is slow enough to keep off the main thread.
+      if let png = pasteboard.data(forPasteboardType: "public.png") {
+        result(FlutterStandardTypedData(bytes: png))
+        return
+      }
+      // From here an image IS on the clipboard, so a failure answers EMPTY bytes rather than nil:
+      // Dart then says the image is unreadable instead of that there is nothing to paste.
+      let unreadable = FlutterStandardTypedData(bytes: Data())
+      guard let image = pasteboard.image else { result(unreadable); return }
+      DispatchQueue.global(qos: .userInitiated).async {
+        let png = image.pngData()
+        DispatchQueue.main.async {
+          result(png.map { FlutterStandardTypedData(bytes: $0) } ?? unreadable)
+        }
+      }
+    }
   }
 }
 
