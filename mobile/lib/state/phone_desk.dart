@@ -121,9 +121,10 @@ class PhoneDesk {
     } finally {
       if (identical(_joining, run)) {
         _joining = null;
-        // A read that brought no desk notified nobody, and a launch is waiting on it — see
-        // [settled]. One that did has already, through [_apply].
-        if (!_state.enabled && !_disposed) onChanged();
+        // ⚠️ **Always told, desk or no desk.** A launch waits on [settled], and [_apply]'s own
+        // notice lands while [_joining] is still set — reads as unsettled — so without this one a
+        // desk that answered last held the home screen on "Opening your tabs…" until the next poll.
+        if (!_disposed) onChanged();
       }
     }
   }

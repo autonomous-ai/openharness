@@ -77,6 +77,43 @@ void main() {
       expect(agent({'engine': 'terminal'}).canPauseAndResume, isTrue);
     });
 
+    group('a resume is what it promised', () {
+      final paused = agent({
+        'engine': 'claude',
+        'sessionId': 's1',
+        'resumeMode': 'conversation',
+      });
+      Agent back(String? sessionId) => agent({
+        'engine': 'claude',
+        'status': 'running',
+        'sessionId': ?sessionId,
+        'resumeMode': 'conversation',
+      });
+
+      test('the same conversation is', () {
+        expect(paused.resumedAsPromised(back('s1')), isTrue);
+      });
+
+      test('another one, where the old one was promised, is not', () {
+        expect(paused.resumedAsPromised(back('s2')), isFalse);
+      });
+
+      test('a fallback the daemon owned up to is not, whatever the ids', () {
+        expect(
+          paused.resumedAsPromised(back('s1'), reportedResumed: false),
+          isFalse,
+        );
+      });
+
+      test('a new one is, where only a new one could be', () {
+        final fresh = agent({'engine': 'devin', 'resumeMode': 'fresh'});
+        expect(
+          fresh.resumedAsPromised(back('s9'), reportedResumed: false),
+          isTrue,
+        );
+      });
+    });
+
     test('a word it does not know is not taken for one', () {
       expect(
         agent({'engine': 'devin', 'resumeMode': 'maybe'}).canPauseAndResume,

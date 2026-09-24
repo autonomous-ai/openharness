@@ -113,6 +113,28 @@ void main() {
     expect(backend.reads, 1);
   });
 
+  // A launch holds its fallback until [PhoneDesk.settled] — so the join's LAST
+  // notice has to find it settled, or nothing wakes that launch until the poll.
+  test('the last notice of a join finds the desk settled', () async {
+    for (final offline in [false, true]) {
+      backend.offline = offline;
+      final settledAtNotice = <bool>[];
+      late final PhoneDesk watched;
+      watched = PhoneDesk(
+        read: backend.read,
+        write: backend.write,
+        onChanged: () => settledAtNotice.add(watched.settled),
+      );
+      addTearDown(watched.dispose);
+
+      watched.ensure();
+      expect(watched.settled, isFalse);
+      await pumpEventQueue();
+
+      expect(settledAtNotice.last, isTrue, reason: 'offline: $offline');
+    }
+  });
+
   test(
     'a read that fails leaves the phone without tabs, and it can join later',
     () async {

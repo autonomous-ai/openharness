@@ -118,9 +118,8 @@ PhoneDestination _agent(
     promptContext: PhonePromptContext(
       harness: label,
       machine: entry.machineName,
-      // The FOLDER, not the project's reported name — the desktop's picker
-      // shows `Desktop` and `autonomous-harness`, which is the tail of the path
-      // somebody actually recognises, and a phone has no width for the rest.
+      // The desktop's label — the repository, or the subfolder chosen inside
+      // it — never a worktree's made-up folder. See [AgentProject.label].
       project: project?.label,
       branch: project?.shownBranch,
       leading: offline ? 'Offline' : null,

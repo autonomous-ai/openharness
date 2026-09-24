@@ -5243,15 +5243,13 @@ class AppNotifier extends ChangeNotifier {
     } catch (_) {
       return unconfirmed;
     }
-    // The desktop's bar for "resumed": the same conversation, started — not a fresh session the
-    // daemon fell back to, and not one still starting or already failed. A NEW conversation is only
-    // a surprise where an old one was promised: one that was always going to open fresh
-    // ([Agent.resumesFreshConversation]) is honoured, as the desktop honours it.
-    final fresh =
-        stopped.resumesFreshConversation || resumed.resumesFreshConversation;
-    if ((result['resumed'] == false && !fresh) ||
-        (resumed.sessionId != stopped.sessionId && !fresh) ||
-        resumed.launchState != 'ready') {
+    // The desktop's bar for "resumed": the conversation promised ([Agent.resumedAsPromised]),
+    // started — not one still starting or already failed.
+    final promised = stopped.resumedAsPromised(
+      resumed,
+      reportedResumed: result['resumed'] != false,
+    );
+    if (!promised || resumed.launchState != 'ready') {
       return unconfirmed;
     }
     _agentResumes.remove(key);
