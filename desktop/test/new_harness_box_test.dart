@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/engine_availability.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/project_folder.dart';
@@ -579,6 +580,90 @@ void main() {
     );
     addTearDown(shell.dispose);
     expect(shell.error, contains('will not be sent'));
+  });
+
+  // The machine LIST is the only witness for a computer nothing has been heard
+  // from: our socket reaches the local daemon, and its being up says nothing
+  // about the far end of the relay. A machine the list calls offline used to be
+  // offered like any other, and the failure arrived a minute later.
+  test('a machine the list calls offline cannot be chosen', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['studio']!
+      ..nodeOnline = null
+      ..machine = const Machine(
+        machineId: 'studio',
+        name: 'iMac · Office',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+    final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.machine);
+    final row = box.options.firstWhere((option) => option.id == 'studio');
+    expect(row.enabled, isFalse);
+    expect(row.detail, contains('offline'));
+    box.accept(row);
+    expect(box.error, contains('offline'));
+    expect(box.machineId, 'm', reason: 'and the machine did not change');
+  });
+
+  // `nodeOnline` is set hopefully the instant OUR socket connects, and that
+  // socket reaches the local daemon — not the computer across the relay. So a
+  // true from it does not outrank the backend's own view.
+  test('the list is believed over a hopeful socket', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['studio']!
+      ..nodeOnline = true
+      ..machine = const Machine(
+        machineId: 'studio',
+        name: 'iMac · Office',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+    final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.machine);
+    final row = box.options.firstWhere((option) => option.id == 'studio');
+    expect(row.enabled, isFalse);
+  });
+
+  // ...and the computer the app is running on is never called offline, however
+  // stale its row in the list is.
+  test('this computer is never disabled by the list', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['m']!
+      ..localOnly = true
+      ..nodeOnline = null
+      ..machine = const Machine(
+        machineId: 'm',
+        name: 'MacBook',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+    expect(app.machineStates['m']!.isOffline, isFalse);
+  });
+
+  test('a machine the list calls running stays choosable', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['studio']!
+      ..nodeOnline = null
+      ..machine = const Machine(
+        machineId: 'studio',
+        name: 'iMac · Office',
+        authMode: MachineAuthMode.remote,
+        status: 'running',
+      );
+    final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.machine);
+    expect(
+      box.options.firstWhere((option) => option.id == 'studio').enabled,
+      isTrue,
+    );
   });
 
   test('Return and ⌘↵ are never silent, and a dropped task is said', () async {

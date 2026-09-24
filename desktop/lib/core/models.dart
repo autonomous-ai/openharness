@@ -117,6 +117,25 @@ class Machine {
       ? name!
       : 'machine-${machineId.length > 8 ? machineId.substring(0, 8) : machineId}';
 
+  /// What the machine list says about this computer being up — `null` when it
+  /// says a word neither side has agreed on, which is not the same as "down".
+  ///
+  /// This is the ONE signal that speaks for a machine we have never reached:
+  /// our own socket goes to the local daemon, so its being up says nothing
+  /// about whether the far end answered. Kept on the model rather than in
+  /// `AppNotifier` because the box reads it too, and two copies of a word list
+  /// are two chances to disagree about what "stopped" means.
+  bool? get reportedOnline => switch (status?.trim().toLowerCase()) {
+    'running' || 'online' || 'connected' || 'ready' => true,
+    'offline' ||
+    'stopped' ||
+    'disconnected' ||
+    'unreachable' ||
+    'error' ||
+    'failed' => false,
+    _ => null,
+  };
+
   factory Machine.fromJson(Map<String, dynamic> j) => Machine(
     machineId: j['machineId'] as String,
     apiKey: j['apiKey'] as String? ?? '',

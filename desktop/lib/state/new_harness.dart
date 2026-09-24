@@ -1856,6 +1856,10 @@ class NewHarnessController extends ChangeNotifier {
         state.isLocalMachine,
         state.needsLink,
         state.nodeOnline,
+        // The machine list's own word, which moves without `nodeOnline` ever
+        // changing — a machine that goes offline while nothing has been heard
+        // from it would otherwise keep its old row.
+        state.isOffline,
       ],
       machine?.engines.loaded,
       for (final identity in allEngines)
@@ -2210,10 +2214,14 @@ class NewHarnessController extends ChangeNotifier {
             machine.isLocalMachine ? 'This computer' : 'Remote',
             if (machine.needsLink)
               'link required'
-            else if (machine.nodeOnline == false)
+            else if (machine.isOffline)
               'offline',
           ].join(' · '),
-          enabled: !machine.needsLink && machine.nodeOnline != false,
+          // `isOffline`, not `nodeOnline == false`: a machine nothing has been
+          // heard from yet still has the machine list's word for it, and a
+          // computer the list calls offline cannot start an agent — offering
+          // it is offering a failure a minute from now.
+          enabled: !machine.needsLink && !machine.isOffline,
           why: machine.needsLink
               ? '${machine.machine.displayName} is not linked to this '
                     'computer yet. Link it from the Machines menu.'
@@ -2292,7 +2300,7 @@ class NewHarnessController extends ChangeNotifier {
         detail: location(folder),
         project: NewHarnessProject.folder(folder),
         machineId: _machineId,
-        enabled: _machine?.needsLink != true && _machine?.nodeOnline != false,
+        enabled: _machine?.needsLink != true && _machine?.isOffline != true,
         why: _machine?.needsLink == true
             ? '$machineLabel needs linking. Open Machines to link it.'
             : '$machineLabel is offline.',

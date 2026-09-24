@@ -338,6 +338,25 @@ class MachineState {
   bool get isLocalMachine => localOnly || localEndpoint != null;
   bool get usesLocalTransport => localEndpoint != null;
 
+  /// Whether this machine can be given work right now.
+  ///
+  /// Two witnesses, and neither is always right. [nodeOnline] is what has been
+  /// heard ABOUT the far end — but it is also set hopefully, the moment our
+  /// own socket connects (`_onMachineConnected`), and that socket only reaches
+  /// the LOCAL daemon: it proves nothing about a computer on the other side of
+  /// the relay. The machine list is the backend's own view, and a computer it
+  /// calls `offline` is one that stopped heartbeating to it.
+  ///
+  /// So the list's `offline` counts even against a hopeful `nodeOnline`, and
+  /// the one machine exempt is this one — the computer the app is running on
+  /// is not offline, whatever a stale row says about it. Erring this way is
+  /// deliberate: the cost of being wrong is a machine that looks unavailable
+  /// for a few seconds longer, against starting work on a computer that is
+  /// not there and finding out a minute later.
+  bool get isOffline =>
+      nodeOnline == false ||
+      (!isLocalMachine && machine.reportedOnline == false);
+
   AgentProject? projectOf(Agent agent) =>
       agent.project ??
       localProjects[agent.id] ??
@@ -2371,25 +2390,6 @@ class AppNotifier extends ChangeNotifier {
         : machineStates[expandedMachines.first];
   }
 
-  bool? _nodeOnlineFromStatus(String? status) {
-    switch (status?.trim().toLowerCase()) {
-      case 'running':
-      case 'online':
-      case 'connected':
-      case 'ready':
-        return true;
-      case 'offline':
-      case 'stopped':
-      case 'disconnected':
-      case 'unreachable':
-      case 'error':
-      case 'failed':
-        return false;
-      default:
-        return null;
-    }
-  }
-
   Future<void> selectAutonomousEnv(String value) async {
     if (value != 'prod' && value != 'stag') return;
     _autonomousEnv = value;
@@ -4211,7 +4211,7 @@ class AppNotifier extends ChangeNotifier {
           localComputerId != null &&
           _normalizeComputerId(machine.computerId) == localComputerId;
       _applyLocalTransport(state, localEndpoint, localComputerId);
-      final reportedOnline = _nodeOnlineFromStatus(machine.status);
+      final reportedOnline = machine.reportedOnline;
       if (!state.isLocalMachine &&
           reportedOnline != null &&
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
@@ -4794,7 +4794,7 @@ class AppNotifier extends ChangeNotifier {
         (item) => item.machineId == machineId,
       );
       if (latest.isEmpty) return;
-      final reportedOnline = _nodeOnlineFromStatus(latest.first.status);
+      final reportedOnline = latest.first.reportedOnline;
       if (reportedOnline == null) return;
       machine.machine = latest.first;
       await _applyNodeStatus(machine, reportedOnline);
@@ -8552,6 +8552,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId, {
     bool fromQuestion = false,
+
     /// The dial's own opens are [AttachIntent.automatic]; the Store's Resume
     /// button borrows this door and IS a person, so it says so.
     AttachIntent intent = AttachIntent.automatic,
@@ -8704,11 +8705,8 @@ class AppNotifier extends ChangeNotifier {
     final existing = paneOfAgent(machineId, agentId);
     if (existing == null) {
       await _fromDevice(
-        () => addAgentToSwarm(
-          machineId,
-          agentId,
-          intent: AttachIntent.automatic,
-        ),
+        () =>
+            addAgentToSwarm(machineId, agentId, intent: AttachIntent.automatic),
       );
       return;
     }
@@ -8812,6 +8810,7 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     bool autoTile = false,
     bool focus = true,
+
     /// A rail click, a drag, a picker — a person. The device's own doors pass
     /// [AttachIntent.automatic]: they put an agent on screen without anybody
     /// touching this Mac, so the terminal they show must not be taken from
@@ -10053,7 +10052,11 @@ class AppNotifier extends ChangeNotifier {
     _persistLayout();
     for (final machine in machineStates.values) {
       // A desk another Mac wrote arriving here.
-      _attachPendingPanes(machine, retryExisting: false, intent: AttachIntent.automatic);
+      _attachPendingPanes(
+        machine,
+        retryExisting: false,
+        intent: AttachIntent.automatic,
+      );
     }
     _announceAppFocus();
     notifyListeners();
