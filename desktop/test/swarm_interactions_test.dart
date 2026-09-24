@@ -1,3 +1,4 @@
+import 'support/agent_picker.dart';
 import 'support/new_agent_project.dart';
 
 import 'dart:async';
@@ -626,6 +627,7 @@ void main() {
       await browseNewAgentProject(tester);
       await tester.pump();
       await tester.pump();
+      await expandNewAgentAdvanced(tester);
       final field = find.byKey(const Key('new-agent-machine-field'));
       tester.widget<AppChoicePicker<String>>(field).onChanged('b');
       await tester.pump();

@@ -176,6 +176,7 @@ void main() {
       ),
     );
     await tester.pump();
+    await focusLaunchRow(tester, 'project');
   }
 
   void chooseMachine(NewHarnessController box) {
@@ -531,10 +532,7 @@ void main() {
       await mount(tester, box);
       final agent = find.byKey(const ValueKey('new-harness-field-agent'));
       final project = find.byKey(const ValueKey('new-harness-field-project'));
-      expect(
-        tester.getRect(agent).top,
-        greaterThan(tester.getRect(project).top),
-      );
+      expect(tester.getRect(agent).top, lessThan(tester.getRect(project).top));
       expect(input, findsNothing);
       expect(find.text(box.projectLabel), findsOneWidget);
       expect(find.text('M2'), findsOneWidget);
@@ -546,7 +544,7 @@ void main() {
         find.byKey(const ValueKey('new-harness-field-mode')),
         findsNothing,
       );
-      expect(find.text('Auto-approve'), findsOneWidget);
+      expect(find.text('Auto-approve'), findsNothing);
       for (final (name, field) in [
         ('agent', NewHarnessField.agent),
         ('machine', NewHarnessField.machine),

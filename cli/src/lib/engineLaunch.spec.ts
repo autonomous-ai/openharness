@@ -36,6 +36,7 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
 import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
+import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
@@ -53,6 +54,18 @@ const FALLBACK = (engine: AgentEngine, shell: string) => engineFallbackPrelude(e
 const NO_TMUX = null
 
 describe('buildEngineLaunchArgv', () => {
+  it.each(['claude', 'terminal'] as const)('clears inherited harness context before a plain %s session runs', (engine) => {
+    const argv = buildEngineLaunchArgv(engine, { clearEnv: harnessEnvToClear() }, '/bin/sh', undefined, undefined, NO_TMUX)
+    const probe = 'for name in HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID; do printenv "$name" && exit 9; done; printf "%s" "$KEEP_ME"'
+    const args = engine === 'terminal' ? ['harness-terminal', ''] : ['harness-engine']
+    const out = execFileSync(argv[0], [argv[1], argv[2], ...args, '/bin/sh', '-c', probe], {
+      encoding: 'utf8',
+      env: { ...process.env, ...Object.fromEntries(DSH_SESSION_ENV.map((name) => [name, 'stale-harness'])), KEEP_ME: 'retained' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    expect(out).toBe('retained')
+  })
+
   it('wraps zsh in its interactive login form and execs the resolved binary', () => {
     expect(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)).toEqual([
       '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),

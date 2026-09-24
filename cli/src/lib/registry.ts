@@ -166,6 +166,8 @@ export interface RegisteredSession {
    * again after a restart) is still labelled. Fill-only, like `codexHome`. See `src/dsh/`.
    */
   dsh?: string | null
+  /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
+  dshRuntime?: string | null
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -907,6 +909,7 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
+          dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
@@ -1160,6 +1163,7 @@ class Registry {
     gridLaunchRecord?: GridLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
+    dshRuntime?: string | null
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1195,6 +1199,7 @@ class Registry {
       // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
       hermesHome: null,
       dsh: input.dsh ?? null,
+      dshRuntime: input.dshRuntime ?? null,
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
@@ -1463,6 +1468,7 @@ class Registry {
       // would send the mirror back to the default store (openharness#191).
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
+      dshRuntime: existing?.dshRuntime ?? null,
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
@@ -1599,7 +1605,7 @@ class Registry {
     this.terminalAvailableAgents.delete(agentId)
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     this.releaseBinding(entry)
     delete entry.resumeOnly
     entry.engine = 'terminal'

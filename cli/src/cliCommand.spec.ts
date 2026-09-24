@@ -117,7 +117,12 @@ describe('CLI login/start command contract', () => {
     const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'start'], {
       cwd: CLI_ROOT,
       detached: true,
-      env: envFor(root, { PORT: String(20_000 + Math.floor(Math.random() * 20_000)) }),
+      env: envFor(root, {
+        PORT: String(20_000 + Math.floor(Math.random() * 20_000)),
+        DISABLE_HOOK_INSTALL: 'true', CABLE_DISABLE: 'true', DISABLE_GRID_INSTALL: 'true',
+        // Startup's sign-in contract does not need a runtime download or the developer's Grid.
+        HARNESS_GRID_BIN: join(root, 'grid-unavailable'),
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(child)
@@ -125,7 +130,7 @@ describe('CLI login/start command contract', () => {
     child.stdout?.on('data', (chunk: Buffer) => { said += chunk.toString() })
     child.stderr?.on('data', (chunk: Buffer) => { said += chunk.toString() })
     const deadline = Date.now() + 25_000
-    while (Date.now() < deadline && !/serving this computer only|Not signed in|Sign in to Harness/.test(said)) {
+    while (Date.now() < deadline && !/serving this computer only|Sign in to Harness in your browser/.test(said)) {
       await new Promise((r) => setTimeout(r, 100))
     }
     try {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InstalledDsh } from './installed.js'
-import { dshLaunch } from './launch.js'
+import { dshLaunch, harnessEnvToClear, DSH_SESSION_ENV } from './launch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { dshFromEnv } from './probe.js'
 
@@ -47,7 +47,7 @@ describe('buildLaunchOverrides with a DSH', () => {
     writeGridConfigDir: async () => '/cfg',
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: () => undefined,
-    dshLaunch: (id, workspace) => (id === installed.id ? dshLaunch(installed, workspace) : null),
+    dshLaunch: (id, workspace, engine) => (id === installed.id ? dshLaunch(installed, workspace, {}, engine) : null),
   }
 
   it('layers the DSH env and argv over a plain relaunch', async () => {
@@ -62,16 +62,17 @@ describe('buildLaunchOverrides with a DSH', () => {
   it('layers it over a Codex profile too, keeping CODEX_HOME', async () => {
     const built = await buildLaunchOverrides(deps, 'codex', { dsh: 'autonomous/circuit', cwd: '/ws', codexHome: '/home/u/.codex-work' }, 'agent-1')
     expect(built.ok && built.overrides.env).toMatchObject({ CODEX_HOME: '/home/u/.codex-work', HARNESS_DSH: 'autonomous/circuit' })
+    expect(built.ok && built.overrides.extraArgs).not.toContain('--add-dir')
   })
 
-  it('falls back to the plain engine when the DSH is no longer installed here', async () => {
+  it('refuses a restart when the DSH is no longer installed here', async () => {
     const built = await buildLaunchOverrides(deps, 'claude', { dsh: 'gone/away', cwd: '/ws' }, 'agent-1')
-    expect(built.ok && built.overrides).toEqual({ env: {}, extraArgs: [], clearEnv: [] })
+    expect(built).toMatchObject({ ok: false, error: 'DSH_NOT_INSTALLED' })
   })
 
-  it('does nothing without a workspace to expand into', async () => {
+  it('refuses to silently lose a harness when its workspace is missing', async () => {
     const built = await buildLaunchOverrides(deps, 'claude', { dsh: 'autonomous/circuit', cwd: null }, 'agent-1')
-    expect(built.ok && built.overrides.env).toEqual({})
+    expect(built).toMatchObject({ ok: false, error: 'DSH_WORKSPACE_MISSING' })
   })
 })
 
@@ -81,4 +82,10 @@ describe('dshFromEnv', () => {
     expect(dshFromEnv({ HARNESS_DSH: 'not an id' })).toBeNull()
     expect(dshFromEnv({})).toBeNull()
   })
+})
+
+it('clears inherited session facts except those explicitly supplied by this launch', () => {
+  expect(harnessEnvToClear()).toEqual(DSH_SESSION_ENV)
+  expect(harnessEnvToClear({ HARNESS_DSH: 'acme/draw' })).toEqual(DSH_SESSION_ENV.filter(name => name !== 'HARNESS_DSH'))
+  expect(harnessEnvToClear(Object.fromEntries(DSH_SESSION_ENV.map(name => [name, 'current'])))).toEqual([])
 })

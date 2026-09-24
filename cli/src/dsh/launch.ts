@@ -14,6 +14,13 @@ export interface DshLaunch {
   args: string[]
 }
 
+/** Clear every inherited session fact that this launch does not explicitly provide. This includes
+ * all context for Coding and an old account's private grid when the new harness has none. */
+export const DSH_SESSION_ENV = ['HARNESS_DSH', 'HARNESS_DSH_DIR', 'HARNESS_WORKSPACE', 'HARNESS_CONTEXT_FILE', 'HARNESS_SKILLS_DIR', 'HARNESS_PRIVATE_GRID'] as const
+export function harnessEnvToClear(launchEnv: Record<string, string> = {}): string[] {
+  return DSH_SESSION_ENV.filter(name => !Object.hasOwn(launchEnv, name))
+}
+
 /** Facts about the signed-in account a harness is told rather than left to guess or ask. */
 export interface DshAccount {
   /** The account's private grid — what "my grid" means to the person. */
@@ -25,7 +32,7 @@ export function dshAccountEnv(account: DshAccount): Record<string, string> {
   return account.privateGrid ? { HARNESS_PRIVATE_GRID: account.privateGrid } : {}
 }
 
-export function dshLaunch(dsh: InstalledDsh, workspace: string, account: DshAccount = {}): DshLaunch {
+export function dshLaunch(dsh: InstalledDsh, workspace: string, account: DshAccount = {}, engine = dsh.manifest.engine): DshLaunch {
   const vars = { dsh: dsh.realDir, workspace }
   const env: Record<string, string> = {
     HARNESS_DSH: dsh.id,
@@ -37,6 +44,9 @@ export function dshLaunch(dsh: InstalledDsh, workspace: string, account: DshAcco
     if (key.startsWith('HARNESS_')) continue // ours; a manifest cannot rename itself
     env[key] = expandDshValue(value, vars)
   }
-  const args = (dsh.manifest.agent?.args ?? []).map((arg) => expandDshValue(arg, vars))
+  // A saved session keeps its engine even if a package update changes the default.
+  // Default-engine flags must never be handed to a different engine on restore.
+  const args = (engine === dsh.manifest.engine ? dsh.manifest.agent?.args ?? [] : [])
+    .map((arg) => expandDshValue(arg, vars))
   return { env, args }
 }

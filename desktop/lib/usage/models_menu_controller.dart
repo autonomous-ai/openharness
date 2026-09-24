@@ -34,6 +34,22 @@ class ModelsMenuController extends ChangeNotifier {
       _row(account, _now(), failed: _failed),
   ];
 
+  /// The subscription the selected agent machine can actually use. An account
+  /// seen only on another computer must not be presented as this one's login.
+  Map<String, Object?>? subscriptionFor(
+    String engine, {
+    required bool local,
+    required String machineName,
+  }) {
+    for (final account in _usage.accounts) {
+      if (account.provider.engineId == engine &&
+          (local ? account.isLocal : account.machines.contains(machineName))) {
+        return _row(account, _now(), failed: _failed);
+      }
+    }
+    return null;
+  }
+
   Future<void> refresh() {
     if (_disposed) return Future.value();
     // Re-evaluate expired windows even if another request is already running.

@@ -56,7 +56,7 @@ void main() {
     expect(box.engine, 'claude');
     expect(harnessChoicesActive(tester), isFalse);
     await key(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.machine);
+    expect(box.field, NewHarnessField.model);
     expect(input, isEmpty);
     semantics.dispose();
     await tester.pumpWidget(const SizedBox());

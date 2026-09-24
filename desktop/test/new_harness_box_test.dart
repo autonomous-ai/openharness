@@ -120,7 +120,7 @@ void main() {
     },
   );
 
-  test('agent choices consolidate prototypes while preserving the actual launch id', () {
+  test('harness choices consolidate prototypes while preserving the actual launch id', () {
     final app = createApp();
     addTearDown(app.dispose);
     final box = NewHarnessController(app, machineId: 'm', engine: 'codex');
@@ -145,7 +145,7 @@ void main() {
         engine: 'claude',
       ),
     ]);
-    box.focusField(NewHarnessField.agent);
+    box.focusField(NewHarnessField.harness);
     final ollama = box.options.where((o) => o.title == 'Ollama').single;
     expect(ollama.id, 'local/ollama');
     expect(
@@ -157,8 +157,9 @@ void main() {
       isFalse,
     );
     box.accept(ollama);
-    expect(box.engine, 'local/ollama');
-    expect(box.agentLabel, 'Ollama');
+    expect(box.harnessId, 'local/ollama');
+    expect(box.engine, 'codex');
+    expect(box.harnessLabel, 'Ollama');
   });
 
   test('a named new project gets that folder, and never a changed name', () async {
@@ -223,16 +224,18 @@ void main() {
     expect(box.isCurrent(box.selected!), isTrue);
     expect(box.returnCreates, isFalse);
     box.nextField(-1);
-    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.field, NewHarnessField.harness);
     expect(box.task, 'fix the flaky login test');
   });
 
-  test('the main loop follows Agent, Machine, Project and modes remain available to advanced drafts', () {
+  test('the main loop follows Harness, Agent, Machine, Project and modes remain available to advanced drafts', () {
     final app = createApp();
     final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
     addTearDown(box.dispose);
     expect(box.fields, [
+      NewHarnessField.harness,
       NewHarnessField.agent,
+      NewHarnessField.model,
       NewHarnessField.machine,
       NewHarnessField.projectMenu,
     ]);
@@ -249,6 +252,7 @@ void main() {
     box.accept();
     expect(box.isTerminal, isTrue);
     expect(box.fields, [
+      NewHarnessField.harness,
       NewHarnessField.agent,
       NewHarnessField.machine,
       NewHarnessField.projectMenu,
@@ -886,7 +890,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.field, NewHarnessField.harness);
     await openLaunchRow(tester, 'agent');
     await typeHarnessQuery(tester, 'clau');
     expect(box.engine, 'codex');

@@ -415,7 +415,7 @@ void main() {
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
-      expect(box.engine, harness);
+      expect(box.harnessId, harness);
       expect(box.machineId, machineId ?? 'm');
       expect(box.projectLabel, startsWith('~/harnesses/$stem-'));
       expect(box.placement, HarnessPlacement.newTab);
@@ -437,7 +437,7 @@ void main() {
           tester
               .widget<NewHarnessForm>(find.byType(NewHarnessForm))
               .controller
-              .engine,
+              .harnessId,
           harness,
         );
         expect(app.swarms, [source]);

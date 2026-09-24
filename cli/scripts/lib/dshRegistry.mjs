@@ -7,6 +7,11 @@ import { readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 
+const engineSource = readFileSync(new URL('../../src/engines/types.ts', import.meta.url), 'utf8')
+const engineList = engineSource.match(/export const ENGINES = \[([\s\S]*?)\] as const/)
+if (!engineList) throw new Error('Cannot read the canonical engine list')
+const processEngines = [...engineList[1].matchAll(/'([^']+)'/g)].map(match => match[1]).filter(engine => engine !== 'terminal')
+
 const HARNESS_MONOREPO = 'https://github.com/autonomous-ai/openharness'
 
 export function storeEntry(path, manifest, facts) {
@@ -16,6 +21,8 @@ export function storeEntry(path, manifest, facts) {
   Object.assign(entry, { repo: HARNESS_MONOREPO, ref: 'main', path })
   for (const key of ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
   if (manifest.engine !== undefined) entry.engine = manifest.engine
+  if (manifest.engine !== undefined) entry.engines = manifest.kind === 'viewer' || manifest.engine === 'terminal'
+    ? [] : [manifest.engine, ...processEngines.filter(engine => engine !== manifest.engine)]
   if (typeof manifest.viewer?.use === 'string') entry.viewerUse = manifest.viewer.use
   entry.tier = manifest.viewer ? 2 : manifest.verdict ? 1 : 0
   entry.verified = true

@@ -534,7 +534,7 @@ export function terminalHintLines(machineName: string): string[] {
  * gives the person a prompt.
  */
 export function buildTerminalLaunchArgv(
-  opts: Pick<LaunchCommandOptions, 'cwd' | 'terminalHint'> = {},
+  opts: Pick<LaunchCommandOptions, 'cwd' | 'terminalHint' | 'clearEnv'> = {},
   shell: string | undefined = undefined,
 ): string[] {
   const candidate = shell === undefined ? currentUserShell() : shell
@@ -546,7 +546,7 @@ export function buildTerminalLaunchArgv(
   const hintPrelude = opts.terminalHint
     ? `printf '%s\\n' ${terminalHintLines(opts.terminalHint.machineName).map(shellSingleQuote).join(' ')}\n`
     : ''
-  return [path, '-c', RAISE_OPEN_FILES_SH + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', path, ...loginArgs]
+  return [path, '-c', RAISE_OPEN_FILES_SH + clearEnvPrelude(opts.clearEnv) + cwdPrelude + hintPrelude + 'shift\nexec "$@"', 'harness-terminal', opts.cwd ?? '', path, ...loginArgs]
 }
 
 /**

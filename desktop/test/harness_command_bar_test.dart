@@ -421,10 +421,11 @@ void main() {
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       expect(prompt.machineId, 'm');
-      expect(prompt.engine, 'studio/arm');
+      expect(prompt.harnessId, 'studio/arm');
+      expect(prompt.engine, 'claude');
       expect(prompt.project.folder, isNull);
       expect(prompt.task, 'Plan the arm calibration');
-      expect(prompt.field, NewHarnessField.projectMenu);
+      expect(prompt.field, NewHarnessField.harness);
       expect(
         find.byKey(const ValueKey('new-harness-field-project')),
         findsOneWidget,

@@ -1,3 +1,4 @@
+import { prepareHarnessLaunch } from './runtime.js'
 import { updateDsh } from './update.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
@@ -158,8 +159,9 @@ describe('package updates', { timeout: 30_000 }, () => {
       const workspace = join(root, 'workspace')
       mkdirSync(workspace)
       await materializeWorkspace(before, workspace)
+      const launch = prepareHarnessLaunch(before, workspace, 'claude', 'session')
       write(workspace, { 'project.txt': 'my finished work\n', 'AGENTS.md': 'my custom instructions\n', '.harness/verdict.json': '{"ready":true}', 'notes.md': 'my notes' })
-      const skill = join(workspace, '.claude', 'skills', 'task')
+      const skill = join(launch.env.HARNESS_SKILLS_DIR!, 'task')
       const link = readlinkSync(skill)
       const dir = path ? join(repo, path) : repo
       write(dir, { 'skills/task/SKILL.md': '# Updated skill\n', 'AGENTS.md': '# New instructions\n', 'template/project.txt': 'new template\n' })

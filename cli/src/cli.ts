@@ -107,7 +107,8 @@ import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { materializeWorkspace } from './dsh/materialize.js'
-import { dshLaunch, type DshAccount } from './dsh/launch.js'
+import { harnessEnvToClear, type DshAccount } from './dsh/launch.js'
+import { forkRuntimeKey, harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from './dsh/runtime.js'
 import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
@@ -4215,13 +4216,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) installCodexHooks(hookPort, codexHome) },
-    dshLaunch: (id, workspace) => {
+    dshLaunch: (id, workspace, engine, runtimeKey) => {
       const installed = installedDsh(id)
       if (!installed) {
-        console.warn(`[dsh] ${id} is not installed on this machine · relaunching as its plain base engine`)
+        console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
         return null
       }
-      return dshLaunch(installed, workspace, { privateGrid: backend.gridName() })
+      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: backend.gridName() })
     },
   }
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
@@ -4229,7 +4230,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // agent is, or bring a pane opened as `harness-compute` back as a general session.
   const relaunchOverrides = (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
     prepareApiTools(session.cwd, session.engine)
-    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
   }
 
   /**
@@ -4617,8 +4618,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
       return { ok: false, ...refusal }
     }
-    // A domain-specific harness: put its files into the workspace first (template, AGENTS.md, skill
-    // links) and take its env/argv for the launch. Refused, never approximated, when it is not here.
+    // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
+    // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
+    // before the grid block because a file-configured engine keys its config directory on it.
+    // The `harness-` prefix is also discovery's whitelist (see `isHarnessSession` /
+    // `TmuxBackend.inventory()`) — every pane outside it is invisible to the daemon.
+    const label = buildHarnessSessionLabel(engine)
+    // Prepare the harness workspace, then bind its session context to the selected engine.
+    // Missing packages or invalid runtimes refuse the launch before the agent is started.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
     /** A DSH's own name ("Blender"), which the agent is named after instead of its engine. */
@@ -4629,8 +4636,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const installed = installedDsh(dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
       if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
-      if (installed.manifest.engine !== engine) {
-        return { ok: false, error: 'INVALID_DSH', detail: `${dsh} runs on ${installed.manifest.engine}, not ${engine}` }
+      const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
+      if (refusal) {
+        return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
       if (!(await tmuxSupportsSessionEnv())) {
         const detail = `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
@@ -4641,7 +4649,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
-        const materialized = await materializeWorkspace(installed, cwd, dshAccount)
+        const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went in: the folder is the harness's, and Claude Code need not ask.
@@ -4656,17 +4664,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const launch = dshLaunch(installed, cwd, dshAccount)
-      dshEnv = launch.env
-      dshArgs = launch.args
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount))
+      if (!prepared.ok) return prepared
+      dshEnv = prepared.launch.env
+      dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
-    // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
-    // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
-    // before the grid block because a file-configured engine keys its config directory on it.
-    // The `harness-` prefix is also discovery's whitelist (see `isHarnessSession` /
-    // `TmuxBackend.inventory()`) — every pane outside it is invisible to the daemon.
-    const label = buildHarnessSessionLabel(engine)
     // A grid is the user's answer to "where should this run", so every way of not honouring it is a
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked.
@@ -4718,7 +4721,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // key wins on its own terms — OpenCode picked Anthropic over a grid it had been handed, and said
     // only `invalid x-api-key`. Nothing is cleared when no grid is in play: an agent on its own login
     // is supposed to use exactly these variables.
-    const clearEnv = gridLaunch ? gridConflictingEnvToClear(gridLaunch) : undefined
+    const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv)]
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED), so this cannot throw.
@@ -4751,6 +4754,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       codexHome,
       dsh,
+      dshRuntime: dsh ? label : null,
       agent,
       bypassPermission,
       permissionMode,
@@ -4811,24 +4815,29 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
 
-    // The harness the source was created as: its env and argv, not a second materialisation — the
-    // folder already holds the template, AGENTS.md and skill links the source got.
+    const label = buildHarnessSessionLabel(engine)
+    // Fork the source's saved harness context. Workspace templates and init are not run again.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
     let dshLabel: string | undefined
     if (source.dsh) {
       const installed = installedDsh(source.dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
-      const launch = dshLaunch(installed, source.cwd, { privateGrid: backend.gridName() })
-      dshEnv = launch.env
-      dshArgs = launch.args
+      // Narrowed above; a closure would lose that, so the checked values are named here.
+      const cwd = source.cwd
+      const sourceKey = forkRuntimeKey({ cwd, agentId: source.agentId, dshRuntime: source.dshRuntime })
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label,
+        { privateGrid: backend.gridName() }, sourceKey))
+      if (!prepared.ok) return prepared
+      dshEnv = prepared.launch.env
+      dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
-    const label = buildHarnessSessionLabel(engine)
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     const extraArgs = [...dshArgs, ...(source.agent ? namedAgentArgs(engine, source.agent) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {
+      clearEnv: harnessEnvToClear(dshEnv),
       bypassPermission: source.bypassPermission ?? false,
       ...(source.permissionMode ? { permissionMode: source.permissionMode } : {}),
       extraArgs: extraArgs.length ? extraArgs : undefined,
@@ -4859,6 +4868,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       grid: null,
       gridLaunchRecord: null,
       codexHome: source.codexHome ?? null,
+      dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,
       agent: source.agent ?? null,
       bypassPermission: source.bypassPermission ?? false,
