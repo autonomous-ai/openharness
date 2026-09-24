@@ -10,7 +10,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/terminal/terminal_binary.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 
 import '../keymap_host_test.dart' show MemoryKeymap, key;
 import '../keymap_runtime_test.dart' show mount;
@@ -51,7 +51,7 @@ void main() {
         final elapsed = watch.elapsedMicroseconds;
         if (i >= 0) times.add(elapsed);
         if (name == 'cmd_n') {
-          expect(find.byType(NewHarnessBox), findsOneWidget);
+          expect(find.byType(NewHarnessForm), findsOneWidget);
         } else if (name == 'cmd_o' || name == 'cmd_p') {
           expect(
             find.byKey(const ValueKey('swarm-search-input')),

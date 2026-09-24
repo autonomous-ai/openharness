@@ -10,7 +10,7 @@ import 'package:harness/models/local_model.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:xterm/xterm.dart';
 
@@ -375,7 +375,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('New harness'));
     await tester.pumpAndSettle();
-    final box = tester.widget<NewHarnessBox>(find.byType(NewHarnessBox));
+    final box = tester.widget<NewHarnessForm>(find.byType(NewHarnessForm));
     expect(box.controller.machineId, 'fresh');
     expect(box.controller.placement, HarnessPlacement.currentTab);
     expect(app.panes.single.machineId, 'm', reason: 'Existing work stays open');

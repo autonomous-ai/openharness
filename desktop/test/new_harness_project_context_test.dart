@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_history.dart';
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/mixed_agents.dart';
@@ -65,8 +65,7 @@ void main() {
             child: SizedBox(
               width: 760,
               height: 420,
-              child: NewHarnessBox(
-                docked: true,
+              child: NewHarnessForm(
                 controller: box,
                 onClose: () {},
                 onCreated: () =>
@@ -86,43 +85,37 @@ void main() {
     box.focusField(NewHarnessField.machine);
   }
 
-  testWidgets(
-    'the proposed project name is selected for immediate replacement',
-    (tester) async {
-      final app = createApp();
-      seedMixedAgents(app);
-      addTearDown(app.dispose);
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'codex',
-        autoProject: true,
-        now: () => DateTime(2026, 9, 20, 17, 22, 19),
-      );
-      addTearDown(box.dispose);
-      await mount(tester, box);
-      await openLaunchRow(tester, 'project');
-      box.accept(
-        box.options.firstWhere(
-          (row) => row.id == NewHarnessController.newProjectId,
-        ),
-      );
-      await tester.pump();
-      final controller = tester.widget<TextField>(input).controller!;
-      expect(controller.text, 'codex-2026-09-20-17-22');
-      expect(
-        controller.selection,
-        TextSelection(baseOffset: 0, extentOffset: controller.text.length),
-      );
-      await tester.enterText(input, 'design-system');
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      expect(box.projectLabel, '~/harnesses/design-system');
-      expect(box.project.generated, isNull);
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('the proposed project name can be replaced before accepting', (
+    tester,
+  ) async {
+    final app = createApp();
+    seedMixedAgents(app);
+    addTearDown(app.dispose);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      autoProject: true,
+      now: () => DateTime(2026, 9, 20, 17, 22, 19),
+    );
+    addTearDown(box.dispose);
+    await mount(tester, box);
+    await openLaunchRow(tester, 'project');
+    box.accept(
+      box.options.firstWhere(
+        (row) => row.id == NewHarnessController.newProjectId,
+      ),
+    );
+    await tester.pump();
+    expect(box.query, 'codex-2026-09-20-17-22');
+    await typeHarnessQuery(tester, 'design-system');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(box.projectLabel, '~/harnesses/design-system');
+    expect(box.project.generated, isNull);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'saved project history loads on first opening without replacing the draft',
@@ -228,6 +221,8 @@ void main() {
       box.focusField(NewHarnessField.projectMenu);
       await mount(tester, box);
       await tester.pump(const Duration(milliseconds: 200));
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
       final selected = box.selected?.id;
       final machine = app.machineStates['m']!;
       machine.agents = [
@@ -258,13 +253,13 @@ void main() {
       app.notifyListeners();
       await tester.pump(const Duration(milliseconds: 200));
       expect(changes, 0);
-      await tester.enterText(input, 'product video');
+      await typeHarnessQuery(tester, 'product video');
       await tester.pump();
       expect(box.selected!.project!.folder, '/work/product-video');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(box.project.folder, '/work/product-video');
-      expect(box.field, NewHarnessField.launch);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -346,17 +341,17 @@ void main() {
       );
       await tester.pump();
       expect(box.field, NewHarnessField.projectName);
-      expect(find.text('M2:~/harnesses/<name>'), findsOneWidget);
+      expect(box.query, isEmpty);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(box.error, 'Type a project name.');
-      await tester.enterText(input, 'payments processing');
+      await typeHarnessQuery(tester, 'payments processing');
       await tester.pump();
       expect(find.text('Create payments-processing'), findsOneWidget);
-      expect(find.text('M2:~/harnesses/payments-processing'), findsOneWidget);
+      expect(box.query, 'payments processing');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
-      expect(box.field, NewHarnessField.launch);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(box.project.name, 'payments processing');
       expect(
         box.projectFolderRequest!.payload['projectName'],
@@ -373,7 +368,7 @@ void main() {
       );
       await tester.pump();
       expect(box.query, 'payments processing');
-      await tester.enterText(input, '');
+      await typeHarnessQuery(tester, '');
       await tester.pump();
       expect(await box.createNow(), NewHarnessOutcome.failed);
       expect(box.error, 'Type a project name.');
@@ -382,7 +377,7 @@ void main() {
       expect(box.field, NewHarnessField.projectMenu);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      expect(box.field, NewHarnessField.launch);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(box.project.name, 'payments processing');
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pumpWidget(const SizedBox());
@@ -438,9 +433,12 @@ void main() {
       await mount(tester, box);
       final agent = find.byKey(const ValueKey('new-harness-field-agent'));
       final project = find.byKey(const ValueKey('new-harness-field-project'));
-      expect(tester.getRect(agent).top, lessThan(tester.getRect(project).top));
+      expect(
+        tester.getRect(agent).top,
+        greaterThan(tester.getRect(project).top),
+      );
       expect(input, findsNothing);
-      expect(find.text('/work/payments'), findsOneWidget);
+      expect(find.text(box.projectLabel), findsOneWidget);
       expect(find.text('M2'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('new-harness-field-machine')),
@@ -450,7 +448,7 @@ void main() {
         find.byKey(const ValueKey('new-harness-field-mode')),
         findsNothing,
       );
-      expect(find.text('Auto-approve'), findsNothing);
+      expect(find.text('Auto-approve'), findsOneWidget);
       for (final (name, field) in [
         ('agent', NewHarnessField.agent),
         ('machine', NewHarnessField.machine),
@@ -459,23 +457,31 @@ void main() {
         await openLaunchRow(tester, name);
         await tester.pump();
         expect(box.field, field);
-        expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          'new-harness-query',
+        );
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
-        expect(box.field, NewHarnessField.launch);
+        expect(find.byType(NewHarnessForm), findsOneWidget);
       }
       await openLaunchRow(tester, 'project');
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      box.move(
+        box.options.indexWhere(
+              (row) => row.id == NewHarnessController.newProjectId,
+            ) -
+            box.cursor,
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
-      await tester.enterText(input, 'payments processing');
+      await typeHarnessQuery(tester, 'payments processing');
       await tester.pump();
       expect(find.text('Create payments-processing'), findsOneWidget);
-      expect(find.text('M2:~/harnesses/payments-processing'), findsOneWidget);
+      expect(box.query, 'payments processing');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
-      expect(box.field, NewHarnessField.launch);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(box.task, 'Review the retry path');
       expect(
         box.projectFolderRequest!.payload['projectName'],
@@ -486,63 +492,62 @@ void main() {
     },
   );
 
-  testWidgets(
-    'machine is nested in Project and switching back restores its folder',
-    (tester) async {
-      final app = createApp();
-      seedMixedAgents(app);
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'codex',
-        folder: '/work/payments',
-        task: 'Keep this task',
-      );
-      addTearDown(box.dispose);
-      addTearDown(app.dispose);
-      await mount(tester, box);
-      box.focusField(NewHarnessField.project);
-      box.setQuery('payments processing');
-      chooseMachine(box);
-      await tester.pump();
-      expect(box.field, NewHarnessField.machine);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      expect(box.field, NewHarnessField.projectMenu);
-      expect(box.query, isEmpty);
-      chooseMachine(box);
-      box.setQuery('Office');
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      expect(box.field, NewHarnessField.projectMenu);
-      expect(box.machineId, 'studio');
-      expect(box.project.folder, isNull);
-      expect(box.query, isEmpty);
-      expect(box.task, 'Keep this task');
-      box.setFolder('/work/remote-payments');
-      expect(box.field, NewHarnessField.launch);
-      box.focusField(NewHarnessField.project);
-      chooseMachine(box);
-      box.setQuery('M2');
-      box.accept();
-      expect(box.machineId, 'm');
-      expect(box.project.folder, '/work/payments');
-      // This cache travels with the draft through Escape and More options.
-      final restored = NewHarnessController(
-        app,
-        machineId: 'm',
-        draft: box.draft,
-      );
-      addTearDown(restored.dispose);
-      restored.focusField(NewHarnessField.machine);
-      restored.setQuery('Office');
-      restored.accept();
-      expect(restored.project.folder, '/work/remote-payments');
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('machine changes retain each machine’s folder in the draft', (
+    tester,
+  ) async {
+    final app = createApp();
+    seedMixedAgents(app);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/work/payments',
+      task: 'Keep this task',
+    );
+    addTearDown(box.dispose);
+    addTearDown(app.dispose);
+    await mount(tester, box);
+    box.focusField(NewHarnessField.project);
+    box.setQuery('payments processing');
+    chooseMachine(box);
+    await tester.pump();
+    expect(box.field, NewHarnessField.machine);
+    box.back();
+    await tester.pump();
+    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.query, isEmpty);
+    chooseMachine(box);
+    box.setQuery('Office');
+    await tester.pump();
+    box.accept();
+    await tester.pump();
+    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.machineId, 'studio');
+    expect(box.project.folder, isNull);
+    expect(box.query, isEmpty);
+    expect(box.task, 'Keep this task');
+    box.setFolder('/work/remote-payments');
+    expect(find.byType(NewHarnessForm), findsOneWidget);
+    box.focusField(NewHarnessField.project);
+    chooseMachine(box);
+    box.setQuery('M2');
+    box.accept();
+    expect(box.machineId, 'm');
+    expect(box.project.folder, '/work/payments');
+    // This cache travels with the draft through Escape and More options.
+    final restored = NewHarnessController(
+      app,
+      machineId: 'm',
+      draft: box.draft,
+    );
+    addTearDown(restored.dispose);
+    restored.focusField(NewHarnessField.machine);
+    restored.setQuery('Office');
+    restored.accept();
+    expect(restored.project.folder, '/work/remote-payments');
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpWidget(const SizedBox());
+  });
 
   test(
     'project choices belong only to the selected machine, including stale rows',
@@ -666,7 +671,7 @@ void main() {
       await tester.pump();
       expect(box.machineId, 'studio');
       expect(box.projectLocation, 'iMac · Office:~/payments');
-      expect(box.field, NewHarnessField.launch);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pumpWidget(const SizedBox());
     },

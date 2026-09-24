@@ -18,7 +18,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 import 'package:harness/settings/appearance/wallpaper_section.dart';
 import 'package:harness/widgets/workspace_start_guide.dart';
@@ -137,12 +137,12 @@ void main() {
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
     expect(find.text('Follow your curiosity.'), findsOneWidget);
-    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(search, findsNothing);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-    expect(find.byType(NewHarnessBox), findsOneWidget);
+    expect(find.byType(NewHarnessForm), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
-    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     final tab = app.activeSwarmId;
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
@@ -156,10 +156,10 @@ void main() {
     expect(search, findsNothing);
     await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
     await tester.pump();
-    expect(find.byType(NewHarnessBox), findsOneWidget);
+    expect(find.byType(NewHarnessForm), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     expect(app.activeSwarmId, tab);
-    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(app.launches, isEmpty);
     await tester.pumpWidget(const SizedBox());
   });
@@ -180,7 +180,7 @@ void main() {
     await _mount(tester, app);
     expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
     await key(tester, LogicalKeyboardKey.keyO, cmd: true);
-    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
     expect(find.text('Existing work'), findsOneWidget);
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
@@ -203,7 +203,7 @@ void main() {
     addTearDown(app.dispose);
     final pane = app.adoptSessionForTest(terminal('a0', []));
     await _mount(tester, app);
-    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(app.focusedPane, same(pane));
     await tester.pumpWidget(const SizedBox());
   });
@@ -283,7 +283,7 @@ void main() {
         expect(app.swarms, [first, second, welcome]);
         expect(app.allPanes, [pane, other]);
         expect(find.byType(WorkspaceWelcome).hitTestable(), findsOneWidget);
-        expect(find.byType(NewHarnessBox), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
         expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
         await key(tester, LogicalKeyboardKey.keyO, cmd: true);
         expect(
@@ -313,8 +313,8 @@ void main() {
 
         await key(tester, LogicalKeyboardKey.keyN, cmd: true);
         await tester.pump(const Duration(milliseconds: 150));
-        expect(find.byType(NewHarnessBox), findsOneWidget);
-        expectGuideFixed(find.byKey(const ValueKey('new-harness-box')));
+        expect(find.byType(NewHarnessForm), findsOneWidget);
+        expectGuideFixed(find.byKey(const ValueKey('new-harness-form')));
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pump();
         await key(tester, LogicalKeyboardKey.keyW, cmd: true);
@@ -459,7 +459,7 @@ void main() {
 
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
-    expect(find.byType(NewHarnessBox), findsOneWidget);
+    expect(find.byType(NewHarnessForm), findsOneWidget);
     expectCentered();
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();

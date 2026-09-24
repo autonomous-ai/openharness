@@ -33,11 +33,8 @@ void main() {
       'Agent 0',
     );
     await tester.pump();
-    expect(
-      find.textContaining('enter  open', findRichText: true),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
+    expect(find.byKey(const ValueKey('swarm-search-count')), findsNothing);
 
     expect(find.byType(AlertDialog), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

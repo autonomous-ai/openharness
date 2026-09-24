@@ -191,7 +191,7 @@ void main() {
       );
       await tester.pump();
       await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
       await tester.pump();
       final selected = find.byWidgetPredicate(

@@ -13,8 +13,7 @@ import 'package:harness/core/repository_clone.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
-import 'package:harness/widgets/box_chrome.dart' show kWorkspaceInset;
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:path/path.dart' as p;
 
@@ -532,20 +531,17 @@ void main() {
     await chord(tester, LogicalKeyboardKey.keyN);
     await tester.pump();
     expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byKey(const ValueKey('new-harness-box')), findsOneWidget);
-    // Attached to the workspace's bottom edge, without dimming or resizing it.
-    final dock = tester.getRect(find.byKey(const ValueKey('new-harness-box')));
-    expect(dock.left, kWorkspaceInset);
-    expect(dock.right, tester.view.physicalSize.width - kWorkspaceInset);
-    expect(dock.bottom, tester.view.physicalSize.height - kWorkspaceInset);
-    expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
-    expect(
-      FocusManager.instance.primaryFocus!.debugLabel,
-      'New harness launch',
+    expect(find.byKey(const ValueKey('new-harness-form')), findsOneWidget);
+    final frame = tester.getRect(
+      find.byKey(const ValueKey('new-harness-form')),
     );
+    expect(frame.center.dx, tester.view.physicalSize.width / 2);
+    expect(frame.bottom, lessThan(tester.view.physicalSize.height));
+    expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
+    expect(FocusManager.instance.primaryFocus!.debugLabel, 'new-harness-form');
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    expect(find.byKey(const ValueKey('new-harness-box')), findsNothing);
+    expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
@@ -793,7 +789,7 @@ void main() {
             child: SizedBox(
               width: 720,
               height: 420,
-              child: NewHarnessBox(
+              child: NewHarnessForm(
                 controller: box,
                 onClose: () => closed++,
                 onCreated: () {},
@@ -805,31 +801,17 @@ void main() {
       ),
     );
     await tester.pump();
-    final input = find.byKey(const ValueKey('new-harness-input'));
-    expect(box.field, NewHarnessField.launch);
-    expect(input, findsNothing);
+    expect(box.field, NewHarnessField.projectMenu);
     await openLaunchRow(tester, 'agent');
-    await tester.pump();
-    expect(box.field, NewHarnessField.agent);
-    expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
-    await tester.enterText(input, 'clau');
-    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-    await tester.pump();
-    expect(box.query, 'Claude Code');
+    await typeHarnessQuery(tester, 'clau');
     expect(box.engine, 'codex');
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(box.engine, 'claude');
-    expect(box.field, NewHarnessField.launch);
-    await openLegacyTaskEditor(tester);
-    await tester.pump();
-    await tester.enterText(input, 'a project to test');
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    expect(box.field, NewHarnessField.launch);
-    expect(box.task, 'a project to test');
+    expect(box.field, NewHarnessField.agent);
     expect(closed, 0);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
     expect(closed, 1);
     await tester.pumpWidget(const SizedBox());
     box.dispose();

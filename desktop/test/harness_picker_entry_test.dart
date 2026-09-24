@@ -7,11 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm_search.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
-import 'package:harness/shared/widgets/app_choice_picker.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show terminal;
@@ -20,6 +21,8 @@ import 'swarm_state_test.dart' show createApp;
 import 'support/real_fonts.dart';
 
 void main() {
+  setUp(() => newHarnessOpensInBox = true);
+  tearDown(() => newHarnessOpensInBox = false);
   setUpAll(() async {
     await loadRealFonts();
     for (final (name, asset) in [
@@ -125,22 +128,27 @@ void main() {
         expect(tester.widget<TextField>(field).controller, same(controller));
         expect(
           find.textContaining('Payment retries now reuse'),
-          findsOneWidget,
+          size.width >= 848 ? findsOneWidget : findsNothing,
         );
         await capture('results');
         await chord(tester, LogicalKeyboardKey.keyN);
         await tester.pumpAndSettle();
         expect(field, findsNothing);
         expect(find.byType(SwarmSearchResults), findsNothing);
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(NewHarnessForm), findsOneWidget);
         expect(
-          find.byKey(const ValueKey('create-agent-submit')),
+          find.byKey(const ValueKey('new-harness-field-project')),
           findsOneWidget,
         );
-        expect(find.byType(AppChoicePicker<String>), findsWidgets);
         await capture('creation');
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        await capture('creation-options');
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byType(NewHarnessForm), findsNothing);
         expect(app.focusedPane, same(pane));
         expect(frames, isEmpty);
         expect(tester.takeException(), isNull);

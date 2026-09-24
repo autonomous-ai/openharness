@@ -55,70 +55,14 @@ class TerminalTabBorder extends ShapeBorder {
   void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
 }
 
-/// A temporary command area attached to the workspace's bottom edge. Its
-/// overlay never changes the dimensions or scroll position of live terminals.
-class CommandDock extends StatelessWidget {
-  const CommandDock({
-    super.key,
-    required this.child,
-    this.topClearance = 0,
-    this.expanded = false,
-  });
-  final Widget child;
-  final double topClearance;
-  final bool expanded;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final available =
-            (constraints.maxHeight - topClearance - 2 * kWorkspaceInset).clamp(
-              0.0,
-              double.infinity,
-            );
-        final scale = grid.appTextScaleOf(context);
-        // A shallow dock at ordinary sizes, with room for readable defaults and
-        // key hints when accessibility text or a narrow window needs more rows.
-        final minimum = constraints.maxWidth < 800 * scale ? 320.0 : 280.0;
-        final maxHeight =
-            (expanded
-                    ? 520.0 * scale
-                    : (available * .4).clamp(minimum * scale, 400.0 * scale))
-                .clamp(0.0, available);
-        return Align(
-          alignment: Alignment.bottomCenter,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              kWorkspaceInset,
-              0,
-              kWorkspaceInset,
-              kWorkspaceInset,
-            ),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minWidth: (constraints.maxWidth - 2 * kWorkspaceInset).clamp(
-                  0.0,
-                  double.infinity,
-                ),
-                maxHeight: maxHeight,
-              ),
-              child: FocusScope(child: child),
-            ),
-          ),
-        );
-      },
+/// Fixed UI typography for shared dialogs. Setup screens opt into the
+/// terminal's size explicitly so zoom does not resize unrelated controls.
+TextStyle boxMonoStyle({Color? color, FontWeight? weight, double? height}) =>
+    grid.AppType.mono(
+      height: height ?? 1.35,
+      color: color ?? Colors.white,
+      fontWeight: weight,
     );
-  }
-}
-
-/// Shared typography and frame for prompts that sit over the terminals: the
-/// terminal's face at [grid.AppType.monoSize], which ⌘+ and ⌘− leave alone.
-TextStyle boxMonoStyle({Color? color, FontWeight? weight}) => grid.AppType.mono(
-  height: 1.35,
-  color: color ?? Colors.white,
-  fontWeight: weight,
-);
 
 class TerminalBox extends StatelessWidget {
   const TerminalBox({super.key, required this.child, this.docked = false});

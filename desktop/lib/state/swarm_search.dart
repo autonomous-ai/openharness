@@ -41,6 +41,7 @@ class SwarmSearchController extends ChangeNotifier {
     this.modes,
     this.adding = false,
     this.navigating = false,
+    this.activityFirst = false,
     this.commandsOnly = false,
     this.offersCreate = false,
     this.resultsFromBottom = false,
@@ -77,6 +78,10 @@ class SwarmSearchController extends ChangeNotifier {
   final List<SwarmDestination> Function()? modes;
   final bool adding;
   final bool navigating;
+
+  /// Open Harness filters by latest activity; commands and splits keep relevance order.
+  final bool activityFirst;
+  bool get setupLayout => activityFirst && !isCommandMode && !isHelpMode;
   final bool commandsOnly;
 
   /// Whether the list ends in a row that makes a harness instead of finding
@@ -146,9 +151,7 @@ class SwarmSearchController extends ChangeNotifier {
       rows.any((row) => !row.isCreate);
 
   bool get hasPreview =>
-      _previewVisible &&
-      canPreview &&
-      (!resultsFromBottom || selected?.isCreate != true);
+      _previewVisible && canPreview && selected?.isCreate != true;
 
   void togglePreview() {
     if (!supportsPreview) return;
@@ -402,8 +405,8 @@ class SwarmSearchController extends ChangeNotifier {
     final previous = rows;
     final previousSelection = selected?.id;
     _filter(keepOrder: true);
-    // Live text can add/remove a match, but never shuffle matching rows under
-    // the keyboard or repaint the editor when the result set is unchanged.
+    // Live text can add/remove a match. Preserve selection and avoid repainting
+    // the editor when the result set is unchanged.
     if (!listEquals(previous, rows) || previousSelection != selected?.id) {
       notifyListeners();
     }
@@ -433,6 +436,8 @@ class SwarmSearchController extends ChangeNotifier {
     final availableCommands = isCommandMode
         ? commands?.call() ?? const <SwarmDestination>[]
         : const <SwarmDestination>[];
+    final byActivity =
+        activityFirst && !navigating && !isCommandMode && !isGroupMode;
     _commandIds = {for (final command in availableCommands) command.id};
     final scopedMembers = _groupScope == null
         ? null
@@ -475,13 +480,20 @@ class SwarmSearchController extends ChangeNotifier {
             recent: recent,
             previews: app.sessionPreviews,
           )
+        : byActivity
+        ? rankSwarmDestinationsByActivity(
+            candidates,
+            matchQuery,
+            recent: recent,
+            previews: app.sessionPreviews,
+          )
         : rankSwarmDestinations(
             candidates,
             matchQuery,
             recent: recent,
             previews: history == null ? app.sessionPreviews : null,
           );
-    if (keepOrder && !navigating) {
+    if (keepOrder && !navigating && !byActivity) {
       final remaining = {for (final row in rows) row.id: row};
       rows = [
         for (final row in previous) ?remaining.remove(row.id),
@@ -490,8 +502,9 @@ class SwarmSearchController extends ChangeNotifier {
     }
     // Keep the match order within each group, but put rows Return can open
     // first. An already-added exact match must not bury the usable matches.
-    // Location navigation retains its parent/child structure.
-    if (!navigating && !isCommandMode) {
+    // Location navigation retains its parent/child structure; Open Harness
+    // retains its activity order, including unavailable sessions.
+    if (!navigating && !isCommandMode && !byActivity) {
       final available = <SwarmDestination>[];
       final unavailable = <SwarmDestination>[];
       for (final row in rows) {
@@ -507,7 +520,14 @@ class SwarmSearchController extends ChangeNotifier {
         for (final row in rows)
           if (!row.isCreate) row,
       ];
-      rows = resultsFromBottom || placement != null || query.trim().isEmpty
+      // Navigating (⌘O) always leads with New Harness: the list below it is
+      // ordered by latest activity, so the one thing that is never a
+      // result needs a fixed home rather than a place in that order.
+      rows =
+          resultsFromBottom ||
+              navigating ||
+              placement != null ||
+              query.trim().isEmpty
           ? [?create, ...found]
           : [...found, ?create];
     }
