@@ -739,8 +739,11 @@ class _ModelsPanelState extends State<ModelsPanel> {
   }
 }
 
-/// Discovery appears once. Completion explains where model selection lives;
-/// the overview never creates a session or changes its model implicitly.
+/// Discovery appears once; the overview never creates a session or changes its
+/// model implicitly.
+///
+/// No "`<model>` is running" toast: a started model is shown by its own row in the
+/// Models overview, and a toast in the corner of the workspace repeated it.
 class LocalModelInvitation extends StatelessWidget {
   const LocalModelInvitation({
     super.key,
@@ -755,9 +758,7 @@ class LocalModelInvitation extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: controller,
     builder: (context, _) {
-      final ready = controller.readyModel;
-      if (ready == null &&
-          (!showIntroduction || !controller.showIntroduction)) {
+      if (!showIntroduction || !controller.showIntroduction) {
         return const SizedBox.shrink();
       }
       return Align(
@@ -777,14 +778,7 @@ class LocalModelInvitation extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
                 child: Row(
                   children: [
-                    if (ready == null)
-                      const ModelMark()
-                    else
-                      Icon(
-                        LucideIcons.circleCheckBig,
-                        color: AppColors.success,
-                        size: 22,
-                      ),
+                    const ModelMark(),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -792,36 +786,24 @@ class LocalModelInvitation extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            ready == null
-                                ? 'Run AI on this computer'
-                                : '${ready.name} is running',
+                            'Run AI on this computer',
                             style: AppType.label(color: AppColors.text),
                           ),
-                          if (ready == null)
-                            TextButton(
-                              onPressed: onOpen,
-                              style: TextButton.styleFrom(
-                                padding: EdgeInsets.zero,
-                                alignment: Alignment.centerLeft,
-                              ),
-                              child: const Text('Explore models'),
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.only(top: 5),
-                              child: Text(
-                                'Select it from the model picker in a session.',
-                                style: AppType.body(color: AppColors.textSoft),
-                              ),
+                          TextButton(
+                            onPressed: onOpen,
+                            style: TextButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              alignment: Alignment.centerLeft,
                             ),
+                            child: const Text('Explore models'),
+                          ),
                         ],
                       ),
                     ),
                     IconButton(
                       tooltip: 'Dismiss',
-                      onPressed: () => ready == null
-                          ? unawaited(controller.dismissIntroduction())
-                          : controller.dismissReady(),
+                      onPressed: () =>
+                          unawaited(controller.dismissIntroduction()),
                       icon: const Icon(Icons.close, size: 17),
                     ),
                   ],
