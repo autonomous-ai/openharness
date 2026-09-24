@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../analytics/analytics.dart';
 import '../state/pane_arrangement.dart';
+import '../core/desktop_window.dart';
 import '../core/engine_availability.dart';
 import '../core/codex_profiles.dart';
 import '../core/dsh_catalog.dart';
@@ -540,7 +541,9 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
     final revision = _machineRevision;
     try {
       final picked = _machineIsThisComputer
-          ? await getDirectoryPath(initialDirectory: _folder)
+          ? await whileNativePicker(
+              () => getDirectoryPath(initialDirectory: _folder),
+            )
           : await showRemoteFolderPicker(
               context,
               notifier: widget.notifier,
