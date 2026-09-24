@@ -1,3 +1,5 @@
+import 'support/workspace_tools.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -252,7 +254,7 @@ void main() {
         expect(models, findsNothing);
 
         if (!native) {
-          await tap(tester, find.byTooltip('Harnesses'));
+          await openWorkspaceTool(tester, 'harnesses');
           expect(find.byKey(const ValueKey('session-manager')), findsOneWidget);
           await key(tester, LogicalKeyboardKey.keyI, cmd: true);
           await tester.pumpAndSettle();
@@ -292,19 +294,19 @@ void main() {
     );
   }
 
-  testWidgets('Models shortcut, welcome hint and toolbar follow a live remap', (
+  testWidgets('Models shortcut and welcome hint follow a live remap', (
     tester,
   ) async {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
-    expect(find.byTooltip('Models ⌘I'), findsOneWidget);
+    expect(find.byTooltip('Models ⌘I'), findsNothing);
     map.apply('''{"bindings":[
       {"keys":"cmd+i","command":null},
       {"keys":"cmd+u","command":"models.list"}
     ]}''');
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Models ⌘U'), findsOneWidget);
+    expect(find.byTooltip('Models ⌘U'), findsNothing);
     expect(find.text('⌘U'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.keyI, cmd: true);
     expect(find.byType(ModelsPanel), findsNothing);
@@ -369,9 +371,9 @@ void main() {
       await mount(tester);
       expect(
         find.byKey(const ValueKey('onboarding-harnesses-dot')),
-        findsOneWidget,
+        findsNothing,
       );
-      await tap(tester, find.byTooltip('Harnesses'));
+      await openWorkspaceTool(tester, 'harnesses');
       expect(find.text('Run your first harness'), findsOneWidget);
       expect(journey.completed(OnboardingStep.harnesses), isFalse);
       expect(
@@ -380,7 +382,7 @@ void main() {
       );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      await tap(tester, find.byTooltip('Harnesses'));
+      await openWorkspaceTool(tester, 'harnesses');
       await tap(tester, find.text('New harness'));
       expect(find.byKey(const ValueKey('session-manager')), findsNothing);
       expect(find.byType(NewHarnessForm), findsOneWidget);
@@ -397,7 +399,7 @@ void main() {
         if (hasPassword) app.password = '123456';
         await mount(tester);
         expect(journey.next, OnboardingStep.machines);
-        await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
+        await openWorkspaceTool(tester, 'machines');
         await tap(tester, find.text('Set up access'));
         expect(find.text('On your other computer'), findsOneWidget);
         expect(find.textContaining('Connect to This Mac.'), findsOneWidget);
@@ -444,7 +446,7 @@ void main() {
     ];
     await mount(tester);
     expect(journey.next, OnboardingStep.machines);
-    await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceTool(tester, 'machines');
     await tap(tester, find.text('Connect to M2'));
     final field = find.descendant(
       of: find.byKey(const ValueKey('machines-panel')),
@@ -479,7 +481,7 @@ void main() {
       app.machines = [...app.machines, source];
       await mount(tester);
       expect(journey.next, OnboardingStep.machines);
-      await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
+      await openWorkspaceTool(tester, 'machines');
       expect(
         find.text('Open Harness on M2, then check again.'),
         findsOneWidget,
@@ -508,14 +510,11 @@ void main() {
       localHarness();
       await app.modelManager.refresh();
       await mount(tester);
-      await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
+      await openWorkspaceTool(tester, 'machines');
       await tap(tester, find.byTooltip('Dismiss suggestion'));
       expect(journey.next, OnboardingStep.models);
-      expect(
-        find.byKey(const ValueKey('onboarding-models-dot')),
-        findsOneWidget,
-      );
-      await tap(tester, find.byKey(const ValueKey('swarm-models-button')));
+      expect(find.byKey(const ValueKey('onboarding-models-dot')), findsNothing);
+      await openWorkspaceTool(tester, 'models');
       expect(find.byType(ModelsPanel), findsOneWidget);
       expect(find.byType(OnboardingCard), findsOneWidget);
       expect(find.text('Power a harness with local AI'), findsOneWidget);

@@ -196,7 +196,7 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
       await tester.pump();
       final selected = find.byWidgetPredicate(
-        (w) => w is ListTile && w.selected,
+        (w) => w is Semantics && w.properties.selected == true,
       );
       expect(
         find.descendant(of: selected, matching: find.text('Agent 10')),
@@ -251,21 +251,13 @@ void main() {
     final controls = find.byType(PaneHeaderActions).first;
     expect(
       tester
-          .widgetList<IconButton>(
-            find.descendant(of: controls, matching: find.byType(IconButton)),
+          .widgetList<Text>(
+            find.descendant(of: controls, matching: find.byType(Text)),
           )
-          .map((button) => button.tooltip),
-      orderedEquals([
-        'Share harness',
-        'Show message composer',
-        'Zoom Pane',
-        'Restart Harness',
-        'Fork Harness',
-        'Stop Harness',
-        'Close Pane',
-      ]),
+          .map((text) => text.data),
+      ['-', '[]', 'x'],
     );
-    expect(find.byTooltip('Stop Harness').first.hitTestable(), findsNothing);
+    expect(find.byTooltip('Stop Harness').first.hitTestable(), findsOneWidget);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: const Offset(1, 1));
     Future<void> hover() async {
@@ -274,19 +266,11 @@ void main() {
     }
 
     await hover();
-    await tester.tap(find.byTooltip('Show message composer').first);
-    await tester.pump();
-    expect(pane.composerVisible, isTrue);
-    await hover();
-    await tester.tap(find.byTooltip('Hide message composer').first);
-    await tester.pump();
-    expect(pane.composerVisible, isFalse);
-    await hover();
     await tester.tap(find.byTooltip('Zoom Pane').first);
     await tester.pump();
     expect(app.zoomedPaneId, pane.id);
     await hover();
-    await tester.tap(find.byTooltip('Zoom Pane'));
+    await tester.tap(find.byTooltip('Restore Pane'));
     await tester.pump();
     expect(app.zoomedPaneId, isNull);
     await hover();

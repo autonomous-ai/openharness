@@ -1,5 +1,5 @@
 // New Harness lists every harness the machine's catalog has — recent ones,
-// then Coding, then installed, then the rest of the Store — opens on the last
+// then Code, then installed, then the rest of the Store — opens on the last
 // harness and agent used, and installs a missing harness on the way to
 // starting, narrating that install in the right pane on the form's grid.
 import 'dart:async';
@@ -236,7 +236,7 @@ void main() {
 
   group('the harness list', () {
     test(
-      'recent harnesses, then Coding, then installed, then the Store',
+      'recent harnesses, then Code, then installed, then the Store',
       () async {
         final notifier = await app(
           remember: (n) async {
@@ -255,7 +255,7 @@ void main() {
       },
     );
 
-    test('with no history, Coding leads and every harness is listed', () async {
+    test('with no history, Code leads and every harness is listed', () async {
       final ids = harnessList(controller(await app()));
       expect(ids.first, NewHarnessController.codingId);
       expect(
@@ -285,11 +285,11 @@ void main() {
   });
 
   group('what the form opens on', () {
-    test('Coding and Claude Code when nothing was used before', () async {
+    test('Code and Claude Code when nothing was used before', () async {
       final box = controller(await app());
       await Future<void>.delayed(Duration.zero);
       expect(box.harnessId, isNull);
-      expect(box.harnessLabel, 'Coding');
+      expect(box.harnessLabel, 'Code');
       expect(box.engine, 'claude');
     });
 
@@ -316,23 +316,23 @@ void main() {
       installed: true,
     );
 
-    test('a remembered harness the Store dropped opens as Coding', () async {
+    test('a remembered harness the Store dropped opens as Code', () async {
       final notifier = await app(
         remember: (n) => n.agentPreference.remember('codex', harnessId: gone),
       );
       final box = controller(notifier);
       await Future<void>.delayed(Duration.zero);
       expect(box.harnessId, isNull);
-      expect(box.harnessLabel, 'Coding');
+      expect(box.harnessLabel, 'Code');
       expect(
         box.engine,
         'codex',
-        reason: 'Coding keeps the agent last used, which Coding can run',
+        reason: 'Code keeps the agent last used, which Code can run',
       );
       expect(harnessList(box), isNot(contains(gone)));
     });
 
-    test('a remembered viewer package opens as Coding too', () async {
+    test('a remembered viewer package opens as Code too', () async {
       final notifier = await app(
         catalog: [_blender, viewer],
         remember: (n) =>

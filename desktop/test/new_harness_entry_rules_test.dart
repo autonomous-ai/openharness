@@ -331,17 +331,14 @@ void main() {
     );
   }
 
-  testWidgets('Store Open restores its harness after switching to Coding', (
+  testWidgets('Store Open restores its harness after switching to Code', (
     tester,
   ) async {
     await mount(tester);
     await product(tester, 'autonomous/blender');
     box(tester).focusField(NewHarnessField.harness);
     box(tester).accept(
-      const NewHarnessOption(
-        id: NewHarnessController.codingId,
-        title: 'Coding',
-      ),
+      const NewHarnessOption(id: NewHarnessController.codingId, title: 'Code'),
     );
     box(tester).focusField(NewHarnessField.agent);
     box(tester).accept(const NewHarnessOption(id: 'codex', title: 'Codex'));

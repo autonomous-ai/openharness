@@ -313,6 +313,24 @@ final harnessCommands = <HarnessCommand>[
   const HarnessCommand('agent.stop', 'Stop Harness', ShortcutGroup.actions),
   const HarnessCommand('agent.fork', 'Fork Harness', ShortcutGroup.actions),
   const HarnessCommand(
+    'agent.share',
+    'Share Harness',
+    ShortcutGroup.actions,
+    nativeAction: 'shareAgent',
+  ),
+  const HarnessCommand(
+    'pane.toggle_viewer',
+    'Toggle Viewer',
+    ShortcutGroup.panes,
+    nativeAction: 'toggleViewer',
+  ),
+  const HarnessCommand(
+    'pane.toggle_composer',
+    'Toggle Message Composer',
+    ShortcutGroup.panes,
+    nativeAction: 'toggleComposer',
+  ),
+  const HarnessCommand(
     'agent.clone',
     'Clone Harness',
     ShortcutGroup.actions,
@@ -362,6 +380,13 @@ final harnessCommands = <HarnessCommand>[
     'Connect another machine',
     ShortcutGroup.actions,
     nativeAction: 'linkMachine',
+  ),
+  const HarnessCommand(
+    'harnesses.list',
+    'Harnesses',
+    ShortcutGroup.actions,
+    nativeAction: 'sessions',
+    keywords: ['manage', 'running', 'paused', 'sessions'],
   ),
   const HarnessCommand(
     'project.add',

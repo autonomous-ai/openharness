@@ -8,6 +8,7 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -394,7 +395,13 @@ void main() {
       await tester.enterText(input, 'extensibility');
       await tester.pump();
       // One harness, then the row that makes what was typed instead.
-      expect(find.byType(ListTile), findsNWidgets(2));
+      expect(
+        tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .rows,
+        hasLength(2),
+      );
       expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsOneWidget);
       // Minimal rows keep the full metadata accessible and searchable.
       for (final value in [
@@ -415,7 +422,13 @@ void main() {
       expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
       await tester.enterText(input, 'Architecture review');
       await tester.pump();
-      expect(find.byType(ListTile), findsNWidgets(2));
+      expect(
+        tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .rows,
+        hasLength(2),
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(app.activeSwarm, same(target));

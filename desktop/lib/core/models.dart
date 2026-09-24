@@ -940,14 +940,23 @@ class AgentProject {
   final bool branchPending;
 
   /// The folder as the person chose it: inside a Git checkout, a subfolder
-  /// shows as itself and the checkout's root as its repository ([name]), even
+  /// shows as itself and the checkout's root as its remote repository name
+  /// (falling back to [name]), even
   /// when the checkout is a temporary worktree. Outside Git it is [name], the
   /// folder itself. The branch beside it is the repository's.
   String get label {
     final checkout = root;
     if (checkout == null) return name;
     String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
-    if (trimmed(checkout) == trimmed(cwd)) return name;
+    if (trimmed(checkout) == trimmed(cwd)) {
+      final repository = remote == null
+          ? ''
+          : trimmed(remote!)
+                .split('/')
+                .last
+                .replaceFirst(RegExp(r'\.git$', caseSensitive: false), '');
+      return repository.isEmpty ? name : repository;
+    }
     return cwd
             .split(RegExp(r'[/\\]'))
             .where((part) => part.isNotEmpty)

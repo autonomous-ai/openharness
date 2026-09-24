@@ -211,6 +211,8 @@ void main() {
     expect(app.swarms.length, tabs);
     expect(app.activeSwarmId, tab);
     expect(app.panes.map((pane) => pane.agentId), ['a0', 'made']);
+    // The derived tab label can resize the terminal on the final layout frame.
+    await tester.pump(const Duration(milliseconds: 50));
     await tester.pumpWidget(const SizedBox());
   });
 

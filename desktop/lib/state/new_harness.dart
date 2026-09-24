@@ -574,7 +574,7 @@ class NewHarnessController extends ChangeNotifier {
     return entry != null && !entry.isViewerPackage;
   }
 
-  /// A remembered harness the machine no longer offers opens as Coding. Only
+  /// A remembered harness the machine no longer offers opens as Code. Only
   /// a remembered one: a harness someone asked for by name keeps its row, and
   /// its start explains what is wrong.
   void _forgetUnofferedHarness() {
@@ -584,8 +584,7 @@ class NewHarnessController extends ChangeNotifier {
     _engine = _initialEngine(null);
   }
 
-  String get harnessLabel =>
-      _harnessId == null ? 'Coding' : labelOf(_harnessId!);
+  String get harnessLabel => _harnessId == null ? 'Code' : labelOf(_harnessId!);
   bool advancedOpen = false;
   bool _selectionTouched = false, _advancedTouched = false;
   void toggleAdvanced() {
@@ -2538,7 +2537,7 @@ class NewHarnessController extends ChangeNotifier {
           id,
         )?.id ??
         canonicalHarnessId(id);
-    // Recent harnesses, then Coding, then what this machine has installed,
+    // Recent harnesses, then Code, then what this machine has installed,
     // then the rest of the Store — every harness is here, and searchable; one
     // that is not installed yet installs when it starts.
     final recents = <String>{
@@ -2567,7 +2566,7 @@ class NewHarnessController extends ChangeNotifier {
       for (final id in recents) row(id),
       const NewHarnessOption(
         id: codingId,
-        title: 'Coding',
+        title: 'Code',
         detail: 'Work in any code project',
       ),
       for (final id in rest.where(installed)) row(id),

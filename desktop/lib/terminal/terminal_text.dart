@@ -31,6 +31,20 @@ TextStyle terminalContentStyle({Color? color}) => terminalFontStore.value
     .toTextStyle(color: color)
     .copyWith(letterSpacing: 0, wordSpacing: 0);
 
+/// One character column and one text row, measured just as the terminal does.
+/// Terminal dialogs use whole cells for their margins, gutters and selection.
+Size terminalCellSizeOf(BuildContext context) {
+  TerminalFontScope.watch(context);
+  final painter = TextPainter(
+    text: TextSpan(text: 'mmmmmmmmmm', style: terminalContentStyle()),
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout();
+  final size = Size(painter.width / 10, painter.height);
+  painter.dispose();
+  return size;
+}
+
 /// Keeps retained widgets and open overlays on the same live typography.
 class TerminalFontScope extends InheritedNotifier<TerminalFontStore> {
   TerminalFontScope({super.key, required super.child})

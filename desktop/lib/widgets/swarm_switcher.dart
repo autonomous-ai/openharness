@@ -12,6 +12,8 @@ import '../shortcuts/keymap.dart';
 import 'box_chrome.dart';
 import 'prompt_context.dart';
 import '../terminal/terminal_text.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
 import 'search_result_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -20,7 +22,6 @@ import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../state/harness_sessions.dart' show harnessActivityAge;
-import '../shared/theme/prompt_style.dart';
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
 import 'swarm_icon.dart';
@@ -547,8 +548,13 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
     final scale = MediaQuery.textScalerOf(context);
+    final cell = widget.bios ? terminalCellSizeOf(context) : Size.zero;
     final acceptKey = effectiveCommandHint(
       context,
       'picker.accept',
@@ -582,13 +588,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           stacked: stacked,
         );
         if (widget.bios) {
-          // Two terminal lines, a 4 px title/context gap, and 12 px above
-          // and below each session keep adjacent entries distinct.
-          _rowHeight =
-              scale.scale(terminalFontStore.size) *
-                  terminalFontStore.value.height *
-                  2 +
-              28;
+          // A name, its context, then one blank terminal row. Only the name
+          // receives the selection bar, exactly as in New Harness.
+          _rowHeight = cell.height * 3;
         }
         final height = widget.fitRows
             ? _fittedHeight(
@@ -624,9 +626,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             alreadyHere,
             highlighted ? (search.canAccept, search.actionLabel(row)) : null,
             _rowHeight,
+            cell,
             compactAction,
             grid.AppType.monoFamily,
             grid.AppTheme.palette.value,
+            widget.bios ? theme : null,
             acceptKey,
             widget.terminal,
             stacked,
@@ -640,143 +644,155 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               child: previous.child,
             );
           }
-          final tile = ListTile(
-            key: ValueKey(row.id),
-            minTileHeight: _rowHeight,
-            enabled: canSubmit,
-            onFocusChange: (focused) {
-              if (focused) _focusResult(row.id);
-            },
-            selected: highlighted,
-            selectedColor: Colors.white,
-            hoverColor: Colors.transparent,
-            // BoxRowHighlight draws the selection, the same
-            // in both modes of the box.
-            selectedTileColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(widget.terminal ? 0 : 6),
-            ),
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            minVerticalPadding: 0,
-            horizontalTitleGap: widget.bios ? 12 : 10,
-            minLeadingWidth: 20,
-            contentPadding: EdgeInsets.symmetric(
-              horizontal: widget.bios ? 16 : 10,
-            ),
-            // The dock uses its full-row highlight for
-            // selection; prefixes only appear in the input.
-            leading: widget.bios
-                ? row.isCreate
-                      ? Icon(
-                          LucideIcons.plus300,
-                          size: terminalFontStore.size * 1.25,
-                          color: grid.AppPalette.swarmAccent,
-                        )
-                      : row.agentId != null
-                      ? EngineMark(
-                          engine: row.engine,
-                          size: terminalFontStore.size * 1.25,
-                          enabled: canSubmit,
-                        )
-                      : null
-                : widget.terminal
-                ? null
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Every command wore the same ⌘: a column
-                      // of identical marks says nothing. Its
-                      // own key, at the right, says something.
-                      row.isCommand || row.pickerQuery != null
-                          ? const SizedBox(width: 2)
-                          : row.isCreate
-                          ? const Icon(
-                              LucideIcons.plus300,
-                              size: 18,
-                              color: Colors.white70,
-                            )
-                          : row.isStore
-                          ? StoreMark(size: 20, enabled: canSubmit)
-                          : row.agentId != null ||
-                                (row.isSwarm && row.members.length == 1)
-                          ? EngineMark(
-                              engine: row.engine,
-                              size: 20,
-                              enabled: canSubmit,
-                            )
-                          : row.isProject
-                          ? const Icon(
-                              LucideIcons.folderOpen,
-                              size: 18,
-                              color: Colors.white60,
-                            )
-                          : row.isMachine
-                          ? const Icon(
-                              LucideIcons.monitor300,
-                              size: 18,
-                              color: Colors.white60,
-                            )
-                          : const SwarmIcon(size: 20, color: Colors.white60),
-                    ],
+          final tile = widget.bios
+              ? Semantics(
+                  selected: highlighted,
+                  enabled: canSubmit,
+                  button: true,
+                  child: InkWell(
+                    key: ValueKey(row.id),
+                    onFocusChange: (focused) {
+                      if (focused) _focusResult(row.id);
+                    },
+                    onTap: canSubmit ? () => _submit(row) : null,
+                    hoverColor: Colors.transparent,
+                    focusColor: Colors.transparent,
+                    highlightColor: Colors.transparent,
+                    splashFactory: NoSplash.splashFactory,
+                    child: _SearchRowContent(
+                      search: search,
+                      row: row,
+                      terminal: true,
+                      stacked: true,
+                      bios: true,
+                      highlighted: highlighted,
+                      enabled: canSubmit,
+                      cellSize: cell,
+                      activityAge: activityAge,
+                    ),
                   ),
-            title: _SearchRowContent(
-              search: search,
-              row: row,
-              terminal: widget.terminal,
-              stacked: stacked,
-              bios: widget.bios,
-              highlighted: highlighted,
-              activityAge: activityAge,
-            ),
-            trailing: widget.bios
-                ? null
-                : widget.terminal
-                ? (highlighted
+                )
+              : ListTile(
+                  key: ValueKey(row.id),
+                  minTileHeight: _rowHeight,
+                  enabled: canSubmit,
+                  onFocusChange: (focused) {
+                    if (focused) _focusResult(row.id);
+                  },
+                  selected: highlighted,
+                  selectedColor: Colors.white,
+                  hoverColor: Colors.transparent,
+                  // BoxRowHighlight draws the selection, the same
+                  // in both modes of the box.
+                  selectedTileColor: Colors.transparent,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(
+                      widget.terminal ? 0 : 6,
+                    ),
+                  ),
+                  dense: true,
+                  visualDensity: VisualDensity.compact,
+                  minVerticalPadding: 0,
+                  horizontalTitleGap: 10,
+                  minLeadingWidth: 20,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                  // The dock uses its full-row highlight for
+                  // selection; prefixes only appear in the input.
+                  leading: widget.terminal
+                      ? null
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Every command wore the same ⌘: a column
+                            // of identical marks says nothing. Its
+                            // own key, at the right, says something.
+                            row.isCommand || row.pickerQuery != null
+                                ? const SizedBox(width: 2)
+                                : row.isCreate
+                                ? const Icon(
+                                    LucideIcons.plus300,
+                                    size: 18,
+                                    color: Colors.white70,
+                                  )
+                                : row.isStore
+                                ? StoreMark(size: 20, enabled: canSubmit)
+                                : row.agentId != null ||
+                                      (row.isSwarm && row.members.length == 1)
+                                ? EngineMark(
+                                    engine: row.engine,
+                                    size: 20,
+                                    enabled: canSubmit,
+                                  )
+                                : row.isProject
+                                ? const Icon(
+                                    LucideIcons.folderOpen,
+                                    size: 18,
+                                    color: Colors.white60,
+                                  )
+                                : row.isMachine
+                                ? const Icon(
+                                    LucideIcons.monitor300,
+                                    size: 18,
+                                    color: Colors.white60,
+                                  )
+                                : const SwarmIcon(
+                                    size: 20,
+                                    color: Colors.white60,
+                                  ),
+                          ],
+                        ),
+                  title: _SearchRowContent(
+                    search: search,
+                    row: row,
+                    terminal: widget.terminal,
+                    stacked: stacked,
+                  ),
+                  trailing: widget.terminal
+                      ? (highlighted
+                            ? Text(
+                                acceptKey ?? '',
+                                key: const ValueKey('swarm-row-action'),
+                                style: boxMonoStyle(color: kBoxFaint),
+                              )
+                            : row.shortcut == null
+                            ? null
+                            : Text(
+                                row.shortcut!,
+                                style: boxMonoStyle(color: kBoxFaint),
+                              ))
+                      : alreadyHere && search.placement == null
                       ? Text(
-                          acceptKey ?? '',
-                          key: const ValueKey('swarm-row-action'),
-                          style: boxMonoStyle(color: kBoxFaint),
+                          'Already added',
+                          style: boxMonoStyle(color: Colors.white54),
+                        )
+                      : highlighted
+                      ? ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth:
+                                170 *
+                                scale.scale(grid.AppType.bodySize) /
+                                grid.AppType.bodySize,
+                          ),
+                          child: TextButton(
+                            key: const ValueKey('swarm-row-action'),
+                            onPressed: search.canAccept ? _submit : null,
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                            ),
+                            child: SwarmSearchActionLabel(
+                              search.actionLabel(row),
+                              compact: compactAction,
+                            ),
+                          ),
                         )
                       : row.shortcut == null
                       ? null
                       : Text(
                           row.shortcut!,
-                          style: boxMonoStyle(color: kBoxFaint),
-                        ))
-                : alreadyHere && search.placement == null
-                ? Text(
-                    'Already added',
-                    style: boxMonoStyle(color: Colors.white54),
-                  )
-                : highlighted
-                ? ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth:
-                          170 *
-                          scale.scale(grid.AppType.bodySize) /
-                          grid.AppType.bodySize,
-                    ),
-                    child: TextButton(
-                      key: const ValueKey('swarm-row-action'),
-                      onPressed: search.canAccept ? _submit : null,
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.white,
-                      ),
-                      child: SwarmSearchActionLabel(
-                        search.actionLabel(row),
-                        compact: compactAction,
-                      ),
-                    ),
-                  )
-                : row.shortcut == null
-                ? null
-                : Text(
-                    row.shortcut!,
-                    style: boxMonoStyle(color: Colors.white60),
-                  ),
-            onTap: canSubmit ? () => _submit(row) : null,
-          );
+                          style: boxMonoStyle(color: Colors.white60),
+                        ),
+                  onTap: canSubmit ? () => _submit(row) : null,
+                );
           _rowWidgets[row.id] = (
             presentation: presentation,
             child: MouseRegion(
@@ -789,23 +805,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 }
               },
               child: widget.bios
-                  ? Material(
-                      color: highlighted
-                          ? Colors.white.withValues(alpha: .12)
-                          : Colors.transparent,
-                      child: row.isCreate
-                          ? DecoratedBox(
-                              decoration: BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: Colors.white.withValues(alpha: .12),
-                                  ),
-                                ),
-                              ),
-                              child: tile,
-                            )
-                          : tile,
-                    )
+                  ? tile
                   : BoxRowHighlight(
                       terminal: widget.terminal,
                       highlighted: highlighted,
@@ -847,16 +847,26 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                               : search.adding
                               ? 'No matching harnesses'
                               : 'No matching results',
-                          style: grid.AppType.monoLabel(
-                            fontWeight: FontWeight.w400,
-                            color: Colors.white60,
-                          ),
+                          style: widget.bios
+                              ? terminalContentStyle(
+                                  color: theme.foreground.withValues(
+                                    alpha: .54,
+                                  ),
+                                )
+                              : grid.AppType.monoLabel(
+                                  fontWeight: FontWeight.w400,
+                                  color: Colors.white60,
+                                ),
                         ),
                       )
                     : Padding(
                         padding: EdgeInsets.only(
-                          top: 8,
-                          bottom: pinCreate ? 0 : 8,
+                          top: widget.bios ? 0 : 8,
+                          bottom: pinCreate
+                              ? 0
+                              : widget.bios
+                              ? cell.height
+                              : 8,
                         ),
                         child: FocusTraversalOrder(
                           order: const NumericFocusOrder(1),
@@ -865,7 +875,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                             child: ListView.builder(
                               key: const ValueKey('swarm-search-result-list'),
                               padding: EdgeInsets.symmetric(
-                                horizontal: widget.bios ? 12 : 8,
+                                horizontal: widget.bios ? cell.width : 8,
                               ),
                               controller: _scroll,
                               // The dock only shows a few rows. Building the
@@ -891,9 +901,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               ),
               if (unavailable) ...[
                 SizedBox(
-                  height: 48,
+                  height: widget.bios ? cell.height * 2 : 48,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: widget.bios ? cell.width * 4 : 12,
+                    ),
                     child: Row(
                       children: [
                         Expanded(
@@ -907,10 +919,16 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 : 'No room to open this ${selected.isSwarm || selected.isGroup ? 'group' : 'harness'}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: grid.AppType.monoLabel(
-                              fontWeight: FontWeight.w400,
-                              color: Colors.white60,
-                            ),
+                            style: widget.bios
+                                ? terminalContentStyle(
+                                    color: theme.foreground.withValues(
+                                      alpha: .54,
+                                    ),
+                                  )
+                                : grid.AppType.monoLabel(
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white60,
+                                  ),
                           ),
                         ),
                       ],
@@ -942,7 +960,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     VerticalDivider(
                       width: 1,
                       thickness: 1,
-                      color: Colors.white.withValues(alpha: .16),
+                      color: (widget.bios ? theme.foreground : Colors.white)
+                          .withValues(alpha: .16),
                     )
                   else
                     const SizedBox(width: 8),
@@ -979,7 +998,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 children: [
                   Expanded(child: content),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                    padding: widget.bios
+                        ? EdgeInsets.fromLTRB(
+                            cell.width,
+                            0,
+                            cell.width,
+                            cell.height,
+                          )
+                        : const EdgeInsets.fromLTRB(8, 0, 8, 8),
                     child: SizedBox(
                       height: _rowHeight,
                       child: buildRow(context, 0),
@@ -1021,7 +1047,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
 }
 
 // Typing changes the match text even when the row, its controls, and its focus
-// state stay the same. Listen here so the cached ListTile can keep that state.
+// state stay the same. Listen here so the cached row can keep that state.
 class _SearchRowContent extends StatefulWidget {
   const _SearchRowContent({
     required this.search,
@@ -1030,6 +1056,8 @@ class _SearchRowContent extends StatefulWidget {
     required this.stacked,
     this.bios = false,
     this.highlighted = false,
+    this.enabled = true,
+    this.cellSize,
     this.activityAge,
   });
 
@@ -1039,6 +1067,8 @@ class _SearchRowContent extends StatefulWidget {
   final bool stacked;
   final bool bios;
   final bool highlighted;
+  final bool enabled;
+  final Size? cellSize;
   final String? activityAge;
 
   @override
@@ -1085,69 +1115,93 @@ class _SearchRowContentState extends State<_SearchRowContent> {
     final row = widget.row;
     final matches = searchResultMatches(row, swarmQueryTerms(_query.$1));
     if (widget.bios) {
-      final style = terminalContentStyle(
-        color: row.isCreate
-            ? grid.AppPalette.swarmAccent
-            : widget.highlighted
-            ? Colors.white
-            : Colors.white70,
+      final theme = terminalThemeFor(
+        grid.AppTheme.palette.value,
+        terminalThemeStore.value,
       );
+      final muted = theme.foreground.withValues(alpha: .54);
+      final style = terminalContentStyle(
+        color: !widget.enabled
+            ? theme.foreground.withValues(alpha: .28)
+            : row.isCreate
+            ? theme.cursor
+            : theme.foreground,
+      );
+      final cell = widget.cellSize!;
       final data = row.promptContext;
+      final detail = data == null
+          ? row.terminalDetail ?? row.detail
+          : [
+              if (data.harness?.isNotEmpty == true) data.harness!,
+              if (data.leading?.isNotEmpty == true) data.leading!,
+              if (data.machine?.isNotEmpty == true) '@ ${data.machine}',
+              if (data.project?.isNotEmpty == true) '/ ${data.project}',
+              if (data.branch?.isNotEmpty == true) 'git: ${data.branch}',
+            ].join('  ');
       return Semantics(
         label: row.isCreate
             ? 'New Harness'
             : '${row.title}\n${row.terminalDetail ?? row.detail}'
                   '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
         excludeSemantics: true,
-        child: row.isCreate
-            ? Text('New Harness', style: style)
-            : Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              key: ValueKey('swarm-search-line:${row.id}'),
+              height: cell.height,
+              color: widget.highlighted ? theme.selection : Colors.transparent,
+              padding: EdgeInsets.symmetric(horizontal: cell.width),
+              child: Row(
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SearchResultText(
-                          row.title,
-                          matches: matches.where((match) => match.title),
-                          style: style,
-                        ),
-                      ),
-                      if (widget.activityAge case final age?) ...[
-                        const SizedBox(width: 12),
-                        Tooltip(
-                          message:
-                              'Last active ${row.lastActivityAt!.toLocal()}',
-                          child: Text(
-                            age,
-                            style: terminalContentStyle(color: Colors.white38),
+                  // Match Cmd-N's empty two-cell gutter. Agent identities are
+                  // text in the context line, never logos or icon-font glyphs.
+                  SizedBox(width: cell.width * 2),
+                  Expanded(
+                    child: row.isCreate
+                        ? Text('New Harness', style: style, maxLines: 1)
+                        : SearchResultText(
+                            row.title,
+                            matches: matches.where((match) => match.title),
+                            style: style,
                           ),
-                        ),
-                      ],
-                    ],
                   ),
-                  if (data != null || row.detail.isNotEmpty)
-                    const SizedBox(height: 4),
-                  if (data != null)
-                    PromptContextView(
-                      contextData: PromptContext(
-                        machine: data.machine,
-                        project: data.project,
-                        branch: data.branch,
-                        leading: data.leading,
+                  if (widget.activityAge case final age?) ...[
+                    SizedBox(width: cell.width * 2),
+                    Tooltip(
+                      message: 'Last active ${row.lastActivityAt!.toLocal()}',
+                      child: Text(
+                        age,
+                        maxLines: 1,
+                        style: terminalContentStyle(
+                          color: theme.foreground.withValues(alpha: .38),
+                        ),
                       ),
-                      textStyle: terminalContentStyle(color: kBoxFaint),
-                      matches: matches.where((match) => !match.title),
-                    )
-                  else if (row.detail.isNotEmpty)
-                    SearchResultText(
-                      row.detail,
-                      matches: matches.where((match) => !match.title),
-                      style: style.copyWith(color: kBoxFaint),
                     ),
+                  ],
                 ],
               ),
+            ),
+            if (!row.isCreate && detail.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(
+                  left: cell.width * 3,
+                  right: cell.width,
+                ),
+                child: SizedBox(
+                  height: cell.height,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: SearchResultText(
+                      detail,
+                      matches: matches.where((match) => !match.title),
+                      style: terminalContentStyle(color: muted),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       );
     }
     final title = SearchResultText(

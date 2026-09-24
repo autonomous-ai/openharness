@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -17,7 +16,6 @@ import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/store/store_mark.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
-import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/widgets/pane_grid.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
@@ -85,45 +83,32 @@ TerminalSession terminal(String id, List<TerminalBinaryFrame> input) =>
       ..streamId = 'stream-$id';
 
 void main() {
-  testWidgets('tab close marks follow hover and keyboard focus', (
-    tester,
-  ) async {
-    final app = createApp();
-    final first = app.activeSwarm;
-    app.renameSwarm(first.id, 'First tab');
-    app.newSwarm();
-    final second = app.activeSwarm;
-    app.renameSwarm(second.id, 'Second tab');
-    await mount(tester, app);
-    Finder close(String id) => find.byKey(ValueKey('tab-close:$id'));
-    double opacity(String id) => tester.widget<Opacity>(close(id)).opacity;
-    expect(opacity(first.id), 0);
-    expect(opacity(second.id), 0);
-    final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await pointer.addPointer(location: const Offset(900, 500));
-    await pointer.moveTo(tester.getCenter(find.text('First tab')));
-    await tester.pump();
-    expect(opacity(first.id), 1);
-    expect(opacity(second.id), 0);
-    await pointer.moveTo(const Offset(900, 500));
-    await tester.pump();
-    expect(opacity(first.id), 0);
-    Focus.of(tester.element(find.text('First tab'))).requestFocus();
-    await tester.pumpAndSettle();
-    expect(opacity(first.id), 1);
-    final closeIcon = find.descendant(
-      of: close(first.id),
-      matching: find.byType(Icon),
-    );
-    Focus.of(tester.element(closeIcon)).requestFocus();
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.space);
-    await tester.pump();
-    expect(app.swarms.map((swarm) => swarm.id), [second.id]);
-    await pointer.removePointer();
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+  testWidgets(
+    'tabs omit close buttons and Command-W still closes the active tab',
+    (tester) async {
+      final app = createApp();
+      final first = app.activeSwarm;
+      app.renameSwarm(first.id, 'First tab');
+      app.newSwarm(name: 'Second tab');
+      final second = app.activeSwarm;
+      await mount(tester, app);
+      expect(find.byKey(ValueKey('tab-close:${first.id}')), findsNothing);
+      expect(find.byKey(ValueKey('tab-close:${second.id}')), findsNothing);
+      final label = find.text('2:Second tab');
+      final tab = find.byKey(ValueKey(second.id));
+      expect(
+        tester.getCenter(label).dx,
+        closeTo(tester.getCenter(tab).dx, .01),
+      );
+      Focus.of(tester.element(label)).requestFocus();
+      await tester.pumpAndSettle();
+      await chord(tester, LogicalKeyboardKey.keyW);
+      await tester.pumpAndSettle();
+      expect(app.swarms.map((swarm) => swarm.id), [first.id]);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   for (final native in [false, true]) {
     testWidgets(
@@ -180,7 +165,7 @@ void main() {
   }
 
   for (final native in [false, true]) {
-    testWidgets('the store tab uses the Store mark (native=$native)', (
+    testWidgets('the store tab has a compact text label (native=$native)', (
       tester,
     ) async {
       const channel = MethodChannel('harness/swarm_tabs');
@@ -223,23 +208,12 @@ void main() {
           isFalse,
         );
       } else {
-        final mark = find.byKey(ValueKey('tab-store:${tab.id}'));
-        expect(mark, findsOneWidget);
-        final image = tester.widget<Image>(
-          find.descendant(
-            of: mark,
-            matching: find.byType(Image),
-            matchRoot: true,
-          ),
-        );
-        expect((image.image as AssetImage).assetName, kStoreMarkAsset);
-        expect(image.width, 16);
-        expect(image.height, 16);
+        expect(find.text('1:store'), findsOneWidget);
       }
     });
 
     testWidgets(
-      'a harness tab — its agent and that agent\'s viewer — wears the harness mark (native=$native)',
+      'a harness tab — its agent and that agent\'s viewer — uses the harness type (native=$native)',
       (tester) async {
         const channel = MethodChannel('harness/swarm_tabs');
         final updates = <Map>[];
@@ -295,9 +269,7 @@ void main() {
           );
           expect(row['iconAsset'], 'assets/engine-icons/marp.png');
         } else {
-          final mark = find.byKey(ValueKey('tab-engine:${tab.id}'));
-          expect(tester.widget<EngineMark>(mark).engine, 'autonomous/marp');
-          expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
+          expect(find.text('1:Quarterly deck'), findsOneWidget);
         }
 
         // An agent the machine no longer lists is drawn as its session's engine,
@@ -315,14 +287,7 @@ void main() {
           expect(row['engine'], isNull);
           expect(row['iconAsset'], isNull);
         } else {
-          expect(
-            tester
-                .widget<EngineMark>(
-                  find.byKey(ValueKey('tab-engine:${leftovers.id}')),
-                )
-                .engine,
-            isNull,
-          );
+          expect(find.text('2:Leftovers'), findsOneWidget);
         }
         final session = terminal('gone', []);
         other.session = session;
@@ -333,14 +298,7 @@ void main() {
           expect(row['engine'], 'codex');
           expect(row['iconAsset'], 'assets/engine-icons/codex.png');
         } else {
-          expect(
-            tester
-                .widget<EngineMark>(
-                  find.byKey(ValueKey('tab-engine:${leftovers.id}')),
-                )
-                .engine,
-            'codex',
-          );
+          expect(find.text('2:Leftovers again'), findsOneWidget);
         }
         tab.panes.removeWhere((pane) => pane.id == 900);
         leftovers.panes.clear();
@@ -402,7 +360,7 @@ void main() {
           final position = tester.state<ScrollableState>(strip).position;
           position.jumpTo(position.maxScrollExtent);
           await tester.pump();
-          expect(find.byKey(ValueKey('tab-store:${store.id}')), findsOneWidget);
+          expect(find.text('42:store'), findsOneWidget);
         }
         await tester.pumpWidget(const SizedBox());
         app.dispose();
@@ -443,7 +401,7 @@ void main() {
         expect(row['engine'], 'codex');
         expect(row['iconAsset'], 'assets/engine-icons/codex.png');
       } else {
-        expect(find.byKey(ValueKey('tab-engine:${tab.id}')), findsOneWidget);
+        expect(find.text('1:code'), findsOneWidget);
       }
 
       // A harness's viewer beside its agent is the same agent: still its mark, not a group.
@@ -463,7 +421,7 @@ void main() {
         expect(row['agentCount'], 1);
         expect(row['engine'], 'codex');
       } else {
-        expect(find.byKey(ValueKey('tab-engine:${tab.id}')), findsOneWidget);
+        expect(find.text('1:New Tab'), findsOneWidget);
         expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
       }
       tab.panes.removeWhere((pane) => pane.id == 900);
@@ -475,7 +433,7 @@ void main() {
         expect(row['agentCount'], 2);
         expect(row['engine'], isNull);
       } else {
-        expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsOneWidget);
+        expect(find.text('1:New Tab'), findsOneWidget);
       }
 
       await app.closePane(app.panes.last.id);
@@ -486,7 +444,7 @@ void main() {
           'codex',
         );
       } else {
-        expect(find.byKey(ValueKey('tab-engine:${tab.id}')), findsOneWidget);
+        expect(find.text('1:New Tab'), findsOneWidget);
         expect(find.byKey(ValueKey('tab-group:${tab.id}')), findsNothing);
       }
       expect(app.activeSwarm, same(tab));
@@ -552,7 +510,7 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('swarm-models-button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-models-button')), findsNothing);
       expect(find.text('Machines'), findsNothing);
       await chord(tester, LogicalKeyboardKey.keyO);
       await tester.pump();

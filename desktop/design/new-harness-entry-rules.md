@@ -1,5 +1,8 @@
 # New Harness entry rules
 
+Presentation follows the [terminal dialog design system](terminal-dialogs.md).
+Use that guide for current visuals; this document owns entry and launch behavior.
+
 Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
 Escape leaves that tab open. The command dock opens only after an explicit
 Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;

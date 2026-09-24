@@ -1,7 +1,6 @@
 import 'dart:ui' show Size;
 
-import '../core/models.dart'
-    show Agent, isAutomaticHarnessName, kUntitledPane;
+import '../core/models.dart' show Agent, isAutomaticHarnessName, kUntitledPane;
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'terminal_pane.dart';
@@ -17,7 +16,10 @@ class Swarm {
     this.isNewTabPage = false,
     bool? nameIsCustom,
   }) : name = nameIsCustom == true ? name : normalizeName(name),
-       nameIsCustom = nameIsCustom ?? (normalizeName(name) != defaultName);
+       nameIsCustom =
+           nameIsCustom ??
+           (normalizeName(name) != defaultName &&
+               !(kind == 'store' && name == storeName));
 
   /// What the tab holds: `harness` — panes of agents (the default); `store` —
   /// the Harness Store, no panes. A store tab is a tab like any other —

@@ -10390,7 +10390,9 @@ class AppNotifier extends ChangeNotifier {
         swarm.titleAgentId = raw['titleAgentId'] as String?;
         swarm.nameIsCustom =
             raw['nameIsCustom'] == true ||
-            (swarm.titleAgentId == null && swarm.name != Swarm.defaultName);
+            (swarm.titleAgentId == null &&
+                swarm.name != Swarm.defaultName &&
+                !(swarm.isStore && swarm.name == Swarm.storeName));
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);
           if (entry == null) continue;

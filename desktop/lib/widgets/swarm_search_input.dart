@@ -3,6 +3,8 @@ import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/swarm_search.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 
 /// The shared input for the start page, Open Agent and split searches.
@@ -65,7 +67,7 @@ class SwarmSearchInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    TerminalFontScope.watch(context);
+    grid.AppTheme.watch(context);
     return ListenableBuilder(
       // Command mode changes with the editor value. Result highlights do not,
       // so arrow navigation must not rebuild the text field.
@@ -77,9 +79,20 @@ class SwarmSearchInput extends StatelessWidget {
   Widget _buildInput(BuildContext context) {
     final open = search != null;
     final terminalStyle = terminal || prompt != null;
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
     final style = bios
-        ? terminalContentStyle(color: Colors.white)
+        ? terminalContentStyle(color: theme.foreground)
         : boxMonoStyle();
+    final cell = bios ? terminalCellSizeOf(context) : Size.zero;
+    final hint =
+        search?.isCommandMode == true ||
+            search?.isHelpMode == true ||
+            search?.isGroupMode == true
+        ? search!.hint
+        : hintText ?? search?.hint ?? kSwarmSearchHint;
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.vertical(
         top: Radius.circular(rounded ? (prominent ? 32 : 28) : 12),
@@ -95,7 +108,7 @@ class SwarmSearchInput extends StatelessWidget {
           ? BorderSide(color: Colors.white.withValues(alpha: .10))
           : BorderSide.none,
     );
-    return TextField(
+    final field = TextField(
       key: inputKey,
       groupId: groupId ?? EditableText,
       controller: controller,
@@ -106,96 +119,137 @@ class SwarmSearchInput extends StatelessWidget {
       onTapOutside: onTapOutside == null ? null : (_) => onTapOutside!(),
       onChanged: onChanged,
       style: terminalStyle ? style : grid.AppType.mono(color: Colors.white),
-      cursorColor: bios ? Colors.white70 : grid.AppPalette.swarmAccent,
-      cursorWidth: bios ? terminalFontStore.size * .62 : 2,
+      cursorColor: bios ? theme.cursor : grid.AppPalette.swarmAccent,
+      cursorWidth: bios ? cell.width : 2,
       cursorRadius: Radius.zero,
       cursorOpacityAnimates: !bios,
+      autocorrect: !bios,
+      enableSuggestions: !bios,
       textAlignVertical: TextAlignVertical.center,
-      decoration: InputDecoration(
-        hintText:
-            search?.isCommandMode == true ||
-                search?.isHelpMode == true ||
-                search?.isGroupMode == true
-            ? search!.hint
-            : hintText ?? search?.hint ?? kSwarmSearchHint,
-        hintStyle: terminalStyle
-            ? style.copyWith(color: kBoxFaint)
-            : grid.AppType.mono(color: Colors.white60),
-        hintMaxLines: 1,
-        prefixIcon: prompt != null
-            ? Padding(
-                padding: EdgeInsets.only(
-                  left: bios ? 28 : 14,
-                  right: bios ? 12 : 10,
-                ),
-                child: Center(
-                  widthFactor: 1,
-                  heightFactor: 1,
-                  child: SizedBox(
-                    width: bios ? terminalFontStore.size * 1.25 : null,
-                    child: Text(
-                      prompt!,
-                      key: const ValueKey('swarm-search-prompt'),
-                      textAlign: TextAlign.center,
-                      style: style.copyWith(
-                        color: bios
-                            ? Colors.white
-                            : grid.AppPalette.swarmAccent,
-                      ),
-                    ),
-                  ),
-                ),
-              )
-            : terminal
-            ? null
-            : Icon(Icons.search, size: fontSize + 4, color: Colors.white60),
-        prefixIconConstraints: BoxConstraints(
-          minWidth: prompt != null
-              ? 36
-              : fontSize >= 20
-              ? 64
-              : 52,
-          minHeight: height ?? (prominent ? 64 : 56),
-        ),
-        suffixIcon: showClose || trailing != null
-            ? Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ?trailing,
-                    if (showClose)
-                      TextButton(
-                        onPressed: onClose,
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.white60,
-                          minimumSize: const Size(36, 28),
+      decoration: bios
+          ? InputDecoration(
+              hintText: hint,
+              hintStyle: style.copyWith(
+                color: theme.foreground.withValues(alpha: .54),
+              ),
+              hintMaxLines: 1,
+              isDense: true,
+              isCollapsed: true,
+              constraints: const BoxConstraints(),
+              contentPadding: EdgeInsets.zero,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              filled: false,
+            )
+          : InputDecoration(
+              hintText: hint,
+              hintStyle: terminalStyle
+                  ? style.copyWith(color: kBoxFaint)
+                  : grid.AppType.mono(color: Colors.white60),
+              hintMaxLines: 1,
+              prefixIcon: prompt != null
+                  ? Padding(
+                      padding: const EdgeInsets.only(left: 14, right: 10),
+                      child: Center(
+                        widthFactor: 1,
+                        heightFactor: 1,
+                        child: Text(
+                          prompt!,
+                          key: const ValueKey('swarm-search-prompt'),
+                          textAlign: TextAlign.center,
+                          style: style.copyWith(
+                            color: grid.AppPalette.swarmAccent,
+                          ),
                         ),
-                        child: Text('esc', style: grid.AppType.monoMeta()),
                       ),
-                  ],
-                ),
-              )
-            : null,
-        // TerminalBox owns the dock surface. An unfilled field also avoids
-        // Material's extra inset, keeping the input aligned with result text.
-        filled: !terminal,
-        fillColor:
-            fillColor ??
-            (terminalStyle
-                ? grid.AppPalette.swarmField
-                : grid.AppPalette.swarmSearchSurface),
-        hoverColor: Colors.transparent,
-        contentPadding: EdgeInsets.symmetric(
-          horizontal: 18,
-          vertical: height == null
-              ? (prominent ? 22 : 18)
-              : ((height! - fontSize * 1.2) / 2).clamp(0, double.infinity),
+                    )
+                  : terminal
+                  ? null
+                  : Icon(
+                      Icons.search,
+                      size: fontSize + 4,
+                      color: Colors.white60,
+                    ),
+              prefixIconConstraints: BoxConstraints(
+                minWidth: prompt != null
+                    ? 36
+                    : fontSize >= 20
+                    ? 64
+                    : 52,
+                minHeight: height ?? (prominent ? 64 : 56),
+              ),
+              suffixIcon: showClose || trailing != null
+                  ? Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ?trailing,
+                          if (showClose)
+                            TextButton(
+                              onPressed: onClose,
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.white60,
+                                minimumSize: const Size(36, 28),
+                              ),
+                              child: Text(
+                                'esc',
+                                style: grid.AppType.monoMeta(),
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
+                  : null,
+              // TerminalBox owns the dock surface. An unfilled field also avoids
+              // Material's extra inset, keeping the input aligned with result text.
+              filled: !terminal,
+              fillColor:
+                  fillColor ??
+                  (terminalStyle
+                      ? grid.AppPalette.swarmField
+                      : grid.AppPalette.swarmSearchSurface),
+              hoverColor: Colors.transparent,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: height == null
+                    ? (prominent ? 22 : 18)
+                    : ((height! - fontSize * 1.2) / 2).clamp(
+                        0,
+                        double.infinity,
+                      ),
+              ),
+              isDense: true,
+              border: terminalStyle ? InputBorder.none : border,
+              enabledBorder: terminalStyle ? InputBorder.none : border,
+              focusedBorder: terminalStyle ? InputBorder.none : border,
+            ),
+    );
+    if (!bios) return field;
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: cell.width * 2,
+        vertical: cell.height,
+      ),
+      child: SizedBox(
+        height: cell.height,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            SizedBox(
+              width: cell.width * 2,
+              child: Text(
+                prompt ?? '>',
+                key: const ValueKey('swarm-search-prompt'),
+                textAlign: TextAlign.center,
+                style: style,
+              ),
+            ),
+            Expanded(child: field),
+          ],
         ),
-        isDense: true,
-        border: terminalStyle ? InputBorder.none : border,
-        enabledBorder: terminalStyle ? InputBorder.none : border,
-        focusedBorder: terminalStyle ? InputBorder.none : border,
       ),
     );
   }
