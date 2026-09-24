@@ -16,7 +16,6 @@ import '../core/project_folder.dart';
 import '../core/test_run.dart';
 import '../logging/debug_surface.dart';
 import '../models/models_panel.dart';
-import '../models/model_mark.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -50,13 +49,14 @@ import '../widgets/engine_identity.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
 import '../widgets/harness_start_page.dart';
-import '../widgets/link_machine_screen.dart';
+import '../widgets/machines_panel.dart';
+import '../widgets/toolbar_icon.dart';
+import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
 import '../widgets/rename_agent_dialog.dart';
 import '../widgets/delete_agent_dialog.dart';
 import '../widgets/fork_agent_dialog.dart';
 import '../widgets/restart_agent_action.dart';
-import '../widgets/machines_manager.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
 import '../widgets/new_harness_form.dart';
@@ -146,6 +146,8 @@ class _SwarmScreenState extends State<SwarmScreen>
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
   final _sessionsButton = GlobalKey();
+  MachinesPanelHandle? _machinesPanel;
+  final _toolbarNotices = ToolbarNotices();
   OverlayEntry? _sessionsOverlay;
   VoidCallback? _unregisterSessions;
   OverlayEntry? _modelsOverlay;
@@ -243,6 +245,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
+    app.addListener(_syncToolbarNotices);
+    _toolbarNotices.addListener(_toolbarNoticesChanged);
+    _syncToolbarNotices();
     unawaited(
       _learning.load().then((_) {
         if (mounted) _observeLearning();
@@ -310,6 +315,10 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   @override
   void dispose() {
+    app.removeListener(_syncToolbarNotices);
+    _toolbarNotices.removeListener(_toolbarNoticesChanged);
+    _toolbarNotices.dispose();
+    _machinesPanel?.close(restoreFocus: false);
     app.modelManager.removeListener(_modelManagerChanged);
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
@@ -411,8 +420,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
-    if (_sessionsOverlay != null) _closeSessions();
-    if (_modelsOverlay != null) _closeModels();
+    if (id != 'machines.list' && id != 'machine.link') {
+      _machinesPanel?.close(restoreFocus: false);
+    }
+    if (_sessionsOverlay != null) _closeSessions(restoreFocus: false);
+    if (_modelsOverlay != null) _closeModels(restoreFocus: false);
     if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
@@ -545,6 +557,45 @@ class _SwarmScreenState extends State<SwarmScreen>
   /// still separates the two — its "Needs input" tab is exactly [_attention].
   int get _unread => app.agentUnread.count;
 
+  void _syncToolbarNotices() {
+    final local = app.localMachineState?.machine.machineId;
+    final models = app.modelManager;
+    final profile = app.currentUser;
+    final scope = app.isGuest
+        ? 'local:$local'
+        : 'account:${profile?.id ?? profile?.email ?? local}';
+    _toolbarNotices.sync(
+      scope: scope,
+      machines: {
+        if (!app.isGuest)
+          for (final machine in app.machineStates.values)
+            if (!machine.isLocalMachine &&
+                !machine.machine.isShared &&
+                machine.needsLink &&
+                machine.nodeOnline == true)
+              machine.machine.machineId,
+      },
+      readyModels: {
+        for (final model in models.localModels)
+          if (local != null &&
+              model.running &&
+              model.operation?.started == true)
+            '$local/${model.operation!.id}',
+      },
+      catalog: models.localModels.map((model) => model.id).toSet(),
+      catalogLoaded: models.loaded,
+      machinesVisible: _machinesPanel != null,
+      modelsVisible: _modelsOverlay != null,
+    );
+  }
+
+  void _toolbarNoticesChanged() {
+    if (!mounted) return;
+    _modelsOverlay?.markNeedsBuild();
+    if (_native) _syncNative();
+    setState(() {});
+  }
+
   void _unreadChanged() {
     if (!mounted) return;
     setState(() {});
@@ -583,6 +634,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   void _paletteChanged() {
+    _machinesPanel?.rebuild();
     _searchOverlay?.markNeedsBuild();
     if (_native) _syncNative();
   }
@@ -652,6 +704,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       // key it does not know.
       'unread': _unread,
       'sessionsOpen': _sessionsOverlay != null,
+      'machinesOpen': _machinesPanel != null,
+      'machineNotices': _toolbarNotices.machineCount,
+      'modelNotices': _toolbarNotices.modelCount,
       'modelsOpen': _modelsOverlay != null,
       'localModelReady': app.modelManager.readyModel != null,
       'runningSessions': harnessSessions(app)
@@ -937,6 +992,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
+    if (call.method == 'machineList' || call.method == 'linkMachine') {
+      unawaited(_openMachines());
+      await WidgetsBinding.instance.endOfFrame;
+      return;
+    }
     if (call.method == 'models') {
       _toggleModels();
       await WidgetsBinding.instance.endOfFrame;
@@ -1078,18 +1138,8 @@ class _SwarmScreenState extends State<SwarmScreen>
         if (app.focusedPaneId != null) app.togglePinPane(app.focusedPaneId!);
       case 'addProject':
         await _addProject();
-      case 'linkMachine':
-        await _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap));
       case 'manageMachines':
         await _manageMachines();
-      // BRIDGE, until the Machines menu goes: the old list, so nothing is lost
-      // between this release and that one. When the menu is removed, delete
-      // this case, `machines.list` below, machines_manager.dart and its test,
-      // and the `machineList` action in SwarmTitlebar.swift + keymap_commands.
-      case 'machineList':
-        unawaited(
-          _dialog(() => showMachinesManager(context, app, keymap: _keymap)),
-        );
       case 'refreshMachines':
         unawaited(app.retryMachines());
       case 'machineDestination':
@@ -1355,6 +1405,63 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
   }
 
+  Future<void> _openMachines({String? initialMachineId}) async {
+    if (_machinesPanel case final panel?) {
+      panel.close();
+      return;
+    }
+    if (!_shortcutsEnabled || _newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    _preparePaneFocus();
+    final panel = openMachinesPanel(
+      context,
+      app,
+      keymap: _keymap,
+      initialMachineId: initialMachineId,
+      toolbarHeight: _native ? 0 : _tabBarHeight,
+    );
+    _machinesPanel = panel;
+    _syncToolbarNotices();
+    if (_native) _syncNative();
+    setState(() {});
+    final destination = await panel.closed;
+    if (!mounted || !identical(_machinesPanel, panel)) return;
+    _machinesPanel = null;
+    _syncToolbarNotices();
+    if (_native) _syncNative();
+    setState(() {});
+    // Let the removed panel release its focus before opening work.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final machine = destination == null ? null : app.stateOf(destination);
+    if (machine != null) {
+      if (machine.agents.isEmpty && !machine.machine.isShared) {
+        await _newAgent(
+          machineId: destination,
+          placement: HarnessPlacement.currentTab,
+        );
+      } else {
+        _openSearch(
+          adding: true,
+          query: '@',
+          placement: HarnessPlacement.currentTab,
+        );
+        final machineRow = _search?.rows
+            .where((row) => row.isMachine && row.machineId == destination)
+            .firstOrNull;
+        if (machineRow != null) _search!.submit(machineRow);
+      }
+    } else if (panel.restoreFocus && _shortcutsEnabled) {
+      _shellFocus.requestFocus();
+      final pane = app.focusedPane;
+      if (pane != null) app.focusPane(pane.id, reveal: true);
+      await _ensureEmptyEntry();
+    }
+  }
+
   Future<void> _openProduct(String engine, String machineId, {String? task}) =>
       _newAgent(
         source: _NewHarnessSource.product,
@@ -1420,11 +1527,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     // joins its worktree rather than being where Start begins.
     final initialFolder = folder ?? paneProject?.cwd;
     if (id == null) {
-      await _dialog(
-        () => showSwarmLinkDialog(context, app, keymap: _keymap),
-        restoreEntry: false,
-      );
-      await _ensureEmptyEntry();
+      await _openMachines();
       return;
     }
     if (!newHarnessOpensInBox) {
@@ -1883,7 +1986,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               app.machineStates.values.firstOrNull
         : app.stateOf(focused.machineId);
     if (machine == null) {
-      await _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap));
+      await _openMachines();
       return;
     }
     final machineId = machine.machine.machineId;
@@ -2030,6 +2133,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   void _modelManagerChanged() {
+    _syncToolbarNotices();
     if (_native && mounted) _syncNative();
   }
 
@@ -2069,6 +2173,7 @@ class _SwarmScreenState extends State<SwarmScreen>
         builder: (context, constraints) => Stack(
           children: [
             Positioned.fill(
+              top: _native ? 0 : _tabBarHeight,
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: _closeModels,
@@ -2099,6 +2204,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                     ],
                   ),
                   child: ModelsPanel(
+                    newModelIds: _toolbarNotices.newModelIds,
                     controller: app.modelManager,
                     subscriptions: _modelsMenu!,
                     onClose: _closeModels,
@@ -2112,7 +2218,10 @@ class _SwarmScreenState extends State<SwarmScreen>
       ),
     );
     Overlay.of(context).insert(_modelsOverlay!);
-    _unregisterModels = registerTransientMenu(_closeModels);
+    _syncToolbarNotices();
+    _unregisterModels = registerTransientMenu(
+      () => _closeModels(restoreFocus: false),
+    );
     if (_native) _syncNative();
     setState(() {});
   }
@@ -2124,6 +2233,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
     _modelsOverlay = null;
+    _syncToolbarNotices();
     app.modelManager.setPanelVisible(false);
     if (!mounted) return;
     if (_native) _syncNative();
@@ -2152,6 +2262,7 @@ class _SwarmScreenState extends State<SwarmScreen>
         builder: (context, constraints) => Stack(
           children: [
             Positioned.fill(
+              top: _native ? 0 : _tabBarHeight,
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: _closeSessions,
@@ -2213,7 +2324,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       ),
     );
     overlay.insert(_sessionsOverlay!);
-    _unregisterSessions = registerTransientMenu(_closeSessions);
+    _unregisterSessions = registerTransientMenu(
+      () => _closeSessions(restoreFocus: false),
+    );
     if (_native) _syncNative();
     setState(() {});
   }
@@ -2789,6 +2902,7 @@ class _SwarmScreenState extends State<SwarmScreen>
         machine.isLocalMachine ||
         _dialogOpen ||
         _commandBarOpen ||
+        _machinesPanel != null ||
         _search != null ||
         app.isLinkPromptDismissed(machine.machine.machineId) ||
         _linkDialogMachineId != null) {
@@ -2797,13 +2911,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _linkDialogMachineId = machine.machine.machineId;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
-        await _dialog(
-          () => showLinkMachineScreenDialog(
-            context,
-            app,
-            machine.machine.machineId,
-          ),
-        );
+        await _openMachines(initialMachineId: machine.machine.machineId);
       }
       _linkDialogMachineId = null;
     });
@@ -2894,11 +3002,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     'agent.fork': _forkAgent,
     // `agent.restart` and `agent.clone` come from `_actionHandlers` above:
     // both carry a ShortcutAction, so the loop already binds them.
-    'machine.link': () =>
-        _dialog(() => showSwarmLinkDialog(context, app, keymap: _keymap)),
+    'machine.link': _openMachines,
     'machines.manage': _manageMachines,
-    'machines.list': () =>
-        _dialog(() => showMachinesManager(context, app, keymap: _keymap)),
+    'machines.list': _openMachines,
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
     'keyboard.quick_start': _startQuickStart,
@@ -3557,6 +3663,39 @@ class _SwarmScreenState extends State<SwarmScreen>
     });
   }
 
+  ButtonStyle _toolbarIconStyle(int notices) => ButtonStyle(
+    iconColor: WidgetStateProperty.resolveWith((states) {
+      if (notices > 0) return const Color(0xfff5f5f5);
+      if (states.contains(WidgetState.hovered) ||
+          states.contains(WidgetState.focused) ||
+          states.contains(WidgetState.pressed) ||
+          states.contains(WidgetState.selected)) {
+        return const Color(0xffd6d6d6);
+      }
+      return const Color(0xff999999);
+    }),
+  );
+
+  Widget _toolbarBadge({
+    Key? key,
+    required int count,
+    required String label,
+    required Widget child,
+  }) => Badge(
+    key: key,
+    isLabelVisible: count > 0,
+    backgroundColor: const Color(0xffcf4038),
+    textColor: Colors.white,
+    largeSize: 13,
+    alignment: Alignment.topRight,
+    label: Text(
+      count > 99 ? '99+' : '$count',
+      semanticsLabel: label,
+      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
+    ),
+    child: child,
+  );
+
   Widget _tabStrip() => LayoutBuilder(
     builder: (context, constraints) {
       final compactTools =
@@ -3717,74 +3856,82 @@ class _SwarmScreenState extends State<SwarmScreen>
               icon: const Icon(Icons.add, size: 18, semanticLabel: 'New Tab'),
             ),
             IconButton(
-              key: _sessionsButton,
-              tooltip: 'Harness Monitor',
-              onPressed: _toggleSessions,
-              isSelected: _sessionsOverlay != null,
-              icon: Badge(
-                key: const ValueKey('swarm-unread-badge'),
-                isLabelVisible: _unread > 0,
-                backgroundColor: const Color(0xffcf4038),
-                textColor: Colors.white,
-                largeSize: 13,
-                alignment: Alignment.topRight,
-                label: Text(
-                  _unread > 99 ? '99+' : '$_unread',
-                  semanticsLabel:
-                      '$_unread ${_unread == 1 ? 'harness has' : 'harnesses have'} news you have not seen',
-                  style: const TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                child: Image.asset(
-                  'assets/harnesses.png',
-                  width: 24,
-                  height: 24,
-                  filterQuality: FilterQuality.high,
-                  semanticLabel: 'Harness Monitor',
-                ),
+              key: const ValueKey('swarm-machines-button'),
+              tooltip: 'Machines ${_keymap.hint('machines.list') ?? ''}'.trim(),
+              onPressed: _openMachines,
+              isSelected: _machinesPanel != null,
+              style: _toolbarIconStyle(_toolbarNotices.machineCount),
+              icon: _toolbarBadge(
+                key: const ValueKey('swarm-machines-badge'),
+                count: _toolbarNotices.machineCount,
+                label:
+                    '${_toolbarNotices.machineCount} new ${_toolbarNotices.machineCount == 1 ? 'computer' : 'computers'} ready to connect',
+                child: const ToolbarIcon(name: 'Machines'),
               ),
             ),
-            const SizedBox(width: 6),
             IconButton(
               key: const ValueKey('swarm-models-button'),
-              tooltip: 'AI Models',
+              tooltip: 'Models',
               onPressed: _toggleModels,
               isSelected: _modelsOverlay != null,
-              icon: const ModelMark(size: 20, semanticLabel: 'AI Models'),
+              style: _toolbarIconStyle(_toolbarNotices.modelCount),
+              icon: _toolbarBadge(
+                key: const ValueKey('swarm-models-badge'),
+                count: _toolbarNotices.modelCount,
+                label:
+                    '${_toolbarNotices.modelCount} ${_toolbarNotices.modelCount == 1 ? 'model' : 'models'} ready to use',
+                child: const ToolbarIcon(name: 'Models'),
+              ),
+            ),
+            IconButton(
+              key: _sessionsButton,
+              tooltip: 'Harnesses',
+              onPressed: _toggleSessions,
+              isSelected: _sessionsOverlay != null,
+              style: _toolbarIconStyle(_unread),
+              icon: _toolbarBadge(
+                key: const ValueKey('swarm-unread-badge'),
+                count: _unread,
+                label:
+                    '$_unread ${_unread == 1 ? 'harness has' : 'harnesses have'} news you have not seen',
+                child: const ToolbarIcon(name: 'Harnesses'),
+              ),
             ),
             const SizedBox(width: 6),
             Tooltip(
               message: 'Harness Store ${_keymap.hint('app.store') ?? ''}'
                   .trim(),
-              child: TextButton.icon(
-                key: const ValueKey('swarm-store-button'),
-                onPressed: _openStore,
-                style: TextButton.styleFrom(
-                  foregroundColor: grid.AppPalette.swarmAccent,
-                  backgroundColor: Color.alphaBlend(
-                    grid.AppPalette.swarmAccent.withValues(alpha: 0.10),
-                    grid.AppPalette.swarmField,
-                  ),
-                  overlayColor: grid.AppPalette.swarmAccent,
-                  textStyle: grid.AppType.monoLabel(),
-                  minimumSize: const Size(0, 28),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: StadiumBorder(
-                    side: BorderSide(
-                      color: grid.AppPalette.swarmAccent.withValues(
-                        alpha: 0.12,
+              child: compactTools
+                  ? IconButton(
+                      key: const ValueKey('swarm-store-button'),
+                      onPressed: _openStore,
+                      icon: const StoreMark(),
+                    )
+                  : TextButton.icon(
+                      key: const ValueKey('swarm-store-button'),
+                      onPressed: _openStore,
+                      style: TextButton.styleFrom(
+                        foregroundColor: grid.AppPalette.swarmAccent,
+                        backgroundColor: Color.alphaBlend(
+                          grid.AppPalette.swarmAccent.withValues(alpha: 0.10),
+                          grid.AppPalette.swarmField,
+                        ),
+                        overlayColor: grid.AppPalette.swarmAccent,
+                        textStyle: grid.AppType.monoLabel(),
+                        minimumSize: const Size(0, 28),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: StadiumBorder(
+                          side: BorderSide(
+                            color: grid.AppPalette.swarmAccent.withValues(
+                              alpha: 0.12,
+                            ),
+                          ),
+                        ),
                       ),
+                      icon: const StoreMark(),
+                      label: const Text('Harness Store'),
                     ),
-                  ),
-                ),
-                icon: const StoreMark(),
-                label: compactTools
-                    ? const SizedBox.shrink()
-                    : const Text('Harness Store'),
-              ),
             ),
             const SizedBox(width: 6),
           ],

@@ -32,6 +32,7 @@ import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
+import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
 import '../core/git_worktree.dart';
 import '../core/project_history.dart';
@@ -2170,6 +2171,7 @@ class AppNotifier extends ChangeNotifier {
       _dismissedLinkPrompts.contains(machineId);
 
   void dismissLinkPrompt(String machineId) {
+    if (_disposed) return;
     if (_dismissedLinkPrompts.add(machineId)) notifyListeners();
   }
 
@@ -5105,6 +5107,42 @@ class AppNotifier extends ChangeNotifier {
     final focused = focusedPane?.machineId ?? selectedMachineId;
     return (focused == null ? null : machineStates[focused]) ??
         machineStates.values.firstOrNull;
+  }
+
+  /// A visible Machines panel uses the existing connection; it never dials a
+  /// disconnected/unlinked host just to obtain optional system readings.
+  Future<MachineResources?> readMachineResources(String machineId) async {
+    final machine = machineStates[machineId];
+    if (_disposed ||
+        machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected ||
+        (_pool == null && connectionForTest == null)) {
+      return null;
+    }
+    final revision = _authRevision;
+    final discoveryRevision = machine._discoveryRevision;
+    try {
+      final connection = _conn(machineId);
+      if (!connection.isReady) return null;
+      final reply = await connection.request(
+        'machine_resources',
+        timeout: const Duration(seconds: 3),
+      );
+      if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision) ||
+          machine.needsLink ||
+          machine.nodeOnline == false ||
+          machine.connectionStatus != ConnectionStatus.connected ||
+          reply['error'] != null) {
+        return null;
+      }
+      return MachineResources.fromJson(reply);
+    } catch (_) {
+      // Older daemons and temporarily unavailable readings leave the stats blank.
+      return null;
+    }
   }
 
   WsConn _conn(String machineId) {

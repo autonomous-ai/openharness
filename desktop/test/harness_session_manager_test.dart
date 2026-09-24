@@ -69,7 +69,7 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await tester.tap(find.byTooltip('Harness Monitor'));
+    await tester.tap(find.byTooltip('Harnesses'));
     await tester.pumpAndSettle();
   }
 
@@ -230,13 +230,13 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byTooltip('Harnesses'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
         findsNothing,
       );
-      final managerIcon = tester.getRect(find.byTooltip('Harness Monitor'));
+      final managerIcon = tester.getRect(find.byTooltip('Harnesses'));
       expect(
         managerIcon.right,
         lessThan(
@@ -373,7 +373,7 @@ void main() {
     (tester) async {
       await open(tester);
       expect(find.byType(HarnessSessionManager), findsOneWidget);
-      expect(find.text('Harness Monitor'), findsOneWidget);
+      expect(find.text('Harnesses'), findsOneWidget);
       expect(find.text('Running 1'), findsOneWidget);
       expect(find.text('Paused 1'), findsOneWidget);
       expect(find.text('Ready'), findsNothing);
@@ -513,7 +513,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byTooltip('Harnesses'));
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -904,7 +904,7 @@ void main() {
       expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byTooltip('Harnesses'));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },

@@ -133,7 +133,7 @@ class SwarmSearchController extends ChangeNotifier {
       : isMachineMode
       ? 'Machines'
       : _groupScope != null
-      ? 'Agents · ${_groupScope!.name}'
+      ? 'Harnesses · ${_groupScope!.name}'
       : switch (split?.axis) {
           PaneResizeAxis.x => 'New Pane to the Right',
           PaneResizeAxis.y => 'New Pane Below',

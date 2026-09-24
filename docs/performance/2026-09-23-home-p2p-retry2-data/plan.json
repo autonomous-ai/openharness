@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "sourceRevision": "853239bb737599d71a659889e8315a9e3beb6d31",
+  "samplesPerWorkload": 200,
+  "controlSamples": 30,
+  "createdAt": "2026-09-23T22:56:27.764090+00:00",
+  "purpose": "Second requested Home direct-P2P follow-up: three fixed attempts, retaining all earlier failures separately.",
+  "trials": [
+    {
+      "label": "home",
+      "route": "p2p",
+      "repetition": 1,
+      "file": "home-p2p-1.json"
+    },
+    {
+      "label": "home",
+      "route": "p2p",
+      "repetition": 2,
+      "file": "home-p2p-2.json"
+    },
+    {
+      "label": "home",
+      "route": "p2p",
+      "repetition": 3,
+      "file": "home-p2p-3.json"
+    }
+  ]
+}

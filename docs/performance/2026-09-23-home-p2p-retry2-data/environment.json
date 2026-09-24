@@ -1,0 +1,12 @@
+{
+  "collectedAt": "2026-09-23T22:56:27.765254+00:00",
+  "cpu": "Apple M2 Max",
+  "memoryBytes": 68719476736,
+  "physicalCores": 12,
+  "logicalCores": 12,
+  "macOS": "26.6.2",
+  "node": "v22.23.1",
+  "arch": "arm64",
+  "werift": "0.24.4",
+  "note": "Existing workstation and remote sessions remain running. Network conditions and remote host load are not controlled."
+}

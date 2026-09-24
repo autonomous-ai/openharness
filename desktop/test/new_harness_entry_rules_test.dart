@@ -560,7 +560,7 @@ void main() {
       expect(picker.rows.any((row) => row.isCreate), isFalse);
       expect(picker.selected?.id, selected);
       expect(picker.rows.map((row) => row.id), results);
-      expect(find.text('Agents · openharness'), findsOneWidget);
+      expect(find.text('Harnesses · openharness'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       expect(picker.query, '# openharness');
       expect(picker.canGoBack, isFalse);
