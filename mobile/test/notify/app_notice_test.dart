@@ -96,6 +96,23 @@ void main() {
     expect(unread(app, 'b'), isFalse);
   });
 
+  test('opening an agent that has no pane yet reads its news', () async {
+    // The phone's ordinary road: a row tapped, a notice tapped — a NEW pane,
+    // focused on its swarm directly rather than through `focusPane`.
+    await turn(app, 'c');
+    expect(app.paneOfAgent('m', 'c'), isNull);
+    await app.selectAgent('m', 'c');
+    expect(unread(app, 'c'), isFalse);
+  });
+
+  test('coming back to an agent already open reads its news', () async {
+    await app.selectAgent('m', 'b');
+    await app.selectAgent('m', 'a');
+    await turn(app, 'b');
+    await app.selectAgent('m', 'b');
+    expect(unread(app, 'b'), isFalse);
+  });
+
   test('a deleted agent takes its mark with it', () async {
     await turn(app, 'b');
     await app.handleEventForTest('m', {

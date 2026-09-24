@@ -1119,12 +1119,7 @@ class AppNotifier extends ChangeNotifier {
   /// no pointer behind it: the dial's scroll and focus frames, and which agent
   /// the rail draws as current.
   int? get focusedPaneId => activeSwarm.focusedPaneId;
-  set focusedPaneId(int? value) {
-    activeSwarm.focusedPaneId = value;
-    // Every route onto an agent ends here, so none of them has to remember
-    // that going to an agent is what reads its news.
-    _seeWatchedAgent();
-  }
+  set focusedPaneId(int? value) => activeSwarm.focusedPaneId = value;
 
   int _paneFocusRequest = 0;
 
@@ -7173,6 +7168,22 @@ class AppNotifier extends ChangeNotifier {
   void _seeWatchedAgent() {
     final watched = _watchedAgent;
     if (watched != null) agentNotices.seen(watched);
+  }
+
+  /// Every change the screens hear about is also a chance that the agent on
+  /// screen is a different one — and going to an agent is what reads its news.
+  ///
+  /// ⚠️ **Here, and not in the `focusedPaneId` setter where it first went.**
+  /// Half the roads onto an agent never touch that setter: a NEW pane — a row
+  /// tapped, a notice tapped — is focused on its swarm directly, and so are a
+  /// restored layout and a swarm switched to. Hooked there, the mark outlived
+  /// the person opening the very agent it pointed at. Every one of those roads
+  /// ends by notifying, so this is the one place none of them can miss. It
+  /// costs a lookup: [AgentAnnouncer.seen] is silent for an agent with no mark.
+  @override
+  void notifyListeners() {
+    _seeWatchedAgent();
+    super.notifyListeners();
   }
 
   /// [agent] on [machine], as a notice names it.
