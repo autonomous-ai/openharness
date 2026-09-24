@@ -235,6 +235,40 @@ class _TerminalPageState extends State<TerminalPage>
   /// the remote resize until this clears.
   bool _keyboardSettling = false;
 
+  /// Whether the keyboard was this page's when the app went into the
+  /// background, and so has to come back with it.
+  ///
+  /// ⚠️ **Android takes the keyboard away on the way out and does not bring it
+  /// back.** Switching to another app hides the IME, the inset falls to zero,
+  /// and the metrics tick that follows spends [_keyboardRequested] and clears
+  /// [_keyboardIsUp] — so the page returned to holds no record that it was
+  /// being typed into, and shows a bare terminal over a half-written prompt.
+  /// What was on screen on the way out is what belongs on screen on the way
+  /// back.
+  bool _keyboardHeldForBackground = false;
+
+  /// The lifecycle state as of the last callback, so LEAVING the foreground can
+  /// be told apart from arriving back in it.
+  ///
+  /// ⚠️ **Both directions pass through `inactive`**: resumed → inactive →
+  /// paused going away, and paused → inactive → resumed coming back. Recording
+  /// the keyboard on every non-resumed state therefore recorded it a second
+  /// time on the way home, by which point the keyboard was long gone — wiping
+  /// the answer one callback before it was due to be read.
+  ///
+  /// ⚠️ Read eagerly in `initState`, deliberately NOT as a `late` initializer.
+  /// Flutter sets `lifecycleState` BEFORE it notifies observers, so a field
+  /// first touched inside the callback would initialise itself to the state
+  /// being announced — and the very first announcement a page hears is the app
+  /// going away. `was` would then read `inactive`, the branch below would
+  /// decide this was not the step out of the foreground, and the one keyboard
+  /// worth remembering would be the one never recorded.
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+
+  /// Bumped to ask [TerminalPanel] for the input connection again when nothing
+  /// else about it has changed — see [didChangeAppLifecycleState].
+  int _focusRequest = 0;
+
   /// Drives the search sheet up from the bottom edge and back down — see
   /// [TerminalSearchOverlay].
   ///
@@ -658,6 +692,8 @@ class _TerminalPageState extends State<TerminalPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _lifecycle =
+        WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     widget.notifier.addListener(_onNotifier);
   }
 
@@ -881,6 +917,54 @@ class _TerminalPageState extends State<TerminalPage>
       _keyboardUp = up;
       _keyboardRequested = requested;
     });
+  }
+
+  /// Leaves the page as it was found: the keyboard the app went away with is the
+  /// keyboard it comes back to.
+  ///
+  /// ⚠️ **The restore cannot ride on `focused` alone.** [_shouldFocus] reads
+  /// [_keyboardIsUp], which the keyboard's own metrics tick clears — and whether
+  /// that tick lands before the process is frozen or after it is woken is
+  /// Android's business, not ours. Landing early, `focused` goes false and back
+  /// to true and the panel notices the change; landing late, `focused` was never
+  /// false, so there is no change for the panel to notice and the keyboard stays
+  /// away. [_focusRequest] covers both: it moves either way, and re-claiming a
+  /// connection that turned out to still be open is a no-op.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final was = _lifecycle;
+    _lifecycle = state;
+    if (state != AppLifecycleState.resumed) {
+      // Only the step OUT of the foreground reads the keyboard — see [_lifecycle].
+      if (was == AppLifecycleState.resumed) {
+        // The search field's keyboard is not this page's to put back, and a
+        // page with something stacked over it is not the page being returned to.
+        _keyboardHeldForBackground =
+            !_heldForSearch && (_ownsInput || _keyboardRequested);
+      }
+      return;
+    }
+    if (!_keyboardHeldForBackground) return;
+    _keyboardHeldForBackground = false;
+    _restoreKeyboard();
+  }
+
+  /// The keyboard this page had before the app went away, asked for again.
+  void _restoreKeyboard() {
+    if (!mounted || !widget.isActive) return;
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
+    // Gone, detached or read-only while the app was away: a keyboard over it
+    // would be a keyboard that does nothing. See [_raiseKeyboardForQuestion].
+    final session = _readFacts().session;
+    if (session == null || !session.acceptsInput) return;
+    setState(() {
+      _keyboardRequested = true;
+      _focusRequest++;
+    });
+    // The key bar opens with it and the pane's height moves while it does — the
+    // same hold [_raiseKeyboard] takes. See [_armSettle].
+    _armSettle();
   }
 
   /// The window's own bottom inset as of the last metrics tick, in physical
@@ -1372,6 +1456,11 @@ class _TerminalPageState extends State<TerminalPage>
                                                 // up is a separate question, and the pager asks
                                                 // it on every swipe — see [_shouldFocus].
                                                 focused: _shouldFocus,
+                                                // Asks again when `focused` did
+                                                // not move — coming back from
+                                                // another app. See
+                                                // [didChangeAppLifecycleState].
+                                                focusRequest: _focusRequest,
                                                 visible: widget.isActive,
                                                 // Hold the remote resize while the keyboard
                                                 // slides. Separate from `visible` because this
