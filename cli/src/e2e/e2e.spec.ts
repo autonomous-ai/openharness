@@ -150,7 +150,7 @@ describe('matrix entry (dry run)', () => {
     expect(entry.status.login).toBe(false)
     expect(entry.subscriptionModel).toBe('claude-sonnet-5')
     // Dry run: the journey is planned, nothing typed yet.
-    expect(entry.legs.map((l) => l.leg)).toEqual(['subscription', 'grid', 'back-home'])
+    expect(entry.legs.map((l) => l.leg)).toEqual(['subscription', 'grid'])
     expect(entry.legs.flatMap((l) => l.checks).every((c) => c.status === 'not-run')).toBe(true)
   })
 
@@ -167,10 +167,14 @@ describe('matrix entry (dry run)', () => {
 
 describe('scenario (one conversation carried across the switch)', () => {
   it('uses the script tool and the MCP server on every leg, and recalls the start after each switch', () => {
-    expect(LEGS).toEqual(['subscription', 'grid', 'back-home'])
-    expect(SCENARIO.subscription.map((c) => c.id)).toEqual(['tool', 'mcp'])
-    expect(SCENARIO.grid.map((c) => c.id)).toEqual(['recall', 'tool', 'mcp'])
-    expect(SCENARIO['back-home'].map((c) => c.id)).toEqual(['recall', 'tool', 'mcp'])
+    // The same three questions on each side of the switch; nothing re-asked on a leg that proved it.
+    expect(LEGS).toEqual(['subscription', 'grid'])
+    expect(SCENARIO.subscription.map((c) => c.id).sort()).toEqual(['mcp', 'recall', 'tool'])
+    expect(SCENARIO.grid.map((c) => c.id).sort()).toEqual(['mcp', 'recall', 'tool'])
+    const recallOn = (leg: 'subscription' | 'grid') => SCENARIO[leg].find((c) => c.id === 'recall')!.prompt
+    expect(recallOn('grid')).toBe(recallOn('subscription'))
+    const patterns = SMOKE_CHECKS.filter((c) => c.logPattern).map((c) => c.logPattern)
+    expect(new Set(patterns).size).toBe(patterns.length) // an old log line can never pass a new step
     for (const c of SMOKE_CHECKS) if (c.id !== 'recall') expect(c.log && c.logPattern).toBeTruthy()
     expect(plannedLegs().flatMap((l) => l.checks).every((c) => c.status === 'not-run')).toBe(true)
   })
@@ -298,7 +302,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
   it('out of usage ends the leg: nothing more is typed into an account that cannot answer', async () => {
     const pane = fakePane(() => "You've hit your usage limit. try again at 6:02 PM.")
     const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1 })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=no-quota', 'mcp=not-run'])
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=no-quota', 'mcp=not-run', 'recall=not-run'])
     expect(pane.typed).toHaveLength(1)
     expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'tool', resets: 'try again at 6:02 PM' })
   })
@@ -349,7 +353,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
       return 'I do not see an MCP server named e2e_calc.'
     })
     const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1, checkTimeoutMs: 5, readLog: logs.readLog })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=ok', 'mcp=stuck'])
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=ok', 'mcp=stuck', 'recall=not-run'])
     expect(leg.checks[1].tail).toContain('I do not see an MCP server named e2e_calc.')
     expect(pane.typed).toHaveLength(2)
   })
@@ -359,6 +363,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
     const pane = fakePane((p) => {
       if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' }
       if (p.includes('e2e_calc')) { logs.lines.mcp.push('t add 30 12 = 42'); return 'MCP_42' }
+      if (p.includes('very first calculation')) return 'RECALL_40+2'
       return null
     })
     // What a fresh codex shows before its prompt; a step typed here would pick "1. Update now".

@@ -49,7 +49,7 @@ export interface MatrixEntry {
   status: EngineStatus
   notify: string[]
   /**
-   * The smoke checks per leg (tool / mcp / recall on subscription, grid, back-home).
+   * The smoke checks per leg (tool / mcp / recall on subscription and grid).
    * Dry run: every check `not-run`. Live (`runGridSwitchTrace.ts`): the real outcomes + pane tails.
    */
   legs: LegOutcome[]

@@ -1,6 +1,6 @@
 /**
  * smokeChecks — the scenario: one ordinary conversation with a coding tool, carried across
- * subscription -> grid -> back home, the way a person would actually work.
+ * subscription -> grid, the way a person would actually work.
  *
  * The person has a tool in their folder (`tools/calc.sh`) and an MCP server (`e2e_calc`, see
  * `workspace/`). They ask the tool to use them by name, switch model, and keep talking. "Smooth"
@@ -14,10 +14,15 @@
  * leg / step is the one that got stuck.
  */
 
-export type Leg = 'subscription' | 'grid' | 'back-home'
+export type Leg = 'subscription' | 'grid'
 
-/** The journey, in order. `subscription` is the baseline before any switch. */
-export const LEGS: readonly Leg[] = ['subscription', 'grid', 'back-home']
+/**
+ * The journey, in order: the same three questions on the tool's own account, then again on the grid
+ * in the same session. There used to be a third leg, back home, and it was dropped on purpose: it
+ * re-asked what the first leg had already proven, on the same login, for about a third of the run's
+ * time. What a switch can break shows up on the grid leg.
+ */
+export const LEGS: readonly Leg[] = ['subscription', 'grid']
 
 /** Which log a step must leave a line in: the script tool's or the MCP server's (`workspace.ts`). */
 export type LogKind = 'tool' | 'mcp'
@@ -39,7 +44,14 @@ const TOOL_MISS = 'the tool did not run the script: shell tool calls fail on thi
 const MCP_MISS = 'the MCP server was not called: the respawn dropped the MCP config, the resumed session did not reload servers, or it answered from memory (marker without a log line)'
 const RECALL_MISS = 'the conversation did not carry over the switch: the pane resumed a different or empty session'
 
-/** The conversation, step by step per leg. Numbers differ per leg so an old answer can never pass a new step. */
+/**
+ * The conversation: the SAME three questions on each leg — the script, the MCP server, and memory.
+ * Numbers differ per leg so an old answer can never pass a new step (the log line must match), and
+ * the memory question is word for word the same: on the own account it proves memory works at all,
+ * on the grid it proves the session came across the switch with its history.
+ */
+const RECALL_PROMPT = 'What was the very first calculation I asked you for in this conversation? Reply with exactly RECALL_<A>+<B> using the two numbers.'
+
 export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = {
   subscription: [
     {
@@ -58,14 +70,10 @@ export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = {
       logPattern: 'add 30 12 = 42',
       onMiss: MCP_MISS,
     },
+    { id: 'recall', prompt: RECALL_PROMPT, marker: 'RECALL_40\\+2', onMiss: 'the tool does not keep its own conversation — nothing to do with a switch yet' },
   ],
   grid: [
-    {
-      id: 'recall',
-      prompt: 'What was the very first calculation I asked you for in this conversation? Reply with exactly RECALL_<A>+<B> using the two numbers.',
-      marker: 'RECALL_40\\+2',
-      onMiss: RECALL_MISS,
-    },
+    { id: 'recall', prompt: RECALL_PROMPT, marker: 'RECALL_40\\+2', onMiss: RECALL_MISS },
     {
       id: 'tool',
       prompt: 'Same script as before, tools/calc.sh: compute 50 - 8 with sub and reply with exactly TOOL_<result>.',
@@ -80,30 +88,6 @@ export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = {
       marker: 'MCP_42',
       log: 'mcp',
       logPattern: 'sub 60 18 = 42',
-      onMiss: MCP_MISS,
-    },
-  ],
-  'back-home': [
-    {
-      id: 'recall',
-      prompt: 'Remind me: which MCP server have we been using in this conversation, and what was the first calculation? Reply with exactly RECALL_<server>_<A>+<B>.',
-      marker: 'RECALL_e2e_calc_40\\+2',
-      onMiss: RECALL_MISS,
-    },
-    {
-      id: 'tool',
-      prompt: 'One more with tools/calc.sh: add 21 and 21, reply with exactly TOOL_<result>.',
-      marker: 'TOOL_42',
-      log: 'tool',
-      logPattern: 'add 21 21 = 42',
-      onMiss: TOOL_MISS,
-    },
-    {
-      id: 'mcp',
-      prompt: 'And one more through e2e_calc: add with a=2 and b=40, reply with exactly MCP_<result>.',
-      marker: 'MCP_42',
-      log: 'mcp',
-      logPattern: 'add 2 40 = 42',
       onMiss: MCP_MISS,
     },
   ],

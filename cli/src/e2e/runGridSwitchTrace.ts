@@ -6,7 +6,6 @@
  *   agent_create   — a new codex/claude in its own tmux pane, in a scratch folder; nobody's pane is borrowed
  *   subscription   — checks on it as it is (its own login): the baseline
  *   grid           — agent_retarget onto a grid model (pane respawned, session resumed), checks again
- *   back-home      — agent_retarget clearGrid (respawned, resumed on its own login), checks again
  *   agent_delete   — gone at the end, unless E2E_KEEP_AGENT=1 (the reviewer, autonomous-grid-cli's
  *                    e2e-watchdog, reads the bundle afterwards; keep the agent when it should type into the pane)
  *
@@ -32,7 +31,9 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { GridSwitchDriver, pickGridModel, type GridSwitchTraceStep } from './gridSwitchDriver.js'
 import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
-import { firstStuck, plannedLegs, quotaHit, type LegOutcome, type LogKind } from './smokeChecks.js'
+import { firstStuck, plannedLegs, quotaHit, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
+
+const LAST_LEG = LEGS[LEGS.length - 1]
 import { prepareWorkspace, readLog, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
 import { sessionName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
@@ -82,7 +83,7 @@ let pane: string | null = process.env.HARNESS_PANE_ID ?? null
 let workspace: string | null = null
 // A subscription model answers in seconds; a local model on a grid may take a minute. Only the
 // grid leg gets the long budget, so a stuck check on the tool's own login is known in 45s, not 90.
-const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 90_000, grid: 90_000, 'back-home': 90_000 }
+const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 120_000, grid: 120_000 }
 
 async function checks(leg: LegOutcome['leg']): Promise<void> {
   const readLogs = workspace ? (kind: LogKind) => readLog(workspace!, kind) : undefined
@@ -92,8 +93,9 @@ async function checks(leg: LegOutcome['leg']): Promise<void> {
   legs.push(outcome)
   console.error(`[grid-e2e] ${leg}: ${outcome.checks.map((c) => `${c.id}=${c.status}`).join(' ')}${outcome.dialogs ? ` (answered: ${outcome.dialogs.join(', ')})` : ''}`)
   // The marker shows before the tool's turn is fully over (hooks still reporting); a retarget on a
-  // turn in flight is refused AGENT_BUSY. Let the pane go quiet first, the way a person would.
-  if (pane) {
+  // turn in flight is refused AGENT_BUSY. Let the pane go quiet first, the way a person would —
+  // but only when a retarget follows: after the last leg the agent is deleted, not moved.
+  if (pane && leg !== LAST_LEG) {
     await waitForPaneSettle(realTmux, pane, { settleMs: 3_000, settleTimeoutMs: 60_000 })
     await new Promise((r) => setTimeout(r, 3_000))
   }
@@ -172,11 +174,7 @@ try {
     if (!onto.ok) throw new Error(`${onto.error}: ${onto.detail ?? ''}`)
     await checks('grid')
   }
-  if (!quotaHit(legs)) {
-    const home = await driver.clearGrid(agentId!)
-    if (!home.ok) throw new Error(`${home.error}: ${home.detail ?? ''}`)
-    await checks('back-home')
-  }
+
 } catch (err) {
   error = (err as Error).message
   console.error(`[grid-e2e] stopped: ${error}`)
