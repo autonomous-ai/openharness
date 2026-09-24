@@ -33,9 +33,14 @@ class TerminalInputDock extends StatefulWidget {
     required this.onDismiss,
     this.onPickImage,
     this.onTakePhoto,
+    this.questionOpen = false,
   });
 
   final TerminalSession session;
+
+  /// An agent's question dialog is on the pane — see
+  /// [TerminalKeyBar.questionOpen].
+  final bool questionOpen;
 
   /// The software keyboard is up, or has been asked for and is on its way.
   final bool keyboardUp;
@@ -114,6 +119,7 @@ class _TerminalInputDockState extends State<TerminalInputDock>
         onDismissKeyboard: widget.onDismiss,
         onPickImage: widget.onPickImage,
         onTakePhoto: widget.onTakePhoto,
+        questionOpen: widget.questionOpen,
       ),
     ),
     builder: (context, child) {

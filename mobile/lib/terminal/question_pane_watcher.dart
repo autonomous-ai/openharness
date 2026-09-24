@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:xterm/xterm.dart';
 
+import 'key_hints.dart';
 import 'question_pane.dart';
 
 /// Watches one terminal's buffer for an open question dialog.
@@ -22,9 +23,10 @@ import 'question_pane.dart';
 /// a live question off the screen.
 ///
 /// ⚠️ **Whoever listens must treat a repeat as nothing new.** This notifies on
-/// every CHANGE of dialog, including one question replacing another inside the
-/// same exchange; a listener that raises the keyboard on each notification
-/// would raise it again on a keyboard the person had deliberately put away.
+/// every CHANGE of dialog — and of Codex's queue of async questions ([queued])
+/// — including one question replacing another inside the same exchange; a
+/// listener that raises the keyboard on each notification would raise it again
+/// on a keyboard the person had deliberately put away.
 class QuestionPaneWatcher extends ChangeNotifier {
   QuestionPaneWatcher({required this.engine});
 
@@ -37,9 +39,28 @@ class QuestionPaneWatcher extends ChangeNotifier {
   Timer? _debounce;
   QuestionPaneView? _view;
   int _misses = 0;
+  QueuedQuestions? _queued;
+  int _queuedMisses = 0;
+  List<KeyHint> _hints = const [];
+  int _hintMisses = 0;
 
   /// The dialog currently on the pane, or null.
   QuestionPaneView? get view => _view;
+
+  /// Codex's async questions waiting in its queue, or null — see
+  /// [parseQueuedQuestions]. Codex only.
+  ///
+  /// Debounced exactly as [view] is, and for the same reasons: it appears once
+  /// the buffer settles, and goes only after [_goneReads] reads without it.
+  QueuedQuestions? get queued => _queued;
+
+  /// The keys the pane's live chrome offers that a phone cannot press — see
+  /// [parseKeyHints]. Empty when there are none.
+  ///
+  /// Debounced as [view] is: a repaint caught mid-way reads as a bare pane,
+  /// and a row of buttons that blinked out on every redraw would be one
+  /// nobody could hit.
+  List<KeyHint> get hints => _hints;
 
   /// How long the buffer must be quiet before it is read.
   ///
@@ -64,8 +85,10 @@ class QuestionPaneWatcher extends ChangeNotifier {
     _debounce?.cancel();
     _terminal = terminal;
     _misses = 0;
+    _queuedMisses = 0;
+    _hintMisses = 0;
     if (terminal == null) {
-      _publish(null);
+      _publish(null, null, const []);
       return;
     }
     if (engine == null) return;
@@ -85,7 +108,33 @@ class QuestionPaneWatcher extends ChangeNotifier {
     final terminal = _terminal;
     final engine = this.engine;
     if (terminal == null || engine == null) return;
-    final found = readQuestionPane(terminal, engine);
+    // One copy of the buffer for both readings.
+    final lines = questionPaneLines(terminal);
+    final dialog = _readDialog(
+      lines.isEmpty ? null : parseQuestionLines(lines, engine),
+    );
+    final queue = _readQueued(
+      engine == QuestionEngine.codex && lines.isNotEmpty
+          ? parseQueuedQuestions(lines)
+          : null,
+    );
+    final keys = _readHints(parseKeyHints(lines));
+    if (dialog.again || queue.again || keys.again) {
+      // ⚠️ **Ask for the next read rather than waiting for one.** Reads are
+      // driven by terminal output, and the engine may print NOTHING after the
+      // dialog closes — Codex repaints once on `esc` and then goes quiet. The
+      // first read saw the dialog gone, the second never came, and the pad
+      // stayed up over an answered question until the next keystroke.
+      // Measured on a Codex pane after `×`.
+      _debounce?.cancel();
+      _debounce = Timer(_settle, _read);
+    }
+    _publish(dialog.view, queue.queued, keys.hints);
+  }
+
+  /// What [found] makes of the open dialog: the view to keep, and whether to
+  /// read again without waiting for output.
+  ({QuestionPaneView? view, bool again}) _readDialog(QuestionPaneView? found) {
     // Open but scrolled past its own top: still a dialog, so whatever is
     // showing keeps showing. Not a miss, and not something to announce.
     if (found != null && found.partial) {
@@ -93,41 +142,69 @@ class QuestionPaneWatcher extends ChangeNotifier {
       // Keep looking, for the same reason the miss branch below does: a partial
       // dialog that is then dismissed leaves a quiet pane, and a watcher that
       // only wakes on output would never see it go.
-      if (_view != null) {
-        _debounce?.cancel();
-        _debounce = Timer(_settle, _read);
-      }
-      return;
+      return (view: _view, again: _view != null);
     }
     if (found == null || !found.answerable) {
       // Never had one: nothing to debounce, and counting misses forever would
       // be pure noise.
-      if (_view == null) return;
-      if (++_misses < _goneReads) {
-        // ⚠️ **Ask for the next read rather than waiting for one.** Reads are
-        // driven by terminal output, and the engine may print NOTHING after the
-        // dialog closes — Codex repaints once on `esc` and then goes quiet. The
-        // first read saw the dialog gone, the second never came, and the pad
-        // stayed up over an answered question until the next keystroke.
-        // Measured on a Codex pane after `×`.
-        _debounce?.cancel();
-        _debounce = Timer(_settle, _read);
-        return;
-      }
+      if (_view == null) return (view: null, again: false);
+      if (++_misses < _goneReads) return (view: _view, again: true);
       _misses = 0;
-      _publish(null);
-      return;
+      return (view: null, again: false);
     }
     _misses = 0;
     // The same dialog redrawn — a caret moving between rows rewrites the whole
-    // block. Publishing that would rebuild the pad on every arrow key.
-    if (_view?.fingerprint == found.fingerprint) return;
-    _publish(found);
+    // block. Keeping the one already held is what stops a publish on every
+    // arrow key.
+    if (_view?.fingerprint == found.fingerprint) {
+      return (view: _view, again: false);
+    }
+    return (view: found, again: false);
   }
 
-  void _publish(QuestionPaneView? next) {
-    if (_view == null && next == null) return;
-    _view = next;
+  /// The same, for Codex's queue of async questions.
+  ({QueuedQuestions? queued, bool again}) _readQueued(QueuedQuestions? found) {
+    if (found == null) {
+      if (_queued == null) return (queued: null, again: false);
+      // Gone only on the second read without it, as a dialog is: a repaint of
+      // Codex's bottom pane caught mid-way reads as no queue at all.
+      if (++_queuedMisses < _goneReads) return (queued: _queued, again: true);
+      _queuedMisses = 0;
+      return (queued: null, again: false);
+    }
+    _queuedMisses = 0;
+    return (queued: found, again: false);
+  }
+
+  /// The same, for the keys the chrome offers.
+  ({List<KeyHint> hints, bool again}) _readHints(List<KeyHint> found) {
+    if (found.isEmpty) {
+      if (_hints.isEmpty) return (hints: _hints, again: false);
+      if (++_hintMisses < _goneReads) return (hints: _hints, again: true);
+      _hintMisses = 0;
+      return (hints: const [], again: false);
+    }
+    _hintMisses = 0;
+    // The same keys redrawn: keep the list already held, so nothing is
+    // announced for a repaint.
+    if (listEquals(found, _hints)) return (hints: _hints, again: false);
+    return (hints: found, again: false);
+  }
+
+  /// Announce whatever changed — once, however much of it did.
+  void _publish(
+    QuestionPaneView? view,
+    QueuedQuestions? queued,
+    List<KeyHint> hints,
+  ) {
+    if (identical(view, _view) &&
+        queued == _queued &&
+        identical(hints, _hints)) {
+      return;
+    }
+    _view = view;
+    _queued = queued;
+    _hints = hints;
     notifyListeners();
   }
 
