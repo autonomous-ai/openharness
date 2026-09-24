@@ -91,6 +91,7 @@ void main() {
                 child: ModelsPanel(
                   controller: controller,
                   subscriptions: subscriptions,
+                  newModelIds: const {'qwen'},
                   onClose: () => closed++,
                   onManage: () {},
                 ),
@@ -186,6 +187,7 @@ void main() {
       expect(find.text('Team'), findsOneWidget);
       expect(find.text('Shared Qwen'), findsOneWidget);
       expect(find.text('Team computer'), findsOneWidget);
+      expect(find.text('New'), findsNothing);
       expect(find.text('Qwen3.8-27B'), findsNothing);
       await tester.enterText(search, 'TEAM COMPUTER');
       await tester.pump();
@@ -198,6 +200,7 @@ void main() {
       await tester.pump();
       expect(find.text('gemma-4-12B'), findsOneWidget);
       expect(find.text('Qwen3.8-27B'), findsOneWidget);
+      expect(find.text('New'), findsOneWidget);
       expect(find.text('7.3 GB'), findsOneWidget);
       expect(find.text('16.2 GB'), findsOneWidget);
       expect(find.textContaining(' on disk'), findsNothing);
@@ -687,7 +690,7 @@ void main() {
     tester.view.physicalSize = const Size(1200, 480);
     await tester.pump();
     expect(tester.getRect(find.byType(ModelsPanel)).bottom, lessThan(480));
-    expect(find.text('Model Manager').hitTestable(), findsOneWidget);
+    expect(find.text('Manage models').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
     tester.view.physicalSize = const Size(1200, 760);
     await tester.pump();

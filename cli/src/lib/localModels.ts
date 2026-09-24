@@ -282,6 +282,13 @@ export class LocalModels {
     } catch { inventoryError = 'Running models could not be checked. Try again.' }
     const operation = this.active?.grid === grid ? this.active.operation : this.receipt?.grid === grid ? this.receipt.operation : undefined
     const choices = [...this.candidates, ...(await this.known(grid, owned)).filter(k => !this.candidates.some(c => c.file === k.file))]
+    const downloaded = await Promise.all(choices.map(candidate => this.downloaded(candidate)))
+    // Different repositories can use the same filename for different weights.
+    // Attribute the one local engine to the complete file that is actually here.
+    // Keep a fallback so an engine can still be stopped if its file was removed.
+    const owners = new Map(owned.map(instance => [instance.file,
+      choices.find((candidate, index) => candidate.file === instance.file && downloaded[index])
+        ?? choices.find(candidate => candidate.file === instance.file)]))
     const servingNode = (instance?: Owned): Record<string, any> | undefined => {
       const matches = instance?.live ? nodes.filter(n => n.online === true &&
         (str(n.node_id || n.id) ? str(n.node_id || n.id) === instance.nodeId :
@@ -290,11 +297,11 @@ export class LocalModels {
           modelKey(str(typeof m === 'string' ? m : obj(m).model)) === modelKey(alias)))) : []
       return matches.length === 1 ? matches[0] : undefined
     }
-    const models = await Promise.all(choices.map(async (candidate, index): Promise<LocalModel> => {
-      const instance = owned.find(o => o.file === candidate.file)
+    const models = choices.map((candidate, index): LocalModel => {
+      const instance = owned.find(o => owners.get(o.file) === candidate)
       const node = servingNode(instance)
       const running = !!node
-      const available = await this.downloaded(candidate)
+      const available = downloaded[index]
       const answered = obj(node?.answered)
       const perModel = rows(answered.by_model).find(a => instance?.aliases.some(alias => modelKey(alias) === modelKey(str(a.model))))
       const single = Array.isArray(node?.models) && node.models.length === 1
@@ -306,7 +313,7 @@ export class LocalModels {
         requests: running ? num(perModel?.requests) : undefined,
         windowSeconds: running ? num(answered.window_seconds) : undefined,
         operation: operation?.modelId === candidate.id ? operation : undefined }
-    }))
+    })
     for (const instance of owned.filter(o => !choices.some(c => c.file === o.file))) {
       models.push({ id: `local:${instance.file}`, name: cleanName(instance.aliases[0]),
         state: servingNode(instance) ? 'running' : 'available', canStart: false, canStop: !inventoryError,

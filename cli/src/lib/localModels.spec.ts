@@ -245,6 +245,28 @@ describe('local model discovery and lifecycle', () => {
     })
   })
 
+  it('assigns an engine only to the downloaded variant when catalog filenames collide', async () => {
+    const other = card('org/Small-MTP-GGUF')
+    other.versions[0].size_bytes = 80
+    catalogCards = [other, card()]
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const snapshot = await service.list('home')
+    expect(snapshot.models.find(m => m.id === 'org/Small-GGUF')).toMatchObject({
+      state: 'running', canStop: true, requests: 4,
+    })
+    expect(snapshot.models.find(m => m.id === other.repo_id)).toMatchObject({
+      state: 'available', canStop: false, requests: undefined, tokensPerSecond: undefined,
+    })
+  })
+
+  it('can still stop a running catalog model after its weights are removed', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    await rm(join(home, 'models', 'Small-Q4.gguf'))
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'running', canStop: true })
+    await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'available', canStop: false })
+  })
+
   it('encrypts inventory and lifecycle requests and responses', () => {
     for (const type of ['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
       expect(encryptDownFrame(type)).toBe(true); expect(encryptRpcResult(`${type}_result`)).toBe(true)
