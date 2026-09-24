@@ -15,6 +15,8 @@ const str = (v: unknown): string => typeof v === 'string' ? v : ''
 const num = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
 const key = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 24)
 const cleanName = (v: string): string => basename(v).replace(/\.gguf$/i, '').replace(/-GGUF$/i, '')
+// Grid advertises a GGUF filename as a lowercase model name without its extension.
+const modelKey = (v: string): string => v.toLowerCase().replace(/\.gguf$/, '')
 const validArg = (v: string): boolean => !!v && !v.startsWith('-') && !/[\x00-\x1f]/.test(v)
 
 export interface LocalModel {
@@ -34,6 +36,7 @@ export interface LocalModelsSnapshot {
 }
 interface Candidate {
   id: string; name: string; pull: string; file: string; files: string[]; size: number; quant: string; context: number
+  aliases?: string[]
 }
 interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; context: number; siblings: number }
 interface Receipt { spec: 1; grid: string; operation?: ModelOperation }
@@ -214,7 +217,13 @@ export class LocalModels {
         known = rows(JSON.parse(await readFile(path, 'utf8'))).filter(c =>
           c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
           c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) && num(c.context) && c.context <= 16384 &&
-          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file) as Candidate[]
+          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(c => ({
+            ...c,
+            // Older receipts kept only the displayed alias. Preserve that name
+            // when upgrading, and never forward malformed saved argv values.
+            aliases: (Array.isArray(c.aliases) ? c.aliases : [c.name])
+              .filter((alias: unknown): alias is string => typeof alias === 'string' && validArg(alias)),
+          })) as Candidate[]
       } catch { known = [] }
       this.knownByGrid.set(grid, known)
     }
@@ -224,7 +233,8 @@ export class LocalModels {
       const file = await stat(join(this.home, 'models', instance.file)).catch(() => null)
       if (!file?.isFile() || !file.size) continue
       known.push({ id: `local:${instance.file}`, name: cleanName(instance.aliases[0]),
-        file: instance.file, files: [instance.file], pull: '', size: file.size, quant: '', context: instance.context })
+        file: instance.file, files: [instance.file], pull: '', size: file.size, quant: '', context: instance.context,
+        aliases: instance.aliases.filter(validArg) })
       changed = true
     }
     if (changed) {
@@ -280,21 +290,28 @@ export class LocalModels {
     } catch { inventoryError = 'Running models could not be checked. Try again.' }
     const operation = this.active?.grid === grid ? this.active.operation : this.receipt?.grid === grid ? this.receipt.operation : undefined
     const choices = [...this.candidates, ...(await this.known(grid, owned)).filter(k => !this.candidates.some(c => c.file === k.file))]
+    const downloaded = await Promise.all(choices.map(candidate => this.downloaded(candidate)))
+    // Different repositories can use the same filename for different weights.
+    // Attribute the one local engine to the complete file that is actually here.
+    // Keep a fallback so an engine can still be stopped if its file was removed.
+    const owners = new Map(owned.map(instance => [instance.file,
+      choices.find((candidate, index) => candidate.file === instance.file && downloaded[index])
+        ?? choices.find(candidate => candidate.file === instance.file)]))
     const servingNode = (instance?: Owned): Record<string, any> | undefined => {
       const matches = instance?.live ? nodes.filter(n => n.online === true &&
         (str(n.node_id || n.id) ? str(n.node_id || n.id) === instance.nodeId :
           !!instance.name && str(n.name) === instance.name) &&
         instance.aliases.every(alias => (Array.isArray(n.models) ? n.models : []).some((m: unknown) =>
-          str(typeof m === 'string' ? m : obj(m).model).toLowerCase() === alias.toLowerCase()))) : []
+          modelKey(str(typeof m === 'string' ? m : obj(m).model)) === modelKey(alias)))) : []
       return matches.length === 1 ? matches[0] : undefined
     }
-    const models = await Promise.all(choices.map(async (candidate, index): Promise<LocalModel> => {
-      const instance = owned.find(o => o.file === candidate.file)
+    const models = choices.map((candidate, index): LocalModel => {
+      const instance = owned.find(o => owners.get(o.file) === candidate)
       const node = servingNode(instance)
       const running = !!node
-      const available = await this.downloaded(candidate)
+      const available = downloaded[index]
       const answered = obj(node?.answered)
-      const perModel = rows(answered.by_model).find(a => instance?.aliases.some(alias => alias.toLowerCase() === str(a.model).toLowerCase()))
+      const perModel = rows(answered.by_model).find(a => instance?.aliases.some(alias => modelKey(alias) === modelKey(str(a.model))))
       const single = Array.isArray(node?.models) && node.models.length === 1
       return { id: candidate.id, name: candidate.name, state: running ? 'running' : available ? 'downloaded' : 'available',
         sizeBytes: candidate.size, quant: candidate.quant, recommended: index === 0,
@@ -304,7 +321,7 @@ export class LocalModels {
         requests: running ? num(perModel?.requests) : undefined,
         windowSeconds: running ? num(answered.window_seconds) : undefined,
         operation: operation?.modelId === candidate.id ? operation : undefined }
-    }))
+    })
     for (const instance of owned.filter(o => !choices.some(c => c.file === o.file))) {
       models.push({ id: `local:${instance.file}`, name: cleanName(instance.aliases[0]),
         state: servingNode(instance) ? 'running' : 'available', canStart: false, canStop: !inventoryError,
@@ -345,7 +362,12 @@ export class LocalModels {
     const must = async (args: string[], message: string, output?: (chunk: string) => void) => {
       if (!(await this.run(args, output, 30 * 60_000)).ok) throw new ModelError(message)
     }
-    if (operation.action === 'start') await this.loadCatalog()
+    if (operation.action === 'start') {
+      await this.loadCatalog()
+      // Leaving the last engine removes Grid's local registration. Restore the
+      // account's existing grids before resolving ownership or joining again.
+      await must(['--remote', 'sync'], 'Models could not be checked. Try again.')
+    }
     const owned = await this.owned(grid)
     const candidate = [...this.candidates, ...await this.known(grid, owned)].find(c => c.id === operation.modelId)
     const instance = owned.find(o => candidate ? o.file === candidate.file : operation.modelId === `local:${o.file}`)
@@ -398,11 +420,12 @@ export class LocalModels {
           await must(['engine', 'install', 'llama.cpp'], 'The model engine could not start. Try again.')
         }
         await must(['--remote', 'join', grid, '--serve', candidate.file,
-          '--max-concurrency', '1', '--ctx-size', String(candidate.context), '--reasoning-budget', '0'],
+          '--max-concurrency', '1', '--ctx-size', String(candidate.context), '--reasoning-budget', '0',
+          ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])],
         'The model could not start. Try again.')
       }
       await change('verifying')
-      await this.verify(grid, instance?.aliases[0] || candidate.file)
+      await this.verify(grid, instance?.aliases[0] || candidate.aliases?.[0] || candidate.file)
     }
     operation.phase = 'done'
     await this.save(grid, operation)

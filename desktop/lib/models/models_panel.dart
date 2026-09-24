@@ -11,6 +11,8 @@ import 'local_model.dart';
 import 'model_manager_controller.dart';
 import 'model_mark.dart';
 
+enum ModelsTab { subscriptions, local, shared }
+
 class ModelsPanel extends StatefulWidget {
   const ModelsPanel({
     super.key,
@@ -19,21 +21,21 @@ class ModelsPanel extends StatefulWidget {
     required this.onClose,
     required this.onManage,
     this.newModelIds = const {},
+    this.initialTab = ModelsTab.subscriptions,
   });
   final ModelManagerController controller;
   final ModelsMenuController subscriptions;
   final VoidCallback onClose, onManage;
   final Set<String> newModelIds;
+  final ModelsTab initialTab;
   @override
   State<ModelsPanel> createState() => _ModelsPanelState();
 }
 
-enum _Filter { all, running }
-
 class _ModelsPanelState extends State<ModelsPanel> {
   final _search = TextEditingController();
   final _searchFocus = FocusNode(debugLabel: 'Search models');
-  _Filter _filter = _Filter.all;
+  late ModelsTab _selectedTab = widget.initialTab;
   ModelManagerController get controller => widget.controller;
   ModelsMenuController get subscriptions => widget.subscriptions;
   @override
@@ -48,15 +50,39 @@ class _ModelsPanelState extends State<ModelsPanel> {
     listenable: Listenable.merge([controller, subscriptions]),
     builder: (context, _) {
       final query = _search.text.trim().toLowerCase();
+      final subscriptionRows = subscriptions.rows;
+      final matchingSubscriptions = subscriptionRows.where(
+        (row) => [
+          'title',
+          'account',
+          'engine',
+        ].any((key) => '${row[key] ?? ''}'.toLowerCase().contains(query)),
+      );
+      final sharedSections = controller.sections.where((s) => !s.own).toList();
+      final sharedCount = sharedSections.fold(
+        0,
+        (count, section) => count + section.models.length,
+      );
+      final matchingShared = [
+        for (final section in sharedSections)
+          (
+            name: section.name,
+            models: section.models
+                .where(
+                  (model) => [
+                    section.name,
+                    model.id,
+                    model.node,
+                  ].any((text) => text.toLowerCase().contains(query)),
+                )
+                .toList(),
+          ),
+      ];
       final models = controller.localModels
           .where(
             (m) =>
-                (m.name.toLowerCase().contains(query) ||
-                    m.id.toLowerCase().contains(query)) &&
-                switch (_filter) {
-                  _Filter.all => true,
-                  _Filter.running => m.running,
-                },
+                m.name.toLowerCase().contains(query) ||
+                m.id.toLowerCase().contains(query),
           )
           .toList();
       int rank(LocalModel m) => controller.operationFor(m)?.active == true
@@ -113,7 +139,9 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     autofocus: true,
                     style: AppType.monoLabel(),
                     decoration: InputDecoration(
-                      hintText: 'Search models…',
+                      hintText: _selectedTab == ModelsTab.subscriptions
+                          ? 'Search subscriptions…'
+                          : 'Search models…',
                       hintStyle: AppType.monoLabel(color: AppPalette.textFaint),
                       prefixIcon: Icon(
                         LucideIcons.search,
@@ -161,17 +189,16 @@ class _ModelsPanelState extends State<ModelsPanel> {
                       child: Row(
                         children: [
                           _tab(
-                            _Filter.all,
-                            'All',
-                            controller.localModels.length,
+                            ModelsTab.subscriptions,
+                            'Subscriptions',
+                            subscriptionRows.length,
                           ),
                           _tab(
-                            _Filter.running,
-                            'Running',
-                            controller.localModels
-                                .where((m) => m.running)
-                                .length,
+                            ModelsTab.local,
+                            'Local',
+                            controller.localModels.length,
                           ),
+                          _tab(ModelsTab.shared, 'Shared', sharedCount),
                         ],
                       ),
                     ),
@@ -183,6 +210,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                 ),
                 Flexible(
                   child: SingleChildScrollView(
+                    key: ValueKey(_selectedTab),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
                       vertical: 6,
@@ -190,133 +218,105 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                          child: Text(
-                            [
-                              'This computer',
-                              if (controller.memoryBytes case final memory?)
-                                '${_size(memory)} memory',
-                            ].join(' · '),
-                            style: AppType.monoMeta(
-                              color: AppPalette.textSecondary,
+                        if (_selectedTab == ModelsTab.subscriptions) ...[
+                          if (matchingSubscriptions.isEmpty)
+                            _empty(
+                              query.isEmpty
+                                  ? 'No subscriptions'
+                                  : 'No matching subscriptions',
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        if (controller.error case final error?)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 12,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  error,
-                                  style: AppType.body(color: AppColors.warning),
-                                ),
-                                TextButton(
-                                  onPressed: controller.scanning
-                                      ? null
-                                      : () => unawaited(
-                                          controller.refresh(force: true),
-                                        ),
-                                  child: const Text('Try again'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        if (!controller.loaded && controller.error == null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 28,
-                            ),
-                            child: Text(
-                              'Finding models that fit…',
-                              style: AppType.body(color: AppColors.textSoft),
-                            ),
-                          )
-                        else if (models.isEmpty && controller.error == null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 28,
-                            ),
-                            child: Text(
-                              query.isNotEmpty
-                                  ? 'No matching models'
-                                  : switch (_filter) {
-                                      _Filter.running => 'No models running',
-                                      _Filter.all =>
-                                        'No compatible models found',
-                                    },
-                              style: AppType.body(color: AppColors.textSoft),
-                            ),
-                          ),
-                        for (final model in models) _model(model),
-                        if (_filter == _Filter.all &&
-                            query.isEmpty &&
-                            subscriptions.rows.isNotEmpty) ...[
-                          _heading('Subscriptions'),
-                          for (final row in subscriptions.rows)
+                          for (final row in matchingSubscriptions)
                             _subscription(row),
                         ],
-                        if (_filter == _Filter.all)
-                          for (final section in controller.sections.where(
-                            (s) => !s.own && s.models.isNotEmpty,
-                          )) ...[
-                            if (section.models.any(
-                              (m) => m.id.toLowerCase().contains(query),
-                            ))
-                              _heading('Shared · ${section.name}'),
-                            for (final model in section.models.where(
-                              (m) => m.id.toLowerCase().contains(query),
-                            ))
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  12,
-                                  14,
-                                  6,
-                                  14,
-                                ),
-                                child: Row(
-                                  children: [
-                                    ModelMark(model: model.id),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            model.id,
-                                            style: AppType.label(
-                                              color: AppPalette.textPrimary,
-                                              height: 1.3,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            model.node,
-                                            style: AppType.monoMeta(
-                                              color: AppPalette.textSecondary,
-                                              height: 1.3,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                        if (_selectedTab == ModelsTab.local) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                            child: Text(
+                              [
+                                'This computer',
+                                if (controller.memoryBytes case final memory?)
+                                  '${_size(memory)} memory',
+                              ].join(' · '),
+                              style: AppType.monoMeta(
+                                color: AppPalette.textSecondary,
                               ),
-                          ],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          if (controller.error case final error?) _retry(error),
+                          if (!controller.loaded && controller.error == null)
+                            _empty('Finding models that fit…')
+                          else if (models.isEmpty && controller.error == null)
+                            _empty(
+                              query.isNotEmpty
+                                  ? 'No matching models'
+                                  : 'No compatible models found',
+                            ),
+                          for (final model in models) _model(model),
+                        ],
+                        if (_selectedTab == ModelsTab.shared) ...[
+                          if (controller.models?.reachable == false)
+                            _retry('Shared models are unavailable.')
+                          else if (controller.models == null &&
+                              controller.error != null)
+                            _retry(controller.error!)
+                          else if (controller.models == null)
+                            _empty('Finding shared models…')
+                          else if (matchingShared.every(
+                            (s) => s.models.isEmpty,
+                          ))
+                            _empty(
+                              query.isEmpty
+                                  ? 'No shared models'
+                                  : 'No matching models',
+                            ),
+                          for (final section in matchingShared)
+                            if (section.models.isNotEmpty) ...[
+                              _heading(section.name),
+                              for (final model in section.models)
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    14,
+                                    6,
+                                    14,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      ModelMark(model: model.id),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              model.id,
+                                              style: AppType.label(
+                                                color: AppPalette.textPrimary,
+                                                height: 1.3,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              model.node,
+                                              style: AppType.monoMeta(
+                                                color: AppPalette.textSecondary,
+                                                height: 1.3,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                        ],
                       ],
                     ),
                   ),
@@ -363,17 +363,18 @@ class _ModelsPanelState extends State<ModelsPanel> {
     },
   );
 
-  Widget _tab(_Filter filter, String title, int count) => Padding(
+  Widget _tab(ModelsTab tab, String title, int count) => Padding(
     padding: const EdgeInsets.only(right: 4),
     child: Semantics(
-      selected: _filter == filter,
+      selected: _selectedTab == tab,
       child: TextButton(
-        onPressed: () => setState(() => _filter = filter),
+        key: ValueKey('models-tab-${tab.name}'),
+        onPressed: () => setState(() => _selectedTab = tab),
         style: TextButton.styleFrom(
-          backgroundColor: _filter == filter
+          backgroundColor: _selectedTab == tab
               ? AppPalette.textPrimary.withValues(alpha: .08)
               : Colors.transparent,
-          foregroundColor: _filter == filter
+          foregroundColor: _selectedTab == tab
               ? AppPalette.textPrimary
               : AppPalette.textSecondary,
           textStyle: AppType.monoMeta(),
@@ -383,6 +384,27 @@ class _ModelsPanelState extends State<ModelsPanel> {
         ),
         child: Text('$title $count'),
       ),
+    ),
+  );
+
+  Widget _empty(String message) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 28),
+    child: Text(message, style: AppType.body(color: AppColors.textSoft)),
+  );
+
+  Widget _retry(String message) => Padding(
+    padding: const EdgeInsets.all(12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(message, style: AppType.body(color: AppColors.warning)),
+        TextButton(
+          onPressed: controller.scanning
+              ? null
+              : () => unawaited(controller.refresh(force: true)),
+          child: const Text('Try again'),
+        ),
+      ],
     ),
   );
 
@@ -410,12 +432,21 @@ class _ModelsPanelState extends State<ModelsPanel> {
                 when model.running && model.windowSeconds != null)
               '${requests.toInt()} ${requests == 1 ? 'request' : 'requests'} / ${_window(model.windowSeconds!)}',
           ].join(' · ');
-    final action = model.canStop ? 'Pause' : 'Start';
+    final action = model.canStop
+        ? 'Pause'
+        : model.downloaded
+        ? 'Start'
+        : 'Download and start';
+    final icon = model.canStop
+        ? LucideIcons.pause
+        : model.downloaded
+        ? LucideIcons.play
+        : LucideIcons.download;
     final tooltip = active
         ? status
         : model.canStop
         ? 'Pause ${model.name} and free memory. The download is kept.'
-        : 'Start ${model.name}';
+        : '$action ${model.name}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 14, 6, 14),
       child: Row(
@@ -510,7 +541,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                           ? null
                           : () => unawaited(controller.toggle(model)),
                       icon: Icon(
-                        model.canStop ? LucideIcons.pause : LucideIcons.play,
+                        icon,
                         size: 17,
                         semanticLabel: '$action ${model.name}',
                       ),
@@ -571,7 +602,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                 if (account.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Text(
-                    'Account ···$account',
+                    'Account $account',
                     style: AppType.monoMeta(
                       color: AppPalette.textSecondary,
                       height: 1.3,

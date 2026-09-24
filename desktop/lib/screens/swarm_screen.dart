@@ -264,7 +264,9 @@ class _SwarmScreenState extends State<SwarmScreen>
         widget.modelsMenu ?? ModelsMenuController(remote: app.readRemoteUsage);
     app.modelManager.addListener(_modelManagerChanged);
     _modelsRequests = app.modelsRequests.listen((_) {
-      if (mounted && _modelsOverlay == null) _toggleModels();
+      if (mounted && _modelsOverlay == null) {
+        _toggleModels(initialTab: ModelsTab.local);
+      }
     });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1123,7 +1125,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       case 'restartAgent':
         unawaited(_restartAgent());
       case 'runLocalModel':
-        _toggleModels();
+        _toggleModels(initialTab: ModelsTab.local);
       case 'splitRight':
         unawaited(_splitAgent(PaneResizeAxis.x));
       case 'splitDown':
@@ -2153,7 +2155,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
   }
 
-  void _toggleModels() {
+  void _toggleModels({ModelsTab initialTab = ModelsTab.subscriptions}) {
     if (_modelsOverlay != null) {
       _closeModels();
       return;
@@ -2190,7 +2192,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                       (constraints.maxHeight -
                               (_native ? 0 : _tabBarHeight) -
                               20)
-                          .clamp(0, 620),
+                          .clamp(0, 820),
                 ),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
@@ -2207,6 +2209,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                     newModelIds: _toolbarNotices.newModelIds,
                     controller: app.modelManager,
                     subscriptions: _modelsMenu!,
+                    initialTab: initialTab,
                     onClose: _closeModels,
                     onManage: () => unawaited(_openModelManager()),
                   ),
@@ -3596,7 +3599,8 @@ class _SwarmScreenState extends State<SwarmScreen>
                           if (!_commandBarOpen && _newHarness == null)
                             LocalModelInvitation(
                               controller: app.modelManager,
-                              onOpen: _toggleModels,
+                              onOpen: () =>
+                                  _toggleModels(initialTab: ModelsTab.local),
                             ),
                           AgentAlertBanners(notifier: app),
                         ],

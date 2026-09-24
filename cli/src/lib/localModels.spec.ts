@@ -151,6 +151,17 @@ describe('local model discovery and lifecycle', () => {
     expect((await service.list('home')).models[0].operation?.phase).toBe('done')
   })
 
+  it('keeps a failed Grid registration refresh retryable without starting or downloading', async () => {
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('sync') ? { ...ok(), ok: false } : original(args, output))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home')).models[0].operation).toMatchObject({ phase: 'failed', stage: 'checking' })
+    expect(calls.some(args => args.includes('join') || args.includes('pull'))).toBe(false)
+    run.mockImplementation(original)
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home')).models[0].state).toBe('running')
+  })
+
   it('never offers Stop for an external endpoint or another machine', async () => {
     serving = true
     await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ endpoint_url: 'http://localhost:1234', models: ['Small-Q4.gguf'] }] }))
@@ -206,6 +217,30 @@ describe('local model discovery and lifecycle', () => {
     expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
   })
 
+  it.each(['current', 'legacy', 'malformed'])('preserves imported routing names across restart with %s receipts', async scenario => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node',
+      engines: [{ models: ['Small-Q4.gguf'] }], advertise_as: ['team/my-model'] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const id = (await service.list('home')).models[0].id
+    await service.act('home', id, 'stop'); await service.settled()
+    const path = join(stateDir, (await readdir(stateDir)).find(name => name.endsWith('.known.json'))!)
+    const saved = JSON.parse(await readFile(path, 'utf8'))
+    expect(saved[0].aliases).toEqual(['team/my-model'])
+    if (scenario === 'legacy') delete saved[0].aliases
+    if (scenario === 'malformed') saved[0].aliases = [42, '', '--invalid', 'invalid\nname']
+    await writeFile(path, JSON.stringify(saved))
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    await fresh.act('home', id, 'start'); await fresh.settled()
+    const expectedAlias = scenario === 'current' ? 'team/my-model' : scenario === 'legacy' ? 'my-model' : null
+    const joined = calls.find(args => args.includes('join'))!
+    expect(joined.slice(11)).toEqual(expectedAlias ? ['--advertise-as', expectedAlias] : [])
+    const inference = request.mock.calls.find(([url]) => String(url).includes('chat/completions'))!
+    expect(JSON.parse(String(inference[1]?.body)).model).toBe(expectedAlias ?? 'Small-Q4.gguf')
+    expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
+  })
+
   it('reuses an already downloaded fitting quant of the same model', async () => {
     catalogCards[0].versions.push({ version: 'Q3', size_bytes: 48, pull_spec: 'org/Small-GGUF:Small-Q3.gguf', urls: ['https://example.test/Small-Q3.gguf'] })
     await writeFile(join(home, 'models', 'Small-Q3.gguf'), Buffer.alloc(48))
@@ -226,6 +261,45 @@ describe('local model discovery and lifecycle', () => {
     const view = await service.list('home')
     expect(view.models[0]).toMatchObject({ state: 'running', tokensPerSecond: 12 })
     expect(view.models[0].requests).toBeUndefined()
+  })
+
+  it.each(['small-q4', { model: 'small-q4' }])('matches Grid’s canonical model names after start: %j', async alias => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const record = JSON.parse(await readFile(join(records, 'remote.json'), 'utf8'))
+    record.meta_name = 'My laptop'
+    await writeFile(join(records, 'remote.json'), JSON.stringify(record))
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('engines') ? ok([{
+      name: 'My laptop', online: true, models: [alias], throughput_tok_s: 12,
+      answered: { requests: 99, window_seconds: 86400, by_model: [
+        { model: 'small-q8', requests: 95 }, { model: 'small-q4', requests: 4 },
+      ] },
+    }]) : original(args, output))
+    expect((await service.list('home')).models[0]).toMatchObject({
+      state: 'running', canStop: true, tokensPerSecond: 12, requests: 4, windowSeconds: 86400,
+    })
+  })
+
+  it('assigns an engine only to the downloaded variant when catalog filenames collide', async () => {
+    const other = card('org/Small-MTP-GGUF')
+    other.versions[0].size_bytes = 80
+    catalogCards = [other, card()]
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const snapshot = await service.list('home')
+    expect(snapshot.models.find(m => m.id === 'org/Small-GGUF')).toMatchObject({
+      state: 'running', canStop: true, requests: 4,
+    })
+    expect(snapshot.models.find(m => m.id === other.repo_id)).toMatchObject({
+      state: 'available', canStop: false, requests: undefined, tokensPerSecond: undefined,
+    })
+  })
+
+  it('can still stop a running catalog model after its weights are removed', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    await rm(join(home, 'models', 'Small-Q4.gguf'))
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'running', canStop: true })
+    await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'available', canStop: false })
   })
 
   it('encrypts inventory and lifecycle requests and responses', () => {
