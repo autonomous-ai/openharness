@@ -112,6 +112,8 @@ void main() {
     expect(badge('models').isLabelVisible, isFalse);
     await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
     await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Local').first);
+    await tester.pumpAndSettle();
     expect(find.text('New'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     app.dispose();

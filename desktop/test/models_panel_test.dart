@@ -680,8 +680,10 @@ void main() {
     app.modelManager.start();
     await app.modelManager.refresh();
     await tester.pump();
-    expect(find.text('Explore models'), findsOneWidget);
-    await tester.tap(find.text('Explore models'));
+    expect(find.text('Explore models'), findsNothing);
+    await tester.tap(button);
+    await tester.pump();
+    await tester.tap(find.textContaining('Local').first);
     await tester.pump();
     expect(find.text('Qwen3.8-27B'), findsOneWidget);
     expect(find.text('Search models…'), findsOneWidget);

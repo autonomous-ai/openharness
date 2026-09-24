@@ -25,12 +25,14 @@ class HarnessSessionManager extends StatefulWidget {
     required this.onClose,
     required this.onOpen,
     this.initialFilter = SessionFilter.all,
+    this.introduction,
   });
   final AppNotifier app;
   final List<String> recent;
   final VoidCallback onClose;
   final Future<bool> Function(HarnessSession) onOpen;
   final SessionFilter initialFilter;
+  final Widget? introduction;
 
   @override
   State<HarnessSessionManager> createState() => _HarnessSessionManagerState();
@@ -278,10 +280,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          'Harnesses',
-                          style: AppType.heading(),
-                        ),
+                        child: Text('Harnesses', style: AppType.heading()),
                       ),
                       IconButton(
                         tooltip: 'Close Harnesses',
@@ -291,6 +290,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                     ],
                   ),
                 ),
+                if (widget.introduction != null) widget.introduction!,
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: TextField(

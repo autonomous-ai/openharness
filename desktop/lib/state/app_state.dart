@@ -6620,13 +6620,16 @@ class AppNotifier extends ChangeNotifier {
   /// Git choices are read on the machine that owns this project.
   Future<Map<String, dynamic>> readGitProject(
     String machineId,
-    String path,
-  ) async {
+    String path, {
+    bool refresh = false,
+  }) async {
     final machine = machineStates[machineId];
     if (machine == null) return {'error': 'UNAVAILABLE'};
     final reader = gitProjectReaderForTest;
     if (reader != null) return reader(machineId, path);
-    if (machine.isLocalMachine) return readLocalGitProject(path);
+    if (machine.isLocalMachine) {
+      return readLocalGitProject(path, refresh: refresh);
+    }
     if (connectionForTest == null &&
         (machine.nodeOnline == false ||
             machine.needsLink ||
@@ -6636,8 +6639,8 @@ class AppNotifier extends ChangeNotifier {
     try {
       return await _conn(machineId).request(
         'git_project_info',
-        payload: {'path': path},
-        timeout: const Duration(seconds: 6),
+        payload: {'path': path, if (refresh) 'refresh': true},
+        timeout: Duration(seconds: refresh ? 20 : 6),
       );
     } catch (_) {
       return {'error': 'UNAVAILABLE'};

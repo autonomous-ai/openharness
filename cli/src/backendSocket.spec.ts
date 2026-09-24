@@ -567,7 +567,7 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
-  it('returns Git branch choices only to the requesting encrypted connection', async () => {
+  it.each([false, true])('returns refreshed=%s Git branch choices only to the requesting encrypted connection', async refresh => {
     const preview = { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] }
     const read = vi.spyOn(gitProject, 'readGitProject').mockResolvedValue(preview)
     const socket = new BackendSocket('token')
@@ -575,7 +575,7 @@ describe('BackendSocket outbound queue', () => {
     const ws = wsMock.instances[0]
     ws.open()
     vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_project_info', payload: {
-      requestId: 'preview-1', path: '/remote/workspace',
+      requestId: 'preview-1', path: '/remote/workspace', refresh,
     } })
     vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
     const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
@@ -585,7 +585,7 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_project_info', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
     } })
     await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_project_info_result', 'preview-1', preview))
-    expect(read).toHaveBeenCalledWith('/remote/workspace')
+    expect(read).toHaveBeenCalledWith('/remote/workspace', { refresh })
     expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'viewer-a', frame: {
       type: 'git_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     } }))
@@ -637,7 +637,7 @@ describe('BackendSocket outbound queue', () => {
       type: 'git_project_info', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } },
     } })
     await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_project_info_result', 'git-error', { error: 'UNAVAILABLE' }))
-    expect(read).toHaveBeenCalledWith('')
+    expect(read).toHaveBeenCalledWith('', { refresh: false })
     await socket.stop()
   })
 

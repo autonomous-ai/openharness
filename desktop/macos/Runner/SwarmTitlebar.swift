@@ -1282,6 +1282,7 @@ private final class SwarmStoreButton: SwarmIconButton {
 }
 
 private class SwarmNoticeButton: SwarmIconButton {
+  var onboarding = false { didSet { needsDisplay = true } }
   var attention = 0 { didSet { contentTintColor = iconTint; needsDisplay = true } }
   var expanded = false { didSet { contentTintColor = iconTint; needsDisplay = true } }
 
@@ -1319,6 +1320,14 @@ private class SwarmNoticeButton: SwarmIconButton {
       NSBezierPath(roundedRect: badge, xRadius: 6, yRadius: 6).fill()
       text.draw(at: NSPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2),
         withAttributes: attributes)
+    }
+    if onboarding {
+      // A quiet next-step dot never replaces a red unread count.
+      let offset: CGFloat = attention > 0 ? 19 : 3
+      let y = isFlipped ? bounds.minY + offset : bounds.maxY - offset - 6
+      NSColor(calibratedRed: 0.60, green: 0.76, blue: 0.93,
+        alpha: isEnabled ? 1 : 0.45).setFill()
+      NSBezierPath(ovalIn: NSRect(x: bounds.maxX - 7, y: y, width: 6, height: 6)).fill()
     }
   }
 
@@ -1559,6 +1568,17 @@ private final class SwarmTabStrip: NSView {
       sessionsButton.toolTip = attention > 0
         ? "Harnesses · \(unreadState) · \(attentionState)"
         : "Harnesses · \(unreadState)"
+    }
+    let onboarding = state["onboarding"] as? String
+    for (button, step, action) in [
+      (machinesButton as SwarmNoticeButton, "machines", "Use your harnesses from another computer"),
+      (modelsButton as SwarmNoticeButton, "models", "Power a harness with local AI"),
+      (sessionsButton as SwarmNoticeButton, "harnesses", "Run your first harness"),
+    ] {
+      button.onboarding = onboarding == step
+      if button.onboarding {
+        button.setAccessibilityValue("\(button.accessibilityValue() as? String ?? ""), Suggested next step: \(action)")
+      }
     }
     needsLayout = true
     layoutSubtreeIfNeeded()

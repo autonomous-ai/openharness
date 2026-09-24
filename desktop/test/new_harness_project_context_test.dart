@@ -28,6 +28,7 @@ class _Folders extends WsConn {
 
   final paths = <String?>[];
   Completer<Map<String, dynamic>>? pendingHome;
+  final pending = <String, Completer<Map<String, dynamic>>>{};
 
   @override
   Future<Map<String, dynamic>> request(
@@ -40,6 +41,7 @@ class _Folders extends WsConn {
     if (type != 'fs_list_dir') throw StateError('Unexpected request: $type');
     final path = payload['path'] as String?;
     paths.add(path);
+    if (pending[path] case final reply?) return reply.future;
     if (path == null && pendingHome != null) return pendingHome!.future;
     return {
       'path': path ?? '/home/$machineId',
@@ -55,6 +57,102 @@ class _Folders extends WsConn {
 
 void main() {
   final input = find.byKey(const ValueKey('new-harness-input'));
+
+  testWidgets(
+    'remote folders refresh on revisit, retain matches, and never read on each keystroke',
+    (tester) async {
+      final folders = _Folders('m');
+      final app = createApp(connectionForTest: (_) => folders);
+      final box = NewHarnessController(app, machineId: 'm', engine: 'codex');
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      box.focusField(NewHarnessField.project);
+      box.setQuery('/home/m/work/pa');
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(box.options.any((row) => row.title == 'payments'), true);
+      final firstReads = folders.paths
+          .where((path) => path == '/home/m/work')
+          .length;
+      for (final query in ['pay', 'paym', 'payments']) {
+        box.setQuery('/home/m/work/$query');
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        folders.paths.where((path) => path == '/home/m/work').length,
+        firstReads,
+      );
+      final reply = folders.pending['/home/m/work'] = Completer();
+      box.focusField(NewHarnessField.projectMenu);
+      box.focusField(NewHarnessField.project);
+      box.setQuery('/home/m/work/pay');
+      expect(box.options.any((row) => row.title == 'payments'), true);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        folders.paths.where((path) => path == '/home/m/work').length,
+        firstReads + 1,
+      );
+      reply.complete({
+        'path': '/home/m/work',
+        'entries': [
+          {'name': 'payments', 'isDir': true},
+          {'name': 'payments-api', 'isDir': true},
+        ],
+      });
+      await tester.pump();
+      expect(box.query, '/home/m/work/pay');
+      expect(box.selected!.title, 'payments');
+      expect(box.options.any((row) => row.title == 'payments-api'), true);
+      final failed = folders.pending['/home/m/work'] = Completer();
+      box.refreshChoices();
+      await tester.pump(const Duration(milliseconds: 100));
+      failed.complete({'error': 'UNREACHABLE'});
+      await tester.pump();
+      expect(box.options.any((row) => row.title == 'payments-api'), true);
+      expect(box.choicesStatus, contains('Couldn’t refresh folders'));
+      box.setQuery('');
+      expect(box.canRefreshChoices, false);
+      expect(box.choicesStatus, isNull);
+    },
+  );
+
+  testWidgets('new project names refresh their parent folder on revisit', (
+    tester,
+  ) async {
+    final folders = _Folders('m');
+    final app = createApp(connectionForTest: (_) => folders);
+    final box = NewHarnessController(app, machineId: 'm', engine: 'codex');
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.projectName);
+    box.setQuery('toolbar');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(box.options.single.title, 'Create toolbar');
+    final firstReads = folders.paths
+        .where((path) => path == '/home/m/harnesses')
+        .length;
+    final reply = folders.pending['/home/m/harnesses'] = Completer();
+    box.focusField(NewHarnessField.projectMenu);
+    box.focusField(NewHarnessField.projectName);
+    for (final name in ['tool', 'toolba', 'toolbar']) {
+      box.setQuery(name);
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      folders.paths.where((path) => path == '/home/m/harnesses').length,
+      firstReads + 1,
+    );
+    reply.complete({
+      'path': '/home/m/harnesses',
+      'entries': [
+        {'name': 'toolbar', 'isDir': true},
+      ],
+    });
+    await tester.pump();
+    expect(box.query, 'toolbar');
+    expect(box.options.single.title, 'Open existing toolbar');
+  });
 
   Future<void> mount(WidgetTester tester, NewHarnessController box) async {
     await tester.pumpWidget(
