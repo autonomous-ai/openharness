@@ -23,6 +23,7 @@ import '../core/agent_preference.dart';
 import '../core/engine_availability.dart';
 import '../core/device_name.dart';
 import '../core/local_hostname.dart';
+import '../core/permission_modes.dart';
 import '../core/local_git_projects.dart';
 import '../core/last_opened_agent.dart';
 import '../core/phone_search_history.dart';
@@ -4834,7 +4835,7 @@ class AppNotifier extends ChangeNotifier {
     required String engine,
     required String folder,
     ProjectFolderRequest? projectFolder,
-    bool bypassPermission = false,
+    String? permissionMode,
     String? codexHome,
     String? swarmId,
     PaneSplitRequest? split,
@@ -4845,7 +4846,16 @@ class AppNotifier extends ChangeNotifier {
       'engine': engine,
       if (projectFolder == null) 'cwd': folder,
       ...?projectFolder?.payload,
-      'bypassPermission': bypassPermission,
+      'permissionMode': ?permissionMode,
+      // ⚠️ **Both keys, and the older one is not redundant.** `permissionMode`
+      // is the whole menu (`core/permission_modes.dart`); `bypassPermission` is
+      // the yes/no a daemon from before that menu understands, and it is all
+      // such a machine reads. Sent alone, "Plan first" on an old machine would
+      // launch as "approve everything" — so the boolean is derived from the
+      // mode rather than asked for separately. See [permissionModeApproves].
+      'bypassPermission': permissionMode == null
+          ? false
+          : permissionModeApproves(permissionMode),
       'codexHome': ?codexHome,
     };
     if (creation._choices != null &&
