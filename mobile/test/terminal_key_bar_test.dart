@@ -7,14 +7,12 @@ void main() {
   late Terminal terminal;
   late List<String> outbound;
   late int dismissals;
-  late int clears;
   late int edits;
 
   setUp(() {
     terminal = Terminal(maxLines: 200, reflowEnabled: false)..resize(80, 12);
     outbound = [];
     dismissals = 0;
-    clears = 0;
     edits = 0;
     terminal.onOutput = outbound.add;
   });
@@ -29,7 +27,6 @@ void main() {
               terminal: terminal,
               enabled: enabled,
               onDismissKeyboard: () => dismissals++,
-              onClearPrompt: () => clears++,
               onPromptEdited: () => edits++,
             ),
           ),
@@ -57,30 +54,58 @@ void main() {
     expect(outbound, ['\x1b', '\x1b[D', '\x1b[A', '\x1b[B', '\x1b[C']);
   });
 
-  testWidgets('tab and / reach the pty and empty the keyboard buffer', (
+  testWidgets('tab reaches the pty and empties the keyboard buffer', (
     tester,
   ) async {
     await pumpBar(tester);
 
     await tapKey(tester, 'tab');
-    await tapKey(tester, '/');
 
-    expect(outbound, ['\t', '/']);
-    expect(edits, 2);
+    expect(outbound, ['\t']);
+    expect(edits, 1);
   });
 
-  testWidgets('clear hands the prompt to its owner to empty', (tester) async {
+  /// ⚠️ **The modifiers are the app's own, and they have to be.** A software
+  /// keyboard never tells an app whether its Shift is down — it hands over the
+  /// resulting character and keeps the state to itself — so a terminal on a
+  /// phone cannot borrow it. These two are tapped, stay down, and are spent by
+  /// the next key the bar sends.
+  testWidgets('ctrl arms, modifies the next key, and puts itself down', (
+    tester,
+  ) async {
     await pumpBar(tester);
 
-    await tapKey(tester, 'clear');
+    await tapKey(tester, 'ctrl');
+    await tapKey(tester, 'Right');
+    // ⌃→ walks a word on every shell here; the plain arrow moves one column.
+    expect(outbound, ['\x1b[1;5C']);
 
-    expect(clears, 1);
+    // Spent: the arrow after it is a plain arrow again.
+    await tapKey(tester, 'Right');
+    expect(outbound, ['\x1b[1;5C', '\x1b[C']);
   });
 
-  testWidgets('the row holds no Enter, ctrl or digits', (tester) async {
+  testWidgets('shift does the same, and either can be put down unspent', (
+    tester,
+  ) async {
     await pumpBar(tester);
 
-    for (final gone in ['Enter', 'ctrl', '1', '0']) {
+    await tapKey(tester, 'shift');
+    await tapKey(tester, 'Left');
+    expect(outbound, ['\x1b[1;2D']);
+
+    // Armed and tapped again: nothing is sent and nothing stays down.
+    outbound.clear();
+    await tapKey(tester, 'ctrl');
+    await tapKey(tester, 'ctrl');
+    await tapKey(tester, 'Up');
+    expect(outbound, ['\x1b[A']);
+  });
+
+  testWidgets('the row holds no Enter or digits', (tester) async {
+    await pumpBar(tester);
+
+    for (final gone in ['Enter', '1', '0']) {
       expect(
         find.byKey(ValueKey('terminal-key-$gone')),
         findsNothing,
