@@ -47,7 +47,7 @@ appendFileSync(join(home, 'calls.jsonl'), JSON.stringify(args) + '\\n');
 const result = value => console.log(JSON.stringify(value));
 if (args[0] === 'device-info') result({ usable_bytes: 16 * 1024 ** 3, device_class: 'cpu', backend: 'cpu', memory: { total_gb: 16 } });
 else if (args.includes('ls')) result([{ grid: 'home', id: 'fixture-grid' }]);
-else if (args.includes('engines')) result(existsSync(record) ? [{ node_id: 'fixture-node', online: true, models: ['tiny.gguf'] }] : []);
+else if (args.includes('engines')) result(existsSync(record) ? [{ node_id: 'fixture-node', online: true, models: ['tiny'] }] : []);
 else if (args[0] === 'pull') { mkdirSync(join(home, 'models'), { recursive: true }); process.stderr.write('42%\\r100%\\n'); writeFileSync(join(home, 'models', 'tiny.gguf'), Buffer.alloc(64)); }
 else if (args[0] === 'engine') { mkdirSync(join(home, 'bin'), { recursive: true }); writeFileSync(join(home, 'bin', 'llama-server'), '#!/bin/sh\\nexit 0\\n', { mode: 0o700 }); }
 else if (args.includes('join')) { mkdirSync(recordDir, { recursive: true }); writeFileSync(record, JSON.stringify({ node_id: 'fixture-node', engines: [{ models: ['tiny.gguf'] }] })); writeFileSync(join(recordDir, 'remote.heartbeat'), ''); }

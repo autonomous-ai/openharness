@@ -228,6 +228,23 @@ describe('local model discovery and lifecycle', () => {
     expect(view.models[0].requests).toBeUndefined()
   })
 
+  it.each(['small-q4', { model: 'small-q4' }])('matches Grid’s canonical model names after start: %j', async alias => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const record = JSON.parse(await readFile(join(records, 'remote.json'), 'utf8'))
+    record.meta_name = 'My laptop'
+    await writeFile(join(records, 'remote.json'), JSON.stringify(record))
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('engines') ? ok([{
+      name: 'My laptop', online: true, models: [alias], throughput_tok_s: 12,
+      answered: { requests: 99, window_seconds: 86400, by_model: [
+        { model: 'small-q8', requests: 95 }, { model: 'small-q4', requests: 4 },
+      ] },
+    }]) : original(args, output))
+    expect((await service.list('home')).models[0]).toMatchObject({
+      state: 'running', canStop: true, tokensPerSecond: 12, requests: 4, windowSeconds: 86400,
+    })
+  })
+
   it('encrypts inventory and lifecycle requests and responses', () => {
     for (const type of ['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
       expect(encryptDownFrame(type)).toBe(true); expect(encryptRpcResult(`${type}_result`)).toBe(true)

@@ -15,6 +15,8 @@ const str = (v: unknown): string => typeof v === 'string' ? v : ''
 const num = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
 const key = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 24)
 const cleanName = (v: string): string => basename(v).replace(/\.gguf$/i, '').replace(/-GGUF$/i, '')
+// Grid advertises a GGUF filename as a lowercase model name without its extension.
+const modelKey = (v: string): string => v.toLowerCase().replace(/\.gguf$/, '')
 const validArg = (v: string): boolean => !!v && !v.startsWith('-') && !/[\x00-\x1f]/.test(v)
 
 export interface LocalModel {
@@ -285,7 +287,7 @@ export class LocalModels {
         (str(n.node_id || n.id) ? str(n.node_id || n.id) === instance.nodeId :
           !!instance.name && str(n.name) === instance.name) &&
         instance.aliases.every(alias => (Array.isArray(n.models) ? n.models : []).some((m: unknown) =>
-          str(typeof m === 'string' ? m : obj(m).model).toLowerCase() === alias.toLowerCase()))) : []
+          modelKey(str(typeof m === 'string' ? m : obj(m).model)) === modelKey(alias)))) : []
       return matches.length === 1 ? matches[0] : undefined
     }
     const models = await Promise.all(choices.map(async (candidate, index): Promise<LocalModel> => {
@@ -294,7 +296,7 @@ export class LocalModels {
       const running = !!node
       const available = await this.downloaded(candidate)
       const answered = obj(node?.answered)
-      const perModel = rows(answered.by_model).find(a => instance?.aliases.some(alias => alias.toLowerCase() === str(a.model).toLowerCase()))
+      const perModel = rows(answered.by_model).find(a => instance?.aliases.some(alias => modelKey(alias) === modelKey(str(a.model))))
       const single = Array.isArray(node?.models) && node.models.length === 1
       return { id: candidate.id, name: candidate.name, state: running ? 'running' : available ? 'downloaded' : 'available',
         sizeBytes: candidate.size, quant: candidate.quant, recommended: index === 0,
