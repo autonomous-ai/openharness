@@ -26,18 +26,21 @@ void main() {
         home: Scaffold(
           body: SizedBox(
             width: 500,
-            child: PaneHeaderActions(
-              zoomed: false,
-              onZoom: () {},
-              details: const Text('branch-name'),
-              trailing: PullRequestBadge(
-                identity: 'branch',
-                read: () async => {
-                  'status': 'found',
-                  'number': 12,
-                  'state': 'Open',
-                  'url': 'https://github.com/acme/repo/pull/12',
-                },
+            height: 46,
+            child: PaneHeaderHover(
+              child: PaneHeaderActions(
+                zoomed: false,
+                onZoom: () {},
+                details: const Text('branch-name'),
+                trailing: PullRequestBadge(
+                  identity: 'branch',
+                  read: () async => {
+                    'status': 'found',
+                    'number': 12,
+                    'state': 'Open',
+                    'url': 'https://github.com/acme/repo/pull/12',
+                  },
+                ),
               ),
             ),
           ),
@@ -45,6 +48,7 @@ void main() {
       ),
     );
     await tester.pump();
+    expect(find.byTooltip('Zoom Pane').hitTestable(), findsNothing);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('PR #12 · Open')));
@@ -52,6 +56,11 @@ void main() {
     expect(find.text('branch-name').hitTestable(), findsOneWidget);
     expect(find.text('PR #12 · Open').hitTestable(), findsOneWidget);
     expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
+    await mouse.moveTo(const Offset(600, 100));
+    await tester.pump();
+    expect(find.byTooltip('Zoom Pane').hitTestable(), findsNothing);
+    expect(find.text('branch-name').hitTestable(), findsOneWidget);
+    expect(find.text('PR #12 · Open').hitTestable(), findsOneWidget);
     await mouse.removePointer();
     await tester.pumpWidget(const SizedBox());
   });

@@ -40,8 +40,15 @@ to pane titles.
 Keep three muted ASCII controls at the right of a harness pane: `-` closes only
 that view, `[]` toggles zoom, and `x` stops the harness after confirmation. Each
 control occupies two character columns. Use the terminal font and palette,
-plain text, and a subtle hover/focus fill. Retain descriptive tooltips and
-keyboard/accessibility labels; never rely on the symbols alone.
+plain text, and a subtle hover/focus fill. Reveal these controls only while the
+pointer is over that pane's top bar, or a control has keyboard focus. Hovering
+the terminal body does not reveal them. Reserve their columns while hidden so
+the title never shifts, and keep keyboard traversal available. Retain
+descriptive tooltips and accessibility labels; never rely on the symbols alone.
+
+Pane edges have no floating split buttons. Split Right and Split Down remain
+keyboard commands (Cmd-R and Cmd-D by default), with File menu and command-search
+access. Keep the resize gaps available for resizing.
 
 Restart Harness and Share Harness belong in File. Fork remains available in
 command search. Viewer and message-composer toggles belong in View and command

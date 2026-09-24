@@ -35,7 +35,6 @@ import 'terminal_panel.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
 import 'box_chrome.dart';
-import 'pane_split_edges.dart';
 import 'pane_minimize.dart';
 
 /// Terminal views arranged by the chosen preset. Swarms keep each view under
@@ -46,13 +45,11 @@ class PaneGrid extends StatelessWidget {
     required this.notifier,
     this.swarmMode = false,
     this.empty,
-    this.onSplit,
   });
 
   final AppNotifier notifier;
   final bool swarmMode;
   final Widget? empty;
-  final void Function(int paneId, PaneResizeAxis axis)? onSplit;
 
   @override
   Widget build(BuildContext context) {
@@ -65,7 +62,6 @@ class PaneGrid extends StatelessWidget {
             notifier: notifier,
             dragging: dragging,
             empty: empty,
-            onSplit: onSplit,
           );
         }
         final panes = notifier.panes;
@@ -226,12 +222,10 @@ class _SwarmCanvas extends StatefulWidget {
     required this.notifier,
     required this.dragging,
     this.empty,
-    this.onSplit,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
-  final void Function(int paneId, PaneResizeAxis axis)? onSplit;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -453,13 +447,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       single: app.panes.length == 1,
       pinned: app.isPanePinned(pane),
       zoomed: app.zoomedPaneId == pane.id,
-      canSplit: app.canAddPane,
-      splitRight:
-          widget.onSplit != null &&
-          app.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) != null,
-      splitDown:
-          widget.onSplit != null &&
-          app.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) != null,
       composer: pane.composerVisible,
       blocked:
           app.questionFor(pane.machineId, pane.agentId ?? session.agentId) !=
@@ -567,7 +554,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     dragging: widget.dragging,
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
-                                    onSplit: widget.onSplit,
                                   ),
                                 ),
                               ),
@@ -1160,7 +1146,6 @@ class _PaneCell extends StatelessWidget {
     required this.dragging,
     this.visible = true,
     this.swarmMode = false,
-    this.onSplit,
   });
 
   final AppNotifier notifier;
@@ -1168,7 +1153,6 @@ class _PaneCell extends StatelessWidget {
   final AgentDragRef? dragging;
   final bool visible;
   final bool swarmMode;
-  final void Function(int paneId, PaneResizeAxis axis)? onSplit;
 
   bool get _single => notifier.panes.length == 1;
 
@@ -1200,108 +1184,77 @@ class _PaneCell extends StatelessWidget {
       // step with the one the keyboard already went to.
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => notifier.focusPane(pane.id),
-      child: ValueListenableBuilder<PaneDragRef?>(
-        valueListenable: paneDragging,
-        builder: (context, inFlight, child) => onSplit == null
-            ? child!
-            : PaneSplitEdges(
-                enabled:
-                    swarmMode &&
-                    visible &&
-                    agentId != null &&
-                    notifier.zoomedPaneId == null &&
-                    notifier.canAddPane &&
-                    dragging == null &&
-                    inFlight == null,
-                canSplitRight:
-                    notifier.preparePaneSplit(
-                      PaneResizeAxis.x,
-                      paneId: pane.id,
-                    ) !=
-                    null,
-                canSplitDown:
-                    notifier.preparePaneSplit(
-                      PaneResizeAxis.y,
-                      paneId: pane.id,
-                    ) !=
-                    null,
-                onSplit: onSplit == null
-                    ? null
-                    : (axis) => onSplit!(pane.id, axis),
-                child: child!,
-              ),
-        child: Container(
-          decoration: BoxDecoration(
-            // UNCHANGED, and deliberately: the terminal renders its own background
-            // inside this box, so a tile that stops matching the window colour
-            // shows a seam between the header strip and the terminal under it.
-            // What changes to make the gaps visible is the field BEHIND the grid
-            // (see _GridField), which is the part the gaps actually show.
-            color: grid.AppPalette.windowBg,
-            borderRadius: BorderRadius.circular(_paneRadius),
-            // The rim is always drawn — it is what gives an unfocused card its
-            // edge, now that no shared line does. It only CHANGES COLOUR on
-            // focus, so nothing resizes as focus moves.
-            border: Border.fromBorderSide(
-              // A lone pane needs no focus distinction. Dialogs use this same
-              // rim in its focused state while they own the keyboard.
-              terminalPaneBorder(focused: !_single && focused),
-            ),
+      child: Container(
+        decoration: BoxDecoration(
+          // UNCHANGED, and deliberately: the terminal renders its own background
+          // inside this box, so a tile that stops matching the window colour
+          // shows a seam between the header strip and the terminal under it.
+          // What changes to make the gaps visible is the field BEHIND the grid
+          // (see _GridField), which is the part the gaps actually show.
+          color: grid.AppPalette.windowBg,
+          borderRadius: BorderRadius.circular(_paneRadius),
+          // The rim is always drawn — it is what gives an unfocused card its
+          // edge, now that no shared line does. It only CHANGES COLOUR on
+          // focus, so nothing resizes as focus moves.
+          border: Border.fromBorderSide(
+            // A lone pane needs no focus distinction. Dialogs use this same
+            // rim in its focused state while they own the keyboard.
+            terminalPaneBorder(focused: !_single && focused),
           ),
-          // Attention, drawn OVER the terminal and inside the border above, so a
-          // pane can carry both at once — this one is blocked AND focused is a
-          // normal state, not a conflict to resolve. It is amber and 2px against
-          // the border's 1px accent precisely so the two never read as each
-          // other. Unlike focus, it shows on a single pane too: with one tile
-          // there is nowhere else focus could be, but there is very much a
-          // question waiting.
-          foregroundDecoration: blocked
-              ? BoxDecoration(
-                  border: Border.all(color: grid.AppPalette.warn, width: 2),
-                  borderRadius: BorderRadius.circular(_paneRadius),
-                )
-              : null,
-          // Keeps a terminal's constant repainting inside its own layer instead
-          // of dirtying the whole grid. No key: nothing reads this boundary, it
-          // only has to exist.
-          child: ClipRRect(
-            // Clipped HERE rather than through Container's own clipBehavior.
-            //
-            // Both clip, but they clip to different shapes: Container's is the
-            // decoration's OUTER edge, so the child fills the full radius and
-            // paints under the rim, leaving a square-shouldered corner peeking
-            // through the 1px the rim occupies. This one takes the rim's pixel
-            // off the radius, so the fill stops exactly where the rim starts.
-            //
-            // TerminalPanel opens with a ColoredBox across its whole box, and
-            // that is what was reaching the corners.
-            borderRadius: BorderRadius.circular(_paneRadius - 1),
-            child: RepaintBoundary(
-              child: _FileDropZone(
+        ),
+        // Attention, drawn OVER the terminal and inside the border above, so a
+        // pane can carry both at once — this one is blocked AND focused is a
+        // normal state, not a conflict to resolve. It is amber and 2px against
+        // the border's 1px accent precisely so the two never read as each
+        // other. Unlike focus, it shows on a single pane too: with one tile
+        // there is nowhere else focus could be, but there is very much a
+        // question waiting.
+        foregroundDecoration: blocked
+            ? BoxDecoration(
+                border: Border.all(color: grid.AppPalette.warn, width: 2),
+                borderRadius: BorderRadius.circular(_paneRadius),
+              )
+            : null,
+        // Keeps a terminal's constant repainting inside its own layer instead
+        // of dirtying the whole grid. No key: nothing reads this boundary, it
+        // only has to exist.
+        child: ClipRRect(
+          // Clipped HERE rather than through Container's own clipBehavior.
+          //
+          // Both clip, but they clip to different shapes: Container's is the
+          // decoration's OUTER edge, so the child fills the full radius and
+          // paints under the rim, leaving a square-shouldered corner peeking
+          // through the 1px the rim occupies. This one takes the rim's pixel
+          // off the radius, so the fill stops exactly where the rim starts.
+          //
+          // TerminalPanel opens with a ColoredBox across its whole box, and
+          // that is what was reaching the corners.
+          borderRadius: BorderRadius.circular(_paneRadius - 1),
+          child: RepaintBoundary(
+            child: _FileDropZone(
+              notifier: notifier,
+              pane: pane,
+              child: _SwapZone(
                 notifier: notifier,
-                pane: pane,
-                child: _SwapZone(
+                paneId: pane.id,
+                child: _DropZone(
                   notifier: notifier,
                   paneId: pane.id,
-                  child: _DropZone(
-                    notifier: notifier,
-                    paneId: pane.id,
-                    dragging: dragging,
-                    child: ValueListenableBuilder<PaneDragRef?>(
-                      valueListenable: paneDragging,
-                      // The tile being carried fades where it sits, so the grid shows
-                      // where it came FROM while the ghost shows where it is going.
-                      builder: (context, inFlight, child) => Opacity(
-                        opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
-                        child: child,
-                      ),
-                      child: _PaneContent(
-                        notifier: notifier,
-                        pane: pane,
-                        single: _single,
-                        visible: visible,
-                        swarmMode: swarmMode,
-                      ),
+                  dragging: dragging,
+                  child: ValueListenableBuilder<PaneDragRef?>(
+                    valueListenable: paneDragging,
+                    // The tile being carried fades where it sits, so the grid shows
+                    // where it came FROM while the ghost shows where it is going.
+                    builder: (context, inFlight, child) => Opacity(
+                      opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
+                      child: child,
+                    ),
+                    child: _PaneContent(
+                      notifier: notifier,
+                      pane: pane,
+                      single: _single,
+                      visible: visible,
+                      swarmMode: swarmMode,
                     ),
                   ),
                 ),

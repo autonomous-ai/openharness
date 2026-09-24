@@ -5,6 +5,41 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 
+/// Reveals only this header's controls, not those of the whole pane or grid.
+class PaneHeaderHover extends StatefulWidget {
+  const PaneHeaderHover({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<PaneHeaderHover> createState() => _PaneHeaderHoverState();
+}
+
+class _PaneHeaderHoverState extends State<PaneHeaderHover> {
+  bool _hovered = false;
+
+  void _hover(bool value) {
+    if (_hovered != value) setState(() => _hovered = value);
+  }
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => _hover(true),
+    onExit: (_) => _hover(false),
+    child: _PaneHeaderHoverScope(hovered: _hovered, child: widget.child),
+  );
+}
+
+class _PaneHeaderHoverScope extends InheritedWidget {
+  const _PaneHeaderHoverScope({required this.hovered, required super.child});
+
+  final bool hovered;
+
+  @override
+  bool updateShouldNotify(_PaneHeaderHoverScope oldWidget) =>
+      hovered != oldWidget.hovered;
+}
+
 /// Three quiet terminal characters: close this view, zoom, and stop its harness.
 class PaneHeaderActions extends StatelessWidget {
   const PaneHeaderActions({
@@ -92,15 +127,59 @@ class PaneHeaderActions extends StatelessWidget {
               ],
             ),
           ),
-        action('-', 'Close Pane', onClose),
-        action(
-          '[]',
-          zoomed ? 'Restore Pane' : 'Zoom Pane',
-          onZoom,
-          toggled: zoomed,
+        _HoverControls(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              action('-', 'Close Pane', onClose),
+              action(
+                '[]',
+                zoomed ? 'Restore Pane' : 'Zoom Pane',
+                onZoom,
+                toggled: zoomed,
+              ),
+              action(
+                'x',
+                terminal ? 'Stop Terminal' : 'Stop Harness',
+                onDelete,
+              ),
+            ],
+          ),
         ),
-        action('x', terminal ? 'Stop Terminal' : 'Stop Harness', onDelete),
       ],
+    );
+  }
+}
+
+class _HoverControls extends StatefulWidget {
+  const _HoverControls({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_HoverControls> createState() => _HoverControlsState();
+}
+
+class _HoverControlsState extends State<_HoverControls> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final header = context
+        .dependOnInheritedWidgetOfExactType<_PaneHeaderHoverScope>();
+    final visible = (header?.hovered ?? true) || _focused;
+    return Focus(
+      canRequestFocus: false,
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: IgnorePointer(
+        ignoring: !visible,
+        child: Opacity(
+          key: const ValueKey('pane-header-controls'),
+          opacity: visible ? 1 : 0,
+          alwaysIncludeSemantics: true,
+          child: widget.child,
+        ),
+      ),
     );
   }
 }
