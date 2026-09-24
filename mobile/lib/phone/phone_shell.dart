@@ -62,7 +62,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final notices = widget.notifier.doneNotices.system;
+    final notices = widget.notifier.agentNotices.system;
     notices.opened.addListener(_openNoticedAgent);
     // Signed in is the first moment a notice could be worth anything, so it is
     // the moment to ask. The OS keeps the answer; every later ask is a no-op.
@@ -72,7 +72,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    widget.notifier.doneNotices.system.opened.removeListener(_openNoticedAgent);
+    widget.notifier.agentNotices.system.opened.removeListener(_openNoticedAgent);
     _linkedMachineId.dispose();
     _openAgentRequest.dispose();
     for (final controller in _heroControllers.values) {
@@ -149,7 +149,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// A tapped "agent finished" notice: that agent, as the home screen — the
   /// dial's drawer row opening its agent.
   void _openNoticedAgent() {
-    final opened = widget.notifier.doneNotices.system.opened;
+    final opened = widget.notifier.agentNotices.system.opened;
     final agent = opened.value;
     if (agent == null) return;
     opened.value = null;

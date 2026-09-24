@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
+import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -284,7 +285,7 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
       // The unread marks have their own notifier — see `notify/agent_unread.dart`.
       listenable: Listenable.merge([
         widget.notifier,
-        widget.notifier.doneNotices.unread,
+        widget.notifier.agentNotices.unread,
       ]),
       builder: (context, _) => _panel(context),
     );
@@ -379,7 +380,7 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
                     final entry = group.entries[index];
                     return DeskAgentRow(
                       entry: entry,
-                      unread: widget.notifier.doneNotices.unread.contains(
+                      unread: widget.notifier.agentNotices.unread.kindFor(
                         _refOf(entry),
                       ),
                       onScreen:
@@ -410,13 +411,13 @@ class DeskAgentRow extends StatelessWidget {
     required this.first,
     required this.last,
     required this.onTap,
-    this.unread = false,
+    this.unread,
   });
 
   final AgentEntry entry;
 
-  /// It finished a turn while you were elsewhere — see [SheetAgentTitle.unread].
-  final bool unread;
+  /// Its news nobody has gone to yet — see [SheetAgentTitle.unread].
+  final NoticeKind? unread;
 
   /// The agent on screen. It keeps its row — it is the one you came from, and
   /// the list would read as missing an agent without it — and wears the check

@@ -34,7 +34,7 @@ import '../core/project_history.dart';
 import '../core/retry.dart';
 import '../logging/app_log.dart';
 import '../logging/startup_trace.dart';
-import '../notify/done_announcer.dart';
+import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
@@ -410,9 +410,9 @@ class AppNotifier extends ChangeNotifier {
     ),
   );
 
-  /// What a finished turn is worth — a tap, an unread mark, a system notice —
-  /// decided by the dial's rule (`notify/done_notice.dart`).
-  final DoneAnnouncer doneNotices;
+  /// What a finished turn or a question is worth — a tap, an unread mark, a
+  /// system notice — decided by the dial's rules (`notify/`).
+  final AgentAnnouncer agentNotices;
 
   SessionPreviewKey previewKey(String machineId, Agent agent) =>
       (machineId: machineId, agentId: agent.id, sessionId: agent.sessionId);
@@ -602,8 +602,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// A tab renamed by hand, from a double tap on its name in the tabs panel.
   /// See [PhoneDesk.renameTab].
-  void renameDeskTab(String tabId, String name) =>
-      _desk.renameTab(tabId, name);
+  void renameDeskTab(String tabId, String name) => _desk.renameTab(tabId, name);
 
   /// An agent that already exists opens a tab of its own — the `+` on the tab
   /// row. See [PhoneDesk.createTabFor].
@@ -1274,7 +1273,7 @@ class AppNotifier extends ChangeNotifier {
   }) : _paneLayout = paneLayoutStore,
        // On the same terms as the stores below: no layout store means a test,
        // which must never reach the OS notification centre.
-       doneNotices = DoneAnnouncer(
+       agentNotices = AgentAnnouncer(
          system:
              systemNotices ??
              (paneLayoutStore == null
@@ -2837,7 +2836,7 @@ class AppNotifier extends ChangeNotifier {
     // ever read after a sign-in that this clears the way for.
     unawaited(_machineCache?.clear());
     sessionPreviews.clear();
-    doneNotices.unread.clearAll();
+    agentNotices.reset();
     expandedMachines.clear();
     selectedMachineId = null;
     status = AppStatus.unauthenticated;
@@ -4367,8 +4366,7 @@ class AppNotifier extends ChangeNotifier {
         .where((agent) => agent.id != agentId)
         .toList();
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
-    // An agent that no longer exists cannot be gone to.
-    doneNotices.unread.clear((
+    agentNotices.forgetAgent((
       machineId: machine.machine.machineId,
       agentId: agentId,
     ));
@@ -6953,6 +6951,11 @@ class AppNotifier extends ChangeNotifier {
                 known != null && known.sameAs(asked)
                 ? asked.withSince(known.since)
                 : asked;
+            // Whether it is NEWS is the announcer's to say, not [known]'s:
+            // `blockedAgents` is emptied on every dropped socket, and the
+            // re-announce that follows is the same question — see
+            // `notify/question_notice.dart`.
+            _announceQuestion(machine, asked);
           }
         }
         break;
@@ -6972,6 +6975,10 @@ class AppNotifier extends ChangeNotifier {
                   open.requestId == requestId)) {
             machine.blockedAgents.remove(agentId);
           }
+          agentNotices.questionClosed((
+            machineId: machine.machine.machineId,
+            agentId: agentId,
+          ), requestId: requestId is String ? requestId : null);
         }
         break;
       case 'turn_started':
@@ -7071,7 +7078,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// The agent on screen, when the app is in front of anybody.
   AgentRef? get _watchedAgent {
-    if (!doneNotices.inFront) return null;
+    if (!agentNotices.inFront) return null;
     final pane = focusedPane;
     final agentId = pane?.agentId;
     if (pane == null || agentId == null) return null;
@@ -7080,8 +7087,20 @@ class AppNotifier extends ChangeNotifier {
 
   void _seeWatchedAgent() {
     final watched = _watchedAgent;
-    if (watched != null) doneNotices.unread.clear(watched);
+    if (watched != null) agentNotices.unread.clear(watched);
   }
+
+  /// [agent] on [machine], as a notice names it.
+  NoticeAgent _noticeAgent(MachineState machine, Agent agent) => (
+    ref: (machineId: machine.machine.machineId, agentId: agent.id),
+    name: agent.displayName,
+    machine: machine.machine.displayName,
+  );
+
+  /// An agent this phone has not been told about is never announced: a notice
+  /// about it could not open anything.
+  Agent? _knownAgent(MachineState machine, String agentId) =>
+      machine.agents.where((a) => a.id == agentId).firstOrNull;
 
   /// One agent's turn ended: tell the person as the dial would — see
   /// `notify/done_notice.dart` for when that is a tap, a mark or a notice.
@@ -7091,19 +7110,33 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic> event,
     Map<String, dynamic> payload,
   ) {
-    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    final agent = _knownAgent(machine, agentId);
     if (agent == null) return;
-    final ref = (machineId: machine.machine.machineId, agentId: agentId);
-    doneNotices.turnEnded(
-      (ref: ref, name: agent.displayName, machine: machine.machine.displayName),
+    final who = _noticeAgent(machine, agent);
+    agentNotices.turnEnded(
+      who,
       turnEndFrom(
         event,
         payload,
         reply: sessionPreviews
-            .read(previewKey(ref.machineId, agent))
+            .read(previewKey(who.ref.machineId, agent))
             ?.turnReply,
       ),
-      watching: () => _watchedAgent == ref,
+      watching: () => _watchedAgent == who.ref,
+    );
+  }
+
+  /// An agent stopped to ask the person something — see
+  /// `notify/question_notice.dart`.
+  void _announceQuestion(MachineState machine, PendingQuestion asked) {
+    final agent = _knownAgent(machine, asked.agentId);
+    if (agent == null) return;
+    final who = _noticeAgent(machine, agent);
+    agentNotices.questionAsked(
+      who,
+      requestId: asked.requestId,
+      prompt: asked.prompt,
+      watching: () => _watchedAgent == who.ref,
     );
   }
 
@@ -7163,7 +7196,7 @@ class AppNotifier extends ChangeNotifier {
     }
     unawaited(_spokenTasks.close());
     sessionPreviews.dispose();
-    doneNotices.dispose();
+    agentNotices.dispose();
     _desk.dispose();
     super.dispose();
   }

@@ -2,14 +2,25 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
+import 'agent_notice.dart';
 import 'agent_unread.dart';
 
-/// The mark on one agent's row: it finished while you were elsewhere.
+/// A mark's colour says what the news is: amber for an agent waiting on you —
+/// the phone's "Waiting for you" tone — and the accent for one that finished.
+Color unreadColor(NoticeKind kind) => switch (kind) {
+  NoticeKind.question => AppPalette.warn,
+  NoticeKind.done => AppPalette.accent,
+};
+
+/// The mark on one agent's row: it finished, or asked something, while you
+/// were elsewhere.
 ///
-/// The row's own unread dot, iOS Mail's — small and in the accent, before the
-/// name, so it reads before the name does and never pushes anything else off.
+/// The row's own unread dot, iOS Mail's — small, before the name, so it reads
+/// before the name does and never pushes anything else off.
 class UnreadDot extends StatelessWidget {
-  const UnreadDot({super.key});
+  const UnreadDot({super.key, required this.kind});
+
+  final NoticeKind kind;
 
   static const double diameter = 8;
 
@@ -19,10 +30,7 @@ class UnreadDot extends StatelessWidget {
     width: diameter,
     height: diameter,
     margin: const EdgeInsets.only(right: 7),
-    decoration: const BoxDecoration(
-      color: AppPalette.accent,
-      shape: BoxShape.circle,
-    ),
+    decoration: BoxDecoration(color: unreadColor(kind), shape: BoxShape.circle),
   );
 }
 
@@ -55,7 +63,16 @@ class UnreadCountBadge extends StatelessWidget {
             Positioned(
               top: -4,
               right: -4,
-              child: IgnorePointer(child: _CountPill(count: count)),
+              child: IgnorePointer(
+                child: _CountPill(
+                  count: count,
+                  // Amber as soon as ONE of them is waiting on you: that is
+                  // the one the count is there to send you to.
+                  color: unreadColor(
+                    unread.anyQuestion ? NoticeKind.question : NoticeKind.done,
+                  ),
+                ),
+              ),
             ),
         ],
       );
@@ -64,9 +81,10 @@ class UnreadCountBadge extends StatelessWidget {
 }
 
 class _CountPill extends StatelessWidget {
-  const _CountPill({required this.count});
+  const _CountPill({required this.count, required this.color});
 
   final int count;
+  final Color color;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -76,7 +94,7 @@ class _CountPill extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 5),
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: AppPalette.accent,
+      color: color,
       borderRadius: BorderRadius.circular(9),
     ),
     child: Text(

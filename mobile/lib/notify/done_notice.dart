@@ -6,6 +6,8 @@
 /// step — a turn the dial stays quiet about must not make the phone buzz.
 library;
 
+import 'agent_notice.dart';
+
 /// One turn's end, as the machine socket reported it.
 ///
 /// The flags come straight off the `turn_ended` frame. Every one of them is
@@ -45,45 +47,17 @@ TurnEnd turnEndFrom(
   reply: reply,
 );
 
-/// What the phone does about one finished turn — escalating, each step doing
-/// everything the one before it does.
-enum DoneNotice {
-  /// Not news. Nothing at all.
-  none,
-
-  /// The person is looking straight at this agent. The tap still comes — the
-  /// dial's beep ALWAYS sounds, because somebody reading the last reply is not
-  /// watching for the next to end — but nothing is filed for later: they are
-  /// already where the news is.
-  chime,
-
-  /// The app is in front of the person, on something else. Chime, and mark the
-  /// agent unread — the dial's badge. Never more than that: an agent finishing
-  /// elsewhere must not yank anybody off what they are doing.
-  mark,
-
-  /// The app is not in front of anybody. Mark it, and post a system
-  /// notification — the dial waking its dark panel onto the drawer.
-  alert;
-
-  bool get chimes => this != none;
-  bool get marks => this == mark || this == alert;
-  bool get alerts => this == alert;
-}
-
 /// Decides what one turn's end is worth.
 ///
 /// [inFront] is whether the app is on screen at all; [watching] whether the
 /// agent it is showing is the one that finished — only meaningful in front.
-DoneNotice decideDoneNotice(
+AgentNotice decideDoneNotice(
   TurnEnd end, {
   required bool inFront,
   required bool watching,
 }) {
-  if (end.aborted || end.replay || end.subagent) return DoneNotice.none;
+  if (end.aborted || end.replay || end.subagent) return AgentNotice.none;
   final reply = end.reply;
-  if (reply == null || reply.trim().isEmpty) return DoneNotice.none;
-  if (!inFront) return DoneNotice.alert;
-  if (watching) return DoneNotice.chime;
-  return DoneNotice.mark;
+  if (reply == null || reply.trim().isEmpty) return AgentNotice.none;
+  return escalate(inFront: inFront, watching: watching);
 }

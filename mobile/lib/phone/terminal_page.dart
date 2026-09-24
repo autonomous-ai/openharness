@@ -1393,7 +1393,7 @@ class _TerminalPageState extends State<TerminalPage>
                                       session: session,
                                       onSearch: _openSearch,
                                       unread:
-                                          widget.notifier.doneNotices.unread,
+                                          widget.notifier.agentNotices.unread,
                                     ),
                                   ),
                               ],

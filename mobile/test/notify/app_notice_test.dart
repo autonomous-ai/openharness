@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../agent_pager_fixture.dart';
@@ -27,8 +28,33 @@ void main() {
     await send('turn_ended', endPayload);
   }
 
+  Future<void> ask(AppNotifier app, String agentId, {String id = 'q1'}) =>
+      app.handleEventForTest('m', {
+        'type': 'commander_question',
+        'agentId': agentId,
+        'payload': {
+          'requestId': id,
+          'questions': [
+            {
+              'q': 'Which database?',
+              'options': ['Postgres', 'SQLite'],
+            },
+          ],
+        },
+      });
+
+  Future<void> closeQuestion(AppNotifier app, String agentId, String id) =>
+      app.handleEventForTest('m', {
+        'type': 'commander_question_close',
+        'agentId': agentId,
+        'payload': {'requestId': id},
+      });
+
+  NoticeKind? kindOf(AppNotifier app, String agentId) =>
+      app.agentNotices.unread.kindFor((machineId: 'm', agentId: agentId));
+
   bool unread(AppNotifier app, String agentId) =>
-      app.doneNotices.unread.contains((machineId: 'm', agentId: agentId));
+      app.agentNotices.unread.contains((machineId: 'm', agentId: agentId));
 
   late AppNotifier app;
 
@@ -41,7 +67,7 @@ void main() {
   test('an agent finishing elsewhere is marked', () async {
     await turn(app, 'b');
     expect(unread(app, 'b'), isTrue);
-    expect(app.doneNotices.unread.count, 1);
+    expect(app.agentNotices.unread.count, 1);
   });
 
   test('the agent on screen is never marked', () async {
@@ -54,12 +80,12 @@ void main() {
     await turn(app, 'b', endPayload: {'aborted': true});
     await turn(app, 'b', end: {'subagent': true});
     await turn(app, 'b', end: {'replay': true});
-    expect(app.doneNotices.unread.count, 0);
+    expect(app.agentNotices.unread.count, 0);
   });
 
   test('a turn with nothing to say does not borrow the last one', () async {
     await turn(app, 'b');
-    app.doneNotices.unread.clearAll();
+    app.agentNotices.unread.clearAll();
     await turn(app, 'b', reply: null);
     expect(unread(app, 'b'), isFalse);
   });
@@ -78,5 +104,32 @@ void main() {
       'payload': <String, dynamic>{},
     });
     expect(unread(app, 'b'), isFalse);
+  });
+
+  group('questions', () {
+    test('a question elsewhere is marked as one', () async {
+      await ask(app, 'b');
+      expect(kindOf(app, 'b'), NoticeKind.question);
+    });
+
+    test('the agent on screen asking is never marked', () async {
+      await ask(app, 'a');
+      expect(unread(app, 'a'), isFalse);
+    });
+
+    test('answered elsewhere, the mark goes', () async {
+      await ask(app, 'b');
+      await closeQuestion(app, 'b', 'q1');
+      expect(unread(app, 'b'), isFalse);
+    });
+
+    test('a reconnect re-announcing it does not make it new', () async {
+      await ask(app, 'b');
+      app.agentNotices.unread.clearAll();
+      // The disconnect sweep empties `blockedAgents`; the daemon re-announces.
+      app.stateOf('m')!.blockedAgents.clear();
+      await ask(app, 'b');
+      expect(unread(app, 'b'), isFalse);
+    });
   });
 }

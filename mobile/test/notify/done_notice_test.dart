@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/notify/done_notice.dart';
 
 /// The dial's rule for a finished turn — `firmware/main/cable_client.c`,
@@ -12,7 +13,7 @@ void main() {
     String? reply = 'Fixed the login screen.',
   }) => (aborted: aborted, replay: replay, subagent: subagent, reply: reply);
 
-  DoneNotice decide(TurnEnd e, {bool inFront = true, bool watching = false}) =>
+  AgentNotice decide(TurnEnd e, {bool inFront = true, bool watching = false}) =>
       decideDoneNotice(e, inFront: inFront, watching: watching);
 
   test('a turn that is not news is silent wherever the phone is', () {
@@ -24,21 +25,21 @@ void main() {
       end(reply: '  \n '),
     ]) {
       for (final inFront in [true, false]) {
-        expect(decide(e, inFront: inFront), DoneNotice.none, reason: '$e');
+        expect(decide(e, inFront: inFront), AgentNotice.none, reason: '$e');
       }
     }
   });
 
   test('watching the agent: the chime still comes, nothing is filed', () {
     final notice = decide(end(), watching: true);
-    expect(notice, DoneNotice.chime);
+    expect(notice, AgentNotice.chime);
     expect(notice.marks, isFalse);
     expect(notice.alerts, isFalse);
   });
 
   test('in front on another agent: a mark, never a notice', () {
     final notice = decide(end());
-    expect(notice, DoneNotice.mark);
+    expect(notice, AgentNotice.mark);
     expect(notice.chimes, isTrue);
     expect(notice.alerts, isFalse);
   });
@@ -46,7 +47,7 @@ void main() {
   test('away: marked and noticed, whatever was on screen', () {
     for (final watching in [true, false]) {
       final notice = decide(end(), inFront: false, watching: watching);
-      expect(notice, DoneNotice.alert);
+      expect(notice, AgentNotice.alert);
       expect(notice.marks, isTrue);
     }
   });
