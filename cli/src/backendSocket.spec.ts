@@ -13,6 +13,7 @@ import { stoppedAgents } from './lib/stoppedAgents.js'
 import { AgentStopError } from './lib/stopAgentService.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
+import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as storeCatalog from './dsh/catalog.js'
@@ -831,6 +832,79 @@ describe('BackendSocket outbound queue', () => {
     }))
 
     await socket.unregisterLocalClient('local:test')
+    await socket.stop()
+  })
+
+  it('serves machine stats locally without blocking the next RPC while sampling', async () => {
+    let finish!: (value: machineResources.MachineResources) => void
+    const read = vi.spyOn(machineResources, 'readMachineResources').mockImplementation(
+      () => new Promise(resolve => { finish = resolve }),
+    )
+    const socket = new BackendSocket('token')
+    socket.runtimeModelsProvider = async () => []
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:stats', {
+      sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
+    })
+    socket.handleLocalFrame('local:stats', { type: 'machine_resources', payload: { requestId: 'stats' } })
+    socket.handleLocalFrame('local:stats', { type: 'models_list', payload: { requestId: 'models' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({
+      type: 'models_list_result', payload: { requestId: 'models', models: [] },
+    }))
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(frames.some(frame => frame.type === 'machine_resources_result')).toBe(false)
+    finish({ cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 })
+    await vi.waitFor(() => expect(frames).toContainEqual({
+      type: 'machine_resources_result',
+      payload: { requestId: 'stats', cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 },
+    }))
+    read.mockRejectedValueOnce(new Error('unavailable'))
+    socket.handleLocalFrame('local:stats', { type: 'machine_resources', payload: { requestId: 'retry' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({
+      type: 'machine_resources_result', payload: { requestId: 'retry', error: 'UNAVAILABLE' },
+    }))
+    await socket.unregisterLocalClient('local:stats')
+    await socket.stop()
+  })
+
+  it('returns remote machine stats only in a targeted encrypted reply', async () => {
+    const reading = { cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 }
+    vi.spyOn(machineResources, 'readMachineResources').mockResolvedValue(reading)
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+      type: 'machine_resources', payload: { requestId: 'stats' },
+    })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const sealed = { type: 'machine_resources_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } }
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue(sealed)
+    ws.message({
+      t: 'down', connId: 'paired',
+      frame: { type: 'machine_resources', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } },
+    })
+    await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('paired', 'machine_resources_result', 'stats', reading))
+    expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'paired', frame: sealed }))
+    expect(ws.sent.some(frame => frame.includes('memoryUsedBytes'))).toBe(false)
+    await socket.stop()
+  })
+
+  it('rejects unpaired plaintext stats requests before sampling the machine', async () => {
+    const read = vi.spyOn(machineResources, 'readMachineResources')
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({
+      t: 'down', connId: 'unpaired',
+      frame: { type: 'machine_resources', payload: { requestId: 'stats' } },
+    })
+    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual(expect.objectContaining({
+      targetConnId: 'unpaired',
+      frame: { type: 'machine_resources_result', payload: { requestId: 'stats', error: 'E2EE_REQUIRED' } },
+    })))
+    expect(read).not.toHaveBeenCalled()
     await socket.stop()
   })
 

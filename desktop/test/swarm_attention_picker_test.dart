@@ -234,7 +234,7 @@ void main() {
       app.dismissError();
       await tester.pump();
       expect(find.text('No harnesses need your input'), findsOneWidget);
-      await tester.tap(find.byTooltip('Close Harness Monitor'));
+      await tester.tap(find.byTooltip('Close Harnesses'));
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());

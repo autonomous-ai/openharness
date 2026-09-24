@@ -910,11 +910,16 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       // With no machine to open an agent on, the start page's New goes to
-      // linking one, with the desktop and server setup choices in its picker.
-      expect(find.text('Link another machine'), findsOneWidget);
-      expect(find.text('Set up a desktop'), findsOneWidget);
-      expect(find.text('Set up a server over SSH'), findsOneWidget);
-      await tester.tap(find.text('esc  close'));
+      // the Machines panel, with desktop and server instructions one click away.
+      expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+      await tester.tap(find.text('Add a second machine'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('1. Open Harness on your other computer.'),
+        findsOneWidget,
+      );
+      expect(find.text('Set up a server…'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close Machines'));
       await tester.pumpAndSettle();
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());
@@ -1072,61 +1077,66 @@ void main() {
     },
   );
 
-  testWidgets('unlinked remote with a pending agent shows the link form', (
-    tester,
-  ) async {
-    final app = makeNotifier(AppStatus.authenticated);
-    const machine = Machine(
-      machineId: 'unlinked-machine',
-      apiKey: '',
-      authMode: MachineAuthMode.remote,
-      name: 'remote-mac',
-      status: 'online',
-    );
-    final state = MachineState(machine)
-      ..nodeOnline = false
-      ..needsLink = true
-      ..activeAgentId = 'previous-agent'
-      ..pendingOfflineAgentId = 'previous-agent'
-      ..agentLoadStatus = AgentLoadStatus.needsLink
-      ..agents = [
-        Agent.fromJson({
-          'id': 'previous-agent',
-          'name': 'previous-session',
-          'engine': 'claude',
-          'terminal': {
-            'runtimes': [
-              {'backend': 'tmux', 'paneId': '%1'},
-            ],
-          },
-        }),
-      ];
-    app.machines = [machine];
-    app.machineStates[machine.machineId] = state;
-    app.expandedMachines.add(machine.machineId);
-    app.selectedMachineId = machine.machineId;
-    await app.selectAgent(machine.machineId, 'previous-agent');
+  testWidgets(
+    'offline unlinked remote with a pending agent opens machine recovery',
+    (tester) async {
+      final app = makeNotifier(AppStatus.authenticated);
+      const machine = Machine(
+        machineId: 'unlinked-machine',
+        apiKey: '',
+        authMode: MachineAuthMode.remote,
+        name: 'remote-mac',
+        status: 'online',
+      );
+      final state = MachineState(machine)
+        ..nodeOnline = false
+        ..needsLink = true
+        ..activeAgentId = 'previous-agent'
+        ..pendingOfflineAgentId = 'previous-agent'
+        ..agentLoadStatus = AgentLoadStatus.needsLink
+        ..agents = [
+          Agent.fromJson({
+            'id': 'previous-agent',
+            'name': 'previous-session',
+            'engine': 'claude',
+            'terminal': {
+              'runtimes': [
+                {'backend': 'tmux', 'paneId': '%1'},
+              ],
+            },
+          }),
+        ];
+      app.machines = [machine];
+      app.machineStates[machine.machineId] = state;
+      app.expandedMachines.add(machine.machineId);
+      app.selectedMachineId = machine.machineId;
+      await app.selectAgent(machine.machineId, 'previous-agent');
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [appStateProvider.overrideWithValue(app)],
-        child: HarnessApp(authenticatedScreen: _swarm),
-      ),
-    );
-    // The link screen now arrives as a popup (a post-frame callback pushes a showDialog route
-    // with its own entrance transition), not a synchronous inline build — one pump() is no
-    // longer enough to see it.
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWithValue(app)],
+          child: HarnessApp(authenticatedScreen: _swarm),
+        ),
+      );
+      // The panel and its password field receive focus after the first frame.
+      await tester.pumpAndSettle();
 
-    expect(find.text('Link this machine'), findsOneWidget);
-    expect(
-      find.text('Enter the remote password set on this machine.'),
-      findsOneWidget,
-    );
-    expect(find.text('Harness is offline'), findsNothing);
-    expect(find.text('harness start'), findsNothing);
-    app.dispose();
-  });
+      expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField &&
+              widget.decoration?.hintText == 'Harness password',
+        ),
+        findsNothing,
+      );
+      expect(find.textContaining('Offline'), findsOneWidget);
+      expect(find.text('Harness is offline'), findsNothing);
+      expect(find.text('harness start'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   testWidgets('clicking the link-required prompt opens the link screen', (
     tester,
@@ -1167,26 +1177,25 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Link this machine'), findsNothing);
+    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyP);
-    await tester.enterText(
-      find.byKey(const ValueKey('harness-start-search')),
-      '> link machine',
-    );
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await chord(tester, LogicalKeyboardKey.keyM);
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
     await tester.tap(find.text('link-mac'));
     // Same popup-transition reasoning as above.
     await tester.pumpAndSettle();
 
-    expect(find.text('Link this machine'), findsOneWidget);
+    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
     expect(
-      find.text('Enter the remote password set on this machine.'),
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField &&
+            widget.decoration?.hintText == 'Harness password',
+      ),
       findsOneWidget,
     );
+    await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
 
@@ -1250,21 +1259,15 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Link this machine'), findsNothing);
+    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyP);
-    await tester.enterText(
-      find.byKey(const ValueKey('harness-start-search')),
-      '> link machine',
-    );
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await chord(tester, LogicalKeyboardKey.keyM);
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
     await tester.tap(find.text('link-mac'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Link this machine'), findsOneWidget);
+    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
     // No second pane was opened for the popup — just the one terminal pane that was
     // already there.
     expect(app.allPanes, hasLength(1));
@@ -1274,6 +1277,7 @@ void main() {
       find.text('link-mac is not linked to this computer yet.'),
       findsNothing,
     );
+    await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
 }

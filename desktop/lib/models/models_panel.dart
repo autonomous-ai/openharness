@@ -18,10 +18,12 @@ class ModelsPanel extends StatefulWidget {
     required this.subscriptions,
     required this.onClose,
     required this.onManage,
+    this.newModelIds = const {},
   });
   final ModelManagerController controller;
   final ModelsMenuController subscriptions;
   final VoidCallback onClose, onManage;
+  final Set<String> newModelIds;
   @override
   State<ModelsPanel> createState() => _ModelsPanelState();
 }
@@ -347,7 +349,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                             foregroundColor: AppPalette.textSecondary,
                             textStyle: AppType.monoMeta(),
                           ),
-                          child: const Text('Model Manager'),
+                          child: const Text('Manage models'),
                         ),
                       ],
                     ),
@@ -424,17 +426,32 @@ class _ModelsPanelState extends State<ModelsPanel> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Tooltip(
-                  message: model.name,
-                  child: Text(
-                    model.name,
-                    style: AppType.label(
-                      color: AppPalette.textPrimary,
-                      height: 1.3,
+                Row(
+                  children: [
+                    Flexible(
+                      child: Tooltip(
+                        message: model.name,
+                        child: Text(
+                          model.name,
+                          style: AppType.label(
+                            color: AppPalette.textPrimary,
+                            height: 1.3,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                    if (widget.newModelIds.contains(model.id)) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        'New',
+                        style: AppType.monoMeta(
+                          color: AppPalette.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Text(

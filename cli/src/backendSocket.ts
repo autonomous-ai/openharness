@@ -40,6 +40,7 @@ import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
+import { readMachineResources } from './lib/machineResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
@@ -1527,6 +1528,12 @@ export class BackendSocket {
 
     try {
       switch (type) {
+        case 'machine_resources':
+          // Sampling CPU must not hold up typing or other machine requests.
+          void readMachineResources()
+            .then(resources => reply(type, requestId, { ...resources }))
+            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
+          return
         case 'grid_fleet_models_list':
         case 'grid_fleet_model_start':
         case 'grid_fleet_model_stop': {
