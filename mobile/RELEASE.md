@@ -84,6 +84,7 @@ icon size in thirty seconds instead of in an email twenty minutes later.
 | `1.0.0 (36)` | 2026-09-23 | TestFlight. The mic becomes a morphing capsule: a live waveform and take timer while listening, and its own face for busy, sending, sent and retry; notices wrap to whole sentences and clear themselves |
 | `1.0.0 (37)` | 2026-09-24 | TestFlight. When the agent left on has been paused, the app opens the most recently active one — the desktop monitor's order — instead of the oldest; the banner over a terminal another app drives names that machine ("MacBookPro2021.local is using this terminal") when its CLI says who holds it |
 | `1.0.0 (38)` | 2026-09-24 | TestFlight. Tabs only: the "Other" group is gone, and a launch that cannot reopen the last agent opens the tab the phone was last in, on its first agent; search results follow the desktop's rules (every engine its machine can resume reads Paused and resumes, not "Resume unavailable"), and the terminal header reads like the desktop's pane header — the session's title, the repository rather than a worktree's folder, and no placeholder branch |
+| `1.0.0 (39)` | 2026-09-24 | TestFlight. A launch whose desk answers after its machines no longer sits on "Opening your tabs…" until the next desk poll (up to 15s): it opens the last tab's first agent as soon as the tabs land |
 
 `pubspec.yaml` is therefore at `1.0.0+30`: the repo always holds the NEXT build number, so a release
 runs clean without anyone having to remember the last one.
