@@ -1,6 +1,8 @@
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
+import 'package:harness_mobile/state/swarm.dart';
 
 import 'agent_index.dart';
 
@@ -64,19 +66,40 @@ List<DeskGroup> deskGroups(AppNotifier notifier, List<AgentEntry> visible) {
   if (tabs.isEmpty) {
     return [DeskGroup(id: null, name: kEveryAgentGroupName, entries: openable)];
   }
-  final byKey = {
-    for (final entry in openable)
+  Map<String, AgentEntry> keyed(Iterable<AgentEntry> entries) => {
+    for (final entry in entries)
       DeskPaneRef(machineId: entry.machineId, agentId: entry.agent.id).key:
           entry,
   };
+  final byKey = keyed(openable);
+  final known = keyed(visible);
   return [
     for (final tab in tabs)
       DeskGroup(
         id: tab.id,
-        name: tab.name,
+        name: deskTabName(
+          tab,
+          tab.panes.isEmpty ? null : known[tab.panes.first.key]?.agent,
+        ),
         entries: [for (final pane in tab.panes) ?byKey[pane.key]],
       ),
   ];
+}
+
+/// What a tab is called — the desktop's rule (`AppNotifier._syncAgentName`).
+///
+/// A name somebody gave it stands. Otherwise the tab is named after its first
+/// agent ([first]), and follows that agent's [Agent.displayName] as its session
+/// titles it — `Greet user` rather than the `Untitled Tab` the desk was left
+/// holding. An agent with no name of its own leaves the tab [Swarm.defaultName].
+///
+/// ⚠️ **Derived here, never written back.** Every window derives it the same
+/// way, and the desk syncs only names a person chose (`nameIsCustom`); writing a
+/// derived one would turn it into a chosen one on every computer.
+String deskTabName(DeskTab tab, Agent? first) {
+  if (tab.nameIsCustom || first == null) return tab.name;
+  final name = first.displayName;
+  return name == kUntitledPane ? Swarm.defaultName : name;
 }
 
 /// Whether [agent] is on none of the desk's tabs — one opened from search or a

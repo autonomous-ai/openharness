@@ -40,10 +40,17 @@ class DeskApi extends ApiClient {
   }
 }
 
-/// A tab of `m`'s agents, named.
-DeskTab deskTab(String id, String name, List<String> agentIds) => DeskTab(
+/// A tab of `m`'s agents, named — by hand unless [custom] is false, when the
+/// name is the desk's placeholder and the tab is called after its first agent.
+DeskTab deskTab(
+  String id,
+  String name,
+  List<String> agentIds, {
+  bool custom = true,
+}) => DeskTab(
   id: id,
   name: name,
+  nameIsCustom: custom,
   panes: [
     for (final agentId in agentIds)
       DeskPaneRef(machineId: 'm', agentId: agentId),

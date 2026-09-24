@@ -203,9 +203,9 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
           final group = DeskGroup(
             id: notifier.createDeskTabFor(
               _refOf(entry),
-              name: entry.agent.name,
+              name: entry.agent.displayName,
             ),
-            name: entry.agent.name,
+            name: entry.agent.displayName,
             entries: [entry],
           );
           if (group.id == null) return;

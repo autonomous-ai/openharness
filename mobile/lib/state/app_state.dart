@@ -5055,7 +5055,10 @@ class AppNotifier extends ChangeNotifier {
     // Created HERE, so it joins the tab this phone is in — the way an agent
     // created in a window joins that window's tab. See [PhoneDesk.adopt] for
     // what happens when the phone is in no tab.
-    _desk.adopt((machineId: machineId, agentId: agent.id), name: agent.name);
+    _desk.adopt(
+      (machineId: machineId, agentId: agent.id),
+      name: agent.displayName,
+    );
     await assignAgentToPane(
       null,
       machineId,

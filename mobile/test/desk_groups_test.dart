@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_index.dart';
 import 'package:harness_mobile/phone/desk_groups.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/desk_sync.dart';
 
 import 'agent_pager_fixture.dart';
 import 'desk_fixture.dart';
@@ -47,10 +49,10 @@ void main() {
   test('the agents no tab holds are in no group — there is no Other', () async {
     final built = await appWith(['a'], ['b']);
 
-    expect([for (final group in groupsOf(built)) group.name], [
-      'Desktop',
-      'Docker',
-    ]);
+    expect(
+      [for (final group in groupsOf(built)) group.name],
+      ['Desktop', 'Docker'],
+    );
     expect(isUntabbed(built, (machineId: 'm', agentId: 'c')), isTrue);
     expect(isUntabbed(built, (machineId: 'm', agentId: 'a')), isFalse);
   });
@@ -110,5 +112,45 @@ void main() {
     built.selectDeskTab('t2');
 
     expect(activeDeskGroup(built, groups, null).name, 'Docker');
+  });
+
+  group('a tab nobody named is called after its first agent', () {
+    Future<AppNotifier> named(List<DeskTab> tabs) async {
+      final built = await deskApp(conn, tabs: tabs);
+      addTearDown(built.dispose);
+      return built;
+    }
+
+    test('its display name, as the desktop names the tab', () async {
+      final built = await named([
+        deskTab('t1', 'Untitled Tab', ['c', 'a'], custom: false),
+      ]);
+      built.stateOf('m')!.agents = [
+        for (final agent in built.stateOf('m')!.agents)
+          agent.id == 'c'
+              ? Agent(id: 'c', name: 'harness-3', title: 'Greet user')
+              : agent,
+      ];
+
+      expect(groupsOf(built).single.name, 'Greet user');
+    });
+
+    test('a name somebody chose stands', () async {
+      final built = await named([
+        deskTab('t1', 'Docker', ['c']),
+      ]);
+
+      expect(groupsOf(built).single.name, 'Docker');
+    });
+
+    test('an agent with no name of its own leaves the placeholder', () {
+      final tab = deskTab('t1', 'Untitled Tab', ['c'], custom: false);
+
+      expect(
+        deskTabName(tab, const Agent(id: 'c', name: 'harness-3')),
+        'Untitled Tab',
+      );
+      expect(deskTabName(tab, null), 'Untitled Tab');
+    });
   });
 }
