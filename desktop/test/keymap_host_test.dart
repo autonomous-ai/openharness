@@ -76,6 +76,7 @@ void main() {
       ('cmd+p', 'navigation.commands'),
       ('cmd+shift+j', 'navigation.command_bar'),
       ('cmd+s', 'app.store'),
+      ('cmd+m', 'machines.list'),
       ('cmd+shift+l', 'pane.layout'),
       ('cmd+b', 'task.route'),
       ('cmd+shift+w', 'pane.close'),
@@ -97,7 +98,7 @@ void main() {
       final id = command(stroke.toString());
       expect(harnessCommandById[id]?.action, shortcut.action);
     }
-    for (final retired in ['cmd+shift+h', 'cmd+shift+k']) {
+    for (final retired in ['cmd+shift+h', 'cmd+shift+k', 'cmd+u']) {
       expect(command(retired), isNull, reason: retired);
     }
     expect(command('cmd+alt+left'), isNull);
@@ -136,7 +137,7 @@ void main() {
       final map = ResolvedKeymap(
         harnessDefaultBindings,
         KeymapConfig.parse(
-          '{"bindings":[{"keys":"cmd+h","command":"pane.focus_left"},{"keys":"cmd+k","command":null},{"keys":"cmd+k c","command":"pane.focus_right"}]}',
+          '{"bindings":[{"keys":"cmd+h","command":"pane.focus_left"},{"keys":"cmd+m","command":"machines.list"},{"keys":"cmd+k","command":null},{"keys":"cmd+k c","command":"pane.focus_right"}]}',
           commands: harnessCommandById.keys.toSet(),
         ),
       );

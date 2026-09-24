@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "complete": true,
+  "missingTrials": [],
+  "note": "Console logs remain private. Only listed fields were removed; timings and route evidence are unchanged.",
+  "artifacts": [
+    {
+      "file": "plan.json",
+      "sha256": "3e68efc55132b023fe156c31c9c877a57473e750ade0e2246d24fb60ceffb55f",
+      "redactions": []
+    },
+    {
+      "file": "office-p2p-1.json",
+      "sha256": "3c230195a73a796830a4db9b4c1bf8bf12ebf12207c7d150089fc00ae0a66039",
+      "sourceSha256": "19275bf10e8973ba85282c83667d452262be2a1940de3aa97b14a79fcce276cd",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "office-turn-1.json",
+      "sha256": "e650cffe83137b420ce8df2a9a9f35085bc6d91812eb26d9c794a0a44d453795",
+      "sourceSha256": "e650cffe83137b420ce8df2a9a9f35085bc6d91812eb26d9c794a0a44d453795",
+      "redactions": []
+    },
+    {
+      "file": "office-relay-1.json",
+      "sha256": "2396f8c0b2af4d08388332b7987ec63a82a0ebbdfa7ffc87ee88fa2f179114be",
+      "sourceSha256": "2396f8c0b2af4d08388332b7987ec63a82a0ebbdfa7ffc87ee88fa2f179114be",
+      "redactions": []
+    },
+    {
+      "file": "home-turn-1.json",
+      "sha256": "327e1543fdc60cd78ef2c17e1609f756db0f0b7a4e87dd878cbd0e353aec56a8",
+      "sourceSha256": "327e1543fdc60cd78ef2c17e1609f756db0f0b7a4e87dd878cbd0e353aec56a8",
+      "redactions": []
+    },
+    {
+      "file": "home-relay-1.json",
+      "sha256": "051a31be5f95f6ce00f15a1c737fee56541709eca4d6e80c64d561d90f5e181b",
+      "sourceSha256": "051a31be5f95f6ce00f15a1c737fee56541709eca4d6e80c64d561d90f5e181b",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-1.json",
+      "sha256": "df5c2903d7ac65ed16d4787e7c80b4b8a8ed9d0735439a267ec357988735ebb4",
+      "sourceSha256": "a14d4142c40527b4c24065735f808569bc7bf3406660f125a5a28e7aaf033e99",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "home-relay-2.json",
+      "sha256": "e533f104a228e2fd26fd8eb22065c04bfb0a5d1c2144eee63401187a4d13b036",
+      "sourceSha256": "e533f104a228e2fd26fd8eb22065c04bfb0a5d1c2144eee63401187a4d13b036",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-2.json",
+      "sha256": "5176967a0b9e9cc274b24e5888c63fbd89bce7aa1b5992267cda7998056124e3",
+      "sourceSha256": "93f5755e2062717b46bc38dea14ad03bd80154ce881dda4b18cf263c05c3ffd5",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "home-turn-2.json",
+      "sha256": "25ba7e04f14b8a25898669ade4327e6377e10957cbda28d3b708122a4dc81718",
+      "sourceSha256": "25ba7e04f14b8a25898669ade4327e6377e10957cbda28d3b708122a4dc81718",
+      "redactions": []
+    },
+    {
+      "file": "office-turn-2.json",
+      "sha256": "35976499d7f678731a913a11304a285d3505e223b99b8e4f1f7e04acc29a84fa",
+      "sourceSha256": "35976499d7f678731a913a11304a285d3505e223b99b8e4f1f7e04acc29a84fa",
+      "redactions": []
+    },
+    {
+      "file": "office-relay-2.json",
+      "sha256": "9194f7ed8586ecfc2e31012173e92907bef5e150486156b3fca9586ec9c766b1",
+      "sourceSha256": "9194f7ed8586ecfc2e31012173e92907bef5e150486156b3fca9586ec9c766b1",
+      "redactions": []
+    },
+    {
+      "file": "office-p2p-2.json",
+      "sha256": "878766a2647ba7e5990dffb6c95295ad739e2407fecf2e014523a8bda28db369",
+      "sourceSha256": "878766a2647ba7e5990dffb6c95295ad739e2407fecf2e014523a8bda28db369",
+      "redactions": []
+    },
+    {
+      "file": "office-relay-3.json",
+      "sha256": "0efd23f6fe9b2145973a3064f17deef8de9e1e3b58e464283f606245e5b4e3a1",
+      "sourceSha256": "0efd23f6fe9b2145973a3064f17deef8de9e1e3b58e464283f606245e5b4e3a1",
+      "redactions": []
+    },
+    {
+      "file": "office-p2p-3.json",
+      "sha256": "22e05779d97104c892aed553f569c48a597d4c05097051c68adb74b5b8562e9d",
+      "sourceSha256": "c89df4cd3ac84584c1373f9de1a547478dcf9be43314d9d021583f6d30110812",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "office-turn-3.json",
+      "sha256": "1be6437bc6f324924d3779c9c2accda5bfe59cc8d436e7eb76ef1ef4a1095b4e",
+      "sourceSha256": "1be6437bc6f324924d3779c9c2accda5bfe59cc8d436e7eb76ef1ef4a1095b4e",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-3.json",
+      "sha256": "4f1ec1409a1ffdabe11b038d493c5244644eb99023b2122a05003d8dc0464a3a",
+      "sourceSha256": "4f1d9637de9c2af79999a0569e284d376e4cd197509b47c0d9733a5494d0392f",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "home-turn-3.json",
+      "sha256": "53d0b84eb3f0f67a8b500ce0fb209dbd466c3cdb0bc62ebec0a03f0ac46e96c8",
+      "sourceSha256": "53d0b84eb3f0f67a8b500ce0fb209dbd466c3cdb0bc62ebec0a03f0ac46e96c8",
+      "redactions": []
+    },
+    {
+      "file": "home-relay-3.json",
+      "sha256": "1c0d1906870e1e65e7251f231c4bbd2ab1b3d86efe63d1a03f214150a6ef1b88",
+      "sourceSha256": "1c0d1906870e1e65e7251f231c4bbd2ab1b3d86efe63d1a03f214150a6ef1b88",
+      "redactions": []
+    }
+  ]
+}

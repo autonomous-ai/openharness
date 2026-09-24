@@ -136,9 +136,19 @@ export interface AgentFrameContext {
  * (`updateRuntimes`), so falling back to it stamped every agent without a readable transcript "now"
  * — and a client sorting by recency put exactly those agents above the ones just used. File mtime is
  * bookkeeping too: an idle transcript can be rewritten without a new conversation event.
+ *
+ * "The agent's creation at the latest" is the part that was missing: a row no hook has ever reached —
+ * a bare terminal, an engine still starting, a harness opened from the catalog — carries
+ * `lastHookAt: 0`, and answering the epoch made a client render its age as 20719 days ("20719d") and
+ * sort it below everything. Creation is a real answer for "nothing has happened yet"; zero is not.
+ *
+ * Every step is a stamp the row already carries, never a fresh clock read: a client compares this
+ * field to decide whether an agent changed at all (the desktop's `agentsEqual`), so a value that
+ * moves on its own would redraw the row on every sync and reset its age to "0m" forever.
  */
 export async function lastActivityAt(s: RegisteredSession): Promise<number> {
-  return await transcriptActivityAt(s.transcriptPath, s.engine) ?? s.lastHookAt
+  return await transcriptActivityAt(s.transcriptPath, s.engine)
+    ?? (s.lastHookAt || s.boundAt || s.registeredAt)
 }
 
 function frameTitle(s: RegisteredSession): string | null {

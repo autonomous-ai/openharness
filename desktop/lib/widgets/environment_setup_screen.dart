@@ -167,11 +167,20 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         ),
       ),
       const SizedBox(height: 6),
-      Text(title, style: grid.AppType.display()),
-      const SizedBox(height: 8),
+      // Terminal type here too: setup is the first thing a new install shows,
+      // and it should read like the app it is about to open (owner,
+      // 2026-09-23). Weight and colour carry the hierarchy instead of size.
+      Text(
+        title,
+        style: terminalTextStyle(
+          fontWeight: FontWeight.w600,
+          color: AppColors.text,
+        ),
+      ),
+      const SizedBox(height: 6),
       Text(
         lead,
-        style: grid.AppType.body(color: AppColors.textSoft, height: 1.55),
+        style: terminalTextStyle(color: AppColors.textSoft, height: 1.55),
       ),
       const SizedBox(height: 16),
     ],
@@ -431,7 +440,10 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
               children: [
                 Text(
                   '${index + 1} · ${items[index].title}',
-                  style: grid.AppType.heading(),
+                  style: terminalTextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.text,
+                  ),
                 ),
                 const SizedBox(height: 9),
                 CommandRow(
@@ -466,7 +478,13 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         title: Row(
           children: [
             Expanded(
-              child: Text('Setup details', style: grid.AppType.heading()),
+              child: Text(
+                'Setup details',
+                style: terminalTextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                ),
+              ),
             ),
             TextButton.icon(
               onPressed: () => _copy(diagnostics),

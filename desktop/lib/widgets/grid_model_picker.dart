@@ -57,11 +57,7 @@ class GridModelPicker extends StatefulWidget {
   /// have to know a command for.
   final VoidCallback? onUseOwnLogin;
 
-  /// Called when the Local section's action — "Open Grid" — is chosen. An action, not a
-  /// destination: it opens the Grid harness, the agent that puts models on the user's machines,
-  /// which is the answer to the empty section this menu otherwise stops at. Always offered,
-  /// whether or not anything is being served yet: a person with no Local models is exactly who
-  /// needs the door.
+  /// Opens the local Models overview to discover and start compatible models.
   final VoidCallback? onRunLocalModel;
 
   /// The grid model this agent is on right now, or null when it is on its own login. Drives the
@@ -343,13 +339,13 @@ class _GridModelPickerState extends State<GridModelPicker> {
     // The machine's gap before the account's: with no `grid` on this computer there is nothing a
     // sign-in could set up here, and the feature's name is the only word for it a person knows.
     if (answer.gridCli == GridCli.missing) {
-      return "Harness Compute isn't installed on this machine.";
+      return 'Model Manager can finish setting up this computer.';
     }
     // The account's rest are the models on the user's own machines; an empty list there needs a
     // sentence under the heading. Shared grids are never drawn empty (see _sectionsToDraw), so
     // this branch only ever fires for the own grid.
     if (section.own) {
-      return 'No local models on this account yet.';
+      return 'Set up your first local model on this computer.';
     }
     return null;
   }
@@ -424,6 +420,23 @@ class _GridModelPickerState extends State<GridModelPicker> {
         return false;
       }
     }
+    if (a.grids.length != b.grids.length) return false;
+    for (var i = 0; i < a.grids.length; i += 1) {
+      final left = a.grids[i];
+      final right = b.grids[i];
+      if (left.name != right.name ||
+          left.own != right.own ||
+          left.models.length != right.models.length) {
+        return false;
+      }
+      for (var j = 0; j < left.models.length; j += 1) {
+        if (left.models[j].id != right.models[j].id ||
+            left.models[j].node != right.models[j].node ||
+            left.models[j].grid != right.models[j].grid) {
+          return false;
+        }
+      }
+    }
     return true;
   }
 
@@ -431,34 +444,21 @@ class _GridModelPickerState extends State<GridModelPicker> {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     final sentence = _webSearchSentence;
-    if (widget.compact) {
-      return IconButton(
-        tooltip: sentence == null
-            ? 'Where this agent runs'
-            : 'Where this agent runs\n$sentence',
-        onPressed: _open,
-        icon: _loading
-            ? const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 1.5),
-              )
-            : const Icon(Icons.tune, size: 16),
-        style: IconButton.styleFrom(
-          foregroundColor: AppColors.mutedStrong,
-          fixedSize: const Size(28, 28),
-          minimumSize: const Size(28, 28),
-          padding: EdgeInsets.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      );
-    }
+    final current =
+        widget.currentModel ??
+        switch (widget.engineLabel?.toLowerCase()) {
+          'codex' => 'OpenAI',
+          'claude' => 'Anthropic',
+          'opencode' => 'OpenCode',
+          _ => 'Model',
+        };
+    final label = _expecting ? 'Switching…' : current;
     return Tooltip(
       // The same sentence the menu shows, one line under the control's own — so a person can learn
       // the agent has no web search without opening the menu at all.
       message: sentence == null
-          ? 'Where this agent runs'
-          : 'Where this agent runs\n$sentence',
+          ? 'Model: $current · Click to switch'
+          : 'Model: $current · Click to switch\n$sentence',
       waitDuration: const Duration(milliseconds: 700),
       child: MouseRegion(
         // Stated rather than inherited. The pane header sits over a terminal, and the cursor a
@@ -477,33 +477,41 @@ class _GridModelPickerState extends State<GridModelPicker> {
             mouseCursor: SystemMouseCursors.click,
             borderRadius: BorderRadius.circular(4),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              padding: EdgeInsets.symmetric(
+                horizontal: widget.compact ? 3 : 6,
+                vertical: 3,
+              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // No leading glyph: the word carries the control, and a header this dense reads
-                  // better with one fewer mark in it. The spinner takes that space only while a read
-                  // is in flight, so the label does not shift when nothing is happening.
-                  if (_loading) ...[
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: widget.compact ? 44 : 140,
+                    ),
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.monoLabel(
+                        fontWeight: FontWeight.w400,
+                        color: AppColors.textSoft,
+                      ),
+                    ),
+                  ),
+                  // Replace the arrow while loading so a read cannot squeeze
+                  // the session name or move the pane's other controls.
+                  if (_loading)
                     const SizedBox(
-                      width: 11,
-                      height: 11,
+                      width: 14,
+                      height: 14,
                       child: CircularProgressIndicator(strokeWidth: 1.5),
+                    )
+                  else
+                    Icon(
+                      Icons.arrow_drop_down,
+                      size: 14,
+                      color: AppColors.mutedStrong,
                     ),
-                    const SizedBox(width: 5),
-                  ],
-                  Text(
-                    'Model',
-                    style: AppType.monoLabel(
-                      fontWeight: FontWeight.w400,
-                      color: AppColors.textSoft,
-                    ),
-                  ),
-                  Icon(
-                    Icons.arrow_drop_down,
-                    size: 14,
-                    color: AppColors.mutedStrong,
-                  ),
                 ],
               ),
             ),
@@ -623,13 +631,24 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
         rows.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 2),
-            child: ModelPickerRow(
-              title: model.id,
-              subtitle: model.node,
-              selected: widget.currentModel == model.id,
-              avatar: ModelAvatar(label: model.id),
-              note: null,
-              onTap: () => widget.close(_Choice.model(model)),
+            child: Tooltip(
+              message: [
+                'Where this agent runs',
+                ?widget.subtitleFor(model),
+              ].join('\n'),
+              child: ModelPickerRow(
+                title: model.id,
+                subtitle: model.node,
+                // The web-search sentence for the CURRENT model only — a fact
+                // about this agent's launch, not about the model. Dropped when
+                // the panel replaced the old row list, which lost it silently;
+                // the tests that caught it are the reason it is back.
+                hint: widget.subtitleFor(model),
+                selected: widget.currentModel == model.id,
+                avatar: ModelAvatar(label: model.id),
+                note: null,
+                onTap: () => widget.close(_Choice.model(model)),
+              ),
             ),
           ),
         );
@@ -659,7 +678,7 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
         ),
         ModelPickerFooter(
           summary: total == 1 ? '1 model available' : '$total models available',
-          actionLabel: 'Manage in Grid',
+          actionLabel: 'Local models',
           onAction: () => widget.close(const _Choice.runLocalModel()),
         ),
       ],
@@ -680,8 +699,9 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
       subtitle: account.isEmpty ? '' : 'key ···$account',
       selected: widget.currentModel == null,
       avatar: ModelAvatar(
-        label: widget.engineLabel ?? '',
-        child: EngineMark(engine: widget.engineLabel, size: 17),
+        label:
+            (widget.subscription?['title'] as String?) ??
+            engineIdentity(widget.engineLabel).label,
       ),
       // Absent rather than "unknown": a row that cannot say how much is left says nothing, which
       // reads as "no figure" instead of as a figure that happens to be missing.
@@ -701,9 +721,8 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
                   const SizedBox(height: 2),
                   Text(
                     low ? 'Running low' : 'Healthy',
-                    style: AppType.body(
-                      color: AppColors.muted,
-                    ).copyWith(fontSize: 11),
+                    style: AppType.body(color: AppColors.muted)
+                        .copyWith(fontSize: 11),
                   ),
                 ],
               ],

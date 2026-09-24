@@ -5,10 +5,21 @@ Escape leaves that tab open. The command dock opens only after an explicit
 Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
 opening or cancelling the dock never starts a harness.
 
-The launch form starts with Agent, Machine, and Project, followed by Start
-Harness, which is selected initially. There is no heading, Task row, or Open In
-row. Cmd-O and Cmd-P pickers also omit their heading and result-count row.
+The launch form starts on Project, followed by Agent, Machine, Branch,
+Worktree, Approvals, and Profile when the chosen agent uses Codex profiles.
+The separate **+ New Harness** action submits the draft. There is no heading,
+Task row, or Open In row. Cmd-O and Cmd-P also omit headings and counts.
 Tasks carried from search or Store examples remain part of the draft.
+
+Values and search use the terminal's selected font, size, and line height.
+The right pane previews choices without a selection highlight while the left
+has focus. Return or typing activates the list; accepting a value returns to
+its field. The three project actions have icons. Clone, folder path, and new
+project prompts return to Project after acceptance; only New Harness starts.
+Project, machine, branch, and approval options occupy one line. Only the local
+machine has a note, **This machine**. Approvals come from the chosen agent's
+supported modes, and Profile disappears for agents that do not use it.
+Narrow windows show the active list full-width with a back action.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
@@ -32,9 +43,9 @@ while a pending start needs confirmation.
 
 ## Git projects
 
-Git projects show Branch, then Worktree. Worktree defaults to `[x]` for a
-repository with a commit; Enter, Space, or a click toggles `[x]` and `[ ]`.
-Folders without Git show neither row. Discovery runs on the selected machine
+Git projects enable Branch and Worktree. Worktree defaults to **Yes** for a
+repository with a commit; Enter, Left/Right, Page Up/Down, or a click toggles
+**Yes** and **No**. Folders without Git keep both rows visible but disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 
@@ -55,12 +66,12 @@ projects.
 
 **Branch** starts on the default branch with Worktree on, and on the folder's
 own branch with it off. It does not follow the pane New Harness was opened from:
-New Harness is new work, and another agent's branch is one pick away. The Start
-button reads **Start Harness** on every New Harness, whatever the rows say.
+New Harness is new work, and another agent's branch is one pick away. The start
+action reads **New Harness**, whatever the rows say.
 The picker names local branches; a remote branch is listed only when no local
 branch has its name.
 
-With `[x]`, **Branch** is what the new worktree works from. At Start a new
+With **Yes**, **Branch** is what the new worktree works from. At Start a new
 branch starts from the newer of that branch and its upstream, fetched for at
 most ten seconds: `main` behind `origin/main` starts from `origin/main`, and
 `main` with commits of its own starts from `main`, so nothing is lost; offline,
@@ -85,7 +96,7 @@ A picked or created branch keeps its name. The worktree is checked out in
 `~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the
 repository's `.worktreeinclude` (gitignore syntax, e.g. `.env`) are copied in.
 
-With `[ ]`, **Branch** is the branch the folder itself is on; only local
+With **No**, **Branch** is the branch the folder itself is on; only local
 branches are selectable. A branch with a worktree of its own opens there.
 Typing a name no branch has offers **Create branch**:
 a new branch from the folder's branch, keeping its uncommitted changes.
@@ -94,8 +105,8 @@ also needs nothing uncommitted. No changes are forced,
 stashed, or discarded. A selected subfolder follows into a new worktree only if
 it exists in that commit.
 
-The picker tags branches `default`, `current`, `worktree` and `remote`, and
-leaves out branches Harness made (marked `branch.<name>.harness`, or named
+The picker displays branch names on one line; metadata such as `default`,
+`current`, `worktree`, and `remote` remains searchable. It leaves out branches Harness made (marked `branch.<name>.harness`, or named
 `harness/…` by older builds) whose worktree is gone. The daemon removes a
 worktree it finds in `~/harnesses/worktrees` only when no live or stopped
 harness uses it, nothing is uncommitted, and it has been idle for a week; the
@@ -129,7 +140,7 @@ worktree: the retry selects that worktree's branch with Worktree off.
 Suggested projects display the existing `<agent>-YYYY-MM-DD-HH-MM` naming
 convention. Untouched suggestions follow agent changes; a user's edited name
 does not. The suggestion is frozen while reviewed. Project → New Project
-prefills and selects the name so it can be replaced.
+opens the name prompt; accepting a name returns to the Project field.
 
 Each machine retains its own project choice. A folder on one machine is never
 silently reused on another. Generated folders use exclusive reservation and
@@ -139,7 +150,7 @@ never silently renamed, and existing files are never overwritten.
 ## Regression coverage
 
 - `test/new_harness_git_test.dart`, `test/git_worktree_test.dart`, and
-  `test/git_worktree_failures_test.dart`: Git defaults, hidden non-Git rows,
+  `test/git_worktree_failures_test.dart`: Git defaults, disabled non-Git rows,
   keyboard/click toggles, branch search, branch resolution, stale
   replies, retries, actual Git worktrees and branch safety, fetching,
   tracking, `.worktreeinclude`, process deadlines, and bounded output.

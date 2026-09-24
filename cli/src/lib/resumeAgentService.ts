@@ -4,7 +4,7 @@ import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed } from './resumeStoppedAgent.js'
-import { confirmsResumeByHook, resumesConversation } from './resumeCapability.js'
+import { awaitsResumeHook } from './resumeCapability.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
@@ -66,8 +66,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // discovery out of it (see cli.ts's resumeOnly guard). Same condition as the proof itself in
       // `waitForResumedAgent`: only a resume that ASKED for a conversation, on an engine that hooks
       // at launch, is marked ready by `register` instead.
-      const byHook = resumesConversation(saved.engine, saved.sessionId) && confirmsResumeByHook(saved.engine)
-      const ready = byHook
+      const ready = awaitsResumeHook(saved.engine, saved.sessionId)
         ? result.session
         : registry.setLaunch(saved.agentId, { state: 'ready' }) ?? result.session
       announceSession(ready)

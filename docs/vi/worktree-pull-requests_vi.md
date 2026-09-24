@@ -9,8 +9,8 @@ CLI đọc branch và remote `origin` tại thư mục của agent, kể cả li
 phiên đăng nhập GitHub trên máy đó. Đây là truy vấn chỉ đọc, có timeout, không tự mở login. Request
 và response được mã hoá khi chuyển tới máy remote.
 
-Tra cứu thành công và không có PR thì ẩn nhãn. Thiếu hỗ trợ CLI, gh, đăng nhập, mạng hoặc quyền repo
-thì hiện `PR unavailable`; không được coi là chưa có PR. Refresh mỗi phút, cache CLI 60 giây có giới
+Chỉ hiện nhãn khi có kết quả PR hợp lệ. Đang tải, không có PR hoặc không tra cứu được đều ẩn nhãn.
+API vẫn phân biệt lỗi tra cứu với tra cứu thành công nhưng không có PR. Refresh mỗi phút, cache CLI 60 giây có giới
 hạn, bỏ kết quả cũ khi đổi agent/branch. Ưu tiên PR đang mở; nếu không có, lấy PR cập nhật gần nhất.
 
 Phạm vi ban đầu: repo github.com trong `origin`, khớp cả branch lẫn repository nguồn. Chưa tìm PR từ

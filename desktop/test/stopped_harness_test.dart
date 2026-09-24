@@ -8,6 +8,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
+import 'package:harness/terminal/terminal_binary.dart';
 
 import 'support/restart_connection.dart';
 import 'swarm_interactions_test.dart' show chord;
@@ -57,6 +58,85 @@ void main() {
     expect(app.allPanes, isEmpty);
     expect(connection.requests, isEmpty);
   });
+
+  test(
+    'an engine that exits into its shell closes the tile it was running in',
+    () async {
+      // Issue #262: Ctrl+C in a Codex tile. The conversation is archived under the identity that ran
+      // it, the surviving shell comes back as a terminal of its own, and the tile that was watching
+      // the engine must close rather than sit on "terminal unavailable" with nothing to press.
+      final pane = app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
+      expect(app.panes, [pane]);
+      connection.inventory = Completer<Map<String, dynamic>>();
+
+      await app.handleEventForTest('m', {
+        'type': 'agent_deleted',
+        'payload': {'agentId': 'a0', 'retained': true},
+      });
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'Saved work',
+            'engine': 'codex',
+            'sessionId': 'exited-conversation',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+        },
+      });
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'shell-1',
+            'name': 'Terminal harness',
+            'engine': 'terminal',
+            'terminal': {
+              'available': true,
+              'runtimes': [
+                {'backend': 'tmux', 'paneId': '%7'},
+              ],
+            },
+          },
+        },
+      });
+      connection.inventory!.complete({
+        'agents': [
+          {
+            'id': 'a0',
+            'name': 'Saved work',
+            'engine': 'codex',
+            'sessionId': 'exited-conversation',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+          {
+            'id': 'shell-1',
+            'name': 'Terminal harness',
+            'engine': 'terminal',
+            'terminal': {
+              'available': true,
+              'runtimes': [
+                {'backend': 'tmux', 'paneId': '%7'},
+              ],
+            },
+          },
+        ],
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(app.allPanes, isEmpty);
+      final agents = app.stateOf('m')!.agents;
+      expect(agents.firstWhere((agent) => agent.id == 'a0').isStopped, isTrue);
+      expect(
+        agents.firstWhere((agent) => agent.id == 'shell-1').terminalAvailable,
+        isTrue,
+      );
+      expect(swarmDestinations(app).any((row) => row.agentId == 'a0'), isTrue);
+    },
+  );
 
   test(
     'a retained stop refreshes the saved row after closing its live view',

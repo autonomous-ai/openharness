@@ -40,6 +40,10 @@ class UpdateNotice extends StatelessWidget {
     if (update == null) return const SizedBox.shrink();
 
     final installing = notifier.isInstallingUpdate;
+    // Null until the first bytes land, and again while the download is being
+    // verified and unpacked — the bar is honest about not knowing then.
+    final fraction = installing ? notifier.updateDownloadFraction : null;
+    final percent = installing ? notifier.updateDownloadPercent : null;
     final error = notifier.updateError;
     final failed = error != null && !installing;
 
@@ -133,7 +137,21 @@ class UpdateNotice extends StatelessWidget {
                               ),
                             ),
                           ),
-                          if (!installing && !failed && update.size > 0) ...[
+                          // The size answers "how long will this take?" before
+                          // the download; the percent answers it during, and
+                          // says it alone — the two together read as arithmetic
+                          // homework in a band this narrow.
+                          if (percent != null) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              '· $percent%',
+                              style: grid.AppType.monoMeta(
+                                color: grid.AppPalette.textFaint,
+                              ),
+                            ),
+                          ] else if (!installing &&
+                              !failed &&
+                              update.size > 0) ...[
                             const SizedBox(width: 8),
                             Text(
                               '· ${formatDownloadSize(update.size)}',
@@ -184,15 +202,17 @@ class UpdateNotice extends StatelessWidget {
                   ],
                 ),
               ),
-              // Indeterminate on purpose: downloadAndStage() resolves once, with
-              // no byte counter to read, so a percentage here would be invented.
+              // Determinate while the bytes are arriving; indeterminate for the
+              // verify-and-unpack tail, which has nothing to count.
               if (installing)
                 Positioned(
                   left: 0,
                   right: 0,
                   bottom: 0,
                   child: LinearProgressIndicator(
+                    key: const ValueKey('update-progress-bar'),
                     minHeight: 2,
+                    value: fraction,
                     backgroundColor: Colors.transparent,
                     color: grid.AppPalette.accentOnSurface,
                   ),
@@ -344,55 +364,68 @@ Future<void> showUpdateCheckDialog(
           }
           return PopScope(
             canPop: !installing,
-            child: _UpdateDialog(
-              icon: LucideIcons.arrowDownToLine300,
-              title: installing
-                  ? 'Installing Harness ${update.version}…'
-                  : 'Harness ${update.version} is available',
-              body: installing
-                  ? 'Don’t quit Harness. It will restart on its own.'
-                  : current.isSkipped
-                  ? 'You skipped this version earlier. You can still install it.'
-                  : 'Download and install it now? Harness will restart when it '
-                        'finishes.',
-              busy: installing,
-              update: installing ? null : update,
-              actions: installing
-                  ? const []
-                  : [
-                      _DialogAction(
-                        key: const Key('close-update-dialog-button'),
-                        label: 'Close',
-                        onPressed: () async {
-                          Navigator.of(dialogContext).pop();
-                        },
-                      ),
-                      if (!current.isSkipped)
+            // The percentage moves while this dialog is up, and the
+            // StatefulBuilder above only rebuilds on ITS own setState — which
+            // the download never calls. Listening to the notifier is what lets
+            // the number here count along with the band behind it.
+            child: ListenableBuilder(
+              listenable: notifier,
+              builder: (context, _) => _UpdateDialog(
+                icon: LucideIcons.arrowDownToLine300,
+                title: installing
+                    ? 'Installing Harness ${update.version}…'
+                    : 'Harness ${update.version} is available',
+                body: installing
+                    ? [
+                        if (notifier.updateDownloadPercent case final percent?)
+                          'Downloading… $percent%.',
+                        'Don’t quit Harness. It will restart on its own.',
+                      ].join(' ')
+                    : current.isSkipped
+                    ? 'You skipped this version earlier. You can still install it.'
+                    : 'Download and install it now? Harness will restart when it '
+                          'finishes.',
+                busy: installing,
+                update: installing ? null : update,
+                actions: installing
+                    ? const []
+                    : [
                         _DialogAction(
-                          label: 'Skip ${update.version}',
+                          key: const Key('close-update-dialog-button'),
+                          label: 'Close',
                           onPressed: () async {
-                            await notifier.skipAvailableUpdate(update: update);
-                            if (dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop();
-                            }
+                            Navigator.of(dialogContext).pop();
                           },
                         ),
-                      _DialogAction(
-                        label: 'Update',
-                        primary: true,
-                        onPressed: () async {
-                          setState(() => installing = true);
-                          final installed = await notifier
-                              .installAvailableUpdate(update: update);
-                          // A successful install never returns — the process is
-                          // replaced. Reaching here means it failed, and the banner
-                          // behind this dialog is already showing why.
-                          if (!context.mounted || installed) return;
-                          setState(() => installing = false);
-                          Navigator.of(dialogContext).pop();
-                        },
-                      ),
-                    ],
+                        if (!current.isSkipped)
+                          _DialogAction(
+                            label: 'Skip ${update.version}',
+                            onPressed: () async {
+                              await notifier.skipAvailableUpdate(
+                                update: update,
+                              );
+                              if (dialogContext.mounted) {
+                                Navigator.of(dialogContext).pop();
+                              }
+                            },
+                          ),
+                        _DialogAction(
+                          label: 'Update',
+                          primary: true,
+                          onPressed: () async {
+                            setState(() => installing = true);
+                            final installed = await notifier
+                                .installAvailableUpdate(update: update);
+                            // A successful install never returns — the process is
+                            // replaced. Reaching here means it failed, and the banner
+                            // behind this dialog is already showing why.
+                            if (!context.mounted || installed) return;
+                            setState(() => installing = false);
+                            Navigator.of(dialogContext).pop();
+                          },
+                        ),
+                      ],
+              ),
             ),
           );
         },

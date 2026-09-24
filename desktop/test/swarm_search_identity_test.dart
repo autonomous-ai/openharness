@@ -8,7 +8,6 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/state/terminal_pane.dart';
-import 'package:harness/widgets/search_result_text.dart';
 
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -319,7 +318,7 @@ void main() {
   );
 
   testWidgets(
-    'Cmd P renders one harness result and opens it from a tab-name alias',
+    'Cmd O renders one harness result and opens it from a tab-name alias',
     (tester) async {
       final app = createApp();
       final machine = app.machineStates['m']!..nodeOnline = true;
@@ -354,25 +353,13 @@ void main() {
       // One harness, then the row that makes what was typed instead.
       expect(find.byType(ListTile), findsNWidgets(2));
       expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsOneWidget);
-      // Context remains visible and searchable when drawn as separate segments.
-      // A folder short of room keeps both ends; the line still reads it whole.
-      bool shows(String text, String value) =>
-          text == value ||
-          text.contains('…') &&
-              value.startsWith(text.split('…').first) &&
-              value.endsWith(text.split('…').last);
+      // Minimal rows keep the full metadata accessible and searchable.
       for (final value in [
         'Claude',
         'Test host',
         'autonomous-harness',
         'main',
       ]) {
-        expect(
-          find.byWidgetPredicate(
-            (widget) => widget is SearchResultText && shows(widget.text, value),
-          ),
-          findsOneWidget,
-        );
         expect(
           find.byWidgetPredicate(
             (widget) =>
@@ -382,10 +369,7 @@ void main() {
           findsWidgets,
         );
       }
-      expect(
-        find.textContaining('enter  open', findRichText: true),
-        findsOneWidget,
-      );
+      expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
       await tester.enterText(input, 'Architecture review');
       await tester.pump();
       expect(find.byType(ListTile), findsNWidgets(2));

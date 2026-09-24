@@ -65,5 +65,11 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Harness finds and connects to Autonomous robots on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_autonomous._tcp</string>
+	</array>
 </dict>
 </plist>

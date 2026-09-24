@@ -1,0 +1,14 @@
+{
+  "checkedAt": "2026-09-23T12:36:39.295Z",
+  "method": "Read-only agents_list via installed daemon; count exact disposable probe name pattern. No sessions were deleted by this audit.",
+  "results": [
+    {
+      "label": "office",
+      "remainingDisposableProbes": 0
+    },
+    {
+      "label": "home",
+      "remainingDisposableProbes": 0
+    }
+  ]
+}

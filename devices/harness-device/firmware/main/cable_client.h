@@ -143,7 +143,12 @@ const char *cable_client_machine_id(void);
 // in one `swarms` frame whenever it changes, and relays a pick back to the window — which switches, and
 // re-describes its desk. The dial never answers a swarm frame; the next `swarms` + agent list IS the
 // answer. No window → an empty list, and the tile draws no swarm line.
-#define SWARM_ID_MAX 32
+// A desk id is 32 HEX CHARACTERS (desktop desk_sync.dart `newDeskId`), so a 32-byte buffer held 31 of
+// them and the NUL. The list still drew right — both sides of every comparison here were truncated the
+// same way — but each pick named a tab the window does not have, and the daemon dropped it
+// ("ignored select for unknown swarm"): tapping a tab on the dial did nothing at all. Same cap as an
+// agent id, which already counts its NUL.
+#define SWARM_ID_MAX ID_MAX
 #define SWARMS_MAX   24   // the window's own ceiling (AppNotifier.maxSwarms)
 typedef struct {
     char id[SWARM_ID_MAX];

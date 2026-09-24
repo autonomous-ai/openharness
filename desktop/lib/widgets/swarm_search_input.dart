@@ -30,6 +30,7 @@ class SwarmSearchInput extends StatelessWidget {
     this.height,
     this.prompt,
     this.terminal = false,
+    this.bios = false,
   });
 
   final Key inputKey;
@@ -54,12 +55,13 @@ class SwarmSearchInput extends StatelessWidget {
   final double? height;
 
   /// The typed text and the hint; the search glyph grows with it.
-  double get fontSize => grid.AppType.monoSize;
+  double get fontSize => bios ? terminalFontStore.size : grid.AppType.monoSize;
   final String? prompt;
 
   /// Plain monospace input in a TerminalBox, without a decorative search glyph.
   /// Mode prefixes belong to the editable buffer.
   final bool terminal;
+  final bool bios;
 
   @override
   Widget build(BuildContext context) {
@@ -75,6 +77,9 @@ class SwarmSearchInput extends StatelessWidget {
   Widget _buildInput(BuildContext context) {
     final open = search != null;
     final terminalStyle = terminal || prompt != null;
+    final style = bios
+        ? terminalContentStyle(color: Colors.white)
+        : boxMonoStyle();
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.vertical(
         top: Radius.circular(rounded ? (prominent ? 32 : 28) : 12),
@@ -100,10 +105,11 @@ class SwarmSearchInput extends StatelessWidget {
       onTapAlwaysCalled: true,
       onTapOutside: onTapOutside == null ? null : (_) => onTapOutside!(),
       onChanged: onChanged,
-      style: terminalStyle
-          ? boxMonoStyle()
-          : grid.AppType.mono(color: Colors.white),
-      cursorColor: grid.AppPalette.swarmAccent,
+      style: terminalStyle ? style : grid.AppType.mono(color: Colors.white),
+      cursorColor: bios ? Colors.white70 : grid.AppPalette.swarmAccent,
+      cursorWidth: bios ? terminalFontStore.size * .62 : 2,
+      cursorRadius: Radius.zero,
+      cursorOpacityAnimates: !bios,
       textAlignVertical: TextAlignVertical.center,
       decoration: InputDecoration(
         hintText:
@@ -113,18 +119,30 @@ class SwarmSearchInput extends StatelessWidget {
             ? search!.hint
             : hintText ?? search?.hint ?? kSwarmSearchHint,
         hintStyle: terminalStyle
-            ? boxMonoStyle(color: kBoxFaint)
+            ? style.copyWith(color: kBoxFaint)
             : grid.AppType.mono(color: Colors.white60),
         hintMaxLines: 1,
         prefixIcon: prompt != null
             ? Padding(
-                padding: const EdgeInsets.only(left: 14, right: 10),
+                padding: EdgeInsets.only(
+                  left: bios ? 28 : 14,
+                  right: bios ? 12 : 10,
+                ),
                 child: Center(
                   widthFactor: 1,
                   heightFactor: 1,
-                  child: Text(
-                    prompt!,
-                    style: boxMonoStyle(color: grid.AppPalette.swarmAccent),
+                  child: SizedBox(
+                    width: bios ? terminalFontStore.size * 1.25 : null,
+                    child: Text(
+                      prompt!,
+                      key: const ValueKey('swarm-search-prompt'),
+                      textAlign: TextAlign.center,
+                      style: style.copyWith(
+                        color: bios
+                            ? Colors.white
+                            : grid.AppPalette.swarmAccent,
+                      ),
+                    ),
                   ),
                 ),
               )

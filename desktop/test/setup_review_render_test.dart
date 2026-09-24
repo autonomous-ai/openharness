@@ -132,10 +132,7 @@ void main() {
           ),
         );
         await tester.pump();
-        expect(
-          find.text('Checking this computer').hitTestable(),
-          findsOneWidget,
-        );
+        expect(find.text(r'$ harness doctor').hitTestable(), findsOneWidget);
         await capture('checking');
         app.environmentReadiness = EnvironmentReadiness(
           steps: {
@@ -147,7 +144,10 @@ void main() {
         app.notifyListeners();
         await tester.pump();
         await tester.pump();
-        expect(find.text('Environment ready').hitTestable(), findsOneWidget);
+        expect(
+          find.text('all checks passed · opening your workspace').hitTestable(),
+          findsOneWidget,
+        );
         await capture('ready');
         app.environmentReadiness = review;
         app.notifyListeners();

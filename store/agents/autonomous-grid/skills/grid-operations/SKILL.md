@@ -12,11 +12,10 @@ observations to answer ordinary inventory questions. A downloaded weight file or
 is not a serving model. The viewer reads actual CLI data, and the
 runner records operation start/completion without recording prompts, credentials or full argv.
 
-In a restricted agent sandbox, `refresh`, `connect`, `discover` and network-using `run` commands
-require the engine's normal scoped network approval. Request it before calling them rather than
-repeating commands that fail with EPERM. This also applies to the loopback Harness bridge. Do not
-disable the sandbox or broaden global permissions. A denied network call does not prove a host is
-offline; use fresh viewer observations or an approved live check.
+This harness runs without Codex's sandbox, so these commands run as they would in a terminal —
+`join` gets the GPU, every call reaches the network. Never request escalation, and never read a
+failure as a sandbox problem: the command's own error is the answer. Never diagnose an engine with
+`ps`, `lsof`, `sysctl` or logs; report the error after two failed attempts and wait.
 
 ## Targets and access
 
@@ -32,7 +31,20 @@ non-alphanumerics → `-`, trimmed), then `-` and eight hex, of type `permission
 one row of `ls --json` matches — and selects it, so the CLI agrees from the first minute. A person
 who asks to "switch to", "use" or "work on" another grid they are in (`ls`) gets `connect` with
 that name: it verifies the grid answers, then selects it. Pass the selected grid to every command
-that takes one. With no private grid and several reachable, ask which with the question tool.
+that takes one. **Shared grids** are every other row of `"$GRID_FLEET" run -- ls --json` — a
+company's, a team's, a community one. A request that names one ("on the team grid", "on the
+company grid") goes to that row's exact `grid` name; a request that names none goes to `grid` in
+`grid-fleet.json`. Read the names from `ls`, never from memory.
+
+**"My grid", "my personal grid", "my private grid" all mean `personalGrid` in `grid-fleet.json`**
+(also `$HARNESS_PRIVATE_GRID`). Harness put it there from the account that is signed in, so it is
+the answer, not a guess: pass that exact name to `join`, `leave`, `engines` and `models`, and do not
+ask the person which grid is theirs. It can differ from `grid` (the workspace's selected fleet) —
+a request that says "my grid" goes to `personalGrid`, whatever is selected. The `type` column of
+`ls --json` is what kind of grid a row is, not a permission to ask about: `permissioned-public` is
+a person's own grid, `private-domain` a company's, `domain-restricted` a team's, `os-community` a
+public one. Only when `personalGrid` is null: say in one line that Harness has not named this
+account's grid yet and ask them to sign in to Harness — never pick one from `ls`.
 Connect with
 `"$GRID_FLEET" connect --mode remote --grid NAME --remember` to select a verified grid and reuse it
 in future workspaces. `--remember` writes this controller's `~/.harness/grid-fleet/default.json`;
@@ -60,6 +72,27 @@ It supports Grid's entire CLI, including nested commands. Local and SSH executio
 input; Harness transport is noninteractive, so sign-in prompts belong in that machine's terminal. The controller is
 the default execution machine. Model files and `join`/`leave` operations belong on the machine
 that runs the engine; listing, routing and requests can run on the controller.
+
+## First local model: help from this conversation
+
+The Models panel normally handles discovery and Start/Stop directly. If the user asks this
+conversation to help set up a local model, begin inspecting
+this computer immediately. This is the short onboarding path: coding and everyday work, one
+person, a responsive first reply, and enough free memory for other apps. Prefer a suitable
+model already running or downloaded. Inspect device-info and the live catalog, choose one
+comfortable fit, and explain the download size and memory needs in plain words. Offer
+**Start this model** and **Other options** through the question tool. That single choice
+covers installing the required engine and downloading/starting the recommended model.
+Choose context from the model's measured fit and the session's needs. Do not ask the user to
+choose an engine, quantization, token count, concurrency, or vision setting. Use suitable
+existing defaults; extra questions belong to explicit advanced requests. Keep setup on this
+computer. Other machines are available when the user asks for them.
+
+Use the tracked fleet runner for hardware checks, downloads, and startup, so the viewer retains
+progress while the conversation is closed or interrupted. After the model appears in discovery,
+run `"$GRID_FLEET" verify --grid GRID --model MODEL_ALIAS` once. This bounded check records
+readiness only after a real reply. On failure, report the problem and offer recovery. On success,
+say **"Your model is running. Select it from the model picker in a session."** The setup ends at a usable model.
 
 ## Start a model
 
@@ -161,9 +194,7 @@ for the relay to list it (a call before that answers `No providers available for
 is "not yet", not "broken"):
 
     until "$GRID_FLEET" run -- models GRID 2>/dev/null | grep -qx 'MODEL_ALIAS'; do sleep 10; done
-    eval "$("$GRID_FLEET" run -- info GRID --env)" && curl -s --max-time 420 "$OPENAI_BASE_URL/chat/completions" \
-      -H "Authorization: Bearer $OPENAI_API_KEY" -H 'content-type: application/json' \
-      -d '{"model":"MODEL_ALIAS","messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":8}'
+    "$GRID_FLEET" verify --grid GRID --model MODEL_ALIAS
 
 ⚠️ Not `chat` for this check. `chat` sets no output limit and the engine's default is tens of
 thousands of tokens, so a small model that runs away answering "ok" holds the slot for minutes — and
@@ -180,8 +211,8 @@ one step larger from the same list (tiny models loop), or more requests at once,
 not acceptance. Then `"$GRID_FLEET" refresh`.
 
 **7. Say where it is.** "<alias> is running on <machine>, N at a time, vision on/off. Pick it from
-the model dropdown at the top of any agent's pane, and that agent switches to it." The window's
-Models menu only lists Local models; it does not switch. Don't offer to wire it into an agent's
+the model dropdown at the top of any agent's pane, and that agent switches to it." In the Models
+panel, **Use** returns to the person's session or opens one when needed. Don't offer to wire it into an agent's
 config or add a provider — the picker is the whole hand-off.
 
 ## Change a running model

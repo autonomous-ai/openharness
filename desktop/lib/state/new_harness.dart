@@ -755,6 +755,7 @@ class NewHarnessController extends ChangeNotifier {
   String get modeLabel =>
       _modes.where((m) => m.id == mode).firstOrNull?.label ?? mode;
   bool get riskyMode => _modes.any((m) => m.id == mode && m.risky);
+  bool get usesProfile => _base == 'codex';
   bool get hasProfile => _baseOf(_settingsEngine) == 'codex';
   bool get supportsProfiles =>
       hasProfile && _machine?.engines['codex']?.supportsCodexHome == true;
@@ -798,6 +799,7 @@ class NewHarnessController extends ChangeNotifier {
     _agentPreview = engine;
     focusField(
       setting == profileId ? NewHarnessField.profile : NewHarnessField.mode,
+      previewAgent: true,
     );
   }
 
@@ -913,9 +915,9 @@ class NewHarnessController extends ChangeNotifier {
     NewHarnessField.agent => 'Choose an agent',
     NewHarnessField.machine => 'Choose a machine',
     NewHarnessField.branch => 'Search branches',
-    NewHarnessField.project => 'Enter a folder path, or press Enter to browse',
-    NewHarnessField.projectName => 'Type a project name',
-    NewHarnessField.projectRepository => 'Paste a GitHub repository URL',
+    NewHarnessField.project => 'Folder path',
+    NewHarnessField.projectName => 'Project name',
+    NewHarnessField.projectRepository => 'GitHub URL',
     NewHarnessField.mode => 'How much it may do without asking',
     NewHarnessField.profile => 'Find a Codex profile',
   };
@@ -925,8 +927,12 @@ class NewHarnessController extends ChangeNotifier {
   ({NewHarnessField field, String query, String? agentPreview}) _machineOrigin =
       (field: NewHarnessField.launch, query: '', agentPreview: null);
 
-  void focusField(NewHarnessField next) {
-    if (locked || field == next || !_supportsField(next)) return;
+  void focusField(NewHarnessField next, {bool previewAgent = false}) {
+    if (locked) return;
+    // Form fields edit the saved agent. Only an explicit nested setting may
+    // use the agent currently being previewed in the choices list.
+    if (!previewAgent) _agentPreview = null;
+    if (field == next || !_supportsField(next)) return;
     if (next == NewHarnessField.machine) {
       _machineOrigin = (
         field: field,
@@ -1049,6 +1055,44 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// ← and → change the focused field's value where it stands, as a BIOS
+  /// settings screen does, rather than opening a list to choose from. Unlike
+  /// [accept] the line keeps its field, so the next arrow steps again, and
+  /// the rows the box adds for itself — Browse, New project, Permissions —
+  /// are skipped: they are doors, not values.
+  /// The values a field can be stepped through, in a stable order. The
+  /// displayed list is NOT that order: it re-ranks so the chosen row floats
+  /// to the front, which makes stepping by index walk in circles — right
+  /// always took the second row and left always wrapped to the last.
+  List<NewHarnessOption> stepValues() => [
+    for (final option in options)
+      if (!option.synthetic && option.enabled) option,
+  ];
+
+  /// Take [option] as this field's value without moving off the field.
+  /// Synthetic rows are allowed here even though [stepValues] leaves them
+  /// out: "Create branch x" is a real answer to the Branch row, it is only
+  /// not one the arrows should cycle onto.
+  void applyOption(NewHarnessOption option) {
+    if (locked || !option.enabled) return;
+    error = null;
+    _steered = true;
+    _apply(option);
+    _refresh();
+  }
+
+  /// Take what the field is highlighting as its value, where it stands.
+  /// Typing narrows a field and lands on a row; this is what makes that row
+  /// the answer, so the value on screen is always the one Return acts on.
+  void takeSelection() {
+    final option = selected;
+    if (locked || option == null || option.synthetic || !option.enabled) {
+      return;
+    }
+    _apply(option);
+    _refresh();
+  }
+
   NewHarnessOption? get selected =>
       cursor < 0 || cursor >= options.length ? null : options[cursor];
 
@@ -1109,7 +1153,7 @@ class NewHarnessController extends ChangeNotifier {
   // For anyone who would rather point at a folder than type its path. It stays
   // under whatever is typed: the way out must not vanish on the first key.
   NewHarnessOption get _browse =>
-      NewHarnessOption(id: browseId, synthetic: true, title: 'Open Folder');
+      NewHarnessOption(id: browseId, synthetic: true, title: 'Browse Folder');
 
   NewHarnessOption get _changeMachine => NewHarnessOption(
     id: changeMachineId,
@@ -1122,7 +1166,7 @@ class NewHarnessController extends ChangeNotifier {
     const NewHarnessOption(
       id: repositoryId,
       synthetic: true,
-      title: 'Clone GitHub Repository',
+      title: 'Clone Repository',
       detail: 'Paste a GitHub repository URL',
     ),
     const NewHarnessOption(
@@ -1145,11 +1189,11 @@ class NewHarnessController extends ChangeNotifier {
     final option = row ?? selected;
     if (locked || option?.id == storeId) return;
     if (option?.id == permissionsId) {
-      focusField(NewHarnessField.mode);
+      focusField(NewHarnessField.mode, previewAgent: true);
       return;
     }
     if (option?.id == profileId) {
-      focusField(NewHarnessField.profile);
+      focusField(NewHarnessField.profile, previewAgent: true);
       return;
     }
     if (option?.id == refreshProfilesId) {

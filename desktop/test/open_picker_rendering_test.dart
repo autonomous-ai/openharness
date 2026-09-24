@@ -21,19 +21,34 @@ void main() {
     final results = find.byType(SwarmSearchResults);
     final search = tester.widget<SwarmSearchResults>(results).search;
     final rows = find.descendant(of: results, matching: find.byType(ListTile));
+    final prompt = find.byKey(const ValueKey('swarm-search-prompt'));
+    final visibleTiles = tester.widgetList<ListTile>(rows);
+    for (final tile in visibleTiles.where((tile) => tile.leading != null)) {
+      expect(
+        tester.getCenter(prompt).dx,
+        closeTo(tester.getCenter(find.byWidget(tile.leading!)).dx, .1),
+        reason: 'The prompt, create action and engine marks share one column.',
+      );
+    }
     expect(search.rows.length, greaterThan(50));
-    expect(rows.evaluate().length, lessThan(12));
+    expect(rows.evaluate().length, lessThan(35));
     final visited = <String>{};
     for (var step = 0; step < 35; step++) {
       await key(tester, LogicalKeyboardKey.tab);
       await tester.pumpAndSettle();
-      final row = FocusManager.instance.primaryFocus?.context
-          ?.findAncestorWidgetOfExactType<ListTile>();
-      if (row != null) {
-        final id = (row.key! as ValueKey<String>).value;
-        visited.add(id);
-        expect(search.selected?.id, id);
-        expect(find.byKey(row.key!).hitTestable(), findsOneWidget);
+      final selected = search.selected;
+      if (selected != null) {
+        visited.add(selected.id);
+        expect(find.byKey(ValueKey(selected.id)).hitTestable(), findsOneWidget);
+        expect(
+          tester
+              .widget<TextField>(
+                find.byKey(const ValueKey('swarm-search-input')),
+              )
+              .focusNode!
+              .hasFocus,
+          isTrue,
+        );
       }
     }
     // Focus crosses the initial viewport repeatedly as new rows are built.

@@ -60,7 +60,80 @@ failure is a failed run; remove only the recorded probe, never unrelated agents.
 For validation:
 
 ```sh
-npx tsc --noEmit --module nodenext --moduleResolution nodenext \
-  --target es2022 --allowImportingTsExtensions --skipLibCheck \
-  scripts/benchmark-terminal-latency.mts
+node --import tsx --test scripts/benchmark-route.test.ts
+npx tsc --noEmit --strict --module nodenext --moduleResolution nodenext \
+  --target es2023 --allowImportingTsExtensions --skipLibCheck \
+  scripts/benchmark-terminal-latency.mts scripts/benchmark-route.test.ts
 ```
+
+## Compare the three remote routes
+
+Add `--route p2p`, `--route turn`, or `--route relay` to opt into an **isolated
+source-built transport client**. Use the same remote machine, payload, sample
+count, and checkout for all three. Rotate route order between repetitions. The
+ordinary mode above continues to measure the installed daemon's automatic route.
+
+```sh
+npx tsx scripts/benchmark-terminal-latency.mts \
+  --machine MACHINE_ID --label office --route turn \
+  --samples 200 --control-samples 30 --revision SOURCE_COMMIT \
+  --output /private/tmp/office-turn-1.json
+```
+
+This mode hosts an ephemeral loopback WebSocket and the production
+`RemoteRelayPool` in the benchmark process. The loopback client, E2EE, wire format,
+remote daemon, and PTY remain real. The installed local daemon is not on the
+measured path; its version is recorded only as environment context. This shares
+one Node event loop between client and transport, so compare these three modes
+against each other, not as a before/after of the older installed-daemon results.
+
+- `p2p`: production negotiation with TURN credentials removed from this isolated
+  connection's offer policy, accepted only if the nominated ICE pair
+  has no relay candidate on either side. TURN fallback is an unavailable direct
+  trial, not a P2P result. This measures an available direct path, not the
+  production automatic route-selection success rate.
+- `turn`: the existing `TERMINAL_P2P_FORCE_RELAY` diagnostic flag is set only in
+  this process. A nominated relay candidate and Cloudflare policy hostnames are
+  required. The flag alone is not proof that traffic used TURN.
+- `relay`: production pool option `p2p: false` keeps terminal traffic on the
+  Harness backend WebSocket, including across automatic retry scheduling.
+
+Each run waits at most 35 seconds after probe readiness for the requested route.
+Every typing observation records a nominated candidate pair with addresses and
+ports removed, stream membership/migration state, and counters for actual binary
+sends and deliveries. It must have one input send and a matching PTY response on
+the expected path, with no opposite-path binary traffic during the observation.
+Missing candidate evidence, fallback, and mixed-route observations fail the run;
+retain them separately from the successful latency distributions. This checks
+one-at-a-time probe delivery, not arbitrary exactly-once semantics across outages.
+
+The adapter inspects the pinned production/werift internals and wraps send and
+delivery methods on its own pool for counters. Route restrictions apply only to
+this isolated connection; the installed daemon and production source are unchanged.
+Revalidate that instrumentation when upgrading those implementations. No candidate
+addresses, access tokens, TURN credentials, or private keys belong in published
+results. Console logs may identify machines: keep logs private and review failed
+result diagnostics before publishing.
+
+Authentication and the existing machine identity/pin are consumed read-only.
+Trust removal on this isolated connection affects only an in-memory snapshot.
+No key is generated or copied to disk. A scratch data directory prevents legacy
+state migration, and an expired login fails rather than refreshing or clearing
+the account. The active desktop's transport pool and sessions are never changed.
+Cleanup removes the one created terminal, closes the isolated pool and listener,
+and deletes the scratch directory before ending the process.
+
+For a serial, repeatable matrix with rotated route order and alternating target
+order, use a fresh directory:
+
+```sh
+python3 scripts/benchmark-route-series.py \
+  --target office=OFFICE_MACHINE_ID --target home=HOME_MACHINE_ID \
+  --samples 200 --control-samples 30 --repetitions 3 \
+  --output-dir /private/tmp/harness-route-series
+```
+
+The runner requires committed transport probe files, saves a public-label-only
+trial plan, and preserves every result and private log. It stops on missing
+artifacts or a known cleanup failure. A failed route trial is retained and the
+other routes continue; successful timings must never hide unavailable routes.

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/environment_preflight_screen.dart';
+import 'package:harness/widgets/terminal_progress.dart';
 
 Widget host(EnvironmentReadiness readiness, {bool reduceMotion = false}) =>
     MaterialApp(
@@ -23,7 +24,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.byIcon(Icons.hourglass_empty_rounded), findsOneWidget);
+    expect(find.byType(TerminalProgressLine), findsOneWidget);
     expect(tester.binding.hasScheduledFrame, isFalse);
   });
 
@@ -45,7 +46,7 @@ void main() {
             .isLiveRegion,
         isTrue,
       );
-      expect(find.text('Checking this computer'), findsOneWidget);
+      expect(find.text(r'$ harness doctor'), findsOneWidget);
       await tester.pumpWidget(
         host(
           EnvironmentReadiness(
@@ -59,8 +60,16 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('Environment ready'), findsOneWidget);
-      expect(find.text('Checking this computer'), findsNothing);
+      expect(
+        find.text('all checks passed · opening your workspace'),
+        findsOneWidget,
+      );
+      // The prompt line is the same in both states; what changes is the line
+      // under the bar.
+      expect(
+        find.text('read-only: nothing is installed by this check'),
+        findsNothing,
+      );
       expect(
         tester
             .getSemantics(status)

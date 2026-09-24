@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show min;
 
 import 'package:cryptography/cryptography.dart';
 import 'package:dio/dio.dart';
@@ -107,6 +108,10 @@ void main() {
     required String manifestVersion,
     String? shaOverride,
     int? sizeOverride,
+
+    /// Writes the body in pieces, as a CDN does, so a progress callback has
+    /// more than one number to report.
+    bool chunked = false,
   }) async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final base = 'http://127.0.0.1:${server!.port}';
@@ -124,7 +129,18 @@ void main() {
           }),
         );
       } else if (request.uri.path == '/Harness-macos.zip') {
-        request.response.add(zipBytes);
+        if (chunked) {
+          const pieces = 4;
+          final step = (zipBytes.length / pieces).ceil();
+          for (var at = 0; at < zipBytes.length; at += step) {
+            request.response.add(
+              zipBytes.sublist(at, min(at + step, zipBytes.length)),
+            );
+            await request.response.flush();
+          }
+        } else {
+          request.response.add(zipBytes);
+        }
       } else {
         request.response.statusCode = HttpStatus.notFound;
       }
@@ -288,6 +304,32 @@ void main() {
       expect(found.single.version, newVersion);
     },
   );
+
+  // What the banner counts. The manifest's size is the denominator, so the
+  // fraction is right even from a server that sends no Content-Length.
+  test('downloadAndStage reports the bytes as they arrive', () async {
+    await serveMetadataAndZip(manifestVersion: newVersion, chunked: true);
+    final updater = DesktopUpdater(enabled: true, dio: Dio(), isLinux: false);
+    final info = UpdateInfo(
+      version: newVersion,
+      url: 'http://127.0.0.1:${server!.port}/Harness-macos.zip',
+      sha256: zipSha,
+      size: zipBytes.length,
+    );
+    final seen = <(int, int)>[];
+    final staged = await updater.downloadAndStage(
+      info,
+      onProgress: (received, total) => seen.add((received, total)),
+    );
+    expect(staged, isNotNull, reason: 'the download itself must still verify');
+    expect(seen, isNotEmpty);
+    expect(seen.every((row) => row.$2 == zipBytes.length), isTrue);
+    expect(
+      seen.map((row) => row.$1).toList(),
+      orderedEquals(seen.map((row) => row.$1).toList()..sort()),
+    );
+    expect(seen.last.$1, zipBytes.length);
+  }, skip: _macOnly);
 
   test(
     'downloadAndStage verifies sha256 before trusting the download',

@@ -122,6 +122,23 @@ describe('agentFrame updatedAt', () => {
     expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
   })
 
+  // A row no hook has ever reached — a bare terminal, an engine still starting, a harness opened from
+  // the catalog (`resumePendingAgent` writes `lastHookAt: 0`) — answered the epoch, and the desk
+  // rendered its age as "20719d" and sorted it below everything ever used.
+  it('falls back to when the agent came into being, never to the epoch', async () => {
+    const bound = Date.UTC(2026, 8, 20, 9)
+    const created = Date.UTC(2026, 8, 19, 8)
+    const never = { ...session(null), updatedAt: Date.now(), lastHookAt: 0 }
+    expect((await agentFrame({ ...never, boundAt: bound, registeredAt: created }, context)).updatedAt)
+      .toBe('2026-09-20T09:00:00.000Z')
+    expect((await agentFrame({ ...never, boundAt: null, registeredAt: created }, context)).updatedAt)
+      .toBe('2026-09-19T08:00:00.000Z')
+    // Only stamps the row already carries: a client compares this field to decide whether the agent
+    // changed, so reading a clock here would redraw the row on every sync and reset its age.
+    const row = { ...never, boundAt: null, registeredAt: created }
+    expect((await agentFrame(row, context)).updatedAt).toBe((await agentFrame(row, context)).updatedAt)
+  })
+
   it('uses actual conversation activity even when an idle transcript was rewritten hours later', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agent-frame-'))
     try {

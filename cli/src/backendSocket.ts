@@ -33,12 +33,14 @@ import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
+import { LocalModels } from './lib/localModels.js'
 import { gridCapableEngines, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { listAllGridModels, resolveGridTarget } from './lib/gridModels.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
+import { readMachineResources } from './lib/machineResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
@@ -363,6 +365,7 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
 
 export class BackendSocket {
   private readonly gridFleet = new GridFleetRpc()
+  private readonly localModels = new LocalModels({ stateDir: join(env.ADAPTER_DATA_DIR, 'local-models') })
   private ws: WebSocket | null = null
   private connecting = false
   /** A 401 on the upgrade is being answered with a token refresh; that refresh owns the next connect. */
@@ -752,6 +755,10 @@ export class BackendSocket {
 
   /** Which grid this machine's agents can be pointed at — for `harness status` and the models RPC. */
   gridName(): string | null { return this.harnessGridName }
+
+  /** The account's private grid, resolved the way the models RPC resolves it — for a harness
+   *  workspace that must be told which grid is "yours" rather than work it out or ask. */
+  privateGridName(): Promise<string | null> { return this.resolveGridName() }
 
   /**
    * The account's private grid: the backend's word when it gave one, else what this machine can
@@ -1521,6 +1528,24 @@ export class BackendSocket {
 
     try {
       switch (type) {
+        case 'machine_resources':
+          // Sampling CPU must not hold up typing or other machine requests.
+          void readMachineResources()
+            .then(resources => reply(type, requestId, { ...resources }))
+            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
+          return
+        case 'grid_fleet_models_list':
+        case 'grid_fleet_model_start':
+        case 'grid_fleet_model_stop': {
+          // A daemon-owned operation survives panel closure and a lost reply.
+          // Keep hardware/catalog/network reads off the ordered terminal queue.
+          void this.resolveGridName().then(async grid => type === 'grid_fleet_models_list'
+            ? this.localModels.list(grid, payload.refresh === true)
+            : this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_start' ? 'start' : 'stop'))
+            .then(result => reply(type, requestId, { ...result }))
+            .catch(() => reply(type, requestId, { error: 'Models are unavailable. Try again.' }))
+          return
+        }
         case 'grid_fleet_capabilities':
           reply(type, requestId, { protocol: GRID_FLEET_PROTOCOL, gridCli: gridCliPresence(), maxTimeoutMs: GRID_FLEET_MAX_TIMEOUT_MS, thinkingControl: true })
           return

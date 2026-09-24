@@ -13,12 +13,60 @@ import { stoppedAgents } from './lib/stoppedAgents.js'
 import { AgentStopError } from './lib/stopAgentService.js'
 import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
+import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as storeCatalog from './dsh/catalog.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
+import { LocalModels } from './lib/localModels.js'
+
+describe('local model lifecycle RPCs', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it.each(['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop'])('dispatches %s and returns its correlated result', async type => {
+    const socket = new BackendSocket('fixture')
+    socket.setHarnessGridName('home')
+    const frames: any[] = []
+    socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    const list = vi.spyOn(LocalModels.prototype, 'list').mockResolvedValue({ models: [], busy: false, observedAt: 'fixture' })
+    const act = vi.spyOn(LocalModels.prototype, 'act').mockResolvedValue({ error: 'fixture refusal' })
+    socket.handleLocalFrame('local:models', { type, payload: { requestId: 'models-rpc', modelId: 'fixture/model', refresh: true } })
+    await vi.waitFor(() => expect(frames.some(frame => frame.type === `${type}_result`)).toBe(true))
+    expect(frames.find(frame => frame.type === `${type}_result`).payload.requestId).toBe('models-rpc')
+    if (type === 'grid_fleet_models_list') expect(list).toHaveBeenCalledWith('home', true)
+    else expect(act).toHaveBeenCalledWith('home', 'fixture/model', type.endsWith('start') ? 'start' : 'stop')
+    await socket.stop()
+  })
+
+  it('a slow catalog never blocks terminal or agent inventory, and errors stay redacted', async () => {
+    const socket = new BackendSocket('fixture')
+    socket.setHarnessGridName('home')
+    const frames: any[] = []
+    socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    let reject!: (cause: Error) => void
+    vi.spyOn(LocalModels.prototype, 'list').mockReturnValue(new Promise((_resolve, fail) => { reject = fail }))
+    socket.handleLocalFrame('local:models', { type: 'grid_fleet_models_list', payload: { requestId: 'catalog' } })
+    socket.handleLocalFrame('local:models', { type: 'agents_list', payload: { requestId: 'agents' } })
+    await vi.waitFor(() => expect(frames.some(frame => frame.type === 'agents_list_result')).toBe(true))
+    expect(frames.some(frame => frame.type === 'grid_fleet_models_list_result')).toBe(false)
+    reject(new Error('private-token'))
+    await vi.waitFor(() => expect(frames.some(frame => frame.type === 'grid_fleet_models_list_result')).toBe(true))
+    expect(frames.find(frame => frame.type === 'grid_fleet_models_list_result').payload).toMatchObject({ requestId: 'catalog', error: 'Models are unavailable. Try again.' })
+    expect(JSON.stringify(frames)).not.toContain('private-token')
+    await socket.stop()
+  })
+
+  it('rejects unencrypted remote lifecycle requests before reaching the model service', async () => {
+    const socket = new BackendSocket('fixture')
+    const act = vi.spyOn(LocalModels.prototype, 'act')
+    for (const type of ['grid_fleet_model_start', 'grid_fleet_model_stop']) {
+      await (socket as any).dispatchDown({ type, payload: { requestId: 'unsafe', modelId: 'fixture/model' } }, 'remote')
+    }
+    expect(act).not.toHaveBeenCalled()
+    await socket.stop()
+  })
+})
 
 describe('confirmed harness pause replies', () => {
   it.each(['unsupported', 'unconfirmed', 'confirmed'] as const)('%s stop never sends a false success', async state => {
@@ -784,6 +832,79 @@ describe('BackendSocket outbound queue', () => {
     }))
 
     await socket.unregisterLocalClient('local:test')
+    await socket.stop()
+  })
+
+  it('serves machine stats locally without blocking the next RPC while sampling', async () => {
+    let finish!: (value: machineResources.MachineResources) => void
+    const read = vi.spyOn(machineResources, 'readMachineResources').mockImplementation(
+      () => new Promise(resolve => { finish = resolve }),
+    )
+    const socket = new BackendSocket('token')
+    socket.runtimeModelsProvider = async () => []
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:stats', {
+      sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
+    })
+    socket.handleLocalFrame('local:stats', { type: 'machine_resources', payload: { requestId: 'stats' } })
+    socket.handleLocalFrame('local:stats', { type: 'models_list', payload: { requestId: 'models' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({
+      type: 'models_list_result', payload: { requestId: 'models', models: [] },
+    }))
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(frames.some(frame => frame.type === 'machine_resources_result')).toBe(false)
+    finish({ cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 })
+    await vi.waitFor(() => expect(frames).toContainEqual({
+      type: 'machine_resources_result',
+      payload: { requestId: 'stats', cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 },
+    }))
+    read.mockRejectedValueOnce(new Error('unavailable'))
+    socket.handleLocalFrame('local:stats', { type: 'machine_resources', payload: { requestId: 'retry' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({
+      type: 'machine_resources_result', payload: { requestId: 'retry', error: 'UNAVAILABLE' },
+    }))
+    await socket.unregisterLocalClient('local:stats')
+    await socket.stop()
+  })
+
+  it('returns remote machine stats only in a targeted encrypted reply', async () => {
+    const reading = { cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 }
+    vi.spyOn(machineResources, 'readMachineResources').mockResolvedValue(reading)
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+      type: 'machine_resources', payload: { requestId: 'stats' },
+    })
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    const sealed = { type: 'machine_resources_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } }
+    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue(sealed)
+    ws.message({
+      t: 'down', connId: 'paired',
+      frame: { type: 'machine_resources', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } },
+    })
+    await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('paired', 'machine_resources_result', 'stats', reading))
+    expect(parseSent(ws)).toContainEqual(expect.objectContaining({ targetConnId: 'paired', frame: sealed }))
+    expect(ws.sent.some(frame => frame.includes('memoryUsedBytes'))).toBe(false)
+    await socket.stop()
+  })
+
+  it('rejects unpaired plaintext stats requests before sampling the machine', async () => {
+    const read = vi.spyOn(machineResources, 'readMachineResources')
+    const socket = new BackendSocket('token')
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({
+      t: 'down', connId: 'unpaired',
+      frame: { type: 'machine_resources', payload: { requestId: 'stats' } },
+    })
+    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual(expect.objectContaining({
+      targetConnId: 'unpaired',
+      frame: { type: 'machine_resources_result', payload: { requestId: 'stats', error: 'E2EE_REQUIRED' } },
+    })))
+    expect(read).not.toHaveBeenCalled()
     await socket.stop()
   })
 

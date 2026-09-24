@@ -297,8 +297,11 @@ class _PillState {
 
   static _PillState of(AppNotifier notifier, {required bool checking}) {
     if (notifier.isInstallingUpdate) {
+      // The same number the banner and the dialog show; without one the
+      // download has not started reporting yet, or is being unpacked.
+      final percent = notifier.updateDownloadPercent;
       return _PillState(
-        'Installing…',
+        percent == null ? 'Installing…' : 'Installing… $percent%',
         grid.AppPalette.accentOnSurface,
         wash: true,
       );

@@ -512,6 +512,52 @@ export async function clearMachineAppState(machineId: string): Promise<void> {
   }
 }
 
+// ── new-id quota (how fast one account may mint machine / device rows) ────────────────────────────────
+// Both are resolved-or-created from a SELF-DECLARED computer id, so a valid token plus a loop of fresh
+// ids would otherwise mint rows without bound. Fixed windows, one hour and one day, counted in Redis
+// because every replica must share them. Called only on the CREATE path — a reconnect never spends one.
+const NEW_ID_WINDOWS = [
+  { suffix: 'h', ms: 60 * 60_000 },
+  { suffix: 'd', ms: 24 * 60 * 60_000 },
+] as const
+
+// INCR every window, arming its expiry on first use; return the counts in KEYS order. One round trip,
+// and atomic, so two replicas cannot both read "under the limit" off the same count.
+const NEW_ID_QUOTA_SCRIPT = `
+local out = {}
+for i, key in ipairs(KEYS) do
+  local n = redis.call('incr', key)
+  if n == 1 then redis.call('pexpire', key, ARGV[i]) end
+  out[i] = n
+end
+return out`
+
+export type NewIdKind = 'machine' | 'device'
+
+function newIdLimits(kind: NewIdKind): [number, number] {
+  return kind === 'machine'
+    ? [env.HARNESS_NEW_MACHINE_PER_HOUR, env.HARNESS_NEW_MACHINE_PER_DAY]
+    : [env.HARNESS_NEW_DEVICE_PER_HOUR, env.HARNESS_NEW_DEVICE_PER_DAY]
+}
+
+/**
+ * Spend one new-id for `userId`; false when any window is over its limit (0 = window disabled).
+ * Fails OPEN on a Redis error: the per-account row ceilings still hold, and refusing every first login
+ * during a Redis blip would be worse than a few extra rows.
+ */
+export async function consumeNewIdQuota(kind: NewIdKind, userId: string): Promise<boolean> {
+  const limits = newIdLimits(kind)
+  if (limits.every((l) => l <= 0)) return true
+  try {
+    const keys = NEW_ID_WINDOWS.map((w) => `newid:${kind}:${userId}:${w.suffix}`)
+    const counts = await pub.eval(NEW_ID_QUOTA_SCRIPT, keys.length, ...keys, ...NEW_ID_WINDOWS.map((w) => w.ms)) as number[]
+    return counts.every((n, i) => limits[i]! <= 0 || n <= limits[i]!)
+  } catch (err) {
+    logger.error('[bus] consumeNewIdQuota failed — allowing', err, { kind, userId })
+    return true
+  }
+}
+
 // ── device presence (is a paired device's socket currently connected?) ─────────────────────────────
 // One key PER DEVICE (`device:{deviceId}:conn`) — a user with many devices has one independent key,
 // refresh loop and supersede scope per device. The VALUE is the connection's own token so that when
@@ -531,18 +577,28 @@ export async function setDevicePresence(deviceId: string, connToken: string, ttl
   }
 }
 
-/** Conditional delete: only removes the key if it still holds THIS connection's token.
- *  Returns true when the key is gone afterwards (deleted by us or already absent). */
-export async function clearDevicePresence(deviceId: string, connToken: string): Promise<boolean> {
+/**
+ * What a conditional clear observed. The caller needs all three apart, because they justify
+ * different things (see deviceWs.ts closeBoth):
+ *  - `cleared`    the key is gone — this socket really was the device's last one.
+ *  - `superseded` the key is held by a NEWER connection: the device is ONLINE on another socket and
+ *                 this one no longer speaks for it. Reached whenever a device reconnects before its
+ *                 previous socket is reaped, which is ordinary, not exceptional.
+ *  - `unknown`    Redis could not be reached, so neither of the above is established.
+ */
+export type DevicePresenceClear = 'cleared' | 'superseded' | 'unknown'
+
+/** Conditional delete: only removes the key if it still holds THIS connection's token. */
+export async function clearDevicePresence(deviceId: string, connToken: string): Promise<DevicePresenceClear> {
   try {
     await pub.eval(
       "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
       1, devicePresenceKey(deviceId), connToken,
     )
-    return !(await pub.get(devicePresenceKey(deviceId)))
+    return (await pub.get(devicePresenceKey(deviceId))) ? 'superseded' : 'cleared'
   } catch (err) {
     logger.error('[bus] clearDevicePresence failed', err, { deviceId })
-    return false
+    return 'unknown'
   }
 }
 

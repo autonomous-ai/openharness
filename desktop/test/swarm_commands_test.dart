@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:xterm/xterm.dart';
 
 import 'swarm_interactions_test.dart' show chord;
@@ -11,6 +13,91 @@ import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  for (final pointer in [false, true]) {
+    testWidgets(
+      'Cmd-P hands New Harness focus to the form without launching (pointer=$pointer)',
+      (tester) async {
+        final previousEntry = newHarnessOpensInBox;
+        newHarnessOpensInBox = true;
+        addTearDown(() => newHarnessOpensInBox = previousEntry);
+        final app = createApp();
+        final frames = <TerminalBinaryFrame>[];
+        final pane = app.adoptSessionForTest(terminal('a0', frames));
+        addTearDown(app.dispose);
+        await mount(tester, app);
+        final original = app.activeSwarm;
+        final input = find.byKey(const ValueKey('swarm-search-input'));
+        await chord(tester, LogicalKeyboardKey.keyP);
+        await tester.enterText(input, '> New Harness');
+        await tester.pump();
+        final command = find.byKey(const ValueKey('command:agent.new'));
+        expect(command, findsOneWidget);
+        if (pointer) {
+          await tester.tap(command);
+        } else {
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        }
+        await tester.pumpAndSettle();
+        expect(input, findsNothing);
+        expect(find.byType(NewHarnessForm), findsOneWidget);
+        expect(app.activeSwarm, same(original));
+        expect(app.panes.single, same(pane));
+        expect(frames, isEmpty);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byType(NewHarnessForm), findsNothing);
+        expect(
+          tester
+              .widget<TerminalView>(find.byType(TerminalView))
+              .focusNode!
+              .hasFocus,
+          isTrue,
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        expect(frames.single.bytes, [27, 91, 68]);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('an unmatched command cannot execute the previous selection', (
+    tester,
+  ) async {
+    final app = createApp();
+    final frames = <TerminalBinaryFrame>[];
+    final pane = app.adoptSessionForTest(terminal('a0', frames));
+    addTearDown(app.dispose);
+    await mount(tester, app);
+    final input = find.byKey(const ValueKey('swarm-search-input'));
+    await chord(tester, LogicalKeyboardKey.keyP);
+    await tester.enterText(input, '> pin');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('command:pane.pin')), findsOneWidget);
+    await tester.enterText(input, '> no-command-matches-this-924');
+    await tester.pump();
+    for (final key in [
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowUp,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.numpadEnter,
+    ]) {
+      await tester.sendKeyEvent(key);
+      await tester.pump();
+      expect(input, findsOneWidget);
+      expect(app.isPanePinned(pane), isFalse);
+      expect(frames, isEmpty);
+    }
+    await tester.enterText(input, '> pin');
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(app.isPanePinned(pane), isTrue);
+    expect(input, findsNothing);
+    expect(frames, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test(
     'commands are opt-in, cannot add agents and recheck availability',
     () async {

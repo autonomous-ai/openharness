@@ -5,16 +5,20 @@ const findFirst = vi.hoisted(() => vi.fn())
 const update = vi.hoisted(() => vi.fn())
 const updateMany = vi.hoisted(() => vi.fn())
 const getDevicePresence = vi.hoisted(() => vi.fn())
+const count = vi.hoisted(() => vi.fn())
+const create = vi.hoisted(() => vi.fn())
+const consumeNewIdQuota = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
-    deviceBinding: { findMany, findFirst, update, updateMany },
+    deviceBinding: { findMany, findFirst, count, create, update, updateMany },
     machine: { findMany: vi.fn() },
   },
   machineAlive: {},
 }))
-vi.mock('../lib/bus.js', () => ({ getDevicePresence }))
+vi.mock('../lib/bus.js', () => ({ getDevicePresence, consumeNewIdQuota }))
 
+import { Prisma } from '@prisma/client'
 import { deviceService } from './DeviceService.js'
 
 const device = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -163,5 +167,63 @@ describe('detailForUser', () => {
   it('is null for another user-s device', async () => {
     findFirst.mockResolvedValue(null)
     expect(await deviceService.detailForUser('dev-1', 'u2')).toBeNull()
+  })
+})
+
+describe('resolveOrCreateForComputer', () => {
+  const resolve = () => deviceService.resolveOrCreateForComputer('u1', 'prod', 'a'.repeat(32), 'laptop')
+
+  const notFound = () => new Prisma.PrismaClientKnownRequestError('missing', { code: 'P2025', clientVersion: 'x' })
+
+  beforeEach(() => {
+    count.mockResolvedValue(0)
+    consumeNewIdQuota.mockResolvedValue(true)
+    create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => device(data))
+    // Default: no row yet — the touch misses. A test that wants a known device overrides once.
+    update.mockRejectedValueOnce(notFound())
+    update.mockImplementation(async ({ where }: { where: { deviceId: string } }) => device({ deviceId: where.deviceId }))
+  })
+
+  it('a known device reconnects in one write, without touching the ceiling or the new-id quota', async () => {
+    update.mockReset()
+    update.mockResolvedValue(device())
+    await resolve()
+    expect(update).toHaveBeenCalledOnce()
+    expect(count).not.toHaveBeenCalled()
+    expect(consumeNewIdQuota).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('rethrows a touch failure that is not "no such row"', async () => {
+    update.mockReset()
+    update.mockRejectedValue(new Error('mongo down'))
+    await expect(resolve()).rejects.toThrow('mongo down')
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('a new device spends one new-id and is created with a derived id', async () => {
+    const row = await resolve()
+    expect(consumeNewIdQuota).toHaveBeenCalledWith('device', 'u1')
+    expect(create).toHaveBeenCalledOnce()
+    expect(row.deviceId).toMatch(/^cmp-[0-9a-f]{24}$/)
+  })
+
+  it('refuses a new device past the per-account ceiling with 409, before spending quota', async () => {
+    count.mockResolvedValue(20)
+    await expect(resolve()).rejects.toMatchObject({ statusCode: 409, code: 'TOO_MANY_DEVICES' })
+    expect(consumeNewIdQuota).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('refuses a new device over the new-id rate with 429', async () => {
+    consumeNewIdQuota.mockResolvedValue(false)
+    await expect(resolve()).rejects.toMatchObject({ statusCode: 429, code: 'NEW_DEVICE_RATE_LIMITED' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('a lost create race converges on the winner\'s row', async () => {
+    create.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'x' }))
+    await resolve()
+    expect(update).toHaveBeenCalledTimes(2) // the missed touch, then the converging one
   })
 })

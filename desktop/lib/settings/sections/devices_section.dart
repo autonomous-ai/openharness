@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../autonomous_device/autonomous_device_cli.dart';
 import '../../core/test_run.dart';
@@ -30,6 +32,7 @@ class _DevicesSectionState extends State<DevicesSection> {
   bool _refreshing = false;
   int _generation = 0;
   bool _unsupported = false;
+  bool _networkBlocked = false;
   String? _error;
   String? _actionError;
   String? _selectedDevice;
@@ -74,13 +77,32 @@ class _DevicesSectionState extends State<DevicesSection> {
     }
   }
 
+  /// A refused local network loses discovery only: paired robots still list, and the
+  /// notice says where to allow it instead of "no robots found".
+  Future<Map<String, dynamic>> _discoverOrBlocked() async {
+    try {
+      return await _cli.discover();
+    } on AutonomousDeviceCliException catch (error) {
+      if (!error.localNetworkBlocked) rethrow;
+      return {'devices': const [], 'localNetworkBlocked': true};
+    }
+  }
+
+  void _openLocalNetworkSettings() => unawaited(
+    launchUrl(
+      Uri.parse(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork',
+      ),
+    ),
+  );
+
   Future<void> _refresh() async {
     if (_refreshing || (kUnderTest && widget.cli == null)) return;
     _refreshing = true;
     final generation = _generation;
     try {
       final status = await _cli.status();
-      final results = await Future.wait([_cli.list(), _cli.discover()]);
+      final results = await Future.wait([_cli.list(), _discoverOrBlocked()]);
       if (!mounted || generation != _generation) return;
       final devices = <Map<String, dynamic>>[
         for (final row in results[0]['devices'] as List? ?? [])
@@ -93,6 +115,7 @@ class _DevicesSectionState extends State<DevicesSection> {
               (row['id'] as String).isNotEmpty)
             row,
       ];
+      final networkBlocked = results[1]['localNetworkBlocked'] == true;
       if (_selectedDevice != null &&
           !discovered.any((device) => device['id'] == _selectedDevice)) {
         _selectedDevice = null;
@@ -101,12 +124,14 @@ class _DevicesSectionState extends State<DevicesSection> {
       if (_loading ||
           _unsupported ||
           _error != null ||
+          networkBlocked != _networkBlocked ||
           jsonEncode([status, devices, discovered]) !=
               jsonEncode([_status, _devices, _discovered])) {
         setState(() {
           _status = status;
           _devices = devices;
           _discovered = discovered;
+          _networkBlocked = networkBlocked;
           _loading = false;
           _unsupported = false;
           _error = null;
@@ -300,6 +325,23 @@ class _DevicesSectionState extends State<DevicesSection> {
                 ),
               ),
             if (!_unsupported && !_loading) ...[
+              if (_networkBlocked) ...[
+                SettingRow(
+                  key: const Key('autonomous-device-network-blocked'),
+                  title: 'Allow Harness on your local network',
+                  alignTop: true,
+                  detail:
+                      'macOS is blocking Harness from your local network, so it can’t find Autonomous robots. '
+                      'Turn on Harness in Privacy & Security › Local Network, then refresh.',
+                  control: Platform.isMacOS
+                      ? action(
+                          'Open Settings',
+                          disabled ? null : _openLocalNetworkSettings,
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                const SizedBox(height: 10),
+              ],
               for (final device in _devices) ...[
                 SettingRow(
                   title: device['label']?.toString() ?? 'Autonomous robot',
@@ -329,7 +371,9 @@ class _DevicesSectionState extends State<DevicesSection> {
                     ? 'Pair a device'
                     : 'Pair another device',
                 alignTop: true,
-                detail: _discovered.isEmpty
+                detail: _networkBlocked
+                    ? 'Allow local network access above to find your robot.'
+                    : _discovered.isEmpty
                     ? 'No Autonomous robots found. Keep your device on the same network, then refresh.'
                     : 'Select your device and enter its six-character code. Separators are allowed, for example ABC-123.',
                 control: SizedBox(

@@ -25,7 +25,8 @@ void main() {
     final panelRect = tester.getRect(results);
     final fieldRect = tester.getRect(field);
     expect(fieldRect.left, panelRect.left);
-    expect(fieldRect.right, panelRect.right);
+    expect(fieldRect.right, lessThanOrEqualTo(panelRect.right));
+    expect(fieldRect.width, greaterThan(panelRect.width / 2));
     await chord(tester, LogicalKeyboardKey.keyN);
     expect(find.byType(AlertDialog), findsOneWidget);
     expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);
@@ -62,11 +63,8 @@ void main() {
       await tester.pump();
       expect(find.byType(Checkbox), findsNothing);
       expect(app.panes, isEmpty);
-      expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
-      expect(
-        find.textContaining('enter  open', findRichText: true),
-        findsOneWidget,
-      );
+      expect(find.byKey(const ValueKey('swarm-search-count')), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
       expect(find.byKey(const ValueKey('swarm-search-accept')), findsNothing);
       if (activate == 'click') {
         await tester.tap(find.byKey(ValueKey(agentDestinationId('m', 'a0'))));

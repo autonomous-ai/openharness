@@ -348,13 +348,14 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'machines.list',
-    'Open Machines Manager',
+    'Open Machines',
     ShortcutGroup.actions,
     nativeAction: 'machineList',
+    extraKeys: ['cmd+m'],
   ),
   const HarnessCommand(
     'machine.link',
-    'Link machine',
+    'Connect another machine',
     ShortcutGroup.actions,
     nativeAction: 'linkMachine',
   ),

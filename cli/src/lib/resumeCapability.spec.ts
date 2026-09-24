@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { LAUNCH_RESUME_FLAG } from './engineLaunch.js'
-import { confirmsResumeByHook, resumeMode, resumesConversation } from './resumeCapability.js'
+import { awaitsResumeHook, confirmsResumeByHook, resumeMode, resumesConversation } from './resumeCapability.js'
 
 describe('what a paused harness can promise, per engine', () => {
   it('gives every engine exactly one mode, from the launch table itself', () => {
@@ -37,6 +37,21 @@ describe('what a paused harness can promise, per engine', () => {
     // and amp hook on a turn; muse never hooks. Waiting for one only hangs the resume.
     for (const engine of ['opencode', 'kilo', 'copilot', 'pi', 'amp', 'muse', 'cursor', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'terminal'] as AgentEngine[]) {
       expect(confirmsResumeByHook(engine)).toBe(false)
+    }
+  })
+
+  it('waits for a resume hook only where one is both asked for and sent', () => {
+    // The pair that hooks, with a conversation to confirm: wait for it.
+    expect(awaitsResumeHook('claude', 'sess-1')).toBe(true)
+    expect(awaitsResumeHook('codex', 'sess-1')).toBe(true)
+    // Nothing was asked for, so the id the engine reports is a new one by design.
+    expect(awaitsResumeHook('claude', null)).toBe(false)
+    expect(awaitsResumeHook('codex', '')).toBe(false)
+    // The engine that made this rule worth naming: a restored opencode row waiting for a hook that
+    // `--session <id>` never sends read "Starting" while it was working.
+    expect(awaitsResumeHook('opencode', 'ses_f333bf6d8ffe')).toBe(false)
+    for (const engine of ['kilo', 'copilot', 'pi', 'amp', 'muse', 'hermes', 'grok', 'agy', 'devin', 'terminal'] as AgentEngine[]) {
+      expect(awaitsResumeHook(engine, 'sess-1')).toBe(false)
     }
   })
 

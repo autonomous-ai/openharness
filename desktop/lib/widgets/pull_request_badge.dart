@@ -83,17 +83,10 @@ class _PullRequestBadgeState extends State<PullRequestBadge> {
         uri?.host == 'github.com' &&
         uri!.userInfo.isEmpty &&
         uri.path.endsWith('/pull/$number');
-    final label = found
-        ? '${widget.compact ? '' : 'PR '}#$number · $state'
-        : result == null
-        ? 'PR …'
-        : 'PR unavailable';
+    if (!found) return const SizedBox.shrink();
+    final label = '${widget.compact ? '' : 'PR '}#$number · $state';
     return Tooltip(
-      message: found
-          ? 'PR #$number · $state — Open on GitHub'
-          : result == null
-          ? 'Checking pull request status'
-          : 'Could not check GitHub. Check gh installation, sign-in and repository access on the agent’s machine. This does not mean there is no PR.',
+      message: 'PR #$number · $state — Open on GitHub',
       child: TextButton(
         style: TextButton.styleFrom(
           minimumSize: const Size(0, 28),

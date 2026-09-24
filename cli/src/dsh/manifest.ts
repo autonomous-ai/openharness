@@ -125,6 +125,22 @@ export function dshEngine(manifest: DshManifest): DshManifest['engine'] | null {
   return manifest.engine ?? null
 }
 
+/**
+ * The `agent.env` key a harness names its permission mode in (`PERMISSION_MODES`), run whatever New
+ * Harness picked — for a harness whose job the engine's sandbox cannot do (Grid starts model servers
+ * that need the GPU).
+ *
+ * An env key rather than a manifest field on purpose: every released CLI parses `agent` strictly, so
+ * a new field made older daemons refuse the whole package, and Get failed until they updated. Every
+ * CLI already accepts an `agent.env` key; an older one only exports it, unused.
+ */
+export const DSH_PERMISSION_MODE_ENV = 'DSH_PERMISSION_MODE'
+
+/** The permission mode [manifest] pins, or null. */
+export function dshPinnedPermissionMode(manifest: DshManifest): string | null {
+  return manifest.agent?.env?.[DSH_PERMISSION_MODE_ENV]?.trim() || null
+}
+
 export type ManifestResult =
   | { ok: true; manifest: DshManifest }
   | { ok: false; error: string }

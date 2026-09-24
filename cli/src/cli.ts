@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
 import { HarnessShareOwner } from './sharing/owner.js'
@@ -72,7 +73,7 @@ import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeFlags } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeApproves, permissionModeFlags } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
@@ -87,6 +88,8 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
+import { awaitsResumeHook } from './lib/resumeCapability.js'
+import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
@@ -99,12 +102,12 @@ import { prepareCodexResume } from './engines/codex/portableHistory.js'
 import { buildHarnessSessionLabel } from './lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from './lib/tmuxAgentDiscovery.js'
 import { installedDsh } from './dsh/installed.js'
-import { dshVerdictPath, dshViewerName } from './dsh/manifest.js'
+import { dshPinnedPermissionMode, dshVerdictPath, dshViewerName } from './dsh/manifest.js'
 import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { materializeWorkspace } from './dsh/materialize.js'
-import { dshLaunch } from './dsh/launch.js'
+import { dshLaunch, type DshAccount } from './dsh/launch.js'
 import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
@@ -1826,6 +1829,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // How long the RPCs gate on an attempt, and how many attempts there are, live in the runner —
   // `lib/gridAttach.ts`, beside the reconcile itself, so the coordination has a unit test rather
   // than only a comment. Everything below is the daemon-shaped half: what one attempt actually does.
+  try { ensureBundledModelManager() }
+  catch (error) { console.warn('[model-manager] Could not prepare the bundled harness:', error instanceof Error ? error.message : String(error)) }
+
   const gridAttach = createGridAttachRunner({
     maxAttempts: GRID_ATTACH_MAX_ATTEMPTS,
     minIntervalMs: GRID_ATTACH_MIN_INTERVAL_MS,
@@ -2768,19 +2774,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   }
 
-  /** Retain the conversation's identity; a surviving shell gets its own live identity. */
-  const retainExitedSession = (entry: RegisteredSession, paneAlive: boolean): void => {
-    stoppedAgents.save(entry)
-    const saved = stoppedAgents.get(entry.agentId)!
-    invalidateTerminalControl(entry.agentId)
-    input.forget(entry.agentId)
-    detachDsh(entry.agentId)
-    const terminal = paneAlive ? registry.releaseEngine(entry.agentId, true) : null
-    if (!paneAlive) registry.removeAgent(entry.agentId)
-    syncRecapPool()
-    void backend.publishStoppedAgent(saved).catch(error => console.warn('[resume] could not announce saved harness', error))
-    if (terminal) announceSession(terminal, { device: false })
-  }
+  const retainExitedSession = createRetainExitedSession({
+    stoppedAgents,
+    registry,
+    send: frame => backend.send(frame),
+    publishStoppedAgent: saved => backend.publishStoppedAgent(saved),
+    // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
+    announceSession: session => announceSession(session, { device: false }),
+    invalidateTerminalControl,
+    forgetInput: agentId => input.forget(agentId),
+    detachDsh,
+    syncRecapPool,
+    warn: (message, error) => console.warn(message, error),
+  })
 
   type RegisteredMeta = {
     isNew: boolean
@@ -3113,7 +3119,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
       const withDsh = registry.byAgent(current.agentId)
       if (withDsh?.dsh) attachDsh(withDsh)
-      if (wasLaunching && !current.resumeOnly) registry.setLaunch(current.agentId, { state: 'ready' })
+      // A strict-resume row waits for the hook that proves the engine reopened THAT conversation —
+      // but only where such a hook is coming. For every other engine this live process, in this
+      // row's own pane, IS the proof (`resumeCapability.ts`), and refusing to say so left an
+      // opencode harness restored after a reboot reading "Starting" while it was working. The Open
+      // path already marks those ready itself (`resumeAgentService.ts`); this is the same rule on
+      // the door restore comes through.
+      const waitingForResumeHook = !!current.resumeOnly && awaitsResumeHook(current.engine, current.sessionId)
+      if (wasLaunching && !waitingForResumeHook) registry.setLaunch(current.agentId, { state: 'ready' })
       await bindObservedAgent(observed)
       if (wasDormant || wasLaunching || adopted) {
         const active = registry.byAgent(current.agentId)
@@ -4165,7 +4178,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[dsh] ${id} is not installed on this machine · relaunching as its plain base engine`)
         return null
       }
-      return dshLaunch(installed, workspace)
+      return dshLaunch(installed, workspace, { privateGrid: backend.gridName() })
     },
   }
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
@@ -4517,6 +4530,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     } catch {
       return { ok: false, error: 'CWD_NOT_FOUND' }
     }
+    // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
+    // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
+    // and recorded on the row like a chosen one, so a relaunch keeps it.
+    const pinnedDsh = dsh ? installedDsh(dsh) : null
+    const pinnedMode = pinnedDsh ? dshPinnedPermissionMode(pinnedDsh.manifest) : null
+    if (pinnedMode && permissionModeFlags(engine, pinnedMode)) {
+      permissionMode = pinnedMode
+      bypassPermission = permissionModeApproves(pinnedMode)
+    }
     // `--approve-for-me` was added after older Codex CLI releases. Refuse the
     // incompatible Auto mode before opening a pane, rather than letting Codex
     // reject the flag and leaving the person in an unexpected fallback shell.
@@ -4544,6 +4566,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     let dshArgs: string[] = []
     /** A DSH's own name ("Blender"), which the agent is named after instead of its engine. */
     let dshLabel: string | undefined
+    /** What the harness is told about the signed-in account (its private grid), not left to guess. */
+    let dshAccount: DshAccount = {}
     if (dsh) {
       const installed = installedDsh(dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
@@ -4559,7 +4583,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
       try {
-        const materialized = await materializeWorkspace(installed, cwd)
+        dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
+        const materialized = await materializeWorkspace(installed, cwd, dshAccount)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went in: the folder is the harness's, and Claude Code need not ask.
@@ -4574,7 +4599,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const launch = dshLaunch(installed, cwd)
+      const launch = dshLaunch(installed, cwd, dshAccount)
       dshEnv = launch.env
       dshArgs = launch.args
       dshLabel = installed.manifest.name
@@ -4736,7 +4761,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (source.dsh) {
       const installed = installedDsh(source.dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
-      const launch = dshLaunch(installed, source.cwd)
+      const launch = dshLaunch(installed, source.cwd, { privateGrid: backend.gridName() })
       dshEnv = launch.env
       dshArgs = launch.args
       dshLabel = installed.manifest.name

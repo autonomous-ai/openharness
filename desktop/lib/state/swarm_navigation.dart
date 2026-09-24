@@ -248,6 +248,7 @@ class SwarmDestination {
     this.detailBranchOffset,
     this.terminalDetail,
     this.promptContext,
+    this.lastActivityAt,
     required this.swarmId,
     required this.current,
     this.machineId,
@@ -288,6 +289,7 @@ class SwarmDestination {
   /// and machine before paths and branches, which are more likely to truncate.
   final String? terminalDetail;
   final PromptContext? promptContext;
+  final DateTime? lastActivityAt;
   final String? swarmId, machineId, agentId, engine;
   final String? closedId;
   final String? commandId, shortcut;
@@ -674,6 +676,7 @@ class SwarmLocationCatalog {
       agentId: pane.agentId,
       previewKey: agent == null ? null : app.previewKey(pane.machineId, agent),
       engine: engine,
+      lastActivityAt: agent?.lastActivityAt,
       current: swarm.id == app.activeSwarmId && pane.id == app.focusedPaneId,
       // The agent's own title first, ranked like the name: "board fab check"
       // finds the agent whose work that is, not whichever recap mentions fab.
@@ -688,6 +691,34 @@ class SwarmLocationCatalog {
       titleFields: agent?.title == null ? 1 : 2,
     );
   }
+}
+
+/// Open Harness uses the same activity timestamp it shows beside each session.
+/// Undated rows come last; ties retain visit recency and search relevance.
+List<SwarmDestination> rankSwarmDestinationsByActivity(
+  List<SwarmDestination> all,
+  String query, {
+  List<String> recent = const [],
+  SessionPreviewStore? previews,
+}) {
+  final matches = rankSwarmDestinations(all, query, previews: previews);
+  final rank = {for (var i = 0; i < matches.length; i++) matches[i].id: i};
+  final visits = {for (var i = 0; i < recent.length; i++) recent[i]: i};
+  matches.sort((a, b) {
+    final aTime = a.lastActivityAt;
+    final bTime = b.lastActivityAt;
+    final activity = aTime == null
+        ? (bTime == null ? 0 : 1)
+        : bTime == null
+        ? -1
+        : bTime.compareTo(aTime);
+    if (activity != 0) return activity;
+    final visit = (visits[a.id] ?? recent.length).compareTo(
+      visits[b.id] ?? recent.length,
+    );
+    return visit != 0 ? visit : rank[a.id]!.compareTo(rank[b.id]!);
+  });
+  return matches;
 }
 
 /// Each swarm is one selectable parent, followed by its matching agent views.
@@ -1212,6 +1243,7 @@ List<SwarmDestination> swarmDestinations(
         agentId: agentId,
         previewKey: row == null ? null : app.previewKey(machineId, row.$2),
         engine: engine,
+        lastActivityAt: row?.$2.lastActivityAt,
         current:
             owner?.id == app.activeSwarmId && pane?.id == app.focusedPaneId,
         // The agent's own title is ranked like its name (see titleFields):
