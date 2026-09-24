@@ -5104,6 +5104,15 @@ class AppNotifier extends ChangeNotifier {
     timeout: const Duration(seconds: 90),
   );
 
+  Future<Map<String, dynamic>> apiConnections(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) => _conn(machineId).request(
+    'api_connections',
+    payload: payload,
+    timeout: const Duration(seconds: 10),
+  );
+
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
