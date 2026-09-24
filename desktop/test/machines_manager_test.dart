@@ -317,6 +317,42 @@ void main() {
     },
   );
 
+  for (final nativeTabs in [false, true]) {
+    testWidgets(
+      'New terminal without a machine opens setup and preserves the tab (native=$nativeTabs)',
+      (tester) async {
+        final app = createApp();
+        app.machines = [];
+        app.machineStates.clear();
+        final tab = app.activeSwarm;
+        await mount(tester, app, nativeTabs: nativeTabs);
+
+        if (nativeTabs) {
+          final action = native(tester, 'newTerminal');
+          await tester.pumpAndSettle();
+          await action;
+        } else {
+          await key(tester, LogicalKeyboardKey.keyT, cmd: true, shift: true);
+          await tester.pumpAndSettle();
+        }
+
+        expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+        expect(find.text('Add a second machine'), findsOneWidget);
+        expect(app.activeSwarm, same(tab));
+        expect(app.panes, isEmpty);
+        expect(tester.takeException(), isNull);
+
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+        expect(app.activeSwarm, same(tab));
+        expect(app.panes, isEmpty);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      },
+    );
+  }
+
   testWidgets('a fresh machine opens creation with that machine selected', (
     tester,
   ) async {
