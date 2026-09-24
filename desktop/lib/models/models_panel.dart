@@ -11,8 +11,9 @@ import 'local_model.dart';
 import 'model_manager_controller.dart';
 import 'model_mark.dart';
 import '../widgets/onboarding_card.dart';
+import 'api_connections_panel.dart';
 
-enum ModelsTab { subscriptions, local, shared }
+enum ModelsTab { all, subscriptions, local, shared, apis }
 
 class ModelsPanel extends StatefulWidget {
   const ModelsPanel({
@@ -24,7 +25,7 @@ class ModelsPanel extends StatefulWidget {
     this.newModelIds = const {},
     this.showOnboarding = false,
     this.onDismissOnboarding,
-    this.initialTab = ModelsTab.subscriptions,
+    this.initialTab = ModelsTab.all,
   });
   final ModelManagerController controller;
   final ModelsMenuController subscriptions;
@@ -42,8 +43,15 @@ class _ModelsPanelState extends State<ModelsPanel> {
   bool _exploring = false;
   final _searchFocus = FocusNode(debugLabel: 'Search models');
   late ModelsTab _selectedTab = widget.initialTab;
+  bool _editingApi = false;
   ModelManagerController get controller => widget.controller;
   ModelsMenuController get subscriptions => widget.subscriptions;
+  @override
+  void initState() {
+    super.initState();
+    unawaited(controller.apis.refresh());
+  }
+
   @override
   void dispose() {
     _search.dispose();
@@ -53,9 +61,10 @@ class _ModelsPanelState extends State<ModelsPanel> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([controller, subscriptions]),
+    listenable: Listenable.merge([controller, subscriptions, controller.apis]),
     builder: (context, _) {
       final query = _search.text.trim().toLowerCase();
+      final all = _selectedTab == ModelsTab.all;
       final subscriptionRows = subscriptions.rows;
       final matchingSubscriptions = subscriptionRows.where(
         (row) => [
@@ -91,6 +100,17 @@ class _ModelsPanelState extends State<ModelsPanel> {
                 m.id.toLowerCase().contains(query),
           )
           .toList();
+      final hasShared = matchingShared.any(
+        (section) => section.models.isNotEmpty,
+      );
+      final hasApis = controller.apis.connections.any(
+        (row) => row.matches(query),
+      );
+      final noMatches =
+          matchingSubscriptions.isEmpty &&
+          models.isEmpty &&
+          !hasShared &&
+          !hasApis;
       int rank(LocalModel m) => controller.operationFor(m)?.active == true
           ? 0
           : m.running
@@ -136,7 +156,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     ],
                   ),
                 ),
-                if (widget.showOnboarding && !_exploring)
+                if (widget.showOnboarding && !_exploring && !_editingApi)
                   OnboardingCard(
                     title: 'Power a harness with local AI',
                     description: 'Choose a model that runs on your computer. Then select it in a harness’s model picker.',
@@ -148,56 +168,63 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     }),
                     onDismiss: widget.onDismissOnboarding ?? () {},
                   ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: TextField(
-                    key: const ValueKey('models-search'),
-                    controller: _search,
-                    focusNode: _searchFocus,
-                    autofocus: true,
-                    style: AppType.monoLabel(),
-                    decoration: InputDecoration(
-                      hintText: _selectedTab == ModelsTab.subscriptions
-                          ? 'Search subscriptions…'
-                          : 'Search models…',
-                      hintStyle: AppType.monoLabel(color: AppPalette.textFaint),
-                      prefixIcon: Icon(
-                        LucideIcons.search,
-                        size: 15,
-                        color: AppPalette.textFaint,
-                      ),
-                      prefixIconConstraints: const BoxConstraints(minWidth: 36),
-                      suffixIcon: _search.text.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: 'Clear search',
-                              icon: const Icon(LucideIcons.x, size: 14),
-                              onPressed: () {
-                                setState(_search.clear);
-                                _searchFocus.requestFocus();
-                              },
-                            ),
-                      isDense: true,
-                      filled: true,
-                      fillColor: AppPalette.windowBg,
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 12,
-                        horizontal: 12,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: AppPalette.accent.withValues(alpha: .8),
+                if (!_editingApi)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      key: const ValueKey('models-search'),
+                      controller: _search,
+                      focusNode: _searchFocus,
+                      autofocus: true,
+                      style: AppType.monoLabel(),
+                      decoration: InputDecoration(
+                        hintText: _selectedTab == ModelsTab.subscriptions
+                            ? 'Search subscriptions…'
+                            : _selectedTab == ModelsTab.apis
+                            ? 'Search APIs…'
+                            : 'Search models…',
+                        hintStyle: AppType.monoLabel(
+                          color: AppPalette.textFaint,
+                        ),
+                        prefixIcon: Icon(
+                          LucideIcons.search,
+                          size: 15,
+                          color: AppPalette.textFaint,
+                        ),
+                        prefixIconConstraints: const BoxConstraints(
+                          minWidth: 36,
+                        ),
+                        suffixIcon: _search.text.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear search',
+                                icon: const Icon(LucideIcons.x, size: 14),
+                                onPressed: () {
+                                  setState(_search.clear);
+                                  _searchFocus.requestFocus();
+                                },
+                              ),
+                        isDense: true,
+                        filled: true,
+                        fillColor: AppPalette.windowBg,
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(
+                            color: AppPalette.accent.withValues(alpha: .8),
+                          ),
                         ),
                       ),
+                      onChanged: (_) => setState(() {}),
                     ),
-                    onChanged: (_) => setState(() {}),
                   ),
-                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 10, 12, 8),
                   child: Align(
@@ -206,6 +233,14 @@ class _ModelsPanelState extends State<ModelsPanel> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
+                          _tab(
+                            ModelsTab.all,
+                            'All',
+                            subscriptionRows.length +
+                                controller.localModels.length +
+                                sharedCount +
+                                controller.apis.connections.length,
+                          ),
                           _tab(
                             ModelsTab.subscriptions,
                             'Subscriptions',
@@ -217,6 +252,11 @@ class _ModelsPanelState extends State<ModelsPanel> {
                             controller.localModels.length,
                           ),
                           _tab(ModelsTab.shared, 'Shared', sharedCount),
+                          _tab(
+                            ModelsTab.apis,
+                            'APIs',
+                            controller.apis.connections.length,
+                          ),
                         ],
                       ),
                     ),
@@ -236,7 +276,16 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (_selectedTab == ModelsTab.subscriptions) ...[
+                        if (all &&
+                            !_editingApi &&
+                            query.isNotEmpty &&
+                            noMatches)
+                          _empty('No matches'),
+                        if (_selectedTab == ModelsTab.subscriptions ||
+                            (all &&
+                                !_editingApi &&
+                                matchingSubscriptions.isNotEmpty)) ...[
+                          if (all) _heading('Subscriptions'),
                           if (matchingSubscriptions.isEmpty)
                             _empty(
                               query.isEmpty
@@ -246,7 +295,10 @@ class _ModelsPanelState extends State<ModelsPanel> {
                           for (final row in matchingSubscriptions)
                             _subscription(row),
                         ],
-                        if (_selectedTab == ModelsTab.local) ...[
+                        if (_selectedTab == ModelsTab.local ||
+                            (all &&
+                                !_editingApi &&
+                                (query.isEmpty || models.isNotEmpty))) ...[
                           Padding(
                             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                             child: Text(
@@ -272,7 +324,8 @@ class _ModelsPanelState extends State<ModelsPanel> {
                             ),
                           for (final model in models) _model(model),
                         ],
-                        if (_selectedTab == ModelsTab.shared) ...[
+                        if (_selectedTab == ModelsTab.shared ||
+                            (all && !_editingApi && hasShared)) ...[
                           if (controller.models?.reachable == false)
                             _retry('Shared models are unavailable.')
                           else if (controller.models == null &&
@@ -290,7 +343,9 @@ class _ModelsPanelState extends State<ModelsPanel> {
                             ),
                           for (final section in matchingShared)
                             if (section.models.isNotEmpty) ...[
-                              _heading(section.name),
+                              _heading(
+                                all ? 'Shared · ${section.name}' : section.name,
+                              ),
                               for (final model in section.models)
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
@@ -335,6 +390,16 @@ class _ModelsPanelState extends State<ModelsPanel> {
                                 ),
                             ],
                         ],
+                        if (_selectedTab == ModelsTab.apis ||
+                            (all && (hasApis || _editingApi)))
+                          ApiConnectionsPanel(
+                            key: const ValueKey('models-api-connections'),
+                            controller: controller.apis,
+                            query: query,
+                            showPresets: !all,
+                            onEditingChanged: (editing) =>
+                                setState(() => _editingApi = editing),
+                          ),
                       ],
                     ),
                   ),
@@ -351,7 +416,9 @@ class _ModelsPanelState extends State<ModelsPanel> {
                         if (constraints.maxWidth >= 440)
                           Expanded(
                             child: Text(
-                              'Select models in a session’s model picker.',
+                              _selectedTab == ModelsTab.apis || _editingApi
+                                  ? 'Available to harness tools on this computer.'
+                                  : 'Select models in a session’s model picker.',
                               style: AppType.monoMeta(
                                 color: AppPalette.textSecondary,
                               ),
@@ -359,16 +426,17 @@ class _ModelsPanelState extends State<ModelsPanel> {
                           )
                         else
                           const Spacer(),
-                        TextButton(
-                          onPressed: controller.opening
-                              ? null
-                              : widget.onManage,
-                          style: TextButton.styleFrom(
-                            foregroundColor: AppPalette.textSecondary,
-                            textStyle: AppType.monoMeta(),
+                        if (_selectedTab != ModelsTab.apis && !_editingApi)
+                          TextButton(
+                            onPressed: controller.opening
+                                ? null
+                                : widget.onManage,
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppPalette.textSecondary,
+                              textStyle: AppType.monoMeta(),
+                            ),
+                            child: const Text('Manage models'),
                           ),
-                          child: const Text('Manage models'),
-                        ),
                       ],
                     ),
                   ),
@@ -387,7 +455,13 @@ class _ModelsPanelState extends State<ModelsPanel> {
       selected: _selectedTab == tab,
       child: TextButton(
         key: ValueKey('models-tab-${tab.name}'),
-        onPressed: () => setState(() => _selectedTab = tab),
+        onPressed: () {
+          if (_selectedTab == tab) return;
+          setState(() {
+            _selectedTab = tab;
+            _editingApi = false;
+          });
+        },
         style: TextButton.styleFrom(
           backgroundColor: _selectedTab == tab
               ? AppPalette.textPrimary.withValues(alpha: .08)

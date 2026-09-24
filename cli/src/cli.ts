@@ -111,6 +111,9 @@ import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
+import { ApiConnections } from './lib/apiConnections.js'
+import { apiCommand, apiUsage } from './lib/apiCommand.js'
+import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
 import { basename } from 'node:path'
 import {
@@ -381,6 +384,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
                                --force signs out over a serve child it could not confirm stopped
 
 ${dshUsage()}
+
+${apiUsage}
 
 Browser end-to-end encryption:
   harness browser-link         print a reusable 7-day setup link for browsers
@@ -1283,6 +1288,12 @@ async function statBirthMs(path: string): Promise<number> {
 /** The daemon body: hooks + watcher + process discovery + backend socket. */
 async function runForeground(session: AuthSession | null): Promise<void> {
   installTimestampedConsole() // daemon-only: every harness.log line gets a wall-clock timestamp
+  const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
+  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
+    if (!cwd) return
+    try { prepareApiInstructions(savedApis, cwd, engine) }
+    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
+  }
   const startedAt = Date.now()
   let discoveryReady = false
   let discoveryError: string | null = null
@@ -4186,8 +4197,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace and named agent come from the row: a retarget must not silently drop the harness the
   // agent is, or bring a pane opened as `harness-compute` back as a general session.
-  const relaunchOverrides = (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> =>
-    buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
+  const relaunchOverrides = (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+    prepareApiTools(session.cwd, session.engine)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
+  }
 
   /**
    * A restart or a post-reboot restore rebuilds the ROW's own launch, and the machine may decide
@@ -4681,6 +4694,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // answered and refused (`SPAWN_FAILED`) — see createAgentPane.ts. Registration itself is retried
     // there: a stale registry entry from a previous tmux-server generation occasionally collides with
     // a freshly-minted pane id, and that collision clears on its own on the very next pane.
+    prepareApiTools(cwd, engine)
     // Mutually exclusive with a grid (backendSocket.ts refuses the two together): a chosen Codex
     // profile becomes the new session's CODEX_HOME, the same `-e` mechanism a grid's own env rides.
     const result = await createAndRegisterPane({
@@ -4782,6 +4796,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ...(plan.level === 'native' ? { forkSessionId: plan.forkSessionId } : {}),
       ...(firstPrompt ? { firstPrompt } : {}),
     }
+    prepareApiTools(source.cwd, engine)
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
     const result = await createAndRegisterPane({
@@ -6722,6 +6737,10 @@ switch (cmd) {
     dshCommand(args[0], args[0] === undefined ? rest : withoutFirst(rest, args[0]))
       .then((code) => { process.exitCode = code })
       .catch(onError)
+    break
+  case 'api':
+    apiCommand(rest, new ApiConnections(env.ADAPTER_DATA_DIR))
+      .then(code => { process.exitCode = code }).catch(onError)
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.

@@ -34,6 +34,7 @@ import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
 import { LocalModels } from './lib/localModels.js'
+import { ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { gridCapableEngines, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { listAllGridModels, resolveGridTarget } from './lib/gridModels.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
@@ -366,6 +367,7 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
 export class BackendSocket {
   private readonly gridFleet = new GridFleetRpc()
   private readonly localModels = new LocalModels({ stateDir: join(env.ADAPTER_DATA_DIR, 'local-models') })
+  private readonly apiConnections = new ApiConnections(env.ADAPTER_DATA_DIR)
   private ws: WebSocket | null = null
   private connecting = false
   /** A 401 on the upgrade is being answered with a token refresh; that refresh owns the next connect. */
@@ -1501,6 +1503,12 @@ export class BackendSocket {
 
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
+
+    if (type === 'api_connections') {
+      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Manage APIs on this computer.' }); return }
+      reply(type, requestId, apiConnectionsRequest(this.apiConnections, payload))
+      return
+    }
 
     // Same-host only until remote viewer transport and remote task ownership exist.
     // Refuse before parsing project content; never send it to the relay as plaintext.

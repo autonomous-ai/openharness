@@ -475,7 +475,8 @@ void main() {
     final app = ModelManagerTestApp(connection);
     await openGridDoor(tester, app, command: 'models');
     expect(find.byType(ModelsPanel), findsOneWidget);
-    expect(find.text('Search subscriptions…'), findsOneWidget);
+    expect(find.text('Search models…'), findsOneWidget);
+    expect(find.byKey(const ValueKey('models-tab-all')), findsOneWidget);
     expect(connection.creations, isEmpty);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
