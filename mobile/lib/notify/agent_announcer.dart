@@ -27,6 +27,12 @@ class AgentAnnouncer {
   final SystemNotices system;
   final unread = AgentUnread();
   final _asked = AskedQuestions();
+
+  /// Agents with a notice up in the OS centre right now. What lets going to
+  /// an agent take its notice down — a notice about news already read is a
+  /// second thing to dismiss by hand — without asking the OS for one that was
+  /// never posted.
+  final _posted = <AgentRef>{};
   final Future<void> Function() _chime;
   final bool Function() _inFront;
 
@@ -99,22 +105,33 @@ class AgentAnnouncer {
     if (!_asked.forget(ref, requestId: requestId)) return;
     if (unread.kindFor(ref) != NoticeKind.question) return;
     unread.clear(ref, kind: NoticeKind.question);
-    system.cancel(ref);
+    _withdraw(ref);
+  }
+
+  /// The person went to the agent — tapped its row, its notice, or came back
+  /// to the app on it. Whatever it was carrying has been read: the mark AND
+  /// the notice still sitting in the OS centre come down together.
+  void seen(AgentRef ref) {
+    unread.clear(ref);
+    _withdraw(ref);
   }
 
   /// The agent is gone. An agent that no longer exists cannot be gone to, and
   /// a notice about it would open nothing.
   void forgetAgent(AgentRef ref) {
     _asked.forget(ref);
-    if (!unread.contains(ref)) return;
-    unread.clear(ref);
-    system.cancel(ref);
+    seen(ref);
   }
 
   /// Signed out: nothing any of it was about is this person's any more.
   void reset() {
     unread.clearAll();
     _asked.clear();
+    _posted.toList().forEach(_withdraw);
+  }
+
+  void _withdraw(AgentRef ref) {
+    if (_posted.remove(ref)) system.cancel(ref);
   }
 
   void _deliver(
@@ -126,6 +143,7 @@ class AgentAnnouncer {
     if (notice.chimes && inFront) _chime();
     if (notice.marks) unread.mark(agent.ref, kind);
     if (!notice.alerts) return;
+    _posted.add(agent.ref);
     system.show((
       agent: agent.ref,
       kind: kind,

@@ -7097,7 +7097,7 @@ class AppNotifier extends ChangeNotifier {
 
   void _seeWatchedAgent() {
     final watched = _watchedAgent;
-    if (watched != null) agentNotices.unread.clear(watched);
+    if (watched != null) agentNotices.seen(watched);
   }
 
   /// [agent] on [machine], as a notice names it.

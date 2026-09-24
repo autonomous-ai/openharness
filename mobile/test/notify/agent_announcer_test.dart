@@ -107,6 +107,41 @@ void main() {
     expect(announcer.unread.count, 0);
   });
 
+  group('going to the agent', () {
+    test('takes down its mark and the notice still in the OS centre', () {
+      front = false;
+      announcer.turnEnded(agent, news, watching: () => false);
+      front = true;
+      announcer.seen(ref);
+      expect(announcer.unread.contains(ref), isFalse);
+      expect(system.cancelled, [ref]);
+    });
+
+    test('never asks the OS to cancel a notice it did not post', () {
+      announcer.turnEnded(agent, news, watching: () => false);
+      announcer.seen(ref);
+      expect(announcer.unread.contains(ref), isFalse);
+      expect(system.cancelled, isEmpty);
+    });
+
+    test('a notice is taken down once, not every time the agent is seen', () {
+      front = false;
+      announcer.turnEnded(agent, news, watching: () => false);
+      announcer
+        ..seen(ref)
+        ..seen(ref);
+      expect(system.cancelled, [ref]);
+    });
+
+    test('signing out takes every posted notice down', () {
+      front = false;
+      announcer.turnEnded(agent, news, watching: () => false);
+      announcer.reset();
+      expect(system.cancelled, [ref]);
+      expect(announcer.unread.count, 0);
+    });
+  });
+
   group('questions', () {
     AgentNotice ask({String id = 'q1', bool watching = false}) =>
         announcer.questionAsked(
