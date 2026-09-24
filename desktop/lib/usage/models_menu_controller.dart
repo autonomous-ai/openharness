@@ -7,7 +7,7 @@ import 'usage_accounts.dart';
 import 'usage_controller.dart';
 import 'usage_window.dart';
 
-/// Subscription readings for the native Models menu. Opening the menu reads
+/// Subscription readings for the Models panel. Opening the panel reads
 /// the cached snapshot immediately and refreshes at most once per minute.
 /// No polling, credential reads or requests run on startup or tab changes.
 class ModelsMenuController extends ChangeNotifier {

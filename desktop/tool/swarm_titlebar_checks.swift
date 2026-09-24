@@ -32,12 +32,6 @@ private extension NSButton {
   }
 }
 
-private extension SwarmSubscriptionView {
-  // `icon` is private to the row view; a same-file extension reads it without widening the app API.
-  var iconImage: NSImage? { icon.image }
-  var iconTint: NSColor? { icon.contentTintColor }
-}
-
 private extension SwarmTabButton {
   // `label` is private to the tab; a same-file extension reads what it draws.
   var drawnFont: NSFont? { label.attribute(.font, at: 0, effectiveRange: nil) as? NSFont }
@@ -532,6 +526,7 @@ private extension SwarmTitlebar {
     let agent = original.item(withTitle: "File")!.submenu!
     let newSwarm = agent.items.first(where: { $0.representedObject as? String == "new" })!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
+    let models = original.item(withTitle: "View")!.submenu!.items.first { $0.representedObject as? String == "models" }!
     let nativeCopy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
     edit.addItem(nativeCopy)
     setKeymap(defaults)
@@ -547,6 +542,14 @@ private extension SwarmTitlebar {
       try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
         "The exported keymap preserves the native \(action) shortcut")
     }
+    try checkTitlebar(models.keyEquivalent == "i" && models.keyEquivalentModifierMask == [.command],
+      "The exported keymap gives View Models the same Command-I shortcut")
+    let remappedModels = HarnessNativeKeymap(["version": 1, "contexts": Dictionary(uniqueKeysWithValues:
+      HarnessNativeKeymap.contexts.map { ($0, [["keys": ["cmd+u"], "command": "models.list",
+        "hint": "⌘U", "repeatable": false, "menuAction": "models"]]) })])!
+    setKeymap(remappedModels)
+    try checkTitlebar(models.keyEquivalent == "u" && strip.modelsButton.toolTip == "Models ⌘U",
+      "Remapping Models updates both the View menu and the brain icon hint")
     setKeymap(changed)
     try checkTitlebar(NSApp.mainMenu === main && newSwarm.keyEquivalent == "o",
       "Hot reload updates the existing menu to the remapped key")
@@ -563,6 +566,8 @@ private extension SwarmTitlebar {
     setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
     try checkTitlebar(newSwarm.keyEquivalent.isEmpty && newSwarm.toolTip == nil,
       "Unbinding clears the old native shortcut and hint")
+    try checkTitlebar(models.keyEquivalent.isEmpty,
+      "Unbinding Models clears its View menu shortcut")
     rebuildHistoryMenu()
     try checkTitlebar(historyMenu.items.allSatisfy { $0.keyEquivalent.isEmpty },
       "Rebuilt History rows retain effective unbindings")
@@ -716,7 +721,7 @@ private extension SwarmTitlebar {
     try window.checkContentCommand()
     try checkTitlebar(window.firstResponder === window.contentInput,
       "Adding toolbar buttons does not take initial keyboard focus from the workspace")
-    try checkTitlebar(main.items.map(\.title) == ["Harness", "File", "Edit", "View", "History", "Models", "Window", "Help"], "Machines lives in the toolbar and View menu")
+    try checkTitlebar(main.items.map(\.title) == ["Harness", "File", "Edit", "View", "History", "Window", "Help"], "Models and Machines live in the toolbar and View menu")
     let settings = appItem.submenu!.items.first { $0.representedObject as? String == "settings" }!
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
@@ -944,39 +949,29 @@ private extension SwarmTitlebar {
     try checkTitlebar(main.items.compactMap(\.submenu).flatMap(\.items).allSatisfy {
       !["Next Swarm", "Previous Swarm"].contains($0.title)
     }, "Next and Previous Swarm have no redundant menu rows")
-    let modelRows: [[String: Any]] = [
-      ["title": "Anthropic", "account": "aabbcc", "status": "12% remaining", "engine": "claude",
-       "details": ["Limiting window: Session", "Session — 12% remaining · resets in 2h"]],
-      ["title": "OpenAI", "status": "Not signed in", "engine": "codex",
-       "details": ["Sign in to Codex to see usage"]],
-    ]
-    updateModels(modelRows, current: nil)
-    let models = main.item(withTitle: "Models")!.submenu!
-    try checkTitlebar(models.items.filter { !$0.isSeparatorItem }.map(\.title) == [
-      "Subscriptions", "Anthropic, aabbcc, 12% remaining", "OpenAI, Not signed in",
-      "On this Mac", "Open Models…"
-    ], "Models carries the two sections with something behind them, ending on the row that starts a model")
-    try checkTitlebar(models.items.filter(\.isSeparatorItem).count == 2,
-      "Two native separators: after the subscriptions, and before the row that manages models")
-    for gone in ["API", "OpenRouter", "fal.ai", "Add Model"] {
-      try checkTitlebar(models.item(withTitle: gone) == nil,
-        "\(gone) is gone — it named nothing this app can reach or do")
-    }
-    let openModels = models.items.last!
-    try checkTitlebar(openModels.title == "Open Models…" && openModels.submenu == nil,
-      "The Models menu opens the shared overview")
-    try checkTitlebar(openModels.target === self && openModels.action == #selector(menuAction(_:))
-      && openModels.representedObject as? String == "models",
-      "The menu dispatches the same Models action as the toolbar")
+    try checkTitlebar(main.item(withTitle: "Models") == nil,
+      "Models has no duplicate top-level menu")
+    let openModels = menu.items.first(where: { $0.representedObject as? String == "models" })!
+    try checkTitlebar(openModels.title == "Models" && openModels.submenu == nil,
+      "View offers one direct Models command")
+    try checkTitlebar(openModels.keyEquivalent == "i" && openModels.keyEquivalentModifierMask == [.command],
+      "View Models advertises Command-I")
+    try checkTitlebar(openModels.target === self && openModels.action == #selector(menuAction(_:)),
+      "View Models dispatches the same action as the toolbar")
     try checkTitlebar(openModels.identifier?.rawValue == HarnessKeymapMenu.actionPrefix + "models",
-      "The Models overview is identified for the keymap")
+      "View Models retains its keymap identity")
+    installWorkspaceMenus()
+    try checkTitlebar(menu.items.filter { $0.representedObject as? String == "models" }.count == 1,
+      "Repeated setup keeps a single Models command")
     for rows in [machineRows, [machineRows[0]], []] {
       _ = try messenger.receive("machinesState", arguments: ["machines": rows])
-      let item = main.item(withTitle: "Models")!.submenu!.items.last!
-      try checkTitlebar(item.title == "Open Models…" && item.submenu == nil
-        && item.representedObject as? String == "models",
-        "Any number of machines still opens the same Models overview")
+      try checkTitlebar(menu.items.first(where: { $0.representedObject as? String == "models" }) === openModels,
+        "Machine updates retain the same Models command")
     }
+    let menuCalls = messenger.calls.count
+    menuAction(openModels)
+    try checkTitlebar(messenger.calls.count == menuCalls + 1 && messenger.calls.last?.method == "models",
+      "View Models opens the shared panel exactly once")
     _ = try messenger.receive("update", arguments: ["enabled": true, "modelsOpen": true])
     try checkTitlebar(strip.modelsButton.state == .on && strip.modelsButton.isEnabled
       && strip.modelsButton.accessibilityValue() as? String == "Expanded",
@@ -993,77 +988,6 @@ private extension SwarmTitlebar {
       "Neither Models entry point dispatches behind a modal")
     actionsEnabled = true
 
-    // The Local section is DATA, not two hardcoded names. A menu naming a model nobody serves is
-    // worse than one admitting it has none, which is what the empty case above asserts.
-    updateModels(modelRows, current: nil, local: [
-      ["id": "Qwen3.6-35B-A3B-UD-Q5_K_XL", "node": "macbook-m1max"],
-      ["id": "DeepSeek-V4-Flash", "node": ""],
-    ])
-    let served = main.item(withTitle: "Models")!.submenu!
-    try checkTitlebar(served.item(withTitle: "Qwen3.6-35B-A3B-UD-Q5_K_XL, macbook-m1max") != nil,
-      "a served model names the machine answering it")
-    try checkTitlebar(served.item(withTitle: "DeepSeek-V4-Flash") != nil,
-      "a model with no node named is listed on its own")
-    try checkTitlebar(served.items.last?.title == "Open Models…"
-      && served.items[served.items.count - 2].isSeparatorItem
-      && served.items.filter(\.isSeparatorItem).count == 2,
-      "the manager row sits under its own rule, after the Local data rows")
-
-    // A local row is built by the same view as a subscription row, which is what makes the two
-    // sections read as one menu. A plain disabled NSMenuItem greys its whole title, so a served
-    // model looked unavailable beside the accounts above it.
-    let localRows = served.items.compactMap { $0.view as? SwarmSubscriptionView }.suffix(2)
-    try checkTitlebar(localRows.count == 2, "Local models render as rows, not as greyed labels")
-    try checkTitlebar(localRows.first?.identity.stringValue == "Qwen3.6-35B-A3B-UD-Q5_K_XL"
-      && localRows.first?.balance.stringValue == "macbook-m1max",
-      "the model id takes the left column and its node the trailing one, as usage does above")
-    try checkTitlebar(localRows.last?.balance.stringValue.isEmpty == true,
-      "a model with no node leaves the trailing column empty rather than inventing one")
-    // The mark went when the Models menu was reworked: a local row now carries the id and its
-    // node alone, and the icon column stays empty rather than inventing a brand for it.
-    try checkTitlebar(localRows.allSatisfy { $0.iconImage == nil },
-      "a local model is named without a brand mark")
-    let subscriptionWidth = served.items.compactMap { $0.view as? SwarmSubscriptionView }.first!.bounds.width
-    try checkTitlebar(localRows.allSatisfy { $0.bounds.width == subscriptionWidth },
-      "both sections share one width, so the trailing column does not step at the section break")
-    try checkTitlebar(localRows.allSatisfy { $0.identity.frame.minX == served.items.compactMap({ $0.view as? SwarmSubscriptionView }).first!.identity.frame.minX },
-      "local and subscription titles start in the same column")
-    updateModels(modelRows, current: nil)
-    try checkTitlebar(models.item(withTitle: "No models being served") == nil,
-      "an empty Local says nothing — the run row is the answer, not a sentence")
-    let subscription = models.items.first(where: { $0.view is SwarmSubscriptionView })!
-    let row = subscription.view as! SwarmSubscriptionView
-    try checkTitlebar(subscription.submenu == nil && subscription.action == nil && !subscription.isEnabled,
-      "Subscription balances have no arrow or fake action")
-    // The account is elided on the way in — "···aabbcc" — so the row says which account without
-    // printing an id nobody reads in full.
-    try checkTitlebar(row.identity.stringValue == "Anthropic  ···aabbcc" && row.balance.stringValue == "12% remaining",
-      "Provider and account are on the left; usage is a separate right column")
-    // The meter sits between the two columns on a metered row, and the tick keeps its own column
-    // on the right whether or not this row wears one — so the balance ends short of the rim.
-    try checkTitlebar(row.identity.frame.maxX + 12 <= row.balance.frame.minX
-      && row.balance.frame.maxX == row.bounds.width - 34,
-      "Account and balance have a clear gap, and the balance clears the reserved tick column")
-    try checkTitlebar(row.identity.frame.midY == row.balance.frame.midY,
-      "Both columns share a vertical center")
-    try checkTitlebar(row.accessibilityLabel() == subscription.title,
-      "VoiceOver can read the provider, account and remaining usage together")
-    let secondRow = models.items.compactMap { $0.view as? SwarmSubscriptionView }.last!
-    for view in [row, secondRow] {
-      let cell = view.balance.cell!
-      let drawing = cell.drawingRect(forBounds: view.balance.bounds)
-      let glyphWidth = (view.balance.stringValue as NSString).size(withAttributes: [.font: view.balance.font!]).width
-      try checkTitlebar(view.bounds.width >= 352 && view.bounds.width < 440 && drawing.width >= glyphWidth,
-        "Remaining usage and sign-in status have enough actual text-cell width to display in full")
-    }
-    try checkTitlebar(secondRow.balance.frame.maxX == row.balance.frame.maxX,
-      "Different balances align on their right edges")
-    updateModels(modelRows, current: nil)
-    try checkTitlebar(models.items.contains(where: { $0 === subscription }),
-      "Unchanged subscription data reuses native menu items")
-    updateModels([], current: nil)
-    try checkTitlebar(models.items.allSatisfy { !$0.title.contains("12%") && $0.submenu == nil },
-      "Signing out clears cached native account readings")
     let findItems = find.submenu?.items ?? []
     try checkTitlebar(findItems.map(\.title) == ["Find in Terminal…", "Find Next", "Find Previous"], "Find replaces the unused editor actions with terminal commands")
     try checkTitlebar(findItems.map(\.keyEquivalent) == ["f", "g", "g"], "Native find shortcuts match Flutter")
