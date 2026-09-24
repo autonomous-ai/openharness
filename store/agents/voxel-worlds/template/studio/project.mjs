@@ -148,9 +148,20 @@ export function moveVisitor(world,visitor,input,dt=1/60) {
   return p;
 }
 export function navigationReport(p,world=compileWorld(p)) {
-  const issues=[],height=1.7/p.unit,step=.45/p.unit,drop=1/p.unit,[w,h,d]=p.size,surfaces=new Map();
+  const issues=[],height=1.7/p.unit,radius=.26/p.unit,step=.45/p.unit,drop=1/p.unit,[w,h,d]=p.size,surfaces=new Map();
+  const tops=Array.from({length:w*d},()=>[]);
   for(let z=0;z<d;z++)for(let x=0;x<w;x++){
-    const ys=[];for(let y=1;y+height<=h;y++)if(isSolid(world,x,y-1,z)&&!isSolid(world,x,y,z)&&fitsVisitor(world,[x+.5,y,z+.5]))ys.push(y);
+    for(let y=1;y+height<=h;y++)if(isSolid(world,x,y-1,z)&&!isSolid(world,x,y,z))tops[z*w+x].push(y);
+  }
+  for(let z=0;z<d;z++)for(let x=0;x<w;x++){
+    if(x+.5-radius<0||z+.5-radius<0||x+.5+radius>w||z+.5+radius>d)continue;
+    // The movement solver can stand on any solid cell under the visitor's feet.
+    // Requiring support below its centre leaves a false gap before every riser.
+    const candidates=new Set();
+    for(let a=Math.floor(x+.5-radius);a<=Math.floor(x+.5+radius-.0001);a++)
+      for(let b=Math.floor(z+.5-radius);b<=Math.floor(z+.5+radius-.0001);b++)
+        for(const y of tops[b*w+a])candidates.add(y);
+    const ys=[...candidates].filter(y=>fitsVisitor(world,[x+.5,y,z+.5]));
     if(ys.length)surfaces.set(x+','+z,ys);
   }
   const start=p.spawn.position.map(Math.floor),startHeights=surfaces.get(start[0]+','+start[2])??[],sy=startHeights.find(y=>Math.abs(y-p.spawn.position[1])<.2);
@@ -162,5 +173,5 @@ export function navigationReport(p,world=compileWorld(p)) {
     }
   }
   const stops=p.stops.map(s=>{const [x,y,z]=s.position,reachable=[...surfaces.get(Math.floor(x)+','+Math.floor(z))??[]].some(ny=>Math.abs(y-ny)<.2&&visited.has([Math.floor(x),ny,Math.floor(z)].join(',')));if(!reachable)issues.push(`${s.name} is not connected to the visitor start by the checked walking routes.`);return {id:s.id,reachable};});
-  return {spawnClear:sy!==undefined&&fitsVisitor(world,p.spawn.position),reachableStandingCells:visited.size,stops,issues,method:'Cardinal standing-cell search with visitor clearance, 0.45 m steps and 1 m descents; actual browser walking still required.'};
+  return {spawnClear:sy!==undefined&&fitsVisitor(world,p.spawn.position),reachableStandingCells:visited.size,stops,issues,method:'Cardinal standing-cell search with visitor footprint support and clearance, 0.45 m steps and 1 m descents; actual browser walking still required.'};
 }
