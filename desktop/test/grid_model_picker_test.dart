@@ -214,31 +214,21 @@ void main() {
   testWidgets(
     'rows can be reached and activated from the keyboard',
     (tester) async {
-      // ⚠️ KNOWN REGRESSION, and this test is the record of it.
-      //
-      // The old menu focused its first ROW as it opened, so Enter picked it. The panel focuses its
-      // SEARCH field instead — which is right for typing and wrong for everything else: a text
-      // field consumes up and down for its own cursor, so the rows became unreachable by keyboard
-      // and Enter submitted nothing. Handing the arrows back with a `Shortcuts` override at the
-      // field was tried and is in the widget; it is not enough on its own, and the remaining cause
-      // has not been found. Left failing-and-named rather than deleted, because deleting it would
-      // turn a regression into an absence nobody would notice.
+      // Start on a local model: choosing an already selected subscription intentionally does
+      // nothing. Down must leave search and Enter must switch to the subscription row.
       var ownLogin = 0;
       build(
         models: const [
           {'id': 'Qwen-Test', 'node': 'macbook'},
         ],
       );
-      await open(tester, onOwnLogin: () => ownLogin++);
+      await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => ownLogin++);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(ownLogin, 1);
     },
-    // `skip` takes a bool here; the reason is the comment above, which is where a
-    // person looking at a skipped test will actually read it.
-    skip: true,
   );
 
   // THREE situations, two sentences and one silence, one test each — a single test cannot cover
