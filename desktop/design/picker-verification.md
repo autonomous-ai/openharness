@@ -7,23 +7,31 @@ been tested. Line coverage is measured separately from native UI testing.
 
 ## Automated checks
 
-- Final full desktop suite: **3,010 passed, 12 skipped, 17 failed**. The failures
+- Final full desktop suite: **3,062 passed, 12 skipped, 17 failed**. The failures
   match the pre-existing CLI/auth/setup baseline; no new picker failure.
 - Cmd-P-focused shuffled run (seed 926): **51 passed**, including eight added
   tests for pointer/keyboard handoff, unmatched queries, and native composition.
-- Repeated affected regression runs (seeds 924 and 925): **260 passed each**.
+- Final integrated affected run (seed 927): **284 passed**. Earlier repeat
+  runs (seeds 924 and 925) each passed **260**.
   Covers
   creation, draft ownership, Git/worktrees, accessibility, keyboard routing,
   mouse selection, both picker layouts, typography, previews and activity order.
 - Native macOS creation fixture: **7 passed**. First workspace, Cmd-T/Cmd-O
-  creation, Store Open/Try, Models, edited defaults and destination, and
+  creation, Store Open/Try, Models cancelling pending creation without a launch,
+  edited defaults and destination, and
   immediate terminal input after creation. Fake transport and in-memory state;
   these tests do not launch real agents or establish physical AppKit/IME input.
-- Analysis of the latest changed form, workspace handler and four test files:
-  no issues. The earlier controller, native fixture and benchmark-driver
-  analysis also passed. The unrelated broader lint baseline remains.
-- Normal macOS review build succeeded and was restarted. Final computer-use
-  retests confirmed the accessibility-click and stale-machine-error fixes.
+- Full analysis matches current main exactly: **15 existing findings**, with no
+  new errors or warnings. Final changed integration/rendering fixtures report
+  no issues; all 52 changed Dart files passed the format check.
+- Normal macOS review build 8 succeeded after integration. The running review
+  app was left open because approval review blocked quitting an unconfirmed
+  conversation. Native tests ran in a separate test-only bundle, which exited.
+- The opt-in screenshot walkthrough passed and rendered **135 fixture images**.
+  It now uses the current fields, opens the advanced form for task editing,
+  follows immediate choice acceptance, and selects main's current model label.
+  PR images are synthetic: [New Harness](../../.github/assets/pickers/new-harness.png)
+  and [Open Harness](../../.github/assets/pickers/open-harness.png).
 - The branch-width follow-up passes **39 affected rendering/customization
   checks**. Its new regression failed before the fix and verifies that long
   branch text is actually painted in full across prompt styles and text scales.
@@ -75,7 +83,8 @@ installation failure/retry, unavailable catalogs, duplicate starts and
 oversized carried tasks. Installation and creation tests use fake transports;
 they do not install products on the user's machines.
 
-Both shuffled runs pass the same 260 tests. The final full run has exactly the
+The two pre-integration shuffled runs pass the same 260 tests, and the final
+integrated run passes 284. The final full run has exactly the
 same 17 failed test names as `harness-audit-final-tests-v3.jsonl`, with no added
 or resolved failures. Native creation fixtures also passed again. This is
 measured regression evidence, not a zero-bug or 100%-coverage claim.
@@ -129,7 +138,24 @@ flutter build macos --debug --no-pub --target lib/main.dart
 Detailed run artifacts are under `/private/tmp/harness-audit-*` on the review
 machine. Always rebuild `main.dart` after the native fixture replaces the app.
 
-Final artifacts:
+Final integrated artifacts:
+
+- `harness-picker-merged-full.jsonl`: 3,062 passed, 12 skipped, 17 failures;
+  no loader errors. Failure names match the main checkout exactly.
+- `harness-picker-merged-shuffled.jsonl`: 284 passing affected tests, seed 927.
+- `harness-picker-cmdp-final.jsonl`: 51 passing command/focus checks, seed 926.
+- `harness-picker-main-baseline.jsonl`: 48 passed and the same 17 failures on
+  main `461ff2bf` in a detached worktree.
+- `harness-picker-native-merged.jsonl`: seven native checks in the copied
+  Harness Picker Verification app with a unique bundle ID and fake transports.
+- `harness-picker-merged-analysis-final.txt` and
+  `harness-picker-main-analysis.txt`: the same 15 findings on both trees.
+- `harness-picker-integration-analysis.txt`: no issues in the last three edits.
+- `harness-picker-pr-render-6.jsonl`: the passing optional render walkthrough;
+  images are in `/private/tmp/harness-picker-pr-images`.
+- `harness-picker-review-build-8.log`: successful normal macOS build.
+
+Earlier repeat artifacts:
 
 - `harness-picker-full-repeat.jsonl`: latest full suite and coverage.
 - `harness-picker-repeat-seed924.jsonl` and
@@ -220,6 +246,10 @@ Findings fixed during the audit:
 
 Limitations and cleanup:
 
+- The latest review app restart was blocked by automatic approval review
+  because an active conversation had unconfirmed saved state. The app remains
+  open; build 8 is ready for the next restart. The separately identified native
+  fixture app exited after its successful tests.
 - Live profile selection/refresh/link actions were blocked by automatic
   approval review because they may access credential files. Isolated profile
   tests cover the callbacks, selection and machine ownership. No claim of a

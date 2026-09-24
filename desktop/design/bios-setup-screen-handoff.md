@@ -62,55 +62,49 @@ This supersedes the historical BIOS presentation described below.
 
 ## Latest verification and native review
 
-See [picker-verification.md](picker-verification.md) for the scenario matrix,
-measured coverage, native observations, exact run artifacts and limitations.
-The latest full suite is **3,010 passed, 12 skipped, 17 pre-existing failures**.
-Two randomized affected repeats (seeds 924 and 925) each pass **260 tests**.
-Seven isolated native creation fixtures passed again. New Harness form line
-coverage is **97.6%**, not 100%; controller coverage is **93.7%**.
+See [picker-verification.md](picker-verification.md) for scenario coverage,
+measured line coverage, native observations, artifacts and remaining limits.
+The user has requested PR creation and merge after verification.
 
-The repeat audit added 29 edge-case regressions and fixed composing-text keys
-being taken by Cmd-N, native menu/search commands bypassing composition guards,
-and unhandled folder-browser failures. It also exercises installation and Git
-failure/retry/disposal, delayed clipboard selection changes, duplicate Start
-and carried-task limits. The final full run's failed test names match the prior
-17-test baseline exactly. Build 7 (`harness-picker-review-build-7.log`) was
-rebuilt and restarted; the project prompts, agent-specific settings, Worktree,
-machine labels and Cmd-O branch widths passed another hands-on review.
+Integrated current main `461ff2bf` and checked the resulting branch:
 
-The native audit replaced the simulated query editor with a real text field,
-removed the nine-option scroll limit, fixed acceptance/focus after project
-prompts, and corrected stale agent preview, stale machine error and accessible
-field activation behavior. Cmd-N's prompt and hint now share a baseline, and
-both Cmd-N and Cmd-O align their prompt with the icons below. The final build
-was restarted and the last two behavior fixes passed native retests.
+- Full desktop suite: **3,062 passed, 12 skipped, 17 failed**. All 17 failures
+  reproduce on main (48 passing cases in those same six files); no loader
+  failures or additional failed test names.
+- Affected randomized runs: **260 passed** at each of seeds 924 and 925,
+  **51 Cmd-P checks passed** at seed 926, and **284 passed** after integration
+  at seed 927.
+- **Seven native macOS fixtures passed** after integration, using an isolated
+  test bundle with fake transports. Models now opens its overview without
+  launching the pending product, matching current main.
+- Full analysis matches main's 15 existing findings. Final fixture analysis
+  reports no issues; changed Dart files are formatted.
+- The optional render walkthrough passed and generated 135 synthetic images.
+- New Harness form coverage is **97.6%**; controller coverage is **93.7%**.
+  This is not 100% coverage or a zero-bug guarantee.
+- Normal macOS build 8 succeeded (`harness-picker-review-build-8.log`).
 
-The latest user review found branch names truncating while much of the row was
-empty. `PromptContextView` was allocating equal Flexible shares even when the
-whole identity line fit. It now assigns measured content widths, including the
-inherited text style, and only truncates when the full line exceeds the row.
-The repository still gives way before the branch. The regression checks actual
-painted overflow across prompt styles and enlarged text; all 39 affected
-rendering/customization checks pass (`harness-branch-space-tests-3.jsonl`).
-The normal app was rebuilt (`harness-audit-review-build-6.log`) and restarted.
-Native review confirms the complete branch names in the reported Cmd-O rows;
-the picker is left open for review.
+The repeat audit added 37 regressions covering composition, native command
+routing, folder-browser failures, first-key editing, delayed clipboard replies,
+Git/install failure and retry, duplicate creation, disposal, command handoff
+and unmatched command searches. Cmd-O branch widths use measured content,
+including inherited text styles, so a branch uses the available row space.
 
-A real plain-Terminal creation was approved and verified in `/private/tmp` with
-`pwd`, then exited. The test tab is gone and the temporary picker QA app was
-quit. A pre-existing Office Untitled Tab also closed during cleanup; restoration
-is still incomplete after automatic approval review blocked opening the
-matching Grid session. The restart cleared the app's in-memory closed-tab
-history. The verification note records the details so this is not mistaken for
-fully completed cleanup. Native credential-profile actions were also blocked;
-their isolated fixtures pass. Physical Cmd-V delivery could not be established
-with the computer-use tool, while native context-menu paste did work.
+Computer use confirmed the field/action alignment, scrolling, single-line
+choices, each agent's approval options, conditional Profile, machine labels,
+Worktree activation, project prompt acceptance, and Cmd-P execution and
+cancellation. An approved real plain Terminal was started in `/private/tmp`,
+verified with `pwd`, then exited. Physical Cmd-V and IME delivery remain
+unverified by the automation; native context-menu paste worked. Live credential
+profile actions were blocked by review and are covered only by fake fixtures.
 
-The normal app at `desktop/build/macos/Build/Products/Debug/Harness.app` contains
-the final fixes. The user has now requested PR creation and merge after verification.
-Cmd-P was added to the audit: 51 focused checks pass, including eight new
-regressions. All 17 unrelated full-suite failures reproduce on current main
-`461ff2bf` (48 passes in those same six baseline files).
+The latest quit/restart was blocked by approval review because an active
+conversation had unconfirmed saved state. The existing review process remains
+open, and build 8 is ready for its next restart. Native fixtures instead ran
+as Harness Picker Verification in an isolated copy; that process has exited.
+Earlier cleanup also closed an existing Office Untitled Tab. Its requested
+restoration remains incomplete after review blocked identifying/reopening the
+matching session; the verification record preserves the details.
 
 ## Why this exists
 

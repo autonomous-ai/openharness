@@ -31,6 +31,7 @@ import 'package:harness/usage/ledger/usage_ledger_controller.dart';
 import 'package:harness/usage/ledger/usage_report.dart';
 import 'package:harness/usage/ledger/opencode_ledger_scanner.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/models/models_panel.dart';
 import 'package:harness/settings/settings_nav.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
@@ -1392,7 +1393,9 @@ void main() {
     ('Models', null),
   ]) {
     testWidgets(
-      'native ${entry == 'Models' ? 'Models' : 'Store $entry'} switches products and focuses the started pane',
+      entry == 'Models'
+          ? 'native Models replaces pending creation with its overview without launching'
+          : 'native Store $entry switches products and focuses the started pane',
       (tester) async {
         const products = [
           {
@@ -1464,13 +1467,22 @@ void main() {
           );
           await tester.pump(const Duration(milliseconds: 200));
           await reply.future;
-        } else {
-          await open('autonomous/blender', task: task);
+          expect(find.byType(NewHarnessForm), findsNothing);
+          expect(find.byType(ModelsPanel), findsOneWidget);
+          expect(connection.creates, isEmpty);
+          expect(app.activeSwarm, same(store));
+          await key(tester, LogicalKeyboardKey.escape);
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.byType(ModelsPanel), findsNothing);
+          expect(connection.creates, isEmpty);
+          expect(originalInput, isEmpty);
+          await tester.pumpWidget(const SizedBox());
+          await tester.pump(const Duration(milliseconds: 100));
+          return;
         }
-        final product = entry == 'Models'
-            ? AppNotifier.gridHarness
-            : 'autonomous/blender';
-        final prefix = entry == 'Models' ? 'grid' : 'blender';
+        await open('autonomous/blender', task: task);
+        const product = 'autonomous/blender';
+        const prefix = 'blender';
         expect(prompt().engine, product);
         expect(prompt().projectLabel, startsWith('~/harnesses/$prefix-'));
         expect(prompt().task, task ?? '');

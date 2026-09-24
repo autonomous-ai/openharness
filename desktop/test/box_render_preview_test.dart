@@ -19,6 +19,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -221,11 +222,10 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
 
-      final line = find.byKey(const ValueKey('new-harness-input'));
-      final contextPicker = tester
-          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
-          .controller;
-      contextPicker.setFolder('/work/payments');
+      final line = find.byKey(const ValueKey('new-harness-query'));
+      NewHarnessController contextPicker() =>
+          tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
+      contextPicker().setFolder('/work/payments');
       await app.projectHistory.select('m', '/work/payments');
       app.machineStates['m']!.localProjects = {
         for (final (index, name) in [
@@ -247,16 +247,17 @@ void main() {
       await shot('06-launch-large-text');
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
-      await openLegacyTaskEditor(tester);
-      await tester.pump();
-      await type(line, '');
+      await chord(tester, LogicalKeyboardKey.period);
+      await tester.pumpAndSettle();
+      final taskField = find.byKey(const Key('new-agent-task'));
+      await type(taskField, '');
       await shot('07-new-tab-task-empty');
-      await type(line, 'Plan the launch\nInclude the product demo');
+      await type(taskField, 'Plan the launch\nInclude the product demo');
       await shot('07-new-tab-task-multiline');
-      await type(line, 'fix the flaky login test');
+      await type(taskField, 'fix the flaky login test');
       await shot('07-new-tab-task-typed');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
+      await tester.pumpAndSettle();
       await openLaunchRow(tester, 'agent');
       await tester.pump();
       await shot('08-new-agent');
@@ -278,6 +279,7 @@ void main() {
       await shot('08-codex-highlighted-from-claude');
       await type(line, 'co');
       await shot('09-new-agent-filtered');
+      await key(tester, LogicalKeyboardKey.enter);
       await openAgentSetting(
         tester,
         'codex',
@@ -291,8 +293,6 @@ void main() {
       await shot('09-codex-profiles');
       await type(line, 'Work');
       await key(tester, LogicalKeyboardKey.enter);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
       await shot('09-configured-agent');
       await openLaunchRow(tester, 'project');
       await tester.pump();
@@ -311,7 +311,10 @@ void main() {
         'prototype',
         'experiments',
       ]) {
-        await app.projectHistory.select(contextPicker.machineId, '/work/$name');
+        await app.projectHistory.select(
+          contextPicker().machineId,
+          '/work/$name',
+        );
       }
       app.notifyListeners();
       await tester.pump(const Duration(milliseconds: 200));
@@ -329,22 +332,30 @@ void main() {
       await shot('10-project-filtered');
       await type(line, 'no-matching-project');
       await shot('10-project-no-matches');
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await openLaunchRow(tester, 'project');
+      await tester.tap(
+        find.byKey(
+          ValueKey(
+            'new-harness-option-${NewHarnessController.existingProjectId}',
+          ),
+        ),
+      );
       await tester.pump();
       await shot('10-existing-project');
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await openLaunchRow(tester, 'project');
+      await tester.tap(
+        find.byKey(
+          ValueKey('new-harness-option-${NewHarnessController.repositoryId}'),
+        ),
+      );
       await tester.pump();
       await shot('10-github-empty');
       await type(line, 'https://github.com/acme/payments');
       await shot('10-github-repository');
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      contextPicker.accept(
-        contextPicker.options.firstWhere(
-          (row) => row.id == NewHarnessController.newProjectId,
+      await openLaunchRow(tester, 'project');
+      await tester.tap(
+        find.byKey(
+          ValueKey('new-harness-option-${NewHarnessController.newProjectId}'),
         ),
       );
       await tester.pump();
@@ -361,10 +372,10 @@ void main() {
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pump();
       }
-      contextPicker.focusField(NewHarnessField.task);
-      contextPicker.setQuery('');
-      contextPicker.focusField(NewHarnessField.agent);
-      contextPicker.accept(const NewHarnessOption(id: 'pi', title: 'Pi'));
+      contextPicker().focusField(NewHarnessField.task);
+      contextPicker().setQuery('');
+      contextPicker().focusField(NewHarnessField.agent);
+      contextPicker().accept(const NewHarnessOption(id: 'pi', title: 'Pi'));
       await tester.pump();
       await shot('12-pi-task-availability');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -413,11 +424,11 @@ void main() {
           .controller;
       largeBox.setFolder('/work/payments');
       await shot('15-create-large-text');
-      await openLegacyTaskEditor(tester);
-      await tester.pump();
+      await chord(tester, LogicalKeyboardKey.period);
+      await tester.pumpAndSettle();
       await shot('15-task-large-text');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
+      await tester.pumpAndSettle();
       await openLaunchRow(tester, 'project');
       await tester.pump();
       await shot('15-project-menu-large-text');
@@ -591,9 +602,7 @@ void main() {
       await shot('35-pane-actions-narrow');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      Focus.of(tester.element(find.byIcon(Icons.tune).first)).requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.tap(find.byType(GridModelPicker).first);
       await tester.pumpAndSettle();
       await shot('36-model-menu-narrow');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);

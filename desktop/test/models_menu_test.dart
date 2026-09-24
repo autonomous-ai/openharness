@@ -456,7 +456,7 @@ void main() {
         final app = ModelManagerTestApp(connection);
         await openGridDoor(tester, app, machineId: remote ? 'other' : null);
         expect(find.byType(AgentPicker), findsNothing);
-        expect(find.byType(NewHarnessBox), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
         expect(app.activeSwarm.isStore, isFalse);
         expect(app.allPanes, isEmpty);
         expect(find.byType(ModelsPanel), findsOneWidget);
