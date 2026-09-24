@@ -76,15 +76,22 @@ void main() {
     },
   );
 
-  test('a pane behind another tab is this app\'s too', () async {
+  // A tab behind this one is not what the person is looking at, and taking its
+  // terminal too is how two Macs on two different tabs ended up fighting over
+  // terminals neither had on screen. Switching to that tab is its own gesture.
+  test('a pane behind another tab is left where it is', () async {
     app.adoptSessionForTest(session('a0'));
     app.newSwarm();
     app.adoptSessionForTest(session('a1'));
     expect(app.activeSwarm.panes.map((p) => p.agentId), ['a1']);
 
     await app.retakeTakenOverPanes();
-    expect(opens('a0'), ['terminal_open']);
-    expect(opens('a1'), ['terminal_open']);
+    expect(opens('a1'), ['terminal_open'], reason: 'the tab being looked at');
+    expect(
+      opens('a0'),
+      isEmpty,
+      reason: 'the tab behind it is somebody else\'s',
+    );
   });
 
   test('a pane the daemon would refuse keeps its band', () async {
