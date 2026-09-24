@@ -9,7 +9,6 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/theme/app_theme.dart';
-import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -123,30 +122,6 @@ void main() {
     });
   }
 
-  // The model picker is always shown, right before the ⋮ menu on the header's right edge. It used
-  // to sit left of the details/controls stack, whose width follows the branch and the PR badge, so
-  // it drifted from pane to pane.
-  testWidgets(
-    'the model picker sits before the ⋮ menu and a PR badge does not move it',
-    (tester) async {
-      final session = sessionNamed('Desktop');
-      addTearDown(session.dispose);
-      await pump(tester, session);
-      final picker = find.byType(GridModelPicker);
-      final plain = tester.getRect(picker);
-      final menu = tester.getRect(find.byTooltip('Pane actions'));
-      expect(plain.right, lessThanOrEqualTo(menu.left));
-      expect(menu.left - plain.right, lessThan(8));
-
-      await tester.pumpWidget(const SizedBox());
-      await pump(tester, session, withPr: true);
-      expect(tester.getRect(picker), plain);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump(const Duration(seconds: 1));
-    },
-  );
-
   // Each shape describes the path topology, not an assumed speed: direct link, intermediate hop,
   // backend server. Tooltip and semantics use the protocol names people will diagnose with.
   testWidgets(
@@ -170,8 +145,7 @@ void main() {
           find.widgetWithText(TextButton, label),
         );
         expect(statusRect.left, greaterThan(nameRect.right));
-        // The project line sits under the name, so the status never reaches it.
-        expect(projectRect.top, greaterThan(nameRect.bottom - 1));
+        expect(statusRect.right, lessThan(projectRect.left));
         expect(tester.getRect(project), projectRect);
         expect(tester.takeException(), isNull);
       }

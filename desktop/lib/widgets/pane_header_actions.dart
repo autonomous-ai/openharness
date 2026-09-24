@@ -244,15 +244,31 @@ class PaneHeaderActions extends StatelessWidget {
             ],
           );
     if (modelPicker == null) return actionArea;
-    // The model, then the ⋮ menu on the header's right edge. Both keep one place in every pane:
-    // the folder, branch and PR that used to sit between them, and push the picker around with
-    // their length, now live under the pane's name.
+    // The model, then folder, branch and PR, then the ⋮ menu on the right edge. With the actions
+    // in one menu there is nothing for the details to swap with on hover, so they stay in view.
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Flexible(child: modelPicker!),
+        modelPicker!,
+        if (details != null)
+          // The gap shrinks WITH the details: a pane too narrow for them gives the picker and
+          // the menu every pixel rather than overflowing by the width of a gap beside nothing.
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: trailing == null
+                  ? details!
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(child: details!),
+                        trailing!,
+                      ],
+                    ),
+            ),
+          ),
         const SizedBox(width: 2),
-        actionArea,
+        controls,
       ],
     );
   }
