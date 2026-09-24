@@ -73,7 +73,7 @@ import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeApproves, permissionModeFlags } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
@@ -85,6 +85,7 @@ import { AgentRestartCoordinator, bypassPermissionFor, restartAgent, type Restar
 import { claudeContinuation, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
+import { describeAgentCreateFailure, summarizePaneOutput } from './lib/agentCreateDiagnosis.js'
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
@@ -4315,10 +4316,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // pane that fails to come up is reported failed by the frame regardless of this field.
         refreshGridWebSearch(entry.agentId, built.overrides)
         const { env: launchEnv, extraArgs, clearEnv } = built.overrides
+        // The engine may have been downgraded while the daemon was down. Coming back in Ask beats
+        // coming back as a pane of help text, and beats not coming back at all.
+        const permission = await downgradedPermission(entry, entry.bypassPermission === true, 'restore')
         const argv = buildEngineLaunchArgv(entry.engine, {
           ...opts,
-          bypassPermission: entry.bypassPermission === true,
-          ...(entry.permissionMode ? { permissionMode: entry.permissionMode } : {}),
+          bypassPermission: permission.bypassPermission === true,
+          ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
           ...(entry.cwd ? { cwd: entry.cwd } : {}),
           ...(extraArgs.length ? { extraArgs } : {}),
@@ -4540,6 +4544,22 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // the error where it was printed and types the command again, rather than being handed a
         // "Start failed" tile they cannot type into.
         if (paneState.engineExit !== null) {
+          // Say what happened before the evidence goes. The pane is about to become an ordinary
+          // terminal and `releaseEngine` rewrites the launch to `ready`, so after this point nothing
+          // anywhere — frame, registry, archive — records that an engine was ever meant to be here
+          // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
+          // it did not know, and the only trace was one line saying the pane had become a terminal.
+          // `describeAgentCreateFailure` was written for this and had no caller.
+          const captured = await captureTerminal(pending.agentId, 40)
+          console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
+            + describeAgentCreateFailure({
+              state: { dead: true, exitStatus: paneState.engineExit, command: engine },
+              output: summarizePaneOutput(captured ?? ''),
+              engineBin: command[0],
+              shellName: null,
+              processes: [],
+              elapsedMs: Date.now() - startedAt,
+            }))
           await clearPaneRemainOnExit(spawned.runtime.paneId)
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
@@ -4583,26 +4603,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       permissionMode = pinnedMode
       bypassPermission = permissionModeApproves(pinnedMode)
     }
-    // `--approve-for-me` was added after older Codex CLI releases. Refuse the
-    // incompatible Auto mode before opening a pane, rather than letting Codex
-    // reject the flag and leaving the person in an unexpected fallback shell.
-    // Ask mode has no flag and remains a useful workaround until Codex updates.
-    const codexAutoApprove =
-      engine === 'codex' &&
-      (permissionMode !== null
-        ? permissionModeFlags(engine, permissionMode)?.includes('--approve-for-me') === true
-        : bypassPermission)
-    if (codexAutoApprove) {
-      const support = await commandSupportsFlagInInteractiveShell(
-        engineBin('codex'),
-        '--approve-for-me',
-      )
-      if (support === 'unsupported') {
-        const detail =
-          'Your installed Codex CLI does not support --approve-for-me, which Harness uses for Auto approvals. Update Codex and try again, or choose Ask permissions for this harness.'
-        console.warn(`[agent] create codex refused · ${detail}`)
-        return { ok: false, error: 'CODEX_CLI_TOO_OLD', detail }
-      }
+    // An engine too old for the flag this permission mode launches it with prints its help and
+    // exits; the wrapper then hands the pane to a shell, and what the person gets is a terminal
+    // full of help text with nothing anywhere saying why (openharness#285, opencode without
+    // `--auto`). Refuse before opening a pane — this is a launch somebody is waiting on, and Ask
+    // works today. Codex has been checked this way since it gained `--approve-for-me`; every other
+    // engine with a permission flag was not, and carried the same failure.
+    const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission })
+    if (refusal) {
+      console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
+      return { ok: false, ...refusal }
     }
     // A domain-specific harness: put its files into the workspace first (template, AGENTS.md, skill
     // links) and take its env/argv for the launch. Refused, never approximated, when it is not here.
@@ -4825,6 +4835,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ...(plan.level === 'native' ? { forkSessionId: plan.forkSessionId } : {}),
       ...(firstPrompt ? { firstPrompt } : {}),
     }
+    // Same refusal as create: the clone inherits the source's permission mode, and an engine that
+    // has since been downgraded would hand back a pane of help text instead of a harness.
+    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions)
+    if (forkRefusal) {
+      console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
+      return { ok: false, ...forkRefusal }
+    }
     prepareApiTools(source.cwd, engine)
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
@@ -4875,10 +4892,40 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       && current.tmuxPane === session.tmuxPane && current.engine === session.engine
   }
 
+  /**
+   * The permission this relaunch can actually ask for. Nobody is waiting on a restart, a retarget, a
+   * restore or a resume, so an engine that no longer takes the row's flag costs it the mode, not the
+   * harness — the alternative is a pane of help text, or no pane at all (openharness#285).
+   *
+   * The row is NOT rewritten. `permissionMode` is the person's recorded choice and `setPermissionMode`
+   * is fill-only for that reason; an engine put back the way it was gets Auto again on the next
+   * relaunch, with nobody having to ask for it twice. The row stops CLAIMING the mode on its own:
+   * discovery re-derives `bypassPermission` from the live argv on every pass (`setBypassPermission`
+   * above), so a launch without the flag reads as one within a reconcile.
+   */
+  const downgradedPermission = async (
+    session: RegisteredSession,
+    bypassPermission: boolean,
+    what: string,
+  ): Promise<{ permissionMode?: string | null; bypassPermission?: boolean }> => {
+    const { choice, droppedFlag } = await dropPermissionFlagIfUnsupported(session.engine, {
+      permissionMode: session.permissionMode ?? null,
+      bypassPermission,
+    })
+    if (droppedFlag) {
+      console.warn(`[agent] ${what} ${sid(session.agentId)} · ${session.engine} does not take ${droppedFlag}`
+        + ` · starting in Ask · update ${session.engine} to get ${session.permissionMode ?? 'Auto'} back`)
+    }
+    return choice
+  }
+
   const paneSwapDeps = (
     session: RegisteredSession,
     runtime: TmuxRuntimeRef,
     launch: { env?: Record<string, string>; extraArgs?: readonly string[]; clearEnv?: readonly string[] } = {},
+    /** The mode this swap may actually ask for — the row's own, unless the engine on disk has since
+     *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
+    permissionMode: string | null = session.permissionMode ?? null,
   ): RestartAgentDeps => ({
     prepareResume: () => prepareSessionResume(session),
     holdOpen: async () => {
@@ -4922,7 +4969,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ...opts,
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
       // Plan or Accept edits would come back as Ask without it.
-      ...(session.permissionMode ? { permissionMode: session.permissionMode } : {}),
+      ...(permissionMode ? { permissionMode } : {}),
       ...(session.cwd ? { cwd: session.cwd } : {}),
       ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
       // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
@@ -5107,10 +5154,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           return { ok: false, error: 'GRID_CLEAR_FAILED', detail: 'reason' in cleared ? cleared.reason : 'tmux would not clear the pane environment' }
         }
       }
+      const retargetPermission = await downgradedPermission(session,
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'retarget')
       const outcome = await restartAgent(
         { engine: session.engine, sessionId: session.sessionId },
-        await bypassPermissionFor(session, () => liveBypassPermission(session)),
-        paneSwapDeps(session, pane, built.overrides),
+        retargetPermission.bypassPermission === true,
+        paneSwapDeps(session, pane, built.overrides, retargetPermission.permissionMode ?? null),
       )
       if (!outcome.ok) {
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
@@ -5248,11 +5297,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
     agentReconciler.holdRoute(routeKey)
     try {
-      const bypassPermission = await bypassPermissionFor(session, () => liveBypassPermission(session))
+      const restartPermission = await downgradedPermission(session,
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart')
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId },
-        bypassPermission,
-        { ...paneSwapDeps(session, runtime, built.overrides), isCurrent: current },
+        restartPermission.bypassPermission === true,
+        { ...paneSwapDeps(session, runtime, built.overrides, restartPermission.permissionMode ?? null), isCurrent: current },
       )
 
       if (!current()) return changed
