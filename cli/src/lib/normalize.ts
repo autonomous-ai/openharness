@@ -787,7 +787,7 @@ const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens'
 
 /**
  * Convert ONE appended JSONL line into live events. Derives turn_started/turn_ended from content:
- *  - a real user prompt  → turn_started{userMessage}; in-flight input does not end work
+ *  - a real user prompt  → (turn_ended if one was open) + turn_started{userMessage}
  *  - assistant blocks    → thinking/text/tool_start (tool ids tracked as pending)
  *  - user tool_results   → tool_end (resolves pending ids)
  *  - assistant stop_reason in TERMINAL_STOP_REASONS with no pending tools → turn_ended
@@ -825,10 +825,10 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     }
     const userText = realUserText(msg)
     if (userText !== null) {
-      // Claude can consume queued input during tool execution. Preserve unresolved
-      // tools and wait for real terminal evidence instead of synthesizing completion.
-      if (!state.turnOpen) state.pendingTools.clear()
+      // New prompt (typed in the terminal OR injected from the web) — starts a turn.
+      if (state.turnOpen) events.push({ type: 'turn_ended', payload: {} })
       state.turnOpen = true
+      state.pendingTools.clear()
       events.push({ type: 'turn_started', payload: { userMessage: userText } })
       return events
     }

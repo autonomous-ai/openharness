@@ -1,10 +1,11 @@
 # Input while an agent is working
 
 `turn.send` uses the same session for follow-up requests. A `deliveryId` no longer makes
-Claude/Codex wait for the previous task to finish. The controller owns a short write lock
+Claude/Codex wait for the previous task to finish. The Device-only input adapter owns a short write lock
 (runtime validation, paste, Enter, and acceptance verification), not a lock over model
-reasoning or tool execution. Tracked device messages and untracked local messages share
-that lock and preserve FIFO order.
+reasoning or tool execution. Device messages preserve FIFO order. Existing local/orchestrator scheduling stays unchanged;
+CLI wiring excludes simultaneous terminal writes only while Device owns the same pane.
+The shared SessionInputController and Claude/Codex normalizers are unchanged.
 
 ## Engine behavior
 
@@ -42,13 +43,13 @@ not infer runtime feature configuration on older Codex builds.
 - The existing eight-item/24-KiB waiting queue and five-minute expiration remain. An active
   input returned to the front after detecting a dialog retains its separate reserved slot.
   At most 64 unresolved native inputs can be dispatched per session; further requests are
-  rejected with `unresolved_input_capacity`, and already-waiting input waits for capacity.
+  rejected with `queue_full`, and already-waiting input waits for capacity.
 - Session removal rejects unsent work and marks dispatched/running work unknown. A vanished
   session cannot allow an old async completion to start another write.
 
-Claude/Codex normalizers no longer synthesize `turn_ended` on a new user message inside an
-open turn. Claude retains pending tool IDs across that message. Only actual terminal turn
-signals close work, so a steering message cannot manufacture a completion or premature recap.
+The Device event observer ignores an end immediately followed by a new input in the same
+Claude/Codex batch: that inferred boundary is insufficient completion evidence. Shared
+normalizers and other event consumers retain their existing behavior.
 
 The receipt service keeps every request reservation independently. Only an unambiguous
 observed start followed by its session end can complete a receipt. If starts overlap before
@@ -92,51 +93,28 @@ a changed `serverInstanceId` is reconciliation, never permission to replay autom
 
 ## OS coordination (no Autonomous OS changes in this PR)
 
-Read-only inspection of the available OS checkout verified both callers:
+Both callers use this Device route: harness-use retains its taskKey; Harness-only voice
+uses its original voice request key and focus revision. The supplied OS patch on base
+`30e034f84` adds single-input correlation and avoids agent/latest recap fallback after
+overlap. It does not support merged results or consume receipt.input yet.
 
-- `skills/harness-use/scripts/harness.py`: submits `turn.send` with retained `taskKey`.
-- `system/harness/voice.go`: submits `turn.send` with a `voice-…` key derived from the run,
-  explicit target, and `focusRevision`. It currently stores a single `VoicePending`.
-- `system/server/harness.go`: response routing still has an agent-only fallback and obtains
-  a latest recap after done/summary. Those are unsafe associations for overlapping requests.
-
-Required OS follow-up:
-
-1. Consume `input.status.v1` without changing the meaning of existing receipt fields. Distinguish
-   “sent as steering”, “in the engine queue”, “waiting for user action”, “waiting for writer”,
-   and “waiting for the current turn”; do not announce completed on acceptance.
-2. Retain a map of pending runs keyed by `(serverInstanceId, deliveryId)` and map each back to
-   its original idempotency key, target, and voice/reply route. Do not overwrite A with B.
-3. Route a result only with matching correlation. Uncorrelated session `turn.done/summary`
-   remains session information; it must not complete all pending runs or be assigned to the
-   newest voice request. Do not use the latest recap as a substitute for B's result.
-4. On timeout/reconnect, reconcile the original key/receipt and replay cursor. Do not mint a
-   new key or replay on an instance change just because input acceptance was uncertain.
-
-Proposed next contract for review with OS, **not implemented or advertised here**:
-`turn.correlation.v2`, with engine-derived `engineTurnId` and `inputIds` carried from input
-acceptance through started/done/summary. Keep the existing local `turnId` unchanged. A result
-would explicitly include `correlation: {scope: "input" | "turn" | "session", engineTurnId?,
-inputIds: [...]}` and a stable `resultId`; a merged turn would not imply one result per input.
-OS must route/announce only the explicitly identified scope and dedupe by result ID. This
-requires engine reader/normalizer evidence as well as OS adoption; synthetic IDs on a
-session summary cannot supply it. This PR intentionally does not fabricate that evidence.
-
-Rollout: input delivery works with existing clients, but reliable per-message OS result/TTS
-routing for overlapping tasks requires the OS follow-up above. No physical-device end-to-end
-claim is made by CLI tests.
+The concrete handoff is [Grouped result contract: turn.correlation.v2](autonomous-device-result-correlation.md).
+It defines the event schema, evidence requirements, run closure, result/TTS dedupe,
+compatibility and joint rollout tests. This is the Harness-side contract decision, not an
+implemented or advertised capability. No OS repository changes are included. PR #294 fixes
+input delivery; the complete overlapping-result → Lamp flow remains follow-up work.
 
 ## Validation (2026-09-24)
 
 Mock/component coverage: both caller request shapes (with/without focus revision), A then B
-before A ends, rapid tracked/local A/B/C, exact-draft retry, lost key/write acknowledgments,
+before A ends, rapid Device A/B/C, exact-draft retry, lost key/write acknowledgments,
 same-key retry, reconnect replay, separate receipts, native queue, daemon queue, writer/control
 locks, dialog detection/release, session disappearance, and overlapping done/summary events.
-The final related CLI run passed 473 tests across 18 files (including Autonomous Device
+The scoped CLI regression run passed 474 tests across 18 files (including Autonomous Device
 transport/receipts, Claude/Codex normalizers, dialogs, orchestrator, and voice router); TypeScript typecheck passed.
 The Python harness-use helper passed 28 tests, and `go test ./harness -run Voice -count=1` passed. OS helper/voice tests ran read-only; no OS source files were changed.
 
-Real engine smoke tests used isolated tmux panes and a temporary directory, the modified
+Earlier real engine smoke tests (before isolating the Device adapter) used isolated tmux panes and a temporary directory, the modified
 `SessionInputController`, and production `sendToTmux`. No Harness daemon installation or
 restart and no existing agent interruption were performed:
 
@@ -145,6 +123,8 @@ restart and no existing agent interruption were performed:
 | Codex 0.156.1 | B appeared in “Messages to be submitted after next tool call”; empty composer available | `GARDEN_RED` after `sleep 20` |
 | Claude Code 2.1.280 | B appeared above “Press up to edit queued messages” while `Bash(sleep 20)` was running | Response included `GARDEN_RED` and respected the no-file-modification instruction |
 
+These earlier live smoke tests verify native engine behavior, but do not validate the final
+Device-only adapter wiring. The final adapter is covered by mocks/component tests.
 The live smoke tests verified terminal delivery and native behavior, not the full daemon
 transcript watcher, Device transport, microphone/STT, or OS TTS. Start observation was supplied
 by the test driver after seeing the busy terminal. Receipt correlation/reconnect/error paths

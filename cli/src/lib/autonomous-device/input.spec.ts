@@ -1,37 +1,56 @@
-import { CodexNormalizer } from '../engines/codex/normalizer.js'
-import { lineToEvents, newTurnState, type LiveEvent } from './normalize.js'
+import { CodexNormalizer } from '../../engines/codex/normalizer.js'
+import { lineToEvents, newTurnState, type LiveEvent } from '../normalize.js'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SessionInputController } from './sessionInput.js'
-import { AutonomousDeviceService } from './autonomous-device/service.js'
-import type { RegisteredSession } from './registry.js'
-import type { TerminalActionResult } from './terminalTypes.js'
+import { AutonomousDeviceInput, isDeviceInputBoundary, type DeviceInputDeps } from './input.js'
+import { SessionInputController } from '../sessionInput.js'
+import { AutonomousDeviceService } from './service.js'
+import type { RegisteredSession } from '../registry.js'
+import type { TerminalActionResult } from '../terminalTypes.js'
+
+function makeDevice(overrides: Partial<DeviceInputDeps>): AutonomousDeviceInput {
+  return new AutonomousDeviceInput({
+    getSession: () => ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession,
+    validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
+    capture: async () => '› ', acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
+    onDelivery: vi.fn(), onInputStatus: vi.fn(), ...overrides,
+  })
+}
 
 function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
   let available = true
   const session = { agentId: 'agent', engine, cliVersion: '0.106.0' } as RegisteredSession
   const inject = vi.fn(async (_target: string, _text: string): Promise<TerminalActionResult> => ({ state: 'succeeded', dispatch: 'executed' }))
   const capture = vi.fn(async (): Promise<string | null> => '› \nWorking…')
-  const sendKey = vi.fn(async () => true)
+  const sendKey = vi.fn(async (_id: string, _key: string) => true)
   const events: Record<string, unknown>[] = []
   const service = new AutonomousDeviceService({
     machineId: 'machine', agents: () => available ? [{ agentId: 'agent', engine, name: 'Agent', state: 'working' }] : [],
     submit: (id, text, delivery) => controller.submit(id, text, delivery), cancelDelivery: id => controller.cancelDelivery(id),
     stop: async () => true, answer: async () => true, recent: () => [], emit: frame => events.push(frame),
   })
-  const controller = new SessionInputController({
+  const legacy: SessionInputController = new SessionInputController({
+    getSession: () => available ? session : undefined, validateRuntime: async () => available,
+    inject: (id, text) => controller.legacyWrite(id, () => inject(id, text)),
+    sendKey: (id, key) => controller.legacyWrite(id, () => sendKey(id, key)), capture, onError: vi.fn(),
+    onDelivery: event => service.delivery(event),
+  })
+  const controller: AutonomousDeviceInput = new AutonomousDeviceInput({
+    acquireControl: id => legacy.acquireControl(id, { forAnswer: true }),
+    legacySubmit: (id, text, delivery) => legacy.submit(id, text, delivery),
+    legacyCancel: id => legacy.cancelDelivery(id),
     onForget: id => service.agentGone(id),
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
-    inject, capture, sendKey, onError: vi.fn(), onDelivery: event => service.delivery(event),
+    inject, capture, sendKey, onDelivery: event => service.delivery(event),
     onInputStatus: event => service.inputStatus(event),
   })
   const send = (key: string, text = key, focusRevision?: string) => service.request('device', {
     type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: key, text,
     ...(focusRevision ? { focusRevision } : {}),
   })
-  const start = (text: string) => { controller.onTurnStarted('agent', text); service.turnStarted('agent') }
-  const end = () => { service.turnEnded('agent'); controller.onTurnEnded('agent') }
-  return { controller, service, inject, capture, sendKey, send, start, end, events,
+  const start = (text: string) => { legacy.onTurnStarted('agent', text); controller.onTurnStarted('agent', text); service.turnStarted('agent') }
+  const end = () => { service.turnEnded('agent'); legacy.onTurnEnded('agent'); controller.onTurnEnded('agent') }
+  return { controller, legacy, service, inject, capture, sendKey, send, start, end, events,
     gone: () => { available = false; controller.forget('agent') }, receipt: (key: string) => service.receipt('device', key)! }
 }
 
@@ -69,7 +88,7 @@ describe('in-flight input through the Autonomous Device contract', () => {
     f.controller.forget('agent')
   })
 
-  it('serializes rapid A/B/C writes, including local input, while the agent stays busy', async () => {
+  it('serializes rapid Device A/B/C writes, while the agent stays busy', async () => {
     vi.useFakeTimers()
     const f = fixture()
     const finish: Array<() => void> = []
@@ -77,9 +96,9 @@ describe('in-flight input through the Autonomous Device contract', () => {
     f.start('existing task')
     await f.send('A')
     await f.send('B')
-    f.controller.submit('agent', 'C')
+    await f.send('C')
     expect(f.inject.mock.calls.map(call => call[1])).toEqual(['A'])
-    expect(f.controller.acquireControl('agent', { forAnswer: true })).toBeNull()
+    expect(f.legacy.acquireControl('agent', { forAnswer: true })).toBeNull()
     finish[0]()
     await vi.advanceTimersByTimeAsync(0)
     expect(f.inject.mock.calls.map(call => call[1])).toEqual(['A', 'B'])
@@ -184,11 +203,11 @@ describe('in-flight input through the Autonomous Device contract', () => {
     f.controller.setUserAction('agent', true)
     await f.send('B')
     expect(f.receipt('B').input).toEqual({ mode: 'daemon_queue', phase: 'waiting_for_user' })
-    const release = f.controller.acquireControl('agent', { forAnswer: true })
+    const release = f.legacy.acquireControl('agent', { forAnswer: true })
     expect(release).not.toBeNull()
     f.controller.setUserAction('agent', false)
     expect(f.inject).not.toHaveBeenCalled()
-    release!(); await vi.advanceTimersByTimeAsync(0)
+    release!(); await vi.advanceTimersByTimeAsync(1500)
     expect(f.inject.mock.calls.map(call => call[1])).toEqual(['B'])
     f.controller.forget('agent')
   })
@@ -212,12 +231,12 @@ describe('native input write evidence', () => {
     let blocked = true
     const inject = vi.fn(async (_target: string, _text: string) => true)
     const statuses: unknown[] = []
-    const controller = new SessionInputController({
+    const controller = makeDevice({
       getSession: () => ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession,
       validateRuntime: async () => true, isAwaitingUser: async () => blocked,
-      inject, sendKey: async () => true, onError: vi.fn(), onInputStatus: event => statuses.push(event),
+      inject, sendKey: async () => true, onInputStatus: event => statuses.push(event),
     })
-    controller.setTurnOpen('agent', true)
+    controller.onTurnStarted('agent', 'existing task')
     controller.submit('agent', 'B', 'B')
     await vi.advanceTimersByTimeAsync(0)
     expect(inject).not.toHaveBeenCalled()
@@ -279,9 +298,9 @@ it('preserves A/B order if a dialog appears during the first preflight check', a
   let release!: (blocked: boolean) => void
   const probe = vi.fn<() => Promise<boolean>>().mockImplementationOnce(() => new Promise(resolve => { release = resolve })).mockResolvedValue(false)
   const inject = vi.fn(async (_target: string, _text: string) => true)
-  const controller = new SessionInputController({
+  const controller = makeDevice({
     getSession: () => ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession,
-    validateRuntime: async () => true, isAwaitingUser: probe, inject, sendKey: async () => true, onError: vi.fn(),
+    validateRuntime: async () => true, isAwaitingUser: probe, inject, sendKey: async () => true,
   })
   controller.submit('agent', 'A', 'A')
   await vi.advanceTimersByTimeAsync(0)
@@ -293,7 +312,7 @@ it('preserves A/B order if a dialog appears during the first preflight check', a
 })
 
 
-it.each(['codex', 'claude'] as const)('%s normalizer does not fabricate completion when B arrives inside A', async engine => {
+it.each(['codex', 'claude'] as const)('%s Device filter rejects an inferred completion without changing normalizer output', async engine => {
   vi.useFakeTimers()
   const f = fixture(engine)
   const codex = new CodexNormalizer('live')
@@ -302,7 +321,8 @@ it.each(['codex', 'claude'] as const)('%s normalizer does not fabricate completi
     ? codex.ingest(JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: text } }))
     : lineToEvents(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }), claude)
   const observe = (events: LiveEvent[]) => {
-    for (const event of events) {
+    for (const [index, event] of events.entries()) {
+      if (isDeviceInputBoundary(engine, events, index)) continue
       if (event.type === 'turn_started') f.start(event.payload.userMessage)
       if (event.type === 'turn_ended') f.end()
     }
@@ -311,8 +331,8 @@ it.each(['codex', 'claude'] as const)('%s normalizer does not fabricate completi
   if (engine === 'claude') claude.pendingTools.add('running-tool')
   await f.send('B'); await vi.advanceTimersByTimeAsync(0)
   const inputEvents = normalizeUser('B')
-  expect(inputEvents.map(event => event.type)).toEqual(['turn_started'])
-  if (engine === 'claude') expect(claude.pendingTools.has('running-tool')).toBe(true)
+  expect(inputEvents.map(event => event.type)).toEqual(['turn_ended', 'turn_started'])
+  if (engine === 'claude') expect(claude.pendingTools.has('running-tool')).toBe(false) // unchanged shared normalizer
   observe(inputEvents)
   expect(f.receipt('A').state).toBe('unknown')
   expect(f.receipt('B').state).toBe('unknown')
@@ -327,4 +347,24 @@ it.each(['codex', 'claude'] as const)('%s normalizer does not fabricate completi
   expect(f.receipt('A').state).toBe('unknown')
   expect(f.receipt('B').state).toBe('unknown')
   f.controller.forget('agent')
+})
+
+it('excludes legacy writes only during Device ownership of the same pane', async () => {
+  vi.useFakeTimers()
+  const writes: string[] = []
+  let finish!: () => void
+  const controller = makeDevice({
+    inject: async () => { writes.push('device'); await new Promise<void>(resolve => { finish = resolve }); return true },
+  })
+  await controller.legacyWrite('agent', async () => { writes.push('local-before') })
+  controller.submit('agent', 'A', 'delivery-A')
+  await vi.advanceTimersByTimeAsync(0)
+  const local = controller.legacyWrite('agent', async () => { writes.push('local-after') })
+  await controller.legacyWrite('other', async () => { writes.push('other-pane') })
+  expect(writes).toEqual(['local-before', 'device', 'other-pane'])
+  finish()
+  await vi.advanceTimersByTimeAsync(0)
+  await local
+  expect(writes).toEqual(['local-before', 'device', 'other-pane', 'local-after'])
+  controller.forget('agent')
 })

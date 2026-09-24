@@ -223,6 +223,7 @@ import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js
 import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
+import { AutonomousDeviceInput, isDeviceInputBoundary } from './lib/autonomous-device/input.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
 import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
 import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
@@ -2315,21 +2316,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     replayFromStart = false,
   ): Promise<boolean> =>
     attaches.attach(session, reset, () => attachSessionNow(session, reset, replayCursorFromStart, replayFromStart))
-  const input = new SessionInputController({
-    onForget: agentId => autonomousDeviceService?.agentGone(agentId),
-    isAwaitingUser: async session => {
-      const pane = await captureTerminal(session.agentId)
-      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
-    },
-    onInputStatus: event => autonomousDeviceService?.inputStatus(event),
+  const input: SessionInputController = new SessionInputController({
     getSession: (id) => registry.resolve(id),
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
       backend.orchestratorDelivery(event)
     },
     validateRuntime: validateTerminal,
-    inject: submitTerminalAction,
-    sendKey: keyTerminalAction,
+    inject: (id, text) => deviceInput.legacyWrite(id, () => submitTerminalAction(id, text)),
+    sendKey: (id, key) => deviceInput.legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
     onError: (sessionId, message) => {
       backend.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
@@ -2350,6 +2345,24 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       emitSessionEvents(session.sessionId, normalizer.openTurn(content))
     },
   })
+  const deviceInput: AutonomousDeviceInput = new AutonomousDeviceInput({
+    getSession: id => registry.resolve(id),
+    validateRuntime: validateTerminal,
+    inject: submitTerminalAction,
+    sendKey: keyTerminalAction,
+    capture: captureTerminal,
+    isAwaitingUser: async session => {
+      const pane = await captureTerminal(session.agentId)
+      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
+    },
+    acquireControl: id => input.acquireControl(id, { forAnswer: true }),
+    legacySubmit: (id, text, deliveryId) => input.submit(id, text, deliveryId),
+    legacyCancel: id => input.cancelDelivery(id),
+    onDelivery: event => autonomousDeviceService?.delivery(event),
+    onInputStatus: event => autonomousDeviceService?.inputStatus(event),
+    onForget: id => autonomousDeviceService?.agentGone(id),
+  })
+
   /**
    * agy only: close a turn whose final `Stop` never came.
    *
@@ -2447,7 +2460,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hasDevice: () => someoneCanAnswer(),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped) => {
-      input.setUserAction(agentIdFor(sessionId), true)
+      deviceInput.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
       showAwaitingAnswer(sessionId)
       const asked = {
@@ -2475,7 +2488,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
-      input.setUserAction(agentIdFor(sessionId), false)
+      deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
         agentId: agentIdFor(sessionId),
@@ -2663,7 +2676,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!events.length || !registry.bySession(sessionId)?.active) return
     const usageSession = registry.bySession(sessionId)
     if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
-    for (const event of events) {
+    for (const [eventIndex, event] of events.entries()) {
       const agentId = agentIdFor(sessionId)
       const frame = correlateAgentEvent(event, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
@@ -2677,6 +2690,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
+        deviceInput.onTurnStarted(agentId, event.payload.userMessage)
         autonomousDeviceService?.turnStarted(agentId)
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
@@ -2693,7 +2707,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           `[turn] ${sid(sessionId)} ended${event.payload.aborted ? ' · aborted (interrupted)' : ''}` +
             `${startedAt ? ` · ${Date.now() - startedAt}ms` : ''}`,
         )
-        autonomousDeviceService?.turnEnded(agentId, event.payload.aborted === true)
+        // Filter only the Device receipt view; shared normalizers, mirror, and local input stay unchanged.
+        if (!isDeviceInputBoundary(usageSession?.engine ?? '', events, eventIndex)) {
+          autonomousDeviceService?.turnEnded(agentId, event.payload.aborted === true)
+          deviceInput.onTurnEnded(agentId)
+        }
         input.onTurnEnded(agentIdFor(sessionId))
         // Command Code asks AFTER the turn: `ask_user_question` ends the turn (its Stop hook fires), the
         // dialog goes up, and the answer opens a NEW turn. Stopping the watcher here is what left the
@@ -2784,6 +2802,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)
     input.forget(doomed?.agentId ?? sessionId)
+    deviceInput.forget(doomed?.agentId ?? sessionId)
     if (!opts.keepAgent) detachDsh(announceId)
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
@@ -2800,7 +2819,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => input.forget(agentId),
+    forgetInput: agentId => { input.forget(agentId); deviceInput.forget(agentId) },
     detachDsh,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -3041,6 +3060,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
       input.forget(previousOwner.agentId)
+      deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)
     }
     lastRepairAttempt.delete(agent.agentId)
@@ -3186,6 +3206,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!agent.active) return
       invalidateTerminalControl(agent.agentId)
       input.forget(agent.agentId)
+      deviceInput.forget(agent.agentId)
       if (agent.sessionId) {
         questionWatcher.stop(agent.sessionId)
         stopHeartbeat(agent.sessionId)
@@ -5671,8 +5692,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         runtime: evidence.get(s.agentId)?.runtime ?? 'unavailable',
         state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' }))
     },
-    submit: submitAgent,
-    cancelDelivery: id => input.cancelDelivery(id),
+    submit: (id, text, deliveryId) => {
+      const session = registry.resolve(id)
+      deviceInput.submit(session?.agentId ?? id, adaptSlashCommand(text, session?.engine ?? 'claude'), deliveryId)
+    },
+    cancelDelivery: id => deviceInput.cancelDelivery(id),
     stop: id => cancelAgent(id, true),
     answer: (agentId, requestId, answers) => questions.answer({ agentId, requestId, answers, allowPermissions: false }),
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),

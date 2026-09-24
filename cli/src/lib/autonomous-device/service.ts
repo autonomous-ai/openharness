@@ -1,4 +1,4 @@
-import type { SessionInputStatus } from '../sessionInput.js'
+import type { DeviceInputStatus } from './input.js'
 import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -8,7 +8,7 @@ export type ReceiptState = 'queued' | 'delivered' | 'started' | 'completed' | 'r
 export interface AutonomousDeviceReceipt {
   idempotencyKey: string; deliveryId: string; operation: string; state: ReceiptState
   agentId: string; machineId: string; serverInstanceId: string; turnId: string | null
-  input?: Pick<SessionInputStatus, 'mode' | 'phase'>
+  input?: Pick<DeviceInputStatus, 'mode' | 'phase'>
   error: { code: string; message: string } | null; at: number
 }
 export interface AutonomousDeviceAgent { agentId: string; name: string; engine: string; state: string; packageId?: string | null; workspace?: string | null; runtime?: string }
@@ -250,7 +250,7 @@ export class AutonomousDeviceService {
         && !['completed', 'rejected'].includes(entry.receipt.state)) this.update(entry, 'unknown', 'AGENT_GONE')
     }
   }
-  inputStatus(event: SessionInputStatus): void {
+  inputStatus(event: DeviceInputStatus): void {
     const entry = this.deliveries.get(event.deliveryId)
     if (!entry || entry.receipt.agentId !== event.sessionId) return
     if (['completed', 'rejected'].includes(entry.receipt.state)) return
