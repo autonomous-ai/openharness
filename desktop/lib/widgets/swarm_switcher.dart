@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
+import '../shortcuts/keymap_commands.dart';
+import '../shortcuts/keymap_keyboard.dart';
 import 'box_chrome.dart';
 import 'prompt_context.dart';
 import '../shared/theme/status_line_style.dart';
@@ -22,11 +24,12 @@ import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
-import '../state/harness_sessions.dart' show harnessActivityAge;
+import '../state/harness_sessions.dart' show SessionFilter, harnessActivityAge;
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
 import 'swarm_icon.dart';
 import 'swarm_search_preview.dart';
+import 'swarm_resource_preview.dart';
 
 Future<SwarmSearchSelection?> showSwarmHistory(
   BuildContext context,
@@ -130,6 +133,7 @@ class SwarmSearchKeys extends StatelessWidget {
     this.onNewAgent,
     this.onCommands,
     this.onRefocus,
+    this.previewControls,
     required this.child,
   });
   final SwarmSearchController? search;
@@ -143,6 +147,7 @@ class SwarmSearchKeys extends StatelessWidget {
   final VoidCallback? onNewAgent;
   final VoidCallback? onCommands;
   final VoidCallback? onRefocus;
+  final SearchPreviewControls? previewControls;
   final Widget child;
 
   @override
@@ -164,6 +169,7 @@ class SwarmSearchKeys extends StatelessWidget {
     }
 
     void choose(bool add) => run(() {
+      if (!add && previewControls?.invoke('picker.accept') == true) return;
       if (search == null) {
         onOpen?.call();
         return;
@@ -180,6 +186,15 @@ class SwarmSearchKeys extends StatelessWidget {
       } else {
         search.moveVisually(delta);
         onRefocus?.call();
+      }
+    });
+    void complete(bool forward) => run(() {
+      if (search?.setupLayout == true) {
+        move(forward ? 1 : -1);
+      } else if (forward) {
+        FocusManager.instance.primaryFocus?.nextFocus();
+      } else {
+        FocusManager.instance.primaryFocus?.previousFocus();
       }
     });
     if (KeymapTheme.of(context) != null) {
@@ -199,14 +214,14 @@ class SwarmSearchKeys extends StatelessWidget {
               'picker.preview_page_down': () => run(() => search.page(1)),
             },
             'picker.cancel': dismiss,
-            // Tab is a picker command now (New Harness completes paths with
-            // it); a matched key is consumed, so here it still walks the focus.
-            'picker.complete': () => search?.setupLayout == true
-                ? move(1)
-                : FocusManager.instance.primaryFocus?.nextFocus(),
-            'picker.complete_back': () => search?.setupLayout == true
-                ? move(-1)
-                : FocusManager.instance.primaryFocus?.previousFocus(),
+            'picker.complete': () => complete(true),
+            'picker.complete_back': () => complete(false),
+            if (previewControls != null) ...{
+              for (final command in resourcePickerCommands)
+                command: () => run(() => previewControls!.invoke(command)),
+              'picker.more_options': () =>
+                  run(() => previewControls!.invoke('picker.resource_more')),
+            },
             if (search != null)
               for (var row = 1; row <= 9; row++)
                 'picker.pick_$row': () => run(() {
@@ -250,6 +265,22 @@ class SwarmSearchKeys extends StatelessWidget {
       bindings: search == null && onOpen == null
           ? {}
           : {
+              if (onCommands != null) ...{
+                const SingleActivator(
+                  LogicalKeyboardKey.keyP,
+                  meta: true,
+                  shift: true,
+                  includeRepeats: false,
+                ): () =>
+                    run(onCommands!),
+                const SingleActivator(
+                  LogicalKeyboardKey.keyP,
+                  control: true,
+                  shift: true,
+                  includeRepeats: false,
+                ): () =>
+                    run(onCommands!),
+              },
               if (onNewAgent != null)
                 const SingleActivator(
                   LogicalKeyboardKey.keyN,
@@ -283,6 +314,20 @@ class SwarmSearchKeys extends StatelessWidget {
               const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
                   move(1),
               const SingleActivator(LogicalKeyboardKey.arrowUp): () => move(-1),
+              if (previewControls != null) ...{
+                const SingleActivator(
+                  LogicalKeyboardKey.period,
+                  meta: true,
+                ): () =>
+                    run(() => previewControls!.invoke('picker.resource_more')),
+                const SingleActivator(LogicalKeyboardKey.tab): () =>
+                    complete(true),
+                const SingleActivator(
+                  LogicalKeyboardKey.tab,
+                  shift: true,
+                ): () =>
+                    complete(false),
+              },
               if (search != null) ...{
                 const SingleActivator(
                   LogicalKeyboardKey.slash,
@@ -327,7 +372,26 @@ class SwarmSearchKeys extends StatelessWidget {
               ): () =>
                   run(onClose),
             },
-      child: child,
+      child: previewControls == null
+          ? child
+          : Focus(
+              canRequestFocus: false,
+              onKeyEvent: (_, event) {
+                if (composing()) return KeyEventResult.ignored;
+                final stroke = keyStrokeForEvent(event);
+                if (stroke == null) return KeyEventResult.ignored;
+                final command = harnessDefaultKeymap.match(
+                  KeymapContext.picker,
+                  [stroke],
+                ).command;
+                if (!resourcePickerCommands.contains(command)) {
+                  return KeyEventResult.ignored;
+                }
+                if (event is KeyDownEvent) previewControls!.invoke(command!);
+                return KeyEventResult.handled;
+              },
+              child: child,
+            ),
     );
   }
 }
@@ -371,6 +435,7 @@ class SwarmSearchResults extends StatefulWidget {
     this.terminal = false,
     this.bios = false,
     this.header,
+    this.previewBuilder,
   });
   final SwarmSearchController search;
   final ValueChanged<SwarmSearchSelection> onChoose;
@@ -383,6 +448,7 @@ class SwarmSearchResults extends StatefulWidget {
   final bool terminal;
   final bool bios;
   final Widget? header;
+  final Widget Function()? previewBuilder;
   @override
   State<SwarmSearchResults> createState() => _SwarmSearchResultsState();
 }
@@ -567,7 +633,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         search.adding &&
             !search.canCreate &&
             !search.isCommandMode &&
-            !search.isHelpMode;
+            !search.isHelpMode &&
+            !search.isGroupMode &&
+            !search.isModelMode &&
+            !search.isStoreMode;
     return LayoutBuilder(
       builder: (context, constraints) {
         final sideBySide = constraints.maxWidth >= widget.sideBySideMinWidth;
@@ -591,7 +660,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         if (widget.bios) {
           // A name, its context, then one blank terminal row. Only the name
           // receives the selection bar, exactly as in New Harness.
-          _rowHeight = cell.height * 3;
+          _rowHeight = cell.height * (search.isCommandMode ? 1 : 3);
         }
         final height = widget.fitRows
             ? _fittedHeight(
@@ -837,6 +906,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                         child: Text(
                           search.isCommandMode
                               ? 'No matching commands'
+                              : search.sessionFilter == SessionFilter.needsInput
+                              ? search.matchQuery.isEmpty
+                                    ? 'No harnesses need your input'
+                                    : 'No matching harnesses'
+                              : search.isModelMode
+                              ? 'No matching models'
+                              : search.isStoreMode
+                              ? 'No matching store entries'
                               : search.isHelpMode
                               ? 'No matching modes or help'
                               : search.isProjectMode
@@ -940,13 +1017,16 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             ],
           ),
         );
-        final preview = search.hasPreview && (!widget.bios || sideBySide)
-            ? SwarmSearchPreview(
-                key: const ValueKey('swarm-search-preview'),
-                search: search,
-                compactHeader: constraints.maxWidth < 800,
-                terminal: widget.terminal,
-              )
+        final preview =
+            search.hasPreview &&
+                (!widget.bios || sideBySide || widget.previewBuilder != null)
+            ? widget.previewBuilder?.call() ??
+                  SwarmSearchPreview(
+                    key: const ValueKey('swarm-search-preview'),
+                    search: search,
+                    compactHeader: constraints.maxWidth < 800,
+                    terminal: widget.terminal,
+                  )
             : null;
         // Side by side, the two columns keep their share whether or not
         // there is anything to preview: a list that widened every time the
@@ -1143,7 +1223,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             ].where((part) => part.isNotEmpty).join('  ');
       return Semantics(
         label: row.isCreate
-            ? 'New Harness'
+            ? row.title
             : '${row.title}\n${row.terminalDetail ?? row.detail}'
                   '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
         excludeSemantics: true,
@@ -1162,7 +1242,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   SizedBox(width: cell.width * 2),
                   Expanded(
                     child: row.isCreate
-                        ? Text('New Harness', style: style, maxLines: 1)
+                        ? Text(row.title, style: style, maxLines: 1)
                         : SearchResultText(
                             row.title,
                             matches: matches.where((match) => match.title),
@@ -1185,7 +1265,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ],
               ),
             ),
-            if (!row.isCreate && detail.isNotEmpty)
+            if (!row.isCreate && !row.isCommand && detail.isNotEmpty)
               Padding(
                 padding: EdgeInsets.only(
                   left: cell.width * 3,
@@ -1403,6 +1483,16 @@ class SwarmSearchHints extends StatelessWidget {
                 '#',
                 'projects',
                 onTap: onQuery == null ? null : () => onQuery!('# '),
+              ),
+              BoxHint(
+                ':',
+                'models',
+                onTap: onQuery == null ? null : () => onQuery!(': '),
+              ),
+              BoxHint(
+                '*',
+                'store',
+                onTap: onQuery == null ? null : () => onQuery!('* '),
               ),
             ],
             if (prefixes && search.modes != null && !search.commandsOnly)

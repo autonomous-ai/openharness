@@ -59,7 +59,7 @@ void main() {
         final target = app.activeSwarm;
         await mount(tester, app);
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        Future<void> open() => chord(tester, LogicalKeyboardKey.keyO);
+        Future<void> open() => chord(tester, LogicalKeyboardKey.keyP);
         SwarmSearchKeys keys() => tester.widget<SwarmSearchKeys>(
           find.ancestor(of: field, matching: find.byType(SwarmSearchKeys)),
         );
@@ -143,7 +143,7 @@ void main() {
       SwarmSearchInput inputWidget() => tester.widget<SwarmSearchInput>(
         find.ancestor(of: field, matching: find.byType(SwarmSearchInput)),
       );
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();
       final first = inputWidget().search!;
@@ -158,7 +158,7 @@ void main() {
       await tester.pump();
       session.terminal.write('Newest useful output.\r\n');
       machine.projectReads = 0;
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       expect(tester.widget<TextField>(field).controller!.text, isEmpty);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();
@@ -197,10 +197,7 @@ void main() {
             if (element.widget is SwarmScreen) canvasBuilds++;
           };
           try {
-            await chord(
-              tester,
-              add ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyP,
-            );
+            await chord(tester, LogicalKeyboardKey.keyP, shift: !add);
             expect(
               tester
                   .widget<TextField>(
@@ -240,7 +237,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a69', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Agent');
     await tester.pump(const Duration(milliseconds: 200));
@@ -288,7 +285,7 @@ void main() {
       final input = <TerminalBinaryFrame>[];
       app.adoptSessionForTest(terminal('a69', input));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Agent');
       await tester.pump(const Duration(milliseconds: 200));
@@ -348,7 +345,7 @@ void main() {
           ),
         ),
       );
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Agent');
       await tester.pump();
@@ -404,7 +401,7 @@ void main() {
     final input = <TerminalBinaryFrame>[];
     app.adoptSessionForTest(terminal('a69', input));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Agent');
     await tester.pump();
@@ -448,7 +445,7 @@ void main() {
     app.adoptSessionForTest(terminal('a69', input));
     final target = app.activeSwarm;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Agent');
     await tester.pump();

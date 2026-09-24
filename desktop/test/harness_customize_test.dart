@@ -204,7 +204,7 @@ void main() {
           expect(find.byType(SettingsScreen), findsOneWidget);
           await tester.tap(find.text('Customize'));
         } else {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await chord(tester, LogicalKeyboardKey.keyP, shift: true);
           await tester.enterText(
             find.byKey(const ValueKey('swarm-search-input')),
             '> customize',
@@ -291,7 +291,7 @@ void main() {
       final lineHeights = [
         for (final state in states) state.renderTerminal.lineHeight,
       ];
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> customize',

@@ -1,3 +1,4 @@
+import 'support/resource_picker.dart';
 import 'support/agent_picker.dart';
 import 'support/new_agent_project.dart';
 
@@ -20,7 +21,6 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/codex_profile_field.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
-import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
 
@@ -118,7 +118,7 @@ void main() {
           () => chord(tester, LogicalKeyboardKey.keyT),
           newFromChrome,
           () async {
-            await chord(tester, LogicalKeyboardKey.keyP);
+            await chord(tester, LogicalKeyboardKey.keyP, shift: true);
             await tester.enterText(
               find.byKey(const ValueKey('swarm-search-input')),
               '> New Tab',
@@ -141,7 +141,7 @@ void main() {
           final input = find.byKey(const ValueKey('swarm-search-input'));
           expect(input, findsNothing);
           final created = app.activeSwarmId;
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
           expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
           await tester.enterText(input, 'Agent 1');
           await tester.pump();
@@ -154,7 +154,7 @@ void main() {
         }
         await newFromChrome();
         await tester.pump();
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           'Agent 0',
@@ -181,7 +181,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.enterText(
@@ -455,14 +455,14 @@ void main() {
     expect(updates.last['canReopen'], isFalse);
     final attention = native('notifications');
     await tester.pump();
-    expect(find.byType(HarnessSessionManager), findsOneWidget);
+    expect(resourceScope(''), findsOneWidget);
     expect(updates.last['sessionsOpen'], isTrue);
     expect(updates.last['enabled'], isTrue);
     final repeatedAttention = native('notifications');
     await tester.pump();
     await repeatedAttention;
     expect(app.swarms.single.name, 'Recover me');
-    expect(find.byType(HarnessSessionManager), findsOneWidget);
+    expect(resourceScope(''), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     await attention;

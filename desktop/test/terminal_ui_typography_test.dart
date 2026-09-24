@@ -301,8 +301,8 @@ void main() {
       );
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
-        LogicalKeyboardKey.keyO,
-        LogicalKeyboardKey.keyO,
+        LogicalKeyboardKey.keyP,
+        LogicalKeyboardKey.keyP,
       ]) {
         await key(tester, shortcut, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
@@ -312,7 +312,7 @@ void main() {
         expect(find.byType(SwarmSearchPreview), findsOneWidget);
         final search = checkText(tester, atLeast: 1);
         selectFont(
-          shortcut == LogicalKeyboardKey.keyO ? 9 : 18,
+          shortcut == LogicalKeyboardKey.keyP ? 9 : 18,
           TerminalFontChoice.monaco,
         );
         await tester.pumpAndSettle();

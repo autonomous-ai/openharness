@@ -7260,7 +7260,7 @@ class AppNotifier extends ChangeNotifier {
             failure.code == 'UNSUPPORTED_ON_REMOTE' ||
             failure.code == 'E2EE_REQUIRED') {
           return '$machineName cannot check this creation. '
-              'Use Open Harness (⌘O) to look for it before starting another.';
+              'Use Open Harness to look for it before starting another.';
         }
         return unconfirmed;
       }
@@ -7316,7 +7316,7 @@ class AppNotifier extends ChangeNotifier {
         // receipt-aware version. Missing is not proof that nothing started.
         // Check status stays read-only, even across upgrades and reconnects.
         return '$machineName has no record of this request. '
-            'Use Open Harness (⌘O) to look for it before starting another.';
+            'Use Open Harness to look for it before starting another.';
       case 'pending':
         return '$machineName is still starting your harness. Check again in a moment.';
       case 'unconfirmed':

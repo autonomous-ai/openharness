@@ -1179,10 +1179,12 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyM);
+    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
-    await tester.tap(find.text('link-mac'));
+    await tester.tap(
+      find.byKey(const ValueKey('connect-machine-link-machine')),
+    );
     // Same popup-transition reasoning as above.
     await tester.pumpAndSettle();
 
@@ -1261,10 +1263,12 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyM);
+    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
-    await tester.tap(find.text('link-mac'));
+    await tester.tap(
+      find.byKey(const ValueKey('connect-machine-link-machine')),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);

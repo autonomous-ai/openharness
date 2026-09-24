@@ -1,5 +1,3 @@
-import 'support/workspace_tools.dart';
-
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -227,7 +225,8 @@ void main() {
       await tester.pumpAndSettle();
     }
     if (workspace) {
-      await openWorkspaceTool(tester, 'machines');
+      await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+      await tester.pumpAndSettle();
     } else {
       await tester.tap(find.text('open machines'));
     }
@@ -454,7 +453,8 @@ void main() {
       await capture(tester, 'machines-toolbar-set-password');
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      await openWorkspaceTool(tester, 'machines');
+      await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+      await tester.pumpAndSettle();
       expect(localInput, findsNothing);
       await tap(tester, find.byKey(const ValueKey('connect-machine-remote')));
       expect(tester.widget<TextField>(remoteInput).focusNode!.hasFocus, isTrue);

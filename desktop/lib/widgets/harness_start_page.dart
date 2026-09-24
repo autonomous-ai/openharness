@@ -27,6 +27,7 @@ class HarnessStartPage extends StatefulWidget {
     this.onNewWithTask,
     required this.onChoose,
     this.onStore,
+    this.onResourceSearch,
   });
   final FocusNode focusNode;
   final SwarmSearchController Function() createSearch;
@@ -42,6 +43,7 @@ class HarnessStartPage extends StatefulWidget {
 
   /// Open the Harness Store. Null hides its card (a build without one).
   final VoidCallback? onStore;
+  final ValueChanged<String>? onResourceSearch;
   @override
   State<HarnessStartPage> createState() => _HarnessStartPageState();
 }
@@ -75,13 +77,36 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
     // Reveal results for the visible text, including on keyboard-only entry.
     if (_search == null) {
       final search = widget.createSearch();
+      search.addListener(_resourceModeChanged);
       if (_draft case final draft?) search.restoreDraft(draft);
       search.setQuery(_query.text);
       setState(() => _search = search);
+      _resourceModeChanged();
     } else {
       _search!.setQuery(_query.text);
     }
     _focus.requestFocus();
+  }
+
+  void _resourceModeChanged() {
+    final search = _search;
+    if (widget.onResourceSearch == null ||
+        search == null ||
+        (!search.isModelMode && !search.isStoreMode)) {
+      return;
+    }
+    // The full picker owns model actions and Store previews. Keep the legacy
+    // start-page harness search as an entry point to that same surface.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !identical(_search, search) ||
+          (!search.isModelMode && !search.isStoreMode)) {
+        return;
+      }
+      final query = search.query;
+      _close();
+      widget.onResourceSearch!(query);
+    });
   }
 
   void _close() {
@@ -89,6 +114,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
     if (search != null) {
       _draft = search.draft;
       setState(() => _search = null);
+      search.removeListener(_resourceModeChanged);
       search.dispose();
     }
     _pickerFocus.unfocus();
@@ -182,7 +208,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                                 onRefocus: _focus.requestFocus,
                               ),
                             ),
-                            // The same bottom line ⌘O has: this is the first box a
+                            // The same bottom line ⌘P has: this is the first box a
                             // new person sees, and the one that most needs to say
                             // what the keys are. On a window too short for both,
                             // the results keep the room.

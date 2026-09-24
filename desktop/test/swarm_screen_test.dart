@@ -150,7 +150,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
         expect(app.swarms, hasLength(31));
         expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent 1');
         await tester.pump();
@@ -469,7 +469,7 @@ void main() {
       );
       await mount(tester, app);
       expect(find.text('Existing project'), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -510,9 +510,9 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('swarm-models-button')), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-models-button')), findsOneWidget);
       expect(find.text('Machines'), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -528,7 +528,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       final zoom = app.zoomedPaneId;
       final before = tester.getSize(find.byType(PaneGrid));
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-search-results')),
@@ -724,6 +724,9 @@ void main() {
     'attention shortcut opens current questions in Harnesses and their originating swarm',
     (tester) async {
       final app = createApp();
+      app.machineStates['m']!
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
       await app.addAgentToSwarm('m', 'a0');
       final first = app.activeSwarmId;
       app.newSwarm();
@@ -744,7 +747,7 @@ void main() {
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Which folder?'), findsOneWidget);
-      await tester.tap(find.text('Which folder?'));
+      await tester.tap(find.byKey(ValueKey(agentDestinationId('m', 'a0'))));
       await tester.pump(const Duration(milliseconds: 300));
       expect(app.activeSwarmId, first);
       expect(app.focusedPane?.agentId, 'a0');

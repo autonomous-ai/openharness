@@ -16,11 +16,13 @@ class ApiConnectionsPanel extends StatefulWidget {
     required this.query,
     required this.onEditingChanged,
     this.showPresets = true,
+    this.initialConnectionId,
   });
   final ApiConnectionsController controller;
   final String query;
   final ValueChanged<bool> onEditingChanged;
   final bool showPresets;
+  final String? initialConnectionId;
   @override
   State<ApiConnectionsPanel> createState() => _ApiConnectionsPanelState();
 }
@@ -29,7 +31,17 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
   ApiConnection? _editing;
   String? _removing;
 
-  void _edit(ApiConnection? connection) {
+  @override
+  void initState() {
+    super.initState();
+    _editing = _editableConnection(
+      widget.controller.connections
+          .where((row) => row.id == widget.initialConnectionId)
+          .firstOrNull,
+    );
+  }
+
+  ApiConnection? _editableConnection(ApiConnection? connection) {
     if (connection != null && connection.provider != 'custom') {
       final selected = connection;
       final preset = widget.controller.presets
@@ -50,8 +62,13 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
         'name': name,
       });
     }
+    return connection;
+  }
+
+  void _edit(ApiConnection? connection) {
+    final editing = _editableConnection(connection);
     setState(() {
-      _editing = connection;
+      _editing = editing;
       _removing = null;
     });
     widget.onEditingChanged(connection != null);

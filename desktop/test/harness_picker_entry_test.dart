@@ -74,7 +74,7 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 100));
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         expect(field, findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsOneWidget);
         expect(
@@ -128,7 +128,7 @@ void main() {
         expect(tester.widget<TextField>(field).controller, same(controller));
         expect(
           find.textContaining('Payment retries now reuse'),
-          size.width >= 848 ? findsOneWidget : findsNothing,
+          findsOneWidget,
         );
         await capture('results');
         await chord(tester, LogicalKeyboardKey.keyN);

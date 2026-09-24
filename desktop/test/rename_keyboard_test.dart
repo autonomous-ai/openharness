@@ -23,7 +23,7 @@ TextField field(WidgetTester tester, Finder finder) =>
     tester.widget<TextField>(finder);
 
 Future<void> command(WidgetTester tester, String query) async {
-  await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+  await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
   await tester.enterText(_search, '> $query');
   await key(tester, LogicalKeyboardKey.enter);
   await tester.pumpAndSettle();
@@ -198,7 +198,7 @@ void main() {
     tester,
   ) async {
     await mount(tester);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
     await tester.enterText(_search, '> rename agent');
     expect(find.byKey(const ValueKey('command:agent.rename')), findsNothing);
     await key(tester, LogicalKeyboardKey.escape);
@@ -211,7 +211,7 @@ void main() {
     );
     app.notifyListeners();
     await tester.pump();
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
     await tester.enterText(_search, '> rename agent');
     expect(find.byKey(const ValueKey('command:agent.rename')), findsNothing);
     expect(connection.renames, isEmpty);

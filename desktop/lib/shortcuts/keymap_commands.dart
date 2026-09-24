@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../logging/debug_surface.dart';
 import 'app_shortcuts.dart';
 import 'keymap.dart';
@@ -25,8 +27,14 @@ class HarnessCommand {
 
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
-  List<String> get keys =>
-      action == null ? extraKeys : _workspaceKeys[action] ?? const [];
+  List<String> get keys {
+    if (id == 'navigation.commands' &&
+        defaultTargetPlatform == TargetPlatform.linux) {
+      return const ['ctrl+shift+p'];
+    }
+    return action == null ? extraKeys : _workspaceKeys[action] ?? const [];
+  }
+
   final ShortcutAction? action;
   final String? nativeAction;
   final KeymapContext context;
@@ -36,7 +44,10 @@ class HarnessCommand {
   final bool hidden;
 }
 
-final _workspaceKeys = _readWorkspaceKeys();
+final _workspaceKeysByPlatform =
+    <TargetPlatform, Map<ShortcutAction, List<String>>>{};
+Map<ShortcutAction, List<String>> get _workspaceKeys => _workspaceKeysByPlatform
+    .putIfAbsent(defaultTargetPlatform, _readWorkspaceKeys);
 Map<ShortcutAction, List<String>> _readWorkspaceKeys() {
   final result = <ShortcutAction, List<String>>{};
   for (final shortcut in appShortcuts()) {
@@ -63,7 +74,7 @@ final harnessCommands = <HarnessCommand>[
     'navigation.commands',
     'Search commands',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+p'],
+    extraKeys: ['cmd+shift+p'],
     nativeAction: 'commands',
   ),
   const HarnessCommand(
@@ -536,6 +547,25 @@ final harnessCommands = <HarnessCommand>[
     extraKeys: ['cmd+r', 'ctrl+r'],
     context: KeymapContext.picker,
   ),
+  // Contextual resource actions leave the query and result selection in place.
+  for (final (name, key, label) in [
+    ('toggle', 'ctrl+s', 'Pause or resume the selected harness or model'),
+    ('more', 'ctrl+period', 'Search actions for the selected resource'),
+    ('rename', 'ctrl+shift+r', 'Rename the selected machine'),
+    ('settings', 'ctrl+l', 'Open the selected machine’s connection settings'),
+    ('link', 'ctrl+shift+l', 'Link another machine'),
+    ('add_api', 'ctrl+shift+a', 'Add an API connection'),
+    ('remove', 'ctrl+shift+backspace', 'Remove the selected resource'),
+    ('filter', 'ctrl+shift+f', 'Change the harness list filter'),
+    ('sort', 'ctrl+shift+s', 'Change the harness list sort order'),
+  ])
+    HarnessCommand(
+      'picker.resource_$name',
+      label,
+      ShortcutGroup.actions,
+      extraKeys: [key],
+      context: KeymapContext.picker,
+    ),
   const HarnessCommand(
     'picker.add_here',
     'Add the selected agent',
@@ -633,19 +663,26 @@ final harnessCommands = <HarnessCommand>[
 final harnessCommandById = {
   for (final command in harnessCommands) command.id: command,
 };
-final harnessDefaultBindings = [
-  for (final command in harnessCommands)
-    for (final keys in command.keys)
-      KeyBinding(
-        keys: keys.split(' ').map(KeyStroke.parse),
-        command: command.id,
-        context: command.context,
-      ),
-];
-final harnessDefaultKeymap = ResolvedKeymap(
-  harnessDefaultBindings,
-  const KeymapConfig.empty(),
-);
+final _defaultBindingsByPlatform = <TargetPlatform, List<KeyBinding>>{};
+List<KeyBinding> get harnessDefaultBindings =>
+    _defaultBindingsByPlatform.putIfAbsent(
+      defaultTargetPlatform,
+      () => [
+        for (final command in harnessCommands)
+          for (final keys in command.keys)
+            KeyBinding(
+              keys: keys.split(' ').map(KeyStroke.parse),
+              command: command.id,
+              context: command.context,
+            ),
+      ],
+    );
+final _defaultKeymapsByPlatform = <TargetPlatform, ResolvedKeymap>{};
+ResolvedKeymap get harnessDefaultKeymap =>
+    _defaultKeymapsByPlatform.putIfAbsent(
+      defaultTargetPlatform,
+      () => ResolvedKeymap(harnessDefaultBindings, const KeymapConfig.empty()),
+    );
 
 List<String> describeKeyStrokeKeys(KeyStroke stroke) => [
   if (stroke.control) '⌃',

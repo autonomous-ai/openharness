@@ -63,7 +63,7 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 100));
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(input, 'Test host');
       await tester.pumpAndSettle();
@@ -260,7 +260,7 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     final map = MemoryKeymap();
     await mount(tester, app, map);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     final results = find.byType(SwarmSearchResults);
     final search = tester.widget<SwarmSearchResults>(results).search;
     final rowIds = search.rows.map((row) => row.id).toSet();

@@ -1,9 +1,13 @@
+import 'package:harness/core/models.dart';
+
+import 'support/resource_picker.dart';
+import 'keymap_host_test.dart' show key;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/widgets/swarm_attention.dart';
-import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
 import 'swarm_attention_test.dart' show waitingQuestion, announceQuestion;
@@ -12,13 +16,12 @@ import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 import 'swarm_switcher_test.dart' show selectedRow;
 
-Finder get attentionField => find.byKey(const ValueKey('session-search'));
-Finder get selectedHarness => find.byWidgetPredicate(
-  (widget) =>
-      widget is Semantics &&
-      widget.properties.selected == true &&
-      widget.key is ValueKey<String> &&
-      (widget.key! as ValueKey<String>).value.startsWith('session-open:'),
+Finder get attentionField => resourceField;
+Finder get selectedHarness => find.descendant(
+  of: find.byKey(const ValueKey('swarm-search-result-list')),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is Semantics && widget.properties.selected == true,
+  ),
 );
 
 void main() {
@@ -75,7 +78,9 @@ void main() {
     'attention opens in one frame, owns typing, and returns to prior work through Cmd+P',
     (tester) async {
       final app = createApp();
-      app.machineStates['m']!.nodeOnline = true;
+      app.machineStates['m']!
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
       final firstInput = <TerminalBinaryFrame>[];
       final secondInput = <TerminalBinaryFrame>[];
       final firstPane = app.adoptSessionForTest(terminal('a0', firstInput));
@@ -100,7 +105,7 @@ void main() {
       expect(find.byType(BackdropFilter), findsNothing);
       expect(find.byType(Dialog), findsNothing);
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
-      expect(find.byType(HarnessSessionManager), findsOneWidget);
+      expect(resourceScope(''), findsOneWidget);
       await tester.enterText(attentionField, 'region host');
       await tester.pump();
       expect(find.text('Choose the deployment region'), findsOneWidget);
@@ -149,11 +154,9 @@ void main() {
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
       expect(
         find
-            .byType(Semantics)
+            .byType(InkWell)
             .evaluate()
-            .where(
-              (e) => (e.widget.key?.toString() ?? '').contains('session-open:'),
-            )
+            .where((e) => (e.widget.key?.toString() ?? '').contains('agent:'))
             .length,
         lessThan(25),
       );
@@ -162,17 +165,18 @@ void main() {
         await tester.pump();
         expect(selectedHarness, findsOneWidget);
         final row = tester.getRect(selectedHarness);
-        final list = tester.getRect(find.byType(ListView));
+        final list = tester.getRect(
+          find.byKey(const ValueKey('swarm-search-result-list')),
+        );
         expect(row.top, greaterThanOrEqualTo(list.top));
         expect(row.bottom, lessThanOrEqualTo(list.bottom));
       }
       await tester.pump();
-      final selection = tester.widget<Semantics>(selectedHarness).key;
-      expect(
-        selection,
-        ValueKey('session-open:${agentDestinationId('m', 'a12')}'),
+      final selection = resourceSearch(tester).selected!.id;
+      expect(selection, agentDestinationId('m', 'a13'));
+      final list = tester.getRect(
+        find.byKey(const ValueKey('swarm-search-result-list')),
       );
-      final list = tester.getRect(find.byType(ListView));
       final row = tester.getRect(selectedHarness);
       expect(row.top, greaterThanOrEqualTo(list.top));
       expect(row.bottom, lessThanOrEqualTo(list.bottom));
@@ -180,20 +184,20 @@ void main() {
       app.dismissError();
       await tester.pump();
       await tester.pump();
-      expect(tester.widget<Semantics>(selectedHarness).key, selection);
+      expect(resourceSearch(tester).selected!.id, selection);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(
-        tester.widget<Semantics>(selectedHarness).key,
-        ValueKey('session-open:${agentDestinationId('m', 'a13')}'),
+        resourceSearch(tester).selected!.id,
+        agentDestinationId('m', 'a14'),
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
-      expect(tester.widget<Semantics>(selectedHarness).key, selection);
-      machine.blockedAgents.remove('a12');
+      expect(resourceSearch(tester).selected!.id, selection);
+      machine.blockedAgents.remove('a13');
       app.dismissError();
       await tester.pump();
-      expect(find.text('Question 12?'), findsNothing);
+      expect(find.text('Question 13?'), findsNothing);
       expect(selectedHarness, findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
@@ -214,11 +218,11 @@ void main() {
       machine.blockedAgents['missing'] = waitingQuestion('missing');
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
-      expect(find.text('Offline'), findsOneWidget);
+      expect(find.textContaining('Offline', findRichText: true), findsWidgets);
       final unavailable = find.byKey(
-        ValueKey('session-open:${agentDestinationId('m', 'missing')}'),
+        ValueKey(agentDestinationId('m', 'missing')),
       );
-      expect(tester.widget<Semantics>(unavailable).properties.enabled, isFalse);
+      expect(tester.widget<InkWell>(unavailable).onTap, isNull);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(attentionField, findsOneWidget);
@@ -234,7 +238,7 @@ void main() {
       app.dismissError();
       await tester.pump();
       expect(find.text('No harnesses need your input'), findsOneWidget);
-      await tester.tap(find.byTooltip('Close Harnesses'));
+      await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());

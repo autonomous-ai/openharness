@@ -1,5 +1,3 @@
-import 'support/workspace_tools.dart';
-
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show SemanticsAction;
@@ -71,7 +69,7 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await openWorkspaceTool(tester, 'harnesses');
+    await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
     await tester.pumpAndSettle();
   }
 
@@ -232,7 +230,7 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await openWorkspaceTool(tester, 'harnesses');
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
@@ -508,7 +506,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await openWorkspaceTool(tester, 'harnesses');
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -899,7 +897,7 @@ void main() {
       expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await openWorkspaceTool(tester, 'harnesses');
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },
@@ -927,7 +925,7 @@ void main() {
         tester.binding.defaultBinaryMessenger.handlePlatformMessage(
           channel.name,
           const StandardMethodCodec().encodeMethodCall(
-            const MethodCall('sessions'),
+            const MethodCall('harnessControls'),
           ),
           (_) {},
         );

@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal dialog design system](terminal-dialogs.md).
 
 ```text
-1:api  2:web  3:blender  +                M2:autonomous-harness  (main)
+1:api  2:web  3:blender  +                 M2:autonomous-harness  (main)    >   @   :   *
 ```
 
 ## Tabs on the left
@@ -124,9 +124,28 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Agnoster](https://github.com/agnoster/agnoster-zsh-theme), and
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
-Pane headers keep task identity and model selection. Machines, Models, Harnesses, and
-the Store remain reachable from native menus and commands. Leave a window drag
-area between tabs and context and prevent overlap in narrow windows.
+Pane headers keep task identity and model selection. Four text symbols sit at the far
+right, after the focused context and PR: `>` Harnesses, `@` Machines, `:` Models,
+and `*` Store. Use the same compact monospace font, size, weight, and baseline as the
+status text. Each symbol is centered in an equal four-column slot (at least
+28 points wide) with an equally sized click target. In narrow windows, reduce
+all four slots together in whole columns. Keep the symbols plain at
+rest; hovering, pressing, or keyboard focus adds a flat selection tint and
+brightens the text. A hand cursor, descriptive tooltip, and accessible button
+name make each action discoverable. Do not show a help symbol for now.
+
+Harnesses opens the existing session manager with Pause and Resume. Machines
+opens its connection/password panel, Models opens its management panel with
+download/start/stop controls, and Store opens the Store tab. Cmd-P remains the
+unified resource finder.
+
+![Harnesses controls, rendered with fixture data](images/workspace-status-harnesses.png)
+
+![Machine controls, rendered with fixture data](images/workspace-status-machines.png)
+
+Reserve the symbols' width before laying out tabs and context. Leave a window drag
+area between tabs and context and prevent overlap in narrow windows. Native
+menus and commands remain available.
 
 Data rules live in `lib/state/workspace_status.dart`; prompt formatting lives in
 `lib/shared/theme/status_line_style.dart`. Flutter draws the fallback bar in

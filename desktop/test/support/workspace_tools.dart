@@ -10,18 +10,14 @@ Future<void> openWorkspaceTool(WidgetTester tester, String tool) async {
     'machines' => LogicalKeyboardKey.keyM,
     'models' => LogicalKeyboardKey.keyI,
     'store' => LogicalKeyboardKey.keyS,
-    _ => null,
+    _ => LogicalKeyboardKey.keyP,
   };
-  if (shortcut != null) {
-    await key(tester, shortcut, cmd: true);
-  } else {
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+  await key(tester, shortcut, cmd: true);
+  if (tool == 'harnesses') {
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
-      '> Harnesses',
+      '>',
     );
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('command:harnesses.list')));
   }
   await tester.pump(const Duration(milliseconds: 350));
 }
