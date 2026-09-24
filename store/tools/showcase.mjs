@@ -52,12 +52,6 @@ const gallery = [
 ].join('\n');
 let readme = readFileSync(resolve(root,'README.md'),'utf8');
 const marked = /<!-- store-showcase:start -->[\s\S]*?<!-- store-showcase:end -->/;
-if (marked.test(readme)) readme = readme.replace(marked,gallery);
-else {
-  const start = readme.indexOf('<table>');
-  const end = readme.indexOf('</table>',start);
-  if(start<0||end<0) throw Error('Cannot find the README showcase table');
-  readme = readme.slice(0,start)+gallery+readme.slice(end+'</table>'.length);
-}
-writeFileSync(resolve(root,'README.md'),readme);
+// The README no longer embeds the slideshow; update it only where the markers remain.
+if (marked.test(readme)) writeFileSync(resolve(root,'README.md'),readme.replace(marked,gallery));
 console.log(`Saved ${examples.length} slides, ${examples.reduce((n,e)=>n+e.seconds,0)} seconds per loop, ${(statSync(join(output,'showcase.gif')).size/1048576).toFixed(2)} MiB. Preview frames: ${frames}`);

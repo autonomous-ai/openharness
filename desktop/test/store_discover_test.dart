@@ -261,7 +261,7 @@ Future<(_App, GlobalKey)> _open(
       ...storeProjectAssets.values,
       ...storeCoverArt.values.map((cover) => cover.asset),
       ...storeFeaturedArt.values,
-      'assets/store/blender-studio.png',
+      'assets/store/blender-studio.jpg',
     }) {
       await precacheImage(AssetImage(asset), context);
     }
@@ -1449,7 +1449,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);
       expect(
-        tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+        tester
+            .widget<AgentPicker>(
+              find.byKey(const Key('new-agent-harness-picker')),
+            )
+            .value,
         'autonomous/blender',
       );
       expect(app.swarms.length, count + 1);

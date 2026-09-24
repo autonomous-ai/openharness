@@ -101,6 +101,10 @@ class WsPool {
   }
 
   WsConn? operator [](String machineId) => _conns[machineId];
+
+  /// The machines this pool holds a socket for. A snapshot, so a caller can send
+  /// on each without a concurrent connect mutating what it is walking.
+  List<String> get machineIds => _conns.keys.toList(growable: false);
   bool has(String machineId) => _conns.containsKey(machineId);
 
   Future<void> closeMachine(String machineId) async {

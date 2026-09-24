@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { env } from '../config/env.js'
 import { ENGINES } from '../engines/types.js'
-import { DSH_ID_RE } from './manifest.js'
+import { DSH_ID_RE, dshSupportedEngines, type DshManifest } from './manifest.js'
 
 declare const __DSH_REGISTRY__: string | undefined
 
@@ -61,6 +61,7 @@ export const DshRegistryEntrySchema = z.strictObject({
    */
   path: z.string().min(1).max(512).regex(PACKAGE_PATH_RE, 'path must be a relative folder inside the repo').optional(),
   engine: z.enum(ENGINES).optional(),
+  engines: z.array(z.enum(ENGINES)).min(1).max(ENGINES.length).optional(),
   tier: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
   /** Shared viewer dependency, so the Store can show reverse dependencies before installation. */
   viewerUse: z.string().regex(DSH_ID_RE).optional(),
@@ -118,6 +119,7 @@ export function storeEntry(path: string, manifest: Record<string, unknown>, fact
   Object.assign(entry, { repo: HARNESS_MONOREPO, ref: 'main', path })
   for (const key of ['homepage', 'upstream', 'license', 'tagline', 'screenshots', 'examples']) if (facts[key] !== undefined) entry[key] = facts[key]
   if (manifest.engine !== undefined) entry.engine = manifest.engine
+  if (manifest.engine !== undefined) entry.engines = dshSupportedEngines(manifest as DshManifest)
   const viewer = manifest.viewer as { use?: unknown } | undefined
   if (typeof viewer?.use === 'string') entry.viewerUse = viewer.use
   entry.tier = manifest.viewer ? 2 : manifest.verdict ? 1 : 0

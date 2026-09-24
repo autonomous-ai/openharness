@@ -1,4 +1,5 @@
 import { capture, packTake } from './recording.mjs'
+import { markedPassage, passageWave } from './take-loop.mjs'
 
 const $ = (id) => document.getElementById(id)
 const time = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
@@ -19,6 +20,7 @@ export function installPerformance({ state: S, cycle, stop }) {
     duration = 0
   let takes = [],
     waveSamples = null
+  let audioBytes = null, fullURL = null, loopURL = null, loopRange = null, selectedMarker = null
   const mix = () => ({ muted: [...S.muted], soloed: [...S.soloed] })
   const clock = () => ({ cycle: cycle(), cps: Math.max(0, Number(S.sched?.cps) || 0) })
   function message(value = '', error = false) {
@@ -83,14 +85,47 @@ export function installPerformance({ state: S, cycle, stop }) {
   }
   function clearDraft() {
     $('take-audio').pause()
+    $('take-audio').loop = false
     $('take-audio').removeAttribute('src')
     $('take-audio').load()
     if (blobURL) URL.revokeObjectURL(blobURL)
+    if (loopURL) URL.revokeObjectURL(loopURL)
     blobURL = null
+    audioBytes = fullURL = loopURL = loopRange = selectedMarker = null
     draft = null
     waveSamples = null
     $('take-draft').hidden = true
     sync()
+  }
+  const position = () => $('take-audio').currentTime + (loopRange?.start || 0)
+  function syncLoop() {
+    const range = selectedMarker && markedPassage(draft, selectedMarker)
+    $('loop-moment').disabled = !loopRange && (!audioBytes || !range)
+    $('loop-moment').setAttribute('aria-pressed', String(!!loopRange))
+    $('loop-moment').textContent = loopRange ? 'Stop looping' : 'Loop moment'
+    $('loop-details').textContent = range
+      ? `${loopRange ? 'Looping' : 'Selected'} ${time(range.start)}–${time(range.end)} · ${selectedMarker.note}`
+      : selectedMarker ? 'This marker is at the end of the take.' : 'Choose a marked moment to repeat it.'
+  }
+  function playback(loop, at = position(), play = !$('take-audio').paused) {
+    const audio = $('take-audio')
+    try {
+      const range = loop && selectedMarker && markedPassage(draft, selectedMarker)
+      if (loop && (!audioBytes || !range)) return
+      const nextURL = range ? URL.createObjectURL(passageWave(audioBytes, draft.audio, range)) : null
+      audio.pause()
+      if (loopURL) URL.revokeObjectURL(loopURL)
+      loopURL = nextURL
+      loopRange = range || null
+      audio.loop = !!range
+      audio.src = nextURL || fullURL
+      audio.currentTime = range ? 0 : Math.max(0, Math.min(duration, at))
+      syncLoop()
+      drawWave()
+      if (play) audio.play().catch(() => message('Press Play on the recording to listen.'))
+    } catch (error) {
+      message(error.message, true)
+    }
   }
   function drawWave() {
     if (!waveSamples) return
@@ -101,6 +136,12 @@ export function installPerformance({ state: S, cycle, stop }) {
     canvas.height = Math.round(52 * ratio)
     const ctx = canvas.getContext('2d')
     ctx.scale(ratio, ratio)
+    if (loopRange) {
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--h-accent')
+      ctx.globalAlpha = 0.16
+      ctx.fillRect(loopRange.start / duration * rect.width, 0, (loopRange.end - loopRange.start) / duration * rect.width, 52)
+      ctx.globalAlpha = 1
+    }
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--h-accent')
     const maximum = Math.max(0.0001, ...waveSamples.left, ...waveSamples.right)
     for (let channel = 0; channel < 2; channel++) {
@@ -114,7 +155,7 @@ export function installPerformance({ state: S, cycle, stop }) {
     }
     ctx.globalAlpha = 1
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--h-ink')
-    const x = ($('take-audio').currentTime / duration) * rect.width
+    const x = (position() / duration) * rect.width
     ctx.fillRect(x, 0, 1, 52)
   }
   async function showDraft(value, wav) {
@@ -123,10 +164,13 @@ export function installPerformance({ state: S, cycle, stop }) {
     duration = value.audio.duration
     if (wav) blobURL = URL.createObjectURL(wav)
     const url = blobURL || urlFor(value.id, 'performance.wav')
+    fullURL = url
     $('take-audio').src = url
     $('download-draft').href = url
     $('take-name').value = value.title
     $('take-name').readOnly = !!value.id
+    $('take-level').hidden = true
+    $('take-level').textContent = ''
     $('keep-take').hidden = !!value.id
     $('discard-take').textContent = value.id ? 'Close' : 'Discard'
     $('take-draft').hidden = false
@@ -137,17 +181,29 @@ export function installPerformance({ state: S, cycle, stop }) {
         .filter((e) => e.type === 'marker')
         .map((event) => {
           const button = node('button', `${time(event.at)} · ${event.note}`)
+          button.setAttribute('aria-pressed', 'false')
           button.onclick = () => {
-            $('take-audio').currentTime = event.at
+            selectedMarker = event
+            for (const marker of $('take-markers').children) marker.setAttribute('aria-pressed', String(marker === button))
+            if (loopRange) {
+              const canLoop = !!markedPassage(draft, event)
+              playback(canLoop, event.at, !$('take-audio').paused && event.at < duration)
+            }
+            else $('take-audio').currentTime = event.at
+            syncLoop()
             drawWave()
           }
           return button
         })
     )
+    $('take-loop').hidden = !value.events.some((event) => event.type === 'marker')
+    syncLoop()
     sync()
     try {
       const bytes = await (wav || (await (await fetch(url)).blob())).arrayBuffer()
       if (draft !== value) return
+      audioBytes = bytes
+      syncLoop()
       const floats = new Float32Array(bytes, 56),
         bins = 1600
       waveSamples = { left: new Float32Array(bins), right: new Float32Array(bins) }
@@ -155,6 +211,11 @@ export function installPerformance({ state: S, cycle, stop }) {
         const b = Math.min(bins - 1, Math.floor((i / floats.length) * bins))
         waveSamples.left[b] = Math.max(waveSamples.left[b], Math.abs(floats[i]))
         waveSamples.right[b] = Math.max(waveSamples.right[b], Math.abs(floats[i + 1]))
+      }
+      const peak = Math.max(...waveSamples.left, ...waveSamples.right)
+      if (peak > 1) {
+        $('take-level').textContent = `Peak +${(20 * Math.log10(peak)).toFixed(1)} dBFS: this recording exceeds full scale and may distort during playback. Lower the mix for your next take.`
+        $('take-level').hidden = false
       }
       drawWave()
     } catch {
@@ -372,9 +433,12 @@ export function installPerformance({ state: S, cycle, stop }) {
     else stop()
   }
   $('take-audio').ontimeupdate = drawWave
+  $('loop-moment').onclick = () => playback(!loopRange, position(), !loopRange || !$('take-audio').paused)
   $('take-wave').onclick = (event) => {
     if (duration) {
-      $('take-audio').currentTime = (duration * event.offsetX) / $('take-wave').clientWidth
+      const at = (duration * event.offsetX) / $('take-wave').clientWidth
+      if (loopRange) playback(false, at)
+      else $('take-audio').currentTime = at
       drawWave()
     }
   }

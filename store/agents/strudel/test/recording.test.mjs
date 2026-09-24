@@ -3,6 +3,41 @@ import assert from 'node:assert/strict'
 import { CaptureFrames } from '../pane/capture-worklet.mjs'
 import { wave, packTake } from '../pane/recording.mjs'
 import { unpackTake, readWave } from '../takes.mjs'
+import { markedPassage, passageWave } from '../pane/take-loop.mjs'
+
+test('a marked passage ends at the next distinct marker, including duplicate and end markers', () => {
+  const events = [0.2, 0.2, 0.65, 1].map((at) => ({ type: 'marker', at }))
+  const take = { audio: { frames: 8000, sampleRate: 8000 }, events }
+  assert.deepEqual(markedPassage(take, events[0]), { startFrame: 1600, endFrame: 5200, start: 0.2, end: 0.65 })
+  assert.equal(markedPassage(take, events[1]).end, 0.65)
+  assert.equal(markedPassage(take, events[2]).endFrame, 8000)
+  assert.equal(markedPassage(take, events[3]), null)
+  assert.equal(markedPassage(take, { type: 'marker', at: 0.1 }), null)
+})
+
+test('loop audio contains the exact stereo frames of the selected passage without changing the full take', async () => {
+  const samples = Float32Array.from({ length: 16000 }, (_, i) => (i % 101 - 50) / 40)
+  const bytes = await wave([samples], 8000, 8000).arrayBuffer()
+  const before = Buffer.from(bytes).toString('base64')
+  const marker = { type: 'marker', at: 0.20006 }
+  const take = { audio: { frames: 8000, sampleRate: 8000 }, events: [marker, { type: 'marker', at: 0.65006 }] }
+  const range = markedPassage(take, marker)
+  const loop = Buffer.from(await passageWave(bytes, take.audio, range).arrayBuffer())
+  assert.equal(readWave(loop).frames, 3600)
+  assert.equal(readWave(loop).duration, 0.45)
+  assert.deepEqual(loop.subarray(56), Buffer.from(bytes).subarray(56 + 1600 * 8, 56 + 5200 * 8))
+  assert.equal(Buffer.from(bytes).toString('base64'), before)
+})
+
+test('looping rejects mismatched audio and empty or out-of-bounds passages', async () => {
+  const bytes = await wave([new Float32Array(16000)], 8000, 8000).arrayBuffer()
+  const audio = { frames: 8000, sampleRate: 8000 }
+  const range = { startFrame: 0, endFrame: 4000 }
+  assert.throws(() => passageWave(bytes.slice(0, 20), audio, range), /does not match/)
+  assert.throws(() => passageWave(bytes, { ...audio, sampleRate: 48000 }, range), /does not match/)
+  for (const bad of [{ startFrame: -1, endFrame: 20 }, { startFrame: 0, endFrame: 8001 }, { startFrame: 2, endFrame: 2 }])
+    assert.throws(() => passageWave(bytes, audio, bad), /Choose a moment/)
+})
 
 test('worklet buffer preserves exact stereo frames across chunks, stop is idempotent', () => {
   const messages = [],

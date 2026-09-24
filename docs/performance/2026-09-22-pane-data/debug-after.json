@@ -1,0 +1,62 @@
+{
+  "observations": [
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "switch_tab",
+      "terminals": 16,
+      "discoveredAgents": 70,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 129.024,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 36.857,
+        "p95Ms": 42.701,
+        "p99Ms": 46.108
+      },
+      "rebuilds": 979,
+      "mostRebuiltWidgets": {
+        "_FocusInheritedScope": 62,
+        "Focus": 51,
+        "Positioned": 45,
+        "RawGestureDetector": 35,
+        "Actions": 24,
+        "_ActionsScope": 24,
+        "DefaultSelectionStyle": 24,
+        "IconTheme": 24,
+        "Container": 22,
+        "Tooltip": 21,
+        "ExcludeFocus": 17,
+        "_PaneLayer": 16
+      }
+    },
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "switch_tab",
+      "terminals": 48,
+      "discoveredAgents": 2000,
+      "scrollbackRowsPerTerminal": 1000,
+      "firstAfterFixtureWarmupMs": 84.52,
+      "shortcutAndFirstFrame": {
+        "samples": 40,
+        "medianMs": 30.374,
+        "p95Ms": 37.009,
+        "p99Ms": 41.749
+      },
+      "rebuilds": 1043,
+      "mostRebuiltWidgets": {
+        "Positioned": 77,
+        "_FocusInheritedScope": 62,
+        "Focus": 51,
+        "_PaneLayer": 48,
+        "RawGestureDetector": 35,
+        "Actions": 24,
+        "_ActionsScope": 24,
+        "DefaultSelectionStyle": 24,
+        "IconTheme": 24,
+        "Container": 22,
+        "Tooltip": 21,
+        "ExcludeFocus": 17
+      }
+    }
+  ]
+}

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -10,20 +12,60 @@ import 'search_result_text.dart';
 /// The same compact identity line in the picker, pane header and live preview.
 /// Symbols use our bundled icon font; Powerline separators are drawn shapes.
 /// Changing the terminal font therefore never requires a patched Nerd Font.
-class PromptContextView extends StatelessWidget {
+class PromptContextView extends StatefulWidget {
   const PromptContextView({
     super.key,
     required this.contextData,
     this.prefs,
     this.store,
     this.matches = const [],
+    this.textStyle,
   });
 
   final PromptContext contextData;
   final PromptPrefs? prefs;
   final AppearancePrefsStore? store;
-  double get size => grid.AppType.monoLabelSize;
+  final TextStyle? textStyle;
+  double get size => textStyle?.fontSize ?? grid.AppType.monoLabelSize;
   final Iterable<SearchFieldMatch> matches;
+
+  @override
+  State<PromptContextView> createState() => _PromptContextViewState();
+}
+
+class _PromptContextViewState extends State<PromptContextView> {
+  PromptContext get contextData => widget.contextData;
+  PromptPrefs? get prefs => widget.prefs;
+  AppearancePrefsStore? get store => widget.store;
+  Iterable<SearchFieldMatch> get matches => widget.matches;
+  double get size => widget.size;
+
+  Object? _lineKey;
+  List<SearchFieldMatch> _lineMatches = const [];
+  Widget? _lineWidget;
+
+  Widget _cachedLine(PromptPrefs prefs, double width, TextScaler scaler) {
+    final key = (
+      contextData,
+      prefs,
+      width,
+      scaler,
+      _style(Colors.white),
+      size,
+      grid.AppPalette.swarmAccent,
+      grid.AppPalette.teal,
+      grid.AppPalette.online,
+    );
+    final nextMatches = matches.toList(growable: false);
+    if (_lineKey == key && listEquals(_lineMatches, nextMatches)) {
+      return _lineWidget!;
+    }
+    _lineKey = key;
+    _lineMatches = nextMatches;
+    // Most searches match the title. Keep the breadcrumb's render tree intact
+    // while typing or moving its highlight, until its own content changes.
+    return _lineWidget = _line(prefs, width, scaler);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +76,7 @@ class PromptContextView extends StatelessWidget {
         terminalFontStore,
       ]),
       builder: (context, _) => LayoutBuilder(
-        builder: (context, constraints) => _line(
+        builder: (context, constraints) => _cachedLine(
           prefs ?? (store ?? appearancePrefsStore).value.prompt,
           constraints.maxWidth,
           MediaQuery.textScalerOf(context),
@@ -43,12 +85,14 @@ class PromptContextView extends StatelessWidget {
     );
   }
 
-  /// Breadcrumbs name places a person copies, so they are mono, one step
-  /// under the terminal's own text.
-  static TextStyle _style(Color tone) => grid.AppType.monoLabel(
-    color: tone,
-    fontWeight: FontWeight.w400,
-    height: 1.35,
+  /// Callers can match the terminal while shared headers keep their UI scale.
+  TextStyle _style(Color tone) => DefaultTextStyle.of(context).style.merge(
+    widget.textStyle?.copyWith(color: widget.textStyle?.color ?? tone) ??
+        grid.AppType.monoLabel(
+          color: tone,
+          fontWeight: FontWeight.w400,
+          height: 1.35,
+        ),
   );
 
   Widget _line(PromptPrefs prefs, double maxWidth, TextScaler scaler) {
@@ -127,7 +171,9 @@ class PromptContextView extends StatelessWidget {
                   child: Builder(
                     builder: (context) {
                       final part = segments[index];
-                      final tone = prefs.color ? part.color : Colors.white60;
+                      final tone =
+                          widget.textStyle?.color ??
+                          (prefs.color ? part.color : Colors.white60);
                       final width = widths?[index];
                       final style = _style(tone);
                       // A folder cut short keeps both ends, the way editors
@@ -193,9 +239,9 @@ class PromptContextView extends StatelessWidget {
   /// Folders shorten in the middle; everything else at the end.
   static bool _middle(String label) => label == 'Project' || label.isEmpty;
 
-  /// How much of the line each segment's text gets when it does not all fit:
-  /// the project gives way first, then the machine, and the branch last, each keeping a few characters; narrower than that, all
-  /// alike. Null when everything fits.
+  /// Size each segment by its content, then shrink only when the whole line
+  /// does not fit. The project gives way first, then the machine, and the
+  /// branch last. Null only when the line has no width constraint.
   List<double>? _fit(
     List<
       ({String label, String value, String ascii, IconData? icon, Color color})
@@ -224,7 +270,9 @@ class PromptContextView extends StatelessWidget {
       chrome += powerline ? (index == 0 ? 6 : 12) + 12 : (index > 0 ? 12 : 0);
     }
     var excess = natural.fold(chrome, (sum, width) => sum + width) - maxWidth;
-    if (excess <= 0) return null;
+    // Equal Flexible shares would truncate a long branch even when shorter
+    // machine/project labels leave enough room for the whole line.
+    if (excess <= 0) return natural;
     final widths = [...natural];
     final floor = _measure('mmmmmm…', style, scaler);
     const order = ['', 'Project', 'Machine', 'Branch', 'Harness'];
@@ -245,9 +293,9 @@ class PromptContextView extends StatelessWidget {
     return [for (final width in widths) (width * scale).floorToDouble()];
   }
 
-  static final _widths = <(String, double, double), double>{};
+  static final _widths = <(String, TextStyle, TextScaler), double>{};
   static double _measure(String text, TextStyle style, TextScaler scaler) {
-    final key = (text, style.fontSize ?? 0, scaler.scale(100));
+    final key = (text, style, scaler);
     final known = _widths[key];
     if (known != null) return known;
     if (_widths.length > 512) _widths.clear();
@@ -291,24 +339,25 @@ class PromptContextView extends StatelessWidget {
 class _Clipped extends StatelessWidget {
   const _Clipped({required this.clip, required this.child});
 
-  /// Only with every segment at a fixed width; a line that fits is laid out
-  /// as it always was.
+  /// Only bounded lines with measured segment widths can be safely clipped.
   final bool clip;
   final Widget child;
   @override
   Widget build(BuildContext context) => clip
       ? ClipRect(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const NeverScrollableScrollPhysics(),
+          child: OverflowBox(
+            fit: OverflowBoxFit.deferToChild,
+            alignment: Alignment.centerLeft,
+            minWidth: 0,
+            maxWidth: double.infinity,
             child: child,
           ),
         )
       : child;
 }
 
-/// A segment at the width [PromptContextView._fit] gave it, or sharing the
-/// line's width with the others when it did not give one.
+/// A segment at the width [PromptContextView._fit] gave it, or unconstrained
+/// when the surrounding line has no width limit.
 class _Sized extends StatelessWidget {
   const _Sized({required this.fixed, required this.child});
   final bool fixed;

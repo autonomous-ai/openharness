@@ -11,7 +11,7 @@
  * multi-turn answers are the parts that drift when copied, and a fake that means something slightly
  * different in each file is worse than none.
  */
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -21,14 +21,18 @@ const log = process.env.FAKE_GRID_LOG
 const plan = JSON.parse(fs.readFileSync(process.env.FAKE_GRID_PLAN, 'utf8'))
 const args = process.argv.slice(2).filter((a) => a !== '--remote')
 const verb = args[0] || ''
-const calls = fs.existsSync(log) ? JSON.parse(fs.readFileSync(log, 'utf8')) : []
-calls.push(process.argv.slice(2))
-fs.writeFileSync(log, JSON.stringify(calls))
-const step = plan[verb]
+// One line per call, APPENDED: the daemon runs several \`grid\`s at once (one per grid it reads), and a
+// read-modify-write of one JSON document lost calls and crashed a reader that caught it half written.
+fs.appendFileSync(log, JSON.stringify(process.argv.slice(2)) + '\\n')
+const calls = fs.readFileSync(log, 'utf8').split('\\n').filter(Boolean).map((line) => JSON.parse(line))
+// A plan may answer one grid differently from another: \`info mine\` is asked before \`info\`.
+const keyed = plan[verb + ' ' + (args[1] || '')]
+const step = keyed || plan[verb]
 if (!step) { process.exit(0) }
 // A verb may answer differently on successive calls (\`ls\` before and after a create), so its
 // answer can be a LIST of turns; the last turn repeats once the list runs out.
-const turn = Array.isArray(step) ? (step[calls.filter((c) => c.includes(verb)).length - 1] ?? step[step.length - 1]) : step
+const asked = calls.filter((c) => c.includes(verb) && (!keyed || c.includes(args[1]))).length
+const turn = Array.isArray(step) ? (step[asked - 1] ?? step[step.length - 1]) : step
 if (turn.stdout) process.stdout.write(turn.stdout)
 if (turn.stderr) process.stderr.write(turn.stderr)
 process.exit(turn.exit ?? 0)
@@ -37,7 +41,8 @@ process.exit(turn.exit ?? 0)
 /** What one invocation of a verb prints and how it exits. */
 export interface FakeGridTurn { stdout?: string; stderr?: string; exit?: number }
 
-/** Keyed by the FIRST argument after `--remote` is stripped — `mcp` for `grid mcp config …`. */
+/** Keyed by the FIRST argument after `--remote` is stripped — `mcp` for `grid mcp config …` — or by that
+ *  and the next one, `info mine`, which wins over the verb alone. */
 export type FakeGridPlan = Record<string, FakeGridTurn | FakeGridTurn[]>
 
 export interface FakeGrid {
@@ -45,6 +50,8 @@ export interface FakeGrid {
   calls: () => string[][]
   /** The verbs called, in order, with `--remote` stripped — `['mcp', 'info', 'ls']`. */
   verbs: () => string[]
+  /** Answer every later call from `plan` instead — a grid that changes while a test watches. */
+  replan: (plan: FakeGridPlan) => void
   /** Delete the fake and unset the variables that point at it. */
   dispose: () => void
 }
@@ -62,13 +69,13 @@ export function installFakeGrid(plan: FakeGridPlan): FakeGrid {
   chmodSync(bin, 0o755)
   const planFile = join(root, 'plan.json')
   writeFileSync(planFile, JSON.stringify(plan))
-  const log = join(root, 'calls.json')
+  const log = join(root, 'calls.jsonl')
   process.env.HARNESS_GRID_BIN = bin
   process.env.FAKE_GRID_PLAN = planFile
   process.env.FAKE_GRID_LOG = log
   const calls = (): string[][] => {
     try {
-      return JSON.parse(readFileSync(log, 'utf8')) as string[][]
+      return readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[])
     } catch {
       return []
     }
@@ -76,6 +83,11 @@ export function installFakeGrid(plan: FakeGridPlan): FakeGrid {
   return {
     calls,
     verbs: () => calls().map((argv) => argv.find((arg) => arg !== '--remote') ?? ''),
+    // Replaced, never rewritten in place: a fake still running must read the old plan or the new one.
+    replan: (next) => {
+      writeFileSync(`${planFile}.next`, JSON.stringify(next))
+      renameSync(`${planFile}.next`, planFile)
+    },
     dispose: () => {
       rmSync(root, { recursive: true, force: true })
       delete process.env.HARNESS_GRID_BIN

@@ -1,5 +1,9 @@
 # Terminal prompts in OpenHarness
 
+For current dialog presentation, follow the
+[terminal dialog design system](terminal-dialogs.md). It supersedes the older
+visual descriptions below, including dock placement and chrome.
+
 The terminal is the workspace. Search and creation are temporary prompts over
 it, using the same monospace family, compact text rows, a thin border, and a
 visible cursor. No backdrop dims the running agents. No permanent status bar
@@ -167,6 +171,27 @@ current fleet name. An older daemon, or a taker that said nothing, reads as
 "Another app took control of this terminal". The phone draws the same line
 under its header. Retaking control introduces this app in turn, so the other
 side sees this machine's name.
+
+**Only a person at this window may take a terminal.** Every `terminal_open`
+this app sends says whether a hand on THIS Mac asked for it (`AttachIntent`):
+a click, a key, a menu item, the band's button. Everything else — a tab another
+Mac opened arriving over the desk, a reconnect, a machine answering its agent
+list, a push about an agent created elsewhere, the dial turning, `harness
+remote` handing a session over — opens with `takeover: false` and is answered
+as a WATCHER: real output, live, with the terminal left where it was and the
+band offering it. Where the machine's CLI is too old to understand that key
+(`features.noTakeover` absent) nothing opens by itself at all; the tile says so
+and offers "Open here". This is what stops two screens trading one terminal
+while somebody is typing in it.
+
+Opening the app is itself a gesture, so the tiles a launch restores may claim
+their terminals on their FIRST attach — the window comes back the way it was
+left, typing where it was typing, even if another screen picked one of them up
+meanwhile. That claim is spent on the attach it pays for and dropped from every
+tile a few minutes after launch, so a machine that only comes back in the
+afternoon is met by the ordinary rule rather than by a gesture made at
+breakfast. Tiles that arrive later — over the desk, from a push — never carry
+it.
 
 ## Creation
 

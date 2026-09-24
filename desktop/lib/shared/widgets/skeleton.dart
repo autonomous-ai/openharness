@@ -13,8 +13,8 @@ import 'pulse.dart';
 /// Four rules every skeleton in the app keeps, in order of how often they are
 /// broken elsewhere:
 ///
-/// 1. **The rhythm is an opacity breath, not a shimmer sweep.** [Pulse] owns
-///    it; a light band wiping across a pane fights the app's quiet.
+/// 1. **Placeholders are steady.** Waiting on I/O must not continuously repaint
+///    the window. [Pulse] supplies their static peak appearance.
 /// 2. **A placeholder wears the real content's metrics.** One pixel off and it
 ///    causes the very jump it exists to prevent — which is why [SkeletonText]
 ///    measures the line box of the style it stands in for instead of guessing.
@@ -22,7 +22,7 @@ import 'pulse.dart';
 ///    "more below" rather than a wall cut off mid-list.
 /// 4. **Line widths differ.** Equal bars turn a cluster into one grey slab.
 ///
-/// The fill is [AppSurface.recess] breathing up to [AppSurface.recessHover]:
+/// The fill is [AppSurface.recessHover]:
 /// a translucent *well*, not a solid. A skeleton sits on top of a card, so it
 /// borrows the token for a hollow rather than the card's own fill — it has to
 /// read as an absence — and an overlay rides any ground (page, card, dialog)
@@ -63,17 +63,13 @@ class Skeleton extends StatelessWidget {
     // Tokens are getters against a global brightness; nothing here depends on
     // Theme.of, so the widget has to register for a flip itself.
     AppTheme.watch(context);
-    final rest = AppSurface.recess;
     final peak = AppSurface.recessHover;
     return Pulse(
-      // Stated, not inherited: [Pulse]'s bare default is the status LED's
-      // blink, and a placeholder breathes faster than a light does.
-      duration: const Duration(milliseconds: 1100),
       builder: (context, t, _) => Container(
         width: width,
         height: height,
         decoration: BoxDecoration(
-          color: Color.lerp(rest, peak, t),
+          color: peak,
           borderRadius: shape == BoxShape.rectangle
               ? BorderRadius.circular(radius)
               : null,

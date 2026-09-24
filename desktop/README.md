@@ -7,6 +7,10 @@ planned and its runner is unexercised. Embedded harness viewers currently requir
 
 ## Development
 
+For workspace dialog work, follow the
+[terminal dialog design system](design/terminal-dialogs.md): fixed cells, plain
+text, and one-line selection, using Cmd-N and Cmd-O as references.
+
 Install a compatible Flutter SDK, then run the project from this directory
 (`desktop/` in the monorepo):
 
@@ -28,6 +32,39 @@ flutter build linux --release   # must run on an Ubuntu host — no cross-compil
 
 The terminal core is vendored at `third_party/xterm`. Do not replace it with an
 upstream package upgrade without preserving the local rendering and IME fixes.
+
+## Harness manager
+
+The terminal icon to the left of Harness Store opens a compact list across your
+machines. Each harness shows its agent and name, followed by its machine, project,
+branch, and last activity (`5m`, `1h`, `2d`). Search matches names, machines,
+projects, branches, and pending questions. Filter All, Needs input, Running, or
+Paused; sort by recently active, name, machine, or project.
+
+Needs input replaces the separate bell. A red count badge at the terminal icon’s
+top-right corner appears only when harnesses need input. An amber help action
+opens the waiting harness; its question appears on a third line in the Needs input
+view. The same view opens with **⌘⇧I**. Questions update live and stale actions
+cannot redirect you after a question is answered or replaced elsewhere.
+
+Select a row to reveal its existing pane or resume and open saved work. The
+separate play button resumes in the background. Pause/play remains at the right;
+normal states need no redundant labels.
+
+Pause uses the CLI's existing stop operation, keeping the saved conversation and
+project on its machine. Pause/resume controls are enabled for saved Claude and
+Codex conversations; other engines remain openable with a tooltip explaining
+that exact resume is unavailable. The CLI confirms termination of the exact process
+and pane before publishing the paused state, preserving other panes in the same
+tmux session. A failed inventory refresh keeps confirmed paused work visible,
+and pending operations survive closing the manager.
+
+Closing a pane only hides its view: a curved Genie animation draws it into
+Harnesses while the process continues. A bounded GPU snapshot animates while the
+live terminal stays mounted at its original size. macOS Reduce Motion skips it.
+Offline and shared harnesses expose their state without offering process controls.
+Errors remain beside the affected row, and an uncertain resume checks its original
+receipt rather than starting the process twice.
 
 ## Open media from agent output
 

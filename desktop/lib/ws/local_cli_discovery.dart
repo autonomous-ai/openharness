@@ -287,8 +287,9 @@ class LocalCliDiscovery {
   /// and a spawn into that gap is a wasted process (the CLI's own lock refuses it), not a fix.
   ///
   /// Never surfaces ORDINARY failures to the caller (no exceptions, no
-  /// [AppNotifier]-visible error); [onSignedOut] is the single exception, for the one state no
-  /// amount of respawning can recover from —
+  /// [AppNotifier]-visible error); [onSignedOut] is the single exception, and it is a NOTICE rather
+  /// than a failure — the account is gone, the daemon comes back signed out and goes on serving this
+  /// computer, and the window should say so —
   /// this runs unattended in the background for the app's whole lifetime; callers that need a
   /// one-shot "start now and tell me if it worked" should use [ensureRunning] instead. Cancel the
   /// timer to stop supervising — this never touches the daemon process itself (it self-daemonizes and
@@ -368,17 +369,16 @@ class LocalCliDiscovery {
           if (DateTime.now().isBefore(nextSpawnAllowedAt)) return;
           if (!(spawnAllowedAt?.call(DateTime.now()) ?? true)) return;
           // A daemon that signed itself OUT — its machine was deleted from another machine, or its
-          // session expired — deletes its session file and exits. Respawning it is the one failure
-          // this loop cannot fix: every replacement starts without a session and exits again,
-          // forever, silently. Stop instead, and let the caller send the user somewhere that helps.
+          // session expired — deletes its session file. It used to exit and refuse to start again
+          // without one, which made respawning it the one failure this loop could not fix; a daemon
+          // now STARTS signed out and serves this computer, so the respawn goes ahead below. The
+          // caller is still told: the window it is holding has become a guest, and should say so.
           //
           // Asked here and not on every tick because it costs a `harness auth status` process, and
           // the respawn point is already rate-limited by the backoff above — so this runs once per
           // spawn attempt rather than once every [checkInterval].
           if (stillSignedIn != null && !await stillSignedIn()) {
-            timer.cancel();
             onSignedOut?.call();
-            return;
           }
           try {
             await _spawnCommand();

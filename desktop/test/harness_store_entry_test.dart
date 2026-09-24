@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_binary.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:xterm/xterm.dart';
 
@@ -40,9 +40,7 @@ void main() {
           if (native) {
             await configured.native(tester, 'store');
           } else {
-            final button = find.byKey(const ValueKey('swarm-store-button'));
-            expect(tester.getRect(button).bottom, lessThanOrEqualTo(40));
-            await tester.tap(button);
+            await key(tester, LogicalKeyboardKey.keyS, cmd: true);
           }
           await tester.pump();
         }
@@ -57,7 +55,7 @@ void main() {
         await openStore();
         expect(app.activeSwarm, same(store));
         expect(app.swarms, hasLength(2));
-        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
         expect(app.activeSwarm, same(work));
         expect(tester.state(view), same(terminalState));
         await key(tester, LogicalKeyboardKey.arrowLeft);
@@ -84,7 +82,7 @@ void main() {
       'browse harnesses',
       'extensions',
     ]) {
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> $query',
@@ -94,7 +92,7 @@ void main() {
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
           .search;
       expect(search.selected?.commandId, 'app.store', reason: query);
-      await key(tester, LogicalKeyboardKey.enter);
+      await acceptSetupOrSearch(tester);
       expect(app.activeSwarm.isStore, isTrue);
       expect(app.swarms, hasLength(2));
       expect(find.byType(SwarmSearchResults), findsNothing);
@@ -133,26 +131,26 @@ void main() {
         );
         await tester.pump();
         final box = tester
-            .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+            .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;
-        expect(box.engine, 'studio/arm');
+        expect(box.harnessId, 'studio/arm');
         expect(box.task, prompt ?? '');
         expect(box.projectLabel, startsWith('~/harnesses/robot-studio-'));
         expect(box.projectFolderRequest!.isGenerated, isTrue);
         expect(box.placement, HarnessPlacement.newTab);
-        expect(box.field, NewHarnessField.launch);
+        expect(find.byType(NewHarnessForm), findsOneWidget);
         expect(find.byType(AlertDialog), findsNothing);
         expect(app.activeSwarm, same(store));
         expect(app.swarms, hasLength(count));
         await key(tester, LogicalKeyboardKey.escape);
         expect(app.activeSwarm, same(store));
-        expect(find.byType(NewHarnessBox), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
         await tester.pumpWidget(const SizedBox());
       },
     );
   }
 
-  testWidgets('browsing from agent choices retains the task and defaults', (
+  testWidgets('browsing from harness choices retains the task and defaults', (
     tester,
   ) async {
     newHarnessOpensInBox = true;
@@ -165,31 +163,29 @@ void main() {
     final work = app.activeSwarm;
     await configured.mount(tester, app, map);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-    final input = find.byKey(const ValueKey('new-harness-input'));
+
     final box = tester
-        .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+        .widget<NewHarnessForm>(find.byType(NewHarnessForm))
         .controller;
     box.setFolder('/work/project');
     await tester.pump();
-    await openLegacyTaskEditor(tester);
-    await tester.enterText(input, 'Finish the login feature');
+    box.task = 'Finish the login feature';
     await tester.pump();
     final draft = box.draft;
-    await key(tester, LogicalKeyboardKey.escape);
-    await openLaunchRow(tester, 'agent');
-    await tester.enterText(input, 'a harness not in this catalog');
+    await openLaunchRow(tester, 'harness');
+    await typeHarnessQuery(tester, 'a harness not in this catalog');
     await tester.pump();
     expect(box.selected?.id, NewHarnessController.storeId);
-    expect(find.text('Browse more harnesses…'), findsOneWidget);
-    await key(tester, LogicalKeyboardKey.enter);
+    expect(find.text('Browse Harness Store…'), findsOneWidget);
+    await acceptSetupOrSearch(tester);
     expect(app.activeSwarm.isStore, isTrue);
-    expect(find.byType(NewHarnessBox), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
     expect(work.panes.single, same(pane));
     app.selectSwarm(work.id);
     await tester.pump();
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     final resumed = tester
-        .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+        .widget<NewHarnessForm>(find.byType(NewHarnessForm))
         .controller;
     expect(resumed.task, draft.task);
     expect(resumed.engine, draft.engine);

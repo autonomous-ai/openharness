@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -33,6 +34,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
   final _rowKeys = <String, GlobalKey>{};
   List<KeyboardLesson> _visible = [];
   int _cursor = -1;
+  int _revealRequest = 0;
 
   AppKeymap get _keymap => KeymapTheme.of(context, listen: false) ?? _fallback;
 
@@ -65,10 +67,9 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
         setState(
           () => _cursor = (_cursor + delta).clamp(0, _visible.length - 1),
         );
+        final request = ++_revealRequest;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || _cursor < 0 || _cursor >= _visible.length) return;
-          final target = _rowKeys[_visible[_cursor].id]?.currentContext;
-          if (target != null) Scrollable.ensureVisible(target, alignment: .5);
+          unawaited(_revealCursor(request));
         });
       }
       return KeyEventResult.handled;
@@ -82,15 +83,51 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
     return KeyEventResult.ignored;
   }
 
+  Future<void> _revealCursor(int request) async {
+    // Adjacent rows are normally in the viewport/cache already. A page jump
+    // can cross unbuilt rows, especially with large text: advance by a viewport
+    // until the target is laid out, then reveal its exact bounds. No guessed
+    // fixed row height, and a newer key/filter cancels the pending reveal.
+    while (mounted &&
+        request == _revealRequest &&
+        _cursor >= 0 &&
+        _cursor < _visible.length &&
+        _scroll.hasClients) {
+      final target = _rowKeys[_visible[_cursor].id]?.currentContext;
+      if (target != null && target.mounted) {
+        await Scrollable.ensureVisible(target, alignment: .5);
+        return;
+      }
+      final firstBuilt = _visible.indexWhere(
+        (lesson) => _rowKeys[lesson.id]?.currentContext != null,
+      );
+      final position = _scroll.position;
+      final direction = firstBuilt >= 0 && _cursor < firstBuilt ? -1 : 1;
+      final next = (position.pixels + direction * position.viewportDimension)
+          .clamp(position.minScrollExtent, position.maxScrollExtent);
+      if (next == position.pixels) return;
+      _scroll.jumpTo(next);
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
+
   Future<void> _practice(KeyboardLesson lesson) async {
     await showKeyboardPractice(context, keymap: _keymap, initialLesson: lesson);
     if (mounted) _input.requestFocus();
   }
 
   void _filterChanged(String _) {
+    _revealRequest++;
     setState(() => _cursor = -1);
     if (_scroll.hasClients) _scroll.jumpTo(0);
   }
+
+  Widget _lessonRow(KeyboardLesson lesson) => _ShortcutBrowserRow(
+    key: _rowKeys.putIfAbsent(lesson.id, GlobalKey.new),
+    lesson: lesson,
+    selected: _cursor >= 0 && _visible[_cursor].id == lesson.id,
+    onTap: () => _practice(lesson),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -227,57 +264,65 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                             constraints.maxWidth >= 760 * math.max(1, scale)
                             ? 2
                             : 1;
-                        final width =
-                            (constraints.maxWidth - 32 - (columns - 1) * 20) /
-                            columns;
                         return Scrollbar(
                           controller: _scroll,
-                          child: SingleChildScrollView(
+                          child: ListView(
                             controller: _scroll,
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                for (final name in names) ...[
+                            children: [
+                              for (final name in names) ...[
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    20,
+                                    12,
+                                    10,
+                                  ),
+                                  child: Text(
+                                    name == 'Essentials' ? 'General' : name,
+                                    style: terminalTextStyle(
+                                      color: grid.AppPalette.textSecondary,
+                                    ),
+                                  ),
+                                ),
+                                for (
+                                  var row = 0;
+                                  row < groups[name]!.length;
+                                  row += columns
+                                )
                                   Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      12,
-                                      20,
-                                      12,
-                                      10,
+                                    padding: EdgeInsets.only(
+                                      bottom:
+                                          row + columns < groups[name]!.length
+                                          ? 4
+                                          : 0,
                                     ),
-                                    child: Text(
-                                      name == 'Essentials' ? 'General' : name,
-                                      style: terminalTextStyle(
-                                        color: grid.AppPalette.textSecondary,
-                                      ),
-                                    ),
-                                  ),
-                                  Wrap(
-                                    spacing: 20,
-                                    runSpacing: 4,
-                                    children: [
-                                      for (final lesson in groups[name]!)
-                                        SizedBox(
-                                          width: width,
-                                          child: _ShortcutBrowserRow(
-                                            key: _rowKeys.putIfAbsent(
-                                              lesson.id,
-                                              GlobalKey.new,
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        for (
+                                          var column = 0;
+                                          column < columns;
+                                          column++
+                                        ) ...[
+                                          if (column > 0)
+                                            const SizedBox(width: 20),
+                                          if (row + column >=
+                                              groups[name]!.length)
+                                            const Expanded(child: SizedBox())
+                                          else
+                                            Expanded(
+                                              child: _lessonRow(
+                                                groups[name]![row + column],
+                                              ),
                                             ),
-                                            lesson: lesson,
-                                            selected:
-                                                _cursor >= 0 &&
-                                                _visible[_cursor].id ==
-                                                    lesson.id,
-                                            onTap: () => _practice(lesson),
-                                          ),
-                                        ),
-                                    ],
+                                        ],
+                                      ],
+                                    ),
                                   ),
-                                ],
                               ],
-                            ),
+                            ],
                           ),
                         );
                       },
@@ -343,6 +388,7 @@ class _ShortcutBrowserRow extends StatelessWidget {
       selected: selected,
       label: '${lesson.label}, ${lesson.keys}. Practice shortcut',
       child: Material(
+        animationDuration: Duration.zero,
         color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(

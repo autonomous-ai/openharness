@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Grid · Your AI fleet</title>
+  <title>Model Manager</title>
   <link rel="stylesheet" href="app.css">
+  <script src="stream.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -21,7 +22,7 @@
           <div class="map-heading"><span class="eyebrow">YOUR COMPUTE, CONNECTED</span><span class="map-subtitle" id="map-subtitle">Every machine has a place.</span></div>
           <div class="node-layer" id="nodes" aria-label="Grid engines"></div>
           <button class="hub" id="hub" type="button" aria-label="Inspect your grid"><span class="hub-kicker">THE NETWORK</span><span class="hub-name">your grid</span><span class="hub-status" id="hub-status">connecting</span></button>
-          <div class="map-empty" id="map-empty" hidden><span class="empty-orbit" aria-hidden="true">◎</span><h1>Your fleet starts here.</h1><p id="empty-message">Ask the Grid agent to discover this machine and connect your first model.</p></div>
+          <div class="map-empty" id="map-empty" hidden><span class="empty-orbit" aria-hidden="true">◎</span><h1>Your fleet starts here.</h1><p id="empty-message">Ask the Model Manager to discover this machine and connect your first model.</p></div>
           <div class="map-controls"><span id="map-legend">Links show Grid membership</span><button type="button" id="motion" aria-pressed="false">Pause motion</button></div>
         </div>
         <section class="rack scrolls" id="rack" aria-label="Engine rack" hidden></section>

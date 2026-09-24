@@ -20,6 +20,12 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
 const assignment = { baseUrl: 'https://grid.autonomous.ai/grid-abc/relay', model: 'DeepSeek-V4-Flash-0731' }
 
 describe('agentFrame', () => {
+  it('carries only the owning machine’s cached token snapshot, including a measured zero', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    const usage = { totalTokens: 0, updatedAt: '2026-09-22T16:00:00Z' }
+    expect((await agentFrame(session(null), { ...context, tokenUsage: usage })).tokenUsage).toEqual(usage)
+    expect((await agentFrame(session(null), context)).tokenUsage).toBeNull()
+  })
   // The regression this file exists for: `agent_synced` was built by a SECOND, hand-maintained copy
   // of this shape that never grew a `grid` field. The desktop rebuilds its Agent from every push, so
   // each sync reset an agent's grid to null and the "N agents are on an older target" banner came
@@ -116,15 +122,37 @@ describe('agentFrame updatedAt', () => {
     expect((await agentFrame(row, context)).updatedAt).toBe('2026-09-17T07:00:00.000Z')
   })
 
-  it("prefers the transcript's mtime", async () => {
+  // A row no hook has ever reached — a bare terminal, an engine still starting, a harness opened from
+  // the catalog (`resumePendingAgent` writes `lastHookAt: 0`) — answered the epoch, and the desk
+  // rendered its age as "20719d" and sorted it below everything ever used.
+  it('falls back to when the agent came into being, never to the epoch', async () => {
+    const bound = Date.UTC(2026, 8, 20, 9)
+    const created = Date.UTC(2026, 8, 19, 8)
+    const never = { ...session(null), updatedAt: Date.now(), lastHookAt: 0 }
+    expect((await agentFrame({ ...never, boundAt: bound, registeredAt: created }, context)).updatedAt)
+      .toBe('2026-09-20T09:00:00.000Z')
+    expect((await agentFrame({ ...never, boundAt: null, registeredAt: created }, context)).updatedAt)
+      .toBe('2026-09-19T08:00:00.000Z')
+    // Only stamps the row already carries: a client compares this field to decide whether the agent
+    // changed, so reading a clock here would redraw the row on every sync and reset its age.
+    const row = { ...never, boundAt: null, registeredAt: created }
+    expect((await agentFrame(row, context)).updatedAt).toBe((await agentFrame(row, context)).updatedAt)
+  })
+
+  it('uses actual conversation activity even when an idle transcript was rewritten hours later', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agent-frame-'))
     try {
       const transcriptPath = join(dir, 'session.jsonl')
-      await writeFile(transcriptPath, '{}\n')
-      const written = new Date('2026-09-18T01:02:03.000Z')
-      await utimes(transcriptPath, written, written)
+      const activity = '2026-09-18T01:02:03.000Z'
+      await writeFile(transcriptPath, [
+        JSON.stringify({ type: 'assistant', timestamp: activity, message: { content: [] } }),
+        JSON.stringify({ type: 'ai-title', timestamp: '2026-09-18T10:00:00.000Z', title: 'Playtest' }),
+        '',
+      ].join('\n'))
+      const rewritten = new Date('2026-09-18T10:02:03.000Z')
+      await utimes(transcriptPath, rewritten, rewritten)
       const row = { ...session(null), transcriptPath, updatedAt: Date.now(), lastHookAt: lastHook }
-      expect((await agentFrame(row, context)).updatedAt).toBe(written.toISOString())
+      expect((await agentFrame(row, context)).updatedAt).toBe(activity)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

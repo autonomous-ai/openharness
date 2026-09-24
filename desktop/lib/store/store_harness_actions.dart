@@ -90,7 +90,13 @@ Future<bool> resumeStoreHarness(
   }
   // This path reveals an existing tab first, or attaches a new view to the
   // existing agent. It never calls agent_create or opens the creation dialog.
-  await app.openAgentFromDial(target.machineId, target.agent.id);
+  // A click on Resume, so this one may take the terminal back; the dial's own
+  // opens through this door do not (`AttachIntent`).
+  await app.openAgentFromDial(
+    target.machineId,
+    target.agent.id,
+    intent: AttachIntent.person,
+  );
   return true;
 }
 

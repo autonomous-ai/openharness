@@ -8,6 +8,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
+import 'package:harness/terminal/terminal_binary.dart';
 
 import 'support/restart_connection.dart';
 import 'swarm_interactions_test.dart' show chord;
@@ -49,14 +50,92 @@ void main() {
     expect(SwarmSearchController.action(row()), 'Open Harness');
     final picker = SwarmSearchController(app, const [], adding: true);
     addTearDown(picker.dispose);
-    expect(
-      picker.actionLabel(row()),
-      picker.actionLabel(rows.firstWhere((row) => row.agentId == 'a0')),
-    );
+    expect(picker.actionLabel(row()), 'Resume & open');
     expect(rankSwarmDestinations(rows, 'saved').single.agentId, 'saved');
     expect(app.allPanes, isEmpty);
     expect(connection.requests, isEmpty);
   });
+
+  test(
+    'an engine that exits into its shell closes the tile it was running in',
+    () async {
+      // Issue #262: Ctrl+C in a Codex tile. The conversation is archived under the identity that ran
+      // it, the surviving shell comes back as a terminal of its own, and the tile that was watching
+      // the engine must close rather than sit on "terminal unavailable" with nothing to press.
+      final pane = app.adoptSessionForTest(
+        terminal('a0', <TerminalBinaryFrame>[]),
+      );
+      expect(app.panes, [pane]);
+      connection.inventory = Completer<Map<String, dynamic>>();
+
+      await app.handleEventForTest('m', {
+        'type': 'agent_deleted',
+        'payload': {'agentId': 'a0', 'retained': true},
+      });
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'Saved work',
+            'engine': 'codex',
+            'sessionId': 'exited-conversation',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+        },
+      });
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'shell-1',
+            'name': 'Terminal harness',
+            'engine': 'terminal',
+            'terminal': {
+              'available': true,
+              'runtimes': [
+                {'backend': 'tmux', 'paneId': '%7'},
+              ],
+            },
+          },
+        },
+      });
+      connection.inventory!.complete({
+        'agents': [
+          {
+            'id': 'a0',
+            'name': 'Saved work',
+            'engine': 'codex',
+            'sessionId': 'exited-conversation',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+          {
+            'id': 'shell-1',
+            'name': 'Terminal harness',
+            'engine': 'terminal',
+            'terminal': {
+              'available': true,
+              'runtimes': [
+                {'backend': 'tmux', 'paneId': '%7'},
+              ],
+            },
+          },
+        ],
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(app.allPanes, isEmpty);
+      final agents = app.stateOf('m')!.agents;
+      expect(agents.firstWhere((agent) => agent.id == 'a0').isStopped, isTrue);
+      expect(
+        agents.firstWhere((agent) => agent.id == 'shell-1').terminalAvailable,
+        isTrue,
+      );
+      expect(swarmDestinations(app).any((row) => row.agentId == 'a0'), isTrue);
+    },
+  );
 
   test(
     'a retained stop refreshes the saved row after closing its live view',
@@ -294,7 +373,7 @@ void main() {
     },
   );
 
-  for (final key in [LogicalKeyboardKey.keyO, LogicalKeyboardKey.keyT]) {
+  for (final key in [LogicalKeyboardKey.keyP, LogicalKeyboardKey.keyT]) {
     testWidgets(
       '${key.keyLabel} opens retained work with Enter and preserves other panes',
       (tester) async {
@@ -303,7 +382,7 @@ void main() {
         await mount(tester, app);
         await chord(tester, key);
         if (key == LogicalKeyboardKey.keyT) {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         }
         await tester.pump();
         await tester.enterText(
@@ -329,7 +408,7 @@ void main() {
         expect(app.allPanes.contains(existing), isTrue);
         expect(
           app.activeSwarmId == originalTab,
-          key == LogicalKeyboardKey.keyO,
+          key == LogicalKeyboardKey.keyP,
         );
         expect(connection.types, ['agent_resume']);
         await tester.pumpWidget(const SizedBox());
@@ -344,13 +423,14 @@ void main() {
   ) async {
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyT);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.pump();
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       'Saved work',
     );
     await tester.pump();
+    expect(find.widgetWithText(TextButton, 'Resume & open'), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(connection.types, ['agent_resume']);

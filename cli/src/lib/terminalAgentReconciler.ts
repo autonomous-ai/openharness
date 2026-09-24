@@ -70,11 +70,27 @@ function unboundRouteOwner(
   return matches.length === 1 ? matches[0] : undefined
 }
 
+/**
+ * The observation for a row that cannot be matched by process identity, because it does not have one
+ * yet. Its terminal route is the only identity it has.
+ *
+ * ⚠️ `!sessionId` is NOT the test, and that was a real bug. A RESUMED row keeps the archived session
+ * id while `resumePendingAgent` clears its `processIdentity` — so it has an id and no process, and
+ * the old test made exactly the row that is waiting to be confirmed invisible to every scan. Nothing
+ * else looks at it either: `bindObservedAgent` keys on `byProcess`, and the dormancy branch below
+ * skips it because a failed launch already cleared `active`. A resume whose engine never sent a
+ * startup hook therefore sat at "Starting" — measured at 19 hours over a pane its owner could type
+ * in (openharness#189) — with the heal in cli.ts's `onObserved` (`if (wasLaunching) setLaunch(ready)`)
+ * never reached.
+ *
+ * A row with BOTH an id and a process keeps the stricter rule: process identity is authoritative
+ * again, so a different process in the same pane cannot inherit its transcript.
+ */
 function unboundRouteObservation(
   current: RegisteredSession,
   observed: readonly DiscoveredTerminalAgent[],
 ): DiscoveredTerminalAgent | undefined {
-  if (current.sessionId) return undefined
+  if (current.sessionId && current.processIdentity) return undefined
   const matches = observed.filter((candidate) => (
     routeEngineMatches(current, candidate) && sharesPlacement(current, candidate)
   ))

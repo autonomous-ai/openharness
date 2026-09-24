@@ -138,6 +138,34 @@ void main() {
     expect(process.signals, [ProcessSignal.sigkill]);
   });
 
+  test('a stalled remote lookup times out and keeps saved branch choices', () async {
+    final stalled = _GitProcess(code: null);
+    final result = await readLocalGitProject(
+      '/repo',
+      refresh: true,
+      startProcess: (arguments, environment) async {
+        final command = arguments.skip(3).join(' ');
+        if (command.startsWith('ls-remote')) return stalled;
+        return _GitProcess(
+          output: switch (command) {
+            'rev-parse --show-toplevel' => '/repo\n',
+            'rev-parse --git-common-dir' => '.git\n',
+            'remote' => 'origin\n',
+            'symbolic-ref --quiet HEAD' => 'refs/heads/main\n',
+            'for-each-ref --format=%(refname)%09%(refname:short)%09%(symref) refs/heads refs/remotes' => 'refs/heads/main\tmain\t\nrefs/remotes/origin/main\torigin/main\t\n',
+            _ => '',
+          },
+        );
+      },
+    );
+    expect(result['refreshed'], false);
+    expect(
+      GitProjectInfo.fromJson(result).branches.map((branch) => branch.name),
+      ['main', 'origin/main'],
+    );
+    expect(stalled.signals, [ProcessSignal.sigkill]);
+  });
+
   test(
     'failed worktree creation leaves its allocated folder for recovery',
     () async {

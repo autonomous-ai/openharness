@@ -65,16 +65,19 @@ test('a workspace that is not there yet: watching fails, and every answer is sti
   assert.deepEqual(await viewer.stop(), { code: 0, signal: null })
 })
 
-test('a watcher that fails after starting is logged, and one that names no path announces nothing', async () => {
+test('a watcher that fails after starting is logged, and one that names no path announces nothing', async (t) => {
   const ws = join(root, 'ws-watch')
   mkdirSync(ws)
   const failing = await startViewer({ env: { HARNESS_WORKSPACE: ws, TEST_WATCH: 'error' } })
+  t.after(() => failing.stop())
   await eventually(() => failing.output().includes('[mujoco-viewer] watch error: the watcher stopped'), 'the watch error in the log')
   assert.equal((await failing.get('/')).status, 200, 'the pane keeps serving')
   assert.deepEqual(await failing.stop(), { code: 0, signal: null })
 
   const nameless = await startViewer({ env: { HARNESS_WORKSPACE: ws, TEST_WATCH: 'null-name' } })
+  t.after(() => nameless.stop())
   const feed = await nameless.events()
+  t.after(() => feed.close())
   assert.equal(await feed.until((b) => changedPaths(b) !== null, 800), null, 'no change event for a change with no path')
   feed.close()
   assert.deepEqual(await nameless.stop(), { code: 0, signal: null })

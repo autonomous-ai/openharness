@@ -1,3 +1,5 @@
+import 'support/agent_picker.dart';
+
 // A harness's page in the Harness Store, past the happy path the screen test
 // pins: this computer's install state, Get/Open/Remove
 // under double clicks and pages that vanish mid-dialog, engines as the probes
@@ -1330,6 +1332,7 @@ void main() {
       );
       await tester.tap(_key('store-primary-action'));
       await tester.pumpAndSettle();
+      await expandNewAgentAdvanced(tester);
       expect(
         tester
             .widget<AppChoicePicker<String>>(_key('new-agent-machine-field'))

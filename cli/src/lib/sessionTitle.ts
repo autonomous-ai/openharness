@@ -29,8 +29,9 @@ const ENGINE_TITLES: ReadonlySet<string> = new Set([
 /** OpenCode (and Kilo, its fork) put their short name in front: "OC | Greeting". */
 const OPENCODE_PREFIX = /^(?:oc|opencode|kilo)\s+\|\s+/i
 
-/** Codex's run-state words (run_state_status_text) and its action-required banner. */
-const CODEX_STATUS = /^(?:\[\s*[!.]\s*\]\s*)?(?:starting|ready|working|waiting|thinking|action required)$/i
+/** Codex's status text, including the ellipsis and Braille spinner shown while naming a thread.
+ *  Accepting `renaming... ⠹` as a title permanently names the worktree branch `renaming`. */
+const CODEX_STATUS = /^(?:\[\s*[!.]\s*\]\s*)?(?:starting|ready|working|waiting|thinking|renaming|action required)(?:\s*(?:\.{3}|…))?(?:\s*[\u2800-\u28ff])?$/i
 
 /**
  * A title that names the session, or null when it only names the engine, the folder or the default.

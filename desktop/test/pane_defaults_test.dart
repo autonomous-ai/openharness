@@ -79,7 +79,7 @@ void main() {
       }
 
       for (var count = 3; count <= 5; count++) {
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           'Agent ${count - 1}',

@@ -1,6 +1,6 @@
+import 'pull_request_badge.dart';
 import '../shared/theme/prompt_style.dart';
 import 'prompt_context.dart';
-import '../sharing/share_harness_dialog.dart';
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -33,6 +33,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
 import 'grid_model_picker.dart';
@@ -41,7 +42,46 @@ import 'pane_header_actions.dart';
 /// The pane header's own horizontal inset.
 const double _stripPadding = 14;
 
-typedef TerminalNotice = ({String label, String detail, IconData icon});
+typedef TerminalNotice = ({
+  String label,
+  String detail,
+  IconData icon,
+
+  /// A way out of what the notice describes, shown as the header's button —
+  /// a machine that needs linking offers to ask for its password. Null where
+  /// the state is merely reported and nothing here would fix it.
+  String? actionLabel,
+  VoidCallback? onAction,
+
+  /// Whether this one also earns the band across the top of the pane, over the
+  /// output. The chip is the resting place for a notice; the band is for the
+  /// few that are CONFUSING as well as blocking — a pane still printing while
+  /// its keyboard is locked — where the sentence has to be read, not hovered.
+  /// An offline machine is neither confusing nor rare, and a band on every one
+  /// of those would cost rows in every tile.
+  bool banner,
+});
+
+/// A [TerminalNotice] without spelling out the fields it does not have.
+///
+/// A record has no default values, so every caller of a five-field one has to
+/// name all five — which is how widening this typedef broke eight untouched
+/// call sites at once. This is the one place that knows the full shape.
+TerminalNotice terminalNotice({
+  required String label,
+  required String detail,
+  required IconData icon,
+  String? actionLabel,
+  VoidCallback? onAction,
+  bool banner = false,
+}) => (
+  label: label,
+  detail: detail,
+  icon: icon,
+  actionLabel: actionLabel,
+  onAction: onAction,
+  banner: banner,
+);
 
 class TerminalPanel extends StatefulWidget {
   final AppNotifier notifier;
@@ -50,10 +90,7 @@ class TerminalPanel extends StatefulWidget {
   /// Takes this tile off the grid. Null when the terminal is the whole window,
   /// where there is nothing to close it back to.
   final VoidCallback? onClose;
-  final VoidCallback? onRestart;
 
-  /// Forks this harness — a second agent with its history (fork_agent_dialog.dart).
-  final VoidCallback? onFork;
   final VoidCallback? onDelete;
 
   final VoidCallback? onToggleZoom;
@@ -126,8 +163,6 @@ class TerminalPanel extends StatefulWidget {
     this.notice,
     this.onToggleComposer,
     this.onClose,
-    this.onRestart,
-    this.onFork,
     this.onDelete,
     this.onToggleZoom,
     this.zoomed = false,
@@ -664,7 +699,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool get _inputBlocked =>
       !widget.readOnly &&
       widget.notice == null &&
-      widget.session.status == TerminalSessionStatus.takenOver;
+      // A watcher is the same situation seen from the other side: this window
+      // has the output but another client has the terminal, and the band's
+      // button is how a person here asks for it.
+      (widget.session.watching ||
+          widget.session.status == TerminalSessionStatus.takenOver);
 
   /// Retakes the stream, the same path as the header chip: `selectAgent` on a
   /// dead pane is `reopen()`, and a repeat while it is already `opening` only
@@ -719,7 +758,18 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// there is the "called during build" error the crash log was full of.
   /// Deferred one frame, the retake lands on a built tree.
   void _autoTakeControlAfterBuild() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoTakeControl());
+    final session = widget.session;
+    final request = widget.focusRequest;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !widget.focused ||
+          !widget.focusByUser ||
+          widget.focusRequest != request ||
+          !identical(widget.session, session)) {
+        return;
+      }
+      _autoTakeControl();
+    });
   }
 
   /// A keystroke was typed into a pane that cannot take it. Flash the banner
@@ -1623,6 +1673,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                     // frozen output itself, where the eyes already are, and
                     // stays through `opening` so the pane does not jump when
                     // it is answered.
+                    //
+                    // It also carries a pane-level notice that has something to
+                    // DO about itself (a failed start offering Check again or
+                    // Restart). One strip, never two: a noticed pane is already
+                    // excluded from `_inputBlocked` — nothing the takeover band
+                    // offers would help a pane whose machine or launch is the
+                    // problem — so these two conditions cannot both hold.
                     if (_inputBlocked ||
                         (_retakingControl &&
                             session.status == TerminalSessionStatus.opening))
@@ -1644,6 +1701,14 @@ class _TerminalPanelState extends State<TerminalPanel>
                               ? () => unawaited(_takeControl())
                               : null,
                         ),
+                      )
+                    else if (widget.notice case final notice?
+                        when notice.banner && notice.onAction != null)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _ControlBanner.notice(notice),
                       ),
                     if (session.uploadProgress != null ||
                         _previewProgress != null)
@@ -1732,8 +1797,6 @@ class _TerminalPanelState extends State<TerminalPanel>
       project: agent == null ? null : machine?.projectOf(agent),
       compact: widget.compactHeader,
       close: widget.onClose != null,
-      restart: widget.onRestart != null,
-      fork: widget.onFork != null,
       delete: widget.onDelete != null,
       composer: widget.composerVisible,
       toggleComposer: widget.onToggleComposer != null,
@@ -1755,18 +1818,10 @@ class _TerminalPanelState extends State<TerminalPanel>
             ? null
             : () => widget.onToggleZoom?.call(),
         onClose: widget.onClose == null ? null : () => widget.onClose?.call(),
-        onRestart: widget.onRestart == null
-            ? null
-            : () => widget.onRestart?.call(),
-        onFork: widget.onFork == null ? null : () => widget.onFork?.call(),
         onDelete: widget.onDelete == null
             ? null
             : () => widget.onDelete?.call(),
         onReconnect: () => unawaited(_takeControl()),
-        composerVisible: widget.composerVisible,
-        onToggleComposer: widget.onToggleComposer == null
-            ? null
-            : () => widget.onToggleComposer?.call(),
         paneDrag: widget.paneDrag,
       );
     }
@@ -1780,8 +1835,6 @@ class _TerminalHeader extends StatelessWidget {
   final TerminalNotice? notice;
   final bool readOnly;
   final VoidCallback? onClose;
-  final VoidCallback? onRestart;
-  final VoidCallback? onFork;
 
   /// Ends the agent (with a confirmation), as the rail's row menu does. Null
   /// where the pane cannot name a live agent to end.
@@ -1793,8 +1846,6 @@ class _TerminalHeader extends StatelessWidget {
   final bool compact;
   final VoidCallback? onToggleZoom;
   final bool zoomed;
-  final VoidCallback? onToggleComposer;
-  final bool composerVisible;
 
   /// This strip's drag gesture, or null when there is nothing to drag.
   ///
@@ -1812,21 +1863,26 @@ class _TerminalHeader extends StatelessWidget {
     this.notice,
     this.readOnly = false,
     this.onClose,
-    this.onRestart,
-    this.onFork,
     this.onDelete,
     required this.onReconnect,
     this.compact = false,
     this.onToggleZoom,
     this.zoomed = false,
     this.paneDrag,
-    this.onToggleComposer,
-    this.composerVisible = false,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader));
+
+  Widget _buildHeader(BuildContext context) {
     TerminalFontScope.watch(context);
+    final titleStyle = workspaceBarTextStyle(
+      color: terminalThemeFor(
+        grid.AppTheme.palette.value,
+        terminalThemeStore.value,
+      ).foreground,
+    );
     final color = switch (session.status) {
       TerminalSessionStatus.controlling => AppColors.success,
       TerminalSessionStatus.opening ||
@@ -1848,24 +1904,25 @@ class _TerminalHeader extends StatelessWidget {
         notice ??
         switch (session.status) {
           TerminalSessionStatus.controlling => null,
-          TerminalSessionStatus.opening => (
+          TerminalSessionStatus.opening => terminalNotice(
             label: 'Connecting',
             icon: Icons.sync,
             detail:
                 'Connecting to this terminal. Retained output is read only.',
           ),
-          TerminalSessionStatus.resyncing => (
+          TerminalSessionStatus.resyncing => terminalNotice(
             label: 'Restoring',
             icon: Icons.sync,
             detail: 'Restoring this terminal. Retained output is read only.',
           ),
-          TerminalSessionStatus.takenOver => (
+          TerminalSessionStatus.takenOver => terminalNotice(
             label: 'Take control',
             icon: Icons.lock_outline,
             detail:
                 'Read only: ${taker ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
           ),
-          TerminalSessionStatus.error || TerminalSessionStatus.closed => (
+          TerminalSessionStatus.error ||
+          TerminalSessionStatus.closed => terminalNotice(
             label: 'Reconnect',
             icon: Icons.refresh,
             detail:
@@ -1874,12 +1931,17 @@ class _TerminalHeader extends StatelessWidget {
                 'This stream is closed. Retained output is read only.',
           ),
         };
+    // A notice that carries its own way out owns the button — a machine that
+    // needs linking asks for its password there. Otherwise the button is the
+    // session's own reconnect, which a notice has always suppressed.
+    final noticeAction = notice?.onAction;
     final canReconnect =
         notice == null &&
         !readOnly &&
         (session.status == TerminalSessionStatus.error ||
             session.status == TerminalSessionStatus.closed ||
             session.status == TerminalSessionStatus.takenOver);
+    final statusAction = noticeAction ?? (canReconnect ? onReconnect : null);
     final machine = notifier.stateOf(session.machineId);
     final agent = machine?.agents
         .where((a) => a.id == session.agentId)
@@ -1894,287 +1956,297 @@ class _TerminalHeader extends StatelessWidget {
       if (profile != null) 'Codex profile: $profile',
       'Double-click to rename',
     ].join('\n');
-    // A terminal has no prompt to compose a message for — a shell reads keys,
-    // and the composer's Enter-to-send would be a line nobody asked for.
-    final remoteComposer =
-        machine != null &&
-            !machine.isLocalMachine &&
-            !isTerminalEngine(session.engineId)
-        ? onToggleComposer
-        : null;
-    // The icon cluster, plus the model picker that now sits at its left — without the extra the
-    // constraint clips the picker rather than the details it was measured for. Zero on an engine
-    // that gets no picker, so those headers keep the width they always had.
-    final showModelPicker =
-        status == null && !readOnly && modelPickerSupports(session.engineId);
-    final pickerWidth = showModelPicker ? 72.0 : 0.0;
-    final actionsWidth =
-        (remoteComposer == null ? 148.0 : 178.0) +
-        pickerWidth +
-        (onFork == null ? 0 : 30) +
-        (agent?.viewerUrl == null && agent?.viewerError == null ? 0 : 30);
+    // Reserve space for the pane-local model selector.
+    // Engines without a picker keep their existing header width.
+    final showModelPicker = modelPickerSupports(session.engineId);
+    // The picker: a model id up to 220px and its padding.
+    final pickerWidth = showModelPicker ? 250.0 : 0.0;
+    final actionsWidth = pickerWidth;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
-    final strip = PaneHeaderHover(
-      child: SizedBox(
-        height: compact ? 38 : 46,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final scale = grid.appTextScaleOf(context);
-              final narrow = constraints.maxWidth < 560 * math.max(1, scale);
-              final rightWidth = narrow
-                  ? math.max(
-                      showModelPicker ? 60.0 : 28.0,
-                      constraints.maxWidth * .36,
-                    )
-                  : math.max(actionsWidth, constraints.maxWidth * .55);
-              return Row(
-                children: [
-                  if (agent != null)
-                    EngineMark.forAgent(agent, size: 17)
-                  else
-                    EngineMark(engine: session.engineId, size: 17),
-                  // Icon and name, the same as every other pane (owner,
-                  // 2026-09-15): a harness agent is its harness here, and the
-                  // engine it runs on is the dialog's and the tooltip's to say.
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Flexible(
-                          child: Tooltip(
-                            message: identityDetail,
-                            waitDuration: const Duration(milliseconds: 700),
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onDoubleTap: () => unawaited(
-                                showAgentRenameDialog(
-                                  context,
-                                  notifier,
-                                  session.machineId,
-                                  session.agentId,
-                                  session.agentName,
-                                ),
-                              ),
-                              child: Text(
+    final header = SizedBox(
+      height: compact ? 38 : 46,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final scale = grid.appTextScaleOf(context);
+            final narrow = constraints.maxWidth < 560 * math.max(1, scale);
+            // Workspace panes show PR state once in the main status bar.
+            // Standalone terminals retain their own PR badge.
+            final showPr =
+                !compact &&
+                agent != null &&
+                project?.shownBranch != null &&
+                constraints.maxWidth >= 360 * math.max(1, scale);
+            final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
+            // The room the left side needs: the mark, the whole name as it will be drawn, and
+            // the status beside it — capped at 45% so a very long name still leaves the right
+            // side most of the header.
+            double titleRoom() {
+              final name = TextPainter(
+                text: TextSpan(text: session.agentName, style: titleStyle),
+                textDirection: TextDirection.ltr,
+                textScaler: MediaQuery.textScalerOf(context),
+                maxLines: 1,
+              )..layout();
+              final width = name.width;
+              name.dispose();
+              return math.min(
+                17 + 10 + width + 8 + (status == null ? 16 : 120) + 8,
+                constraints.maxWidth * .45,
+              );
+            }
+
+            final desiredRightWidth = narrow
+                ? math.max(
+                    (showModelPicker ? 96.0 : 0.0) + badgeWidth,
+                    constraints.maxWidth * .36,
+                  )
+                : math.max(
+                    actionsWidth + badgeWidth,
+                    // Everything the name does not use. A fixed 55% left the folder and branch
+                    // shortened to "…" beside a short name with half the header empty.
+                    constraints.maxWidth - titleRoom(),
+                  );
+            // The name/status retain space while model and project text yield.
+            final rightWidth = math.min(
+              desiredRightWidth,
+              math.max(0.0, constraints.maxWidth - 99),
+            );
+            return Row(
+              children: [
+                if (agent != null)
+                  EngineMark.forAgent(agent, size: 17)
+                else
+                  EngineMark(engine: session.engineId, size: 17),
+                // Icon and name, the same as every other pane (owner,
+                // 2026-09-15): a harness agent is its harness here, and the
+                // engine it runs on is the dialog's and the tooltip's to say.
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Tooltip(
+                          message: identityDetail,
+                          waitDuration: const Duration(milliseconds: 700),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onDoubleTap: () => unawaited(
+                              showAgentRenameDialog(
+                                context,
+                                notifier,
+                                session.machineId,
+                                session.agentId,
                                 session.agentName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: grid.AppType.monoLabel(
-                                  color: AppColors.text,
-                                  fontWeight: FontWeight.w600,
-                                ),
                               ),
                             ),
-                          ),
-                        ),
-                        if (status != null || !compact)
-                          const SizedBox(width: 8),
-                        if (status != null && narrow)
-                          Tooltip(
-                            message: '${status.label}: ${status.detail}',
-                            child: IconButton(
-                              tooltip: status.label,
-                              onPressed: canReconnect ? onReconnect : null,
-                              icon: Icon(status.icon, size: 14),
-                              style: IconButton.styleFrom(
-                                foregroundColor: color,
-                                disabledForegroundColor: color,
-                                fixedSize: const Size(28, 28),
-                                minimumSize: const Size(28, 28),
-                                padding: EdgeInsets.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                            ),
-                          )
-                        else if (status != null)
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: math.max(
-                                0,
-                                math.min(
-                                  constraints.maxWidth * .22,
-                                  constraints.maxWidth - actionsWidth - 110,
-                                ),
-                              ),
-                            ),
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: Tooltip(
-                                message: status.detail,
-                                child: TextButton(
-                                  onPressed: canReconnect ? onReconnect : null,
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: color,
-                                    disabledForegroundColor: AppColors.textSoft,
-                                    minimumSize: Size.zero,
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 4,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(status.icon, size: 14),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: Text(
-                                          status.label,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: grid.AppType.monoLabel(
-                                            fontWeight: FontWeight.w400,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          )
-                        else if (!compact)
-                          Padding(
-                            padding: const EdgeInsets.all(4),
-                            child: Icon(Icons.circle, size: 8, color: color),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Which of the three paths carries this pane's bytes. Absent for a local machine's own
-                  // terminal, which has no such distinction and so gets no badge.
-                  //
-                  // The wire word and the word a person reads differ for the middle state, deliberately:
-                  // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
-                  // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
-                  // meaning — the backend WebSocket — so an older CLI is never mislabelled.
-                  if (!compact && !narrow && session.linkMode != null)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: _LinkModeMark(mode: session.linkMode!),
-                    ),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: rightWidth),
-                    child: PaneHeaderActions(
-                      compact: narrow,
-                      // Where this agent runs, with the controls rather than beside the name — the
-                      // header has room for one of the two, and this is the half you only read while
-                      // reaching for it. Absent while a notice is showing: a header asking to
-                      // reconnect is not the moment to offer a menu.
-                      modelPicker: showModelPicker
-                          ? GridModelPicker(
-                              compact: narrow,
-                              notifier: notifier,
-                              machineId: session.machineId,
-                              currentModel: agent?.gridModel,
-                              webSearch: agent?.gridWebSearch,
-                              engineLabel: session.engineId,
-                              onSelected: (model) => unawaited(
-                                notifier.retargetAgentToGridModel(
-                                  session.machineId,
-                                  session.agentId,
-                                  model.id,
-                                  gridName: model.grid,
-                                ),
-                              ),
-                              onUseOwnLogin: () => unawaited(
-                                notifier.clearAgentGrid(
-                                  session.machineId,
-                                  session.agentId,
-                                ),
-                              ),
-                              // The pane's own context, because the door opens New Agent — and
-                              // the pane's own MACHINE, because a picker on a remote agent's pane
-                              // is asking about the models that computer can serve, not this one's.
-                              onRunLocalModel: () => unawaited(
-                                notifier.runLocalModel(
-                                  context,
-                                  machineId: session.machineId,
-                                ),
-                              ),
-                            )
-                          : null,
-                      onShare:
-                          readOnly ||
-                              notifier
-                                      .stateOf(session.machineId)
-                                      ?.machine
-                                      .isShared ==
-                                  true
-                          ? null
-                          : () => showShareHarnessDialog(
-                              context,
-                              notifier,
-                              session.machineId,
-                              session.agentId,
+                            child: Text(
                               session.agentName,
+                              key: const ValueKey('terminal-pane-title'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: titleStyle,
                             ),
-                      zoomed: zoomed,
-                      onZoom: onToggleZoom,
-                      onRestart: onRestart,
-                      onFork: onFork,
-                      onDelete: onDelete,
-                      onClose: onClose,
-                      terminal: isTerminalEngine(session.engineId),
-                      onToggleComposer: remoteComposer,
-                      composerVisible: composerVisible,
-                      // A harness agent's viewer, shown or hidden from the
-                      // pane it belongs to.
-                      onToggleViewer:
-                          agent?.viewerUrl == null && agent?.viewerError == null
-                          ? null
-                          : () => notifier.toggleViewerPane(
-                              session.machineId,
-                              agent!.id,
-                            ),
-                      viewerVisible:
-                          agent != null &&
-                          notifier.viewerPaneShown(session.machineId, agent.id),
-                      viewerColor: agent == null
-                          ? null
-                          : agentIdentity(agent).color,
-                      details: Tooltip(
-                        message: [
-                          if (forkedFrom != null)
-                            'Forked from ${forkedFrom.name}',
-                          if (project != null) project.cwd,
-                          ?project?.branchDetail,
-                          machineName,
-                        ].join('\n'),
-                        child: PromptContextView(
-                          contextData: PromptContext(
-                            // This computer goes without saying.
-                            machine: machine?.isLocalMachine == true
-                                ? null
-                                : machineName,
-                            // The folder as it was chosen and its repository's branch;
-                            // the full working folder is in the tooltip.
-                            project: narrow ? null : project?.label,
-                            // Not a branch Harness made up that waits for the
-                            // session's name, nor a commit an agent checked out.
-                            branch: narrow ? null : project?.shownBranch,
-                            leading: !narrow && forkedFrom != null
-                                ? 'forked from ${forkedFrom.name}'
-                                : null,
                           ),
                         ),
                       ),
-                    ),
+                      if (status != null || !compact) const SizedBox(width: 8),
+                      if (status != null && narrow)
+                        Tooltip(
+                          message: '${status.label}: ${status.detail}',
+                          child: IconButton(
+                            tooltip: status.actionLabel ?? status.label,
+                            onPressed: statusAction,
+                            icon: Icon(status.icon, size: 14),
+                            style: IconButton.styleFrom(
+                              foregroundColor: color,
+                              disabledForegroundColor: color,
+                              fixedSize: const Size(28, 28),
+                              minimumSize: const Size(28, 28),
+                              padding: EdgeInsets.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        )
+                      else if (status != null)
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: math.max(
+                              0,
+                              math.min(
+                                constraints.maxWidth * .22,
+                                constraints.maxWidth - actionsWidth - 110,
+                              ),
+                            ),
+                          ),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Tooltip(
+                              message: status.detail,
+                              child: TextButton(
+                                onPressed: statusAction,
+                                style: TextButton.styleFrom(
+                                  foregroundColor: color,
+                                  disabledForegroundColor: AppColors.textSoft,
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 4,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(status.icon, size: 14),
+                                    const SizedBox(width: 6),
+                                    Flexible(
+                                      child: Text(
+                                        // The chip names the STATE; what
+                                        // pressing it does is in the tooltip
+                                        // and in `actionLabel`. "Link
+                                        // required" that can be pressed reads
+                                        // better than a bare verb where every
+                                        // neighbour is a status.
+                                        status.label,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: grid.AppType.monoLabel(
+                                          fontWeight: FontWeight.w400,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      else if (!compact)
+                        Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(Icons.circle, size: 8, color: color),
+                        ),
+                    ],
                   ),
-                ],
-              );
-            },
-          ),
+                ),
+                const SizedBox(width: 8),
+                // Which of the three paths carries this pane's bytes. Absent for a local machine's own
+                // terminal, which has no such distinction and so gets no badge.
+                //
+                // The wire word and the word a person reads differ for the middle state, deliberately:
+                // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
+                // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
+                // meaning — the backend WebSocket — so an older CLI is never mislabelled.
+                if (!compact && !narrow && session.linkMode != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: _LinkModeMark(mode: session.linkMode!),
+                  ),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: rightWidth),
+                  child: PaneHeaderActions(
+                    trailing: showPr
+                        ? ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: badgeWidth),
+                            child: PullRequestBadge(
+                              compact: narrow,
+                              identity: (
+                                session.machineId,
+                                agent.id,
+                                project?.cwd,
+                                project?.shownBranch,
+                              ),
+                              read: () => notifier.readAgentPullRequest(
+                                session.machineId,
+                                agent.id,
+                              ),
+                            ),
+                          )
+                        : null,
+                    // Keep the current model visible, including while the
+                    // terminal reconnects, without shifting the other controls.
+                    modelPicker: showModelPicker
+                        ? GridModelPicker(
+                            key: ValueKey((
+                              'pane-model',
+                              session.machineId,
+                              session.agentId,
+                            )),
+                            paneHeader: true,
+                            enabled: !readOnly && !session.readOnly,
+                            compact: narrow,
+                            notifier: notifier,
+                            machineId: session.machineId,
+                            currentModel: agent?.gridModel,
+                            subscriptionModel: agent?.modelName,
+                            webSearch: agent?.gridWebSearch,
+                            engineLabel: session.engineId,
+                            onSelected: (model) => unawaited(
+                              notifier.retargetAgentToGridModel(
+                                session.machineId,
+                                session.agentId,
+                                model.id,
+                                gridName: model.grid,
+                              ),
+                            ),
+                            onUseOwnLogin: () => unawaited(
+                              notifier.clearAgentGrid(
+                                session.machineId,
+                                session.agentId,
+                              ),
+                            ),
+                            // Discovery opens the local Models popover. Selection above
+                            // continues to target this pane's existing session.
+                            onRunLocalModel: () => unawaited(
+                              notifier.runLocalModel(
+                                context,
+                                machineId: session.machineId,
+                              ),
+                            ),
+                          )
+                        : null,
+                    details: compact || narrow
+                        ? null
+                        : Tooltip(
+                            message: [
+                              if (forkedFrom != null)
+                                'Forked from ${forkedFrom.name}',
+                              if (project != null) project.cwd,
+                              ?project?.branchDetail,
+                              machineName,
+                            ].join('\n'),
+                            child: PromptContextView(
+                              contextData: PromptContext(
+                                // This computer goes without saying.
+                                machine: machine?.isLocalMachine == true
+                                    ? null
+                                    : machineName,
+                                // The folder as it was chosen and its repository's branch;
+                                // the full working folder is in the tooltip.
+                                project: narrow ? null : project?.label,
+                                // Not a branch Harness made up that waits for the
+                                // session's name, nor a commit an agent checked out.
+                                branch: narrow ? null : project?.shownBranch,
+                                leading: !narrow && forkedFrom != null
+                                    ? 'forked from ${forkedFrom.name}'
+                                    : null,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
+    final strip = header;
     final handle = paneDrag;
     if (handle == null) return strip;
 
@@ -2265,21 +2337,38 @@ class _ControlBanner extends StatelessWidget {
   /// null from an older daemon or a taker that did not introduce itself.
   final String? takerName;
 
+  /// The pane-level notice this band is speaking for instead, when it is one a
+  /// person can act on. Null for the takeover band above.
+  final TerminalNotice? notice;
+
   const _ControlBanner({
     required this.busy,
     required this.nudged,
     required this.nudge,
     required this.onTakeControl,
     this.takerName,
-  });
+  }) : notice = null;
 
-  String get title => busy
+  /// The band for a notice that offers a way out — the same strip, the same
+  /// wording rules, so a pane never grows a second one. The header's chip says
+  /// the same thing in a corner; this is where it can be read.
+  const _ControlBanner.notice(TerminalNotice this.notice)
+    : busy = false,
+      nudged = false,
+      nudge = 0,
+      onTakeControl = null,
+      takerName = null;
+
+  String get title => notice != null
+      ? notice!.label
+      : busy
       ? 'Taking control…'
       : takerName == null
       ? 'Another app took control of this terminal'
       : '$takerName took control of this terminal';
 
   String? get detail {
+    if (notice != null) return notice!.detail;
     if (busy) return null;
     if (nudged) return 'Keys are ignored — press ⏎ to take control.';
     return 'Typing is paused. Click here or press ⏎ to take control.';
@@ -2288,7 +2377,11 @@ class _ControlBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final ink = AppColors.warning;
+    // A notice that failed is red; everything else on this strip is the amber
+    // of "paused, and you can do something about it".
+    final ink = notice != null && notice!.icon == Icons.error_outline
+        ? AppColors.danger
+        : AppColors.warning;
     final detail = this.detail;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     // Composited over the pane's own ground, as [UpdateNotice] is over the
@@ -2333,7 +2426,9 @@ class _ControlBanner extends StatelessWidget {
                 // its own under the title rather than running off the edge.
                 final narrow =
                     constraints.maxWidth < 340 * grid.appTextScaleOf(context);
-                final lead = !busy
+                final lead = notice != null
+                    ? Icon(notice!.icon, size: 16, color: ink)
+                    : !busy
                     ? Icon(Icons.lock_outline, size: 16, color: ink)
                     : SizedBox(
                         width: 16,
@@ -2383,7 +2478,15 @@ class _ControlBanner extends StatelessWidget {
                     ],
                   ),
                 );
-                final button = busy
+                final button = notice != null
+                    ? (notice!.actionLabel == null
+                          ? null
+                          : _ControlBannerButton(
+                              label: notice!.actionLabel!,
+                              onPressed: notice!.onAction,
+                              showReturnKey: false,
+                            ))
+                    : busy
                     ? null
                     : _ControlBannerButton(onPressed: onTakeControl);
                 if (narrow) {
@@ -2419,7 +2522,16 @@ class _ControlBanner extends StatelessWidget {
 /// the accent.
 class _ControlBannerButton extends StatelessWidget {
   final VoidCallback? onPressed;
-  const _ControlBannerButton({required this.onPressed});
+  final String label;
+
+  /// ⏎ is drawn only where the key really does this — taking the stream back
+  /// (`_onTerminalKey`). A notice's action has no chord behind it.
+  final bool showReturnKey;
+  const _ControlBannerButton({
+    required this.onPressed,
+    this.label = 'Take control',
+    this.showReturnKey = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2435,19 +2547,21 @@ class _ControlBannerButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(child: Text('Take control', style: grid.AppType.label())),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-            decoration: BoxDecoration(
-              border: Border.all(color: onAccent.withValues(alpha: 0.6)),
-              borderRadius: BorderRadius.circular(4),
+          Flexible(child: Text(label, style: grid.AppType.label())),
+          if (showReturnKey) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                border: Border.all(color: onAccent.withValues(alpha: 0.6)),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Semantics(
+                label: 'Return',
+                child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
+              ),
             ),
-            child: Semantics(
-              label: 'Return',
-              child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
-            ),
-          ),
+          ],
         ],
       ),
     );

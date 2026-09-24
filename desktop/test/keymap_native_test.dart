@@ -35,7 +35,7 @@ void main() {
             .cast<Map>();
         expect(
           rows.singleWhere(
-            (row) => (row['keys'] as List).join(' ') == 'cmd+o',
+            (row) => (row['keys'] as List).join(' ') == 'cmd+p',
           )['command'],
           'agent.open',
         );

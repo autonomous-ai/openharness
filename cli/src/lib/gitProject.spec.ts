@@ -9,6 +9,7 @@ import { placeholderBranch, sessionBranchSlug, worktreeFolderName } from './agen
 import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
+import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
 const exec = promisify(execFile)
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
@@ -57,6 +58,56 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await git('worktree', 'list', '--porcelain')).not.toContain('harness/')
     expect(await readGitProject(root)).toMatchObject({ isGit: false })
     expect(await readGitProject('relative/path')).toEqual({ error: 'INVALID_PATH' })
+  })
+
+  it('discovers a newly pushed branch without fetching objects, then fetches only on Start', async () => {
+    const remote = join(root, 'remote.git')
+    const clone = join(root, 'other computer')
+    await git('clone', '--bare', repo, remote)
+    await git('clone', '--no-local', '--single-branch', '--branch', 'main', remote, clone)
+    const there = async (...args: string[]) => (await exec('git', ['-C', clone, ...args])).stdout.trim()
+    await git('remote', 'add', 'origin', remote)
+    await git('switch', '-c', 'feat/toolbar-onboarding')
+    await writeFile(join(repo, 'src', 'value'), 'new remote work')
+    await git('commit', '-am', 'new work')
+    await git('push', 'origin', 'feat/toolbar-onboarding')
+    await writeFile(join(clone, 'src', 'value'), 'unsaved local work')
+    const refs = await there('show-ref')
+    expect((await readGitProject(clone) as any).branches.map((b: any) => b.name)).not.toContain('origin/feat/toolbar-onboarding')
+    const info = await readGitProject(clone, { refresh: true })
+    expect(info).toMatchObject({ refreshed: true, branch: 'main', branches: expect.arrayContaining([
+      { ref: 'refs/remotes/origin/feat/toolbar-onboarding', name: 'origin/feat/toolbar-onboarding', remote: true },
+    ]) })
+    expect(await there('show-ref')).toBe(refs)
+    expect(await readFile(join(clone, 'src', 'value'), 'utf8')).toBe('unsaved local work')
+    const path = await prepare('worktree', 'refs/remotes/origin/feat/toolbar-onboarding', clone,
+      { branchName: 'feat/toolbar-onboarding' })
+    expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('new remote work')
+    expect(await there('branch', '--show-current')).toBe('main')
+  })
+
+  it('keeps saved branches from unreachable remotes and refreshes the others', async () => {
+    const remote = join(root, 'remote.git')
+    await git('clone', '--bare', repo, remote)
+    await git('remote', 'add', 'origin', join(root, 'missing.git'))
+    await git('remote', 'add', 'upstream', remote)
+    const info = await readGitProject(repo, { refresh: true })
+    expect(info).toMatchObject({ refreshed: false, branches: expect.arrayContaining([
+      { ref: 'refs/remotes/origin/feature', name: 'origin/feature', remote: true },
+      { ref: 'refs/remotes/upstream/main', name: 'upstream/main', remote: true },
+    ]) })
+    expect(await git('branch', '--show-current')).toBe('main')
+  })
+
+  it('removes deleted remote choices after a successful lookup without changing saved refs', async () => {
+    const remote = join(root, 'remote.git')
+    await git('clone', '--bare', repo, remote)
+    await git('remote', 'add', 'origin', remote)
+    await exec('git', ['-C', remote, 'branch', '-D', 'feature'])
+    const info = await readGitProject(repo, { refresh: true }) as { branches: Array<{ name: string }> }
+    expect(info.branches.map(b => b.name)).toContain('feature')
+    expect(info.branches.map(b => b.name)).not.toContain('origin/feature')
+    expect(await git('show-ref', '--verify', 'refs/remotes/origin/feature')).toBeTruthy()
   })
 
   it('starts concurrent worktrees on distinct branches from the chosen ref and preserves dirty source files', async () => {
@@ -140,6 +191,31 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     await git('config', 'branch.sunny-owl.remote', 'origin')
     expect(await nameBranchAfterSession(pushed, 'Anything')).toBeNull()
     expect(await current(pushed)).toBe('sunny-owl')
+  })
+
+  it('waits through Codex rename statuses before naming the worktree after its conversation', async () => {
+    const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
+    const session = { engine: 'codex', sessionId: 'naming-test', codexHome: join(root, 'codex'), cwd: path }
+    await writeFile(join(path, 'src', 'value'), 'work in progress')
+    for (const status of ['Starting | quiet-owl', 'renaming... ⠹', 'renaming… ⠴']) {
+      const title = namingTitle(engineSessionTitle(session, status), session)
+      expect(await nameBranchAfterSession(path, title)).toBeNull()
+      expect(await current(path)).toBe('quiet-owl')
+      expect(await git('config', '--get', 'branch.quiet-owl.harness')).toBe('placeholder')
+    }
+
+    await mkdir(session.codexHome)
+    await writeFile(join(session.codexHome, 'session_index.jsonl'), JSON.stringify({
+      id: session.sessionId, thread_name: 'Discuss configurable harness agents',
+    }) + '\n')
+    const title = namingTitle(engineSessionTitle(session, 'renaming... ⠴'), session)
+    expect(await nameBranchAfterSession(path, title)).toBe('discuss-configurable-harness-agents')
+    expect(await current(path)).toBe('discuss-configurable-harness-agents')
+    expect(await git('config', '--get', 'branch.discuss-configurable-harness-agents.harness')).toBe('created')
+    expect(await git('rev-parse', 'discuss-configurable-harness-agents')).toBe(await git('rev-parse', 'feature'))
+    expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('work in progress')
+    expect(await nameBranchAfterSession(path, 'A later conversation title')).toBeNull()
+    expect(await current(path)).toBe('discuss-configurable-harness-agents')
   })
 
   it('checks out an existing branch as it is in a new worktree, once', async () => {

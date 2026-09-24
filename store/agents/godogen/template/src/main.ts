@@ -385,10 +385,17 @@ function reset() {
   }
   hud();
   positionRider();
+  if (mode === "play") resetPlayCamera();
   dispatchEvent(new CustomEvent("harness:timeline-reset"));
 }
 function positionRider() {
   rider.position.set(x, groundY(x, z) + jump, z);
+}
+function resetPlayCamera() {
+  camera.setTarget(new Vector3(x, groundY(x, z) + 2, z + 7));
+  camera.alpha = -Math.PI / 2;
+  camera.beta = 1.03;
+  camera.radius = 24;
 }
 function end(crashed: boolean) {
   running = false;
@@ -410,10 +417,7 @@ function setMode(value: Mode) {
   if (value === "play") {
     camera.detachControl();
     if (!running) reset();
-    camera.setTarget(new Vector3(x, groundY(x, z) + 2, z + 7));
-    camera.alpha = -Math.PI / 2;
-    camera.beta = 1.03;
-    camera.radius = 24;
+    resetPlayCamera();
   } else {
     if (!paused) camera.attachControl(canvas, true);
     camera.setTarget(new Vector3(0, 4, 22));

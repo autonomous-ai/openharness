@@ -13,6 +13,47 @@ const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/;
 export const text = (value, max = 240) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max) : '';
 export const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 
+/**
+ * The flag that reads a grid WITHOUT waking it (`grid` ≥ 0.3.49): the overview goes out with no
+ * credential, so a sleeping grid answers "asleep" at once instead of being started for a glance.
+ * Every automatic engines/models/stats read of a REMOTE grid carries it (lib/telemetry.mjs), always,
+ * with no version check — the binary `toolchain/grid.sh` resolves can change between two polls when
+ * the managed pin moves. A `grid` too old for it refuses the whole command with argparse's exit 2,
+ * which is loud and wakes nothing; the caller shows its last reading and never asks again without it.
+ *
+ * ⚠️ A cross-repo literal: the public CLI's `cli/remote_overview.NO_WAKE_FLAG`, pinned by its
+ * `tests/test_grid_reads_lockstep.py`, which finds it here by this exact quoted spelling.
+ */
+export const NO_WAKE = '--no-wake';
+/**
+ * The code beside `detail` when the platform says a grid is resting (grid-apis' proxy), carried to us
+ * in `grid`'s `--json` error envelope. Compared for EQUALITY and nothing else: any other refusal —
+ * codeless, stopped, master down, deleted — is a failed read and keeps today's handling.
+ * ⚠️ Cross-repo like NO_WAKE, and pinned the same way.
+ */
+export const ASLEEP_CODE = 'grid_asleep';
+/** The owner status of a grid the platform put to sleep (`grid info --json`'s `status`). Only the
+ *  grid's owner is shown a status; a member sees null and learns it from ASLEEP_CODE instead. */
+export const ASLEEP_STATE = 'asleep';
+/** argparse's exit status for an argument it does not know — how an old `grid` refuses NO_WAKE. */
+const USAGE_EXIT = 2;
+
+/** The `code` of `grid`'s JSON error envelope (`{"error": {"code": …, "message": …}}`, one line on
+ *  either stream), or null. A program branches on this; the sentence beside it is for people. */
+export function refusalCode(stdout, stderr) {
+  for (const chunk of [stderr, stdout]) {
+    for (const line of String(chunk || '').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{')) continue;
+      try {
+        const code = JSON.parse(trimmed)?.error?.code;
+        if (typeof code === 'string' && code) return code;
+      } catch { /* not an envelope */ }
+    }
+  }
+  return null;
+}
+
 export async function readJson(file, fallback, limit = 2 * 1024 * 1024) {
   try {
     if ((await stat(file)).size > limit) throw new Error('File is too large');
@@ -30,6 +71,39 @@ export async function atomicJson(file, value) {
     await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
     await rename(temporary, file);
   } finally { await unlink(temporary).catch(() => {}); }
+}
+
+/**
+ * The name a machine goes by in Harness Machines, read live from `harness machines --json` rows
+ * ([rows], as `discoverMachines` returns them), or null when Harness has none for it (an SSH target,
+ * or discovery failed). Live because the person renames machines: a name recorded at setup went stale
+ * the moment they did.
+ */
+export function harnessNameFor(machine, rows) {
+  if (!machine || !Array.isArray(rows)) return null;
+  const row = machine.transport === 'local' ? rows.find(r => r.current)
+    : machine.transport === 'harness' ? rows.find(r => r.machineId === machine.machineId) : null;
+  const name = typeof row?.name === 'string' ? row.name.trim() : '';
+  return name && !name.startsWith('-') && !/[\x00-\x1f]/.test(name) ? name : null;
+}
+
+/**
+ * [args] for `grid join` with `--name` set to [name], replacing any name the caller gave.
+ *
+ * ⚠️ Grid labels every engine with `--name`, and that label is what a person reads under the model in
+ * every picker. Left to the agent it was invented (`macbookpro-qwen3.6-35b`) or left off (Grid then
+ * takes the host name, `mac.lan`) — either way not the name Machines shows for the same computer. So
+ * the runner sets it. Anything that is not a join, or no name to set, passes through untouched.
+ */
+export function nameJoin(args, name) {
+  if (!name || args[0] !== 'join') return args;
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--name') { i++; continue; }
+    if (args[i].startsWith('--name=')) continue;
+    out.push(args[i]);
+  }
+  return [...out, '--name', name];
 }
 
 export function validateConfig(raw) {
@@ -51,7 +125,9 @@ export function validateConfig(raw) {
   // The controller is explicit, so editing the order of an inventory cannot redirect fleet reads.
   const controller = raw.controller || machines.find(m => m.transport === 'local')?.id || machines[0].id;
   if (!ids.has(controller)) throw new Error('controller must name a configured machine.');
-  return { spec: 1, mode: raw.mode, grid: raw.grid, controller, machines, preferences: { goal: text(raw.preferences?.goal, 500) || DEFAULT_CONFIG.preferences.goal, keepFreeMemoryGb: number(raw.preferences?.keepFreeMemoryGb) ?? 4, allowAutomaticChanges: raw.preferences?.allowAutomaticChanges === true } };
+  // The account's own grid, as Harness named it — what "my grid" means. Recorded, never chosen here.
+  const personalGrid = typeof raw.personalGrid === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,239}$/.test(raw.personalGrid) ? raw.personalGrid : null;
+  return { spec: 1, mode: raw.mode, grid: raw.grid, personalGrid, controller, machines, preferences: { goal: text(raw.preferences?.goal, 500) || DEFAULT_CONFIG.preferences.goal, keepFreeMemoryGb: number(raw.preferences?.keepFreeMemoryGb) ?? 4, allowAutomaticChanges: raw.preferences?.allowAutomaticChanges === true } };
 }
 export async function readConfig(workspace) { return validateConfig(await readJson(join(workspace, 'grid-fleet.json'), DEFAULT_CONFIG)); }
 
@@ -72,7 +148,7 @@ export function invocation(machine, args, env = process.env, thinking) {
   return { file: 'ssh', args: [...argv, machine.host, remote], env: childEnv };
 }
 
-export function execute(machine, args, { timeoutMs = 15_000, inherit = false, env = process.env, signal, thinking } = {}) {
+export function execute(machine, args, { timeoutMs = 15_000, inherit = false, env = process.env, signal, thinking, onOutput } = {}) {
   if (thinking !== undefined && typeof thinking !== 'boolean') throw new Error('Thinking must be a boolean.');
   if (machine.transport === 'harness') {
     if (!Array.isArray(args) || args.some(a => typeof a !== 'string' || a.includes('\0'))) throw new Error('Grid arguments must be strings without NUL bytes.');
@@ -93,13 +169,17 @@ export function execute(machine, args, { timeoutMs = 15_000, inherit = false, en
       killTimer = setTimeout(() => { child.kill('SIGKILL'); finish({ ok: false, code: 124, error: message }); }, 1500);
     };
     const abort = () => stop('Grid command was interrupted; verify the engine state before retrying.');
-    try { child = spawn(call.file, call.args, { env: call.env, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] }); }
+    try { child = spawn(call.file, call.args, { env: call.env, stdio: inherit && !onOutput ? 'inherit' : ['ignore', 'pipe', 'pipe'] }); }
     catch (error) { finish({ ok: false, code: 127, error: error.message }); return; }
     let stopping = false;
     const capture = which => chunk => {
       if (stopping) return;
       if (stdout.length + stderr.length + chunk.length > 4 * 1024 * 1024) { stopping = true; stop('Grid output exceeded 4 MiB.'); return; }
       if (which === 'out') stdout += chunk; else stderr += chunk;
+      if (onOutput) {
+        onOutput(chunk);
+        if (inherit) (which === 'out' ? process.stdout : process.stderr).write(chunk);
+      }
     };
     child.stdout?.setEncoding('utf8').on('data', capture('out'));
     child.stderr?.setEncoding('utf8').on('data', capture('err'));
@@ -111,17 +191,69 @@ export function execute(machine, args, { timeoutMs = 15_000, inherit = false, en
   });
 }
 
+/**
+ * The CLI's own reason for a failed read: a JSON error envelope (`{"error":
+ * {"message": ...}}`, printed to either stream) or the last human-readable
+ * stderr line. Surfaced so the viewer names the cause — "could not reach grid
+ * X: ..." — instead of a bare exit code. Credentials never reach the browser:
+ * tokens and userinfo are redacted before the message is stored.
+ */
+export function cliDetail(stdout, stderr) {
+  for (const chunk of [stdout, stderr]) {
+    for (const line of String(chunk || '').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{')) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        const message = typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message;
+        if (typeof message === 'string' && message.trim()) return cleanDetail(message);
+      } catch { /* not a JSON envelope */ }
+    }
+  }
+  // Otherwise the human line: stderr first (the CLI reports failures there), then stdout.
+  for (const chunk of [stderr, stdout]) {
+    const lines = String(chunk || '').split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('{'));
+    if (lines.length) return cleanDetail(lines[lines.length - 1]);
+  }
+  return null;
+}
+
+export function cleanDetail(message) {
+  return text(String(message)
+    .replace(/([?&]token=)[^&\s]+/gi, '$1…')
+    .replace(/(^[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, '$1…@'), 280);
+}
+
+/**
+ * Run a `--json` read and classify it. A failure carries two things a caller may branch on beside the
+ * sentence: `refusal`, the envelope's code (ASLEEP_CODE is the one this package reads), and
+ * `outdated`, true when the binary refused an argument it does not know — argparse's exit 2 with its
+ * usage line, which is how a `grid` older than NO_WAKE answers it. The usage line is required as well
+ * as the status because a Harness machine's own RPC also answers 2 for a request it would not start.
+ */
 export async function gridJson(machine, mode, args, options) {
   const result = await execute(machine, [`--${mode}`, ...args, '--json'], options);
   if (!result.ok) {
+    const refusal = refusalCode(result.stdout, result.stderr);
+    const outdated = result.code === USAGE_EXIT && /\busage:|unrecognized arguments/i.test(`${result.stderr}\n${result.stdout}`);
+    const fail = error => ({ ok: false, error, refusal, outdated });
     const blocked = /(?:could not reach|network|socket)[\s\S]{0,600}(?:operation not permitted|EPERM|denied|blocked)/i.test(`${result.stdout}\n${result.stderr}`);
-    return { ok: false, error: blocked ? 'Network access was blocked by the agent sandbox. Use fleet status for viewer observations, or request scoped network approval before retrying this Grid command.' : result.code === 127 ? result.error : `grid ${args[0]} failed (${result.code}). Run it in the agent terminal for details.` };
+    if (blocked) return fail('Network access was blocked by the agent sandbox. Use fleet status for viewer observations, or request scoped network approval before retrying this Grid command.');
+    if (result.code === 127) return fail(result.error);
+    // Exit 1 carries the reason on stderr (e.g. a dead relay URL): repeat it so the
+    // viewer and the agent see "could not reach grid …", not just an exit code.
+    const detail = cliDetail(result.stdout, result.stderr);
+    return fail(detail ? `grid ${args[0]} failed (${result.code}): ${detail}` : `grid ${args[0]} failed (${result.code}). Run it in the agent terminal for details.`);
   }
   try {
     const value = JSON.parse(result.stdout);
-    if (value?.error) return { ok: false, error: `grid ${args[0]} reported an error.` };
+    if (value?.error) {
+      const detail = typeof value.error === 'string' ? cleanDetail(value.error) : cleanDetail(value.error.message || 'Grid reported an error.');
+      const refusal = typeof value.error?.code === 'string' && value.error.code ? value.error.code : null;
+      return { ok: false, error: `grid ${args[0]} reported: ${detail}`, refusal, outdated: false };
+    }
     return { ok: true, value };
-  } catch { return { ok: false, error: `grid ${args[0]} did not return valid JSON.` }; }
+  } catch { return { ok: false, error: `grid ${args[0]} did not return valid JSON.`, refusal: null, outdated: false }; }
 }
 
 /**
@@ -135,7 +267,11 @@ export async function gridJson(machine, mode, args, options) {
  */
 export async function gridSelect(machine, mode, grid, options, { run = execute, readJson = gridJson } = {}) {
   const written = await run(machine, [`--${mode}`, 'use', grid], options);
-  if (!written.ok) return { ok: false, error: written.code === 127 ? written.error : `grid use failed (${written.code}). Run it in the agent terminal for details.` };
+  if (!written.ok) {
+    if (written.code === 127) return { ok: false, error: written.error };
+    const detail = cliDetail(written.stdout, written.stderr);
+    return { ok: false, error: detail ? `grid use failed (${written.code}): ${detail}` : `grid use failed (${written.code}). Run it in the agent terminal for details.` };
+  }
   const read = await readJson(machine, mode, ['use'], options);
   const active = typeof read.value?.active === 'string' ? read.value.active : null;
   if (read.ok && active !== null && active !== grid) return { ok: false, error: `grid use answered, but the active grid is ${active}, not ${grid}.` };
@@ -157,18 +293,54 @@ export async function operations(workspace) {
   });
 }
 
+// Only the public status receipt goes through the app's existing project-file
+// reader. Internal state and endpoint credentials stay hidden under .harness.
+export async function publishSetup(workspace, record) {
+  const file = join(stateDir(workspace), 'setup.json');
+  const current = await readJson(file, null).catch(() => null);
+  if (current?.id !== record.id && current?.startedAt > record.startedAt) return;
+  if (record.stage === 'checking' && current?.stage !== 'checking' &&
+      ['running', 'done'].includes(current?.phase)) return;
+  const updatedAt = now();
+  await atomicJson(file, { spec: 1, ...record, updatedAt });
+  const { id, stage, phase, model, grid, progressPercent } = record;
+  await atomicJson(join(workspace, 'model-setup.json'), {
+    spec: 1, id, stage, phase, model, grid, progressPercent, updatedAt,
+  });
+}
+
 export async function runTracked(workspace, machine, mode, args, options = {}) {
   const command = args.find(a => !a.startsWith('-')) || 'overview';
   const op = { id: randomUUID(), machine: machine.id, command: `grid ${text(command, 40)}`, phase: 'running', startedAt: now(), endedAt: null, exitCode: null, pid: process.pid };
   const file = join(stateDir(workspace), 'operations', `${op.id}.json`);
-  await atomicJson(file, op);
+  const stage = command === 'pull' ? 'downloading' : command === 'join' || (command === 'engine' && args.includes('install')) ? 'starting' : ['device-info', 'catalog', 'ctx'].includes(command) ? 'checking' : null;
+  let pending = Promise.resolve(), lastProgress = 0, outputTail = '';
+  const publish = () => {
+    const snapshot = { ...op };
+    pending = pending.then(async () => {
+      await atomicJson(file, snapshot);
+      if (stage) await publishSetup(workspace, { ...snapshot, stage });
+    });
+    return pending;
+  };
+  await publish();
+  const heartbeat = setInterval(() => { void publish().catch(() => {}); }, 5000);
+  heartbeat.unref();
   try {
-    const result = await execute(machine, [`--${mode}`, ...args], { inherit: true, timeoutMs: 30 * 60_000, ...options });
+    const result = await execute(machine, [`--${mode}`, ...args], { inherit: true, timeoutMs: 30 * 60_000, ...options,
+      ...(stage === 'downloading' && machine.transport !== 'harness' ? { onOutput(chunk) {
+        outputTail = (outputTail + chunk).slice(-1024);
+        const match = [...outputTail.matchAll(/(?:^|[\s(])([0-9]+(?:\.[0-9]+)?)%/g)].at(-1);
+        if (match) op.progressPercent = Math.min(100, Number(match[1]));
+        if (match && Date.now() - lastProgress > 500) { lastProgress = Date.now(); void publish().catch(() => {}); }
+      } } : {}),
+    });
     Object.assign(op, { phase: result.ok ? 'done' : result.code === 124 ? 'interrupted' : 'failed', endedAt: now(), exitCode: result.code });
-    await atomicJson(file, op);
+    await publish();
     return result;
   } catch (error) {
-    await atomicJson(file, { ...op, phase: 'failed', endedAt: now(), exitCode: 1 });
+    Object.assign(op, { phase: 'failed', endedAt: now(), exitCode: 1 });
+    await publish();
     throw error;
-  }
+  } finally { clearInterval(heartbeat); }
 }

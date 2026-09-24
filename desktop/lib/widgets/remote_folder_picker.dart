@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
+
+import '../terminal/terminal_text.dart';
 
 import '../shared/widgets/labeled_field.dart';
 
@@ -19,12 +22,30 @@ Future<String?> showRemoteFolderPicker(
   required AppNotifier notifier,
   required String machineId,
   String? initialPath,
+  bool terminal = false,
 }) => showAppDialog<String>(
   context: context,
-  builder: (context) => _RemoteFolderPickerDialog(
-    notifier: notifier,
-    machineId: machineId,
-    initialPath: initialPath,
+  builder: (context) => ListenableBuilder(
+    listenable: terminalFontStore,
+    builder: (context, _) {
+      final theme = Theme.of(context);
+      return Theme(
+        data: terminal
+            ? theme.copyWith(
+                textTheme: theme.textTheme.apply(
+                  fontSizeFactor:
+                      terminalFontStore.size / grid.AppType.monoSize,
+                ),
+              )
+            : theme,
+        child: _RemoteFolderPickerDialog(
+          notifier: notifier,
+          machineId: machineId,
+          initialPath: initialPath,
+          terminal: terminal,
+        ),
+      );
+    },
   ),
 );
 
@@ -33,11 +54,13 @@ class _RemoteFolderPickerDialog extends StatefulWidget {
     required this.notifier,
     required this.machineId,
     this.initialPath,
+    this.terminal = false,
   });
 
   final AppNotifier notifier;
   final String machineId;
   final String? initialPath;
+  final bool terminal;
 
   @override
   State<_RemoteFolderPickerDialog> createState() =>
@@ -52,11 +75,12 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
   String? _path, _requestedPath, _error;
   List<String> _entries = [];
   bool _loading = true, _truncated = false;
+  bool get _blocking => _loading && (_path == null || _requestedPath != _path);
   int _request = 0, _edit = 0, _selected = -1;
   double _rowHeight = 36;
 
   bool get _canSelect =>
-      !_loading &&
+      !_blocking &&
       _error == null &&
       _path != null &&
       _location.text.trim() == _path;
@@ -94,7 +118,11 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
     super.dispose();
   }
 
-  Future<void> _load(String? path, {String? highlight}) async {
+  Future<void> _load(
+    String? path, {
+    String? highlight,
+    bool refreshing = false,
+  }) async {
     if (_loading && _request > 0 && path == _requestedPath) return;
     final request = ++_request;
     final edit = _edit;
@@ -102,7 +130,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
       _loading = true;
       _error = null;
       _requestedPath = path;
-      if (_location.text != (path ?? '')) {
+      if (!refreshing && _location.text != (path ?? '')) {
         _location.text = path ?? '';
         _location.selection = TextSelection.collapsed(
           offset: _location.text.length,
@@ -129,6 +157,9 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
       });
       return;
     }
+    final keep = refreshing && _selected >= 0 && _selected < _entries.length
+        ? _entries[_selected]
+        : highlight;
     setState(() {
       _loading = false;
       _path = resolved;
@@ -143,10 +174,10 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
       _truncated = result['truncated'] == true;
       _selected = _entries.isEmpty
           ? -1
-          : math.max(0, _entries.indexOf(highlight ?? ''));
+          : math.max(0, _entries.indexOf(keep ?? ''));
       // A reply may canonicalize a path, but must not replace a newer draft or
       // disturb a selection/caret when the field already contains that path.
-      if (edit == _edit && _location.text != resolved) {
+      if (!refreshing && edit == _edit && _location.text != resolved) {
         _location.value = TextEditingValue(
           text: resolved,
           selection: TextSelection(
@@ -161,6 +192,14 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
     });
   }
 
+  void _refresh() {
+    if (_loading) return;
+    final highlighted = _selected >= 0 && _selected < _entries.length
+        ? _entries[_selected]
+        : null;
+    unawaited(_load(_path, highlight: highlighted, refreshing: true));
+  }
+
   void _openPath() {
     final path = _location.text.trim();
     if (path.isEmpty || (_loading && path == _requestedPath)) return;
@@ -168,7 +207,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
   }
 
   void _up() {
-    if (_loading) return;
+    if (_blocking) return;
     final parent = _parentPath;
     if (parent != null) _load(parent, highlight: _paths.basename(_path!));
   }
@@ -178,7 +217,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
   }
 
   void _openSelected() {
-    if (!_loading && _selected >= 0 && _selected < _entries.length) {
+    if (!_blocking && _selected >= 0 && _selected < _entries.length) {
       _load(_paths.join(_path!, _entries[_selected]));
     }
   }
@@ -218,7 +257,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
         key == LogicalKeyboardKey.arrowUp ||
         key == LogicalKeyboardKey.home ||
         key == LogicalKeyboardKey.end) {
-      if (!_loading && _entries.isNotEmpty) {
+      if (!_blocking && _entries.isNotEmpty) {
         setState(() {
           _selected = switch (key) {
             LogicalKeyboardKey.home => 0,
@@ -255,7 +294,16 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final scale = MediaQuery.textScalerOf(context);
-    _rowHeight = math.max(36, scale.scale(grid.AppType.bodySize) * 1.35 + 16);
+    _rowHeight = math.max(
+      36,
+      scale.scale(
+                widget.terminal
+                    ? terminalFontStore.size
+                    : grid.AppType.bodySize,
+              ) *
+              1.35 +
+          16,
+    );
     final listHeight =
         (MediaQuery.sizeOf(context).height - 320 - scale.scale(50)).clamp(
           120.0,
@@ -308,10 +356,18 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
             includeRepeats: false,
           ): _select,
           const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): _up,
+          SingleActivator(LogicalKeyboardKey.keyR, meta: mac, control: !mac):
+              _refresh,
         },
         child: AlertDialog(
           title: const Text('Choose a folder'),
           scrollable: true,
+          // Material's 20 here left MORE air between the title and the
+          // machine line below it (16) than between that line and the next
+          // section (12), so the one line that belongs to the title floated
+          // between the two blocks instead of sitting under it. 10 groups it
+          // with its title and the section below starts a clear 16 later.
+          contentPadding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
           content: SizedBox(
             width: 520,
             child: Column(
@@ -322,8 +378,14 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                   'On ${machine ?? 'the remote machine'}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                const SizedBox(height: 12),
-                const FieldLabel('Folder path'),
+                const SizedBox(height: 16),
+                if (widget.terminal)
+                  Text('Folder path', style: terminalTextStyle())
+                else
+                  const FieldLabel('Folder path'),
+                // The label was flush against its field, while the Folders
+                // header gets ~8 from the icon buttons beside it centring.
+                const SizedBox(height: 6),
                 Focus(
                   onKeyEvent: (node, event) {
                     if (event is KeyDownEvent &&
@@ -333,7 +395,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                         !HardwareKeyboard.instance.isMetaPressed &&
                         !HardwareKeyboard.instance.isShiftPressed &&
                         _location.value.composing.isCollapsed &&
-                        !_loading &&
+                        !_blocking &&
                         _entries.isNotEmpty) {
                       _foldersFocus.requestFocus();
                       _revealSelection();
@@ -347,9 +409,9 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                     focusNode: _locationFocus,
                     autofocus: true,
                     // A path: typed and pasted, so set to be copied exactly.
-                    style: grid.AppType.mono(
-                      color: grid.AppPalette.textPrimary,
-                    ),
+                    style: widget.terminal
+                        ? terminalTextStyle(color: grid.AppPalette.textPrimary)
+                        : grid.AppType.mono(color: grid.AppPalette.textPrimary),
                     decoration: InputDecoration(
                       hintText: 'Enter a full folder path…',
                       suffixIcon: IconButton(
@@ -391,10 +453,15 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                       icon: const Icon(Icons.home_outlined, size: 18),
                     ),
                     IconButton(
+                      tooltip: 'Refresh folders',
+                      onPressed: _loading ? null : _refresh,
+                      icon: const Icon(Icons.refresh, size: 18),
+                    ),
+                    IconButton(
                       tooltip: mac
                           ? 'Up one folder (⌥↑)'
                           : 'Up one folder (Alt+↑)',
-                      onPressed: _loading || _parentPath == null ? null : _up,
+                      onPressed: _blocking || _parentPath == null ? null : _up,
                       icon: const Icon(Icons.arrow_upward, size: 18),
                     ),
                   ],
@@ -418,7 +485,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                       ),
                     ),
                     clipBehavior: Clip.antiAlias,
-                    child: _loading
+                    child: _blocking
                         ? const _FolderRowsSkeleton()
                         : _entries.isEmpty
                         ? Center(

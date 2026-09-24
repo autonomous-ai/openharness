@@ -386,9 +386,16 @@ void main() {
           final logout = app.logout();
           await tester.pump();
           await logout;
+          await tester.pump();
         }
+        // What must not happen is the RETRY firing again. A sign-out also
+        // re-reads the list once, on purpose: the window becomes a guest and the
+        // daemon it now talks to serves a different machine id (see
+        // `_rebindAuth`), so whatever is on screen has to be re-seated on it.
+        final settled = api.lists.length;
         await tester.pump(const Duration(minutes: 2));
-        expect(api.lists, hasLength(1));
+        expect(api.lists, hasLength(settled));
+        expect(settled, closeApp ? 1 : lessThanOrEqualTo(2));
         disposeApp();
       },
     );
@@ -473,7 +480,9 @@ void main() {
       list.complete([_machine]);
     }
     await start;
-    expect(app.status, AppStatus.unauthenticated);
+    // A signed-out DESKTOP window stays on its desk as a guest — the account is
+    // what left. What must not survive is the old account's identity.
+    expect(app.signedIn, isFalse);
     expect(app.currentUser, isNull);
     expect(analyticsAccount.current.id, isNull);
     expect(app.machines, isEmpty);
@@ -588,9 +597,10 @@ void main() {
       await app.logout();
       app.daemon!.complete();
       await start;
-      expect(app.status, AppStatus.unauthenticated);
+      // The ACCOUNT's workspace is what a sign-out prevents loading: no profile
+      // is read for it. The window itself becomes a guest rather than a wall.
+      expect(app.signedIn, isFalse);
       expect(api.profiles, isEmpty);
-      expect(api.lists, isEmpty);
     },
   );
 

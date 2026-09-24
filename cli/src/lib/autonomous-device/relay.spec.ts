@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceRelay } from './relay.js'
 import { AutonomousDeviceService } from './service.js'
 import { randomUUID } from 'node:crypto'
-function fixture() {
+function fixture(store?: import('./store.js').AutonomousDeviceStore) {
   let role = 'device', identity: string | null = 'trusted-device'
   const submit = vi.fn(), cancel = vi.fn(() => true), send = vi.fn()
   const crypto = { sessionRole: () => role as 'device' | 'web', sessionIdentity: () => identity,
     unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
     wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) }
-  const service = new AutonomousDeviceService({ machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
+  const service = new AutonomousDeviceService({ store, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
   const remoteRevoke = vi.fn()
   const relay = new AutonomousDeviceRelay(crypto, send, service, 'machine', undefined, remoteRevoke)
   const request = (payload: Record<string, unknown>) => relay.handle('conn', { type: 'autonomous_device_request', payload: { __e2e: payload } })
@@ -59,4 +59,28 @@ describe('Autonomous device existing E2EE relay seam', () => {
     await f.request({ type: 'pair.revoke', requestId: randomUUID(), extra: true })
     expect(f.remoteRevoke).not.toHaveBeenCalled()
   })
+})
+
+it('Store uses the same device-only encrypted hello gate and never exposes generic app operations', async () => {
+  const call = vi.fn(async (_identity: string, _req: Record<string, unknown>) => ({ packages: [], nextOffset: null, machineId: 'machine' }))
+  const store = { request: call } as unknown as import('./store.js').AutonomousDeviceStore
+  const f = fixture(store)
+  await f.request({ type: 'store.list', requestId: randomUUID() })
+  expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { error: { code: 'HELLO_REQUIRED' } } } })
+  expect(call).not.toHaveBeenCalled()
+  f.setRole('web')
+  await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+  await f.request({ type: 'store.list', requestId: randomUUID() })
+  expect(call).not.toHaveBeenCalled()
+  f.setRole('device')
+  await f.relay.handle('conn', { type: 'autonomous_device_request', payload: { type: 'store.list' } })
+  expect(call).not.toHaveBeenCalled()
+  await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+  expect(f.send.mock.calls.some(([, frame]) => frame.payload.__e2e.capabilities?.includes('agent.prepare'))).toBe(true)
+  await f.request({ type: 'store.list', requestId: randomUUID() })
+  expect(call).toHaveBeenCalledOnce()
+  expect(call.mock.calls[0]?.[0]).toBe('trusted-device')
+  await f.request({ type: 'agent_create', requestId: randomUUID(), cwd: '/tmp', engine: 'claude' })
+  expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { error: { code: 'UNSUPPORTED_CAPABILITY' } } } })
+  expect(call).toHaveBeenCalledOnce()
 })

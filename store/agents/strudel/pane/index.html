@@ -34,9 +34,11 @@
   <div id="take-live" hidden><span id="take-live-note">Recording your mix and code changes.</span><input id="marker-note" maxlength="240" placeholder="Name a moment…" aria-label="Moment note"><button id="add-marker">Add marker</button></div>
   <div id="take-draft" hidden>
     <div class="draft-head"><strong>Your take</strong><span id="draft-details"></span><span class="grow"></span><button id="discard-take">Discard</button></div>
+    <p id="take-level" role="status" hidden></p>
     <canvas id="take-wave" aria-label="Recorded stereo waveform" title="Left and right channels · waveform fitted to view · click to seek"></canvas>
-    <audio id="take-audio" controls preload="metadata"></audio>
+    <audio id="take-audio" controls preload="metadata" aria-label="Recorded performance"></audio>
     <div id="take-markers"></div>
+    <div id="take-loop" hidden><button id="loop-moment" aria-pressed="false" disabled>Loop moment</button><span id="loop-details"></span></div>
     <div class="keep-row"><input id="take-name" maxlength="100" placeholder="Name this take" aria-label="Take name"><button id="keep-take">Keep take</button><a id="download-draft" download="performance.wav">WAV</a></div>
   </div>
   <div id="take-shelf" hidden><div id="take-list"></div><p id="take-empty">Your performances will live here, with their audio, code and moments.</p></div>

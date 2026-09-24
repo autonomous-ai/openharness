@@ -22,6 +22,7 @@ Keep the `harness:ready` event and `window.harnessGame` bridge. Report ready onl
 has rendered and its required assets loaded. Preserve play/explore, pause, restart, and keyboard
 support. Every visible button must work. Do not call the task done based on compilation alone:
 test input, movement, the goal, losing/restarting where appropriate, and browser runtime errors.
+Reset the follow camera with the player on restart; the first frame should show where to play.
 
 Preserve `captureState()` and `restoreState()` for Rewind and saved playtest moments. Capture
 complete JSON game state; validate snapshots before mutation and restore the visuals as well

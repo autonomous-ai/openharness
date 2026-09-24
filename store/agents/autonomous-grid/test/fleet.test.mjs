@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { atomicJson, DEFAULT_CONFIG, execute, gridSelect, invocation, operations, runTracked, validateConfig } from '../lib/fleet.mjs';
+import { atomicJson, cliDetail, DEFAULT_CONFIG, execute, gridJson, gridSelect, harnessNameFor, invocation, nameJoin, operations, runTracked, validateConfig } from '../lib/fleet.mjs';
 
 const temporary = async t => { const dir=await mkdtemp(join(tmpdir(),'grid-harness-test-'));t.after(()=>rm(dir,{recursive:true,force:true}));return dir; };
 test('inventory accepts explicit targets and refuses duplicates, SSH options and malformed paths',()=>{
@@ -50,6 +50,28 @@ test('invalid and abandoned operation files cannot crash the viewer',async t=>{
   const rows=await operations(dir);assert.equal(rows.length,1);assert.equal(rows[0].phase,'interrupted');
 });
 
+test('failed Grid reads repeat the CLI reason instead of a bare exit code', async t => {
+  const dir = await temporary(t), file = join(dir, 'grid');
+  // A dead relay: JSON envelope plus a human line on stderr, exit 1 — the shape the
+  // real CLI prints when a grid_url no longer resolves.
+  await writeFile(file, '#!/bin/sh\necho \'{"error": {"code": null, "message": "Could not reach grid forge: [Errno 8] nodename nor servname provided, or not known"}}\' >&2\necho "Could not reach grid forge: [Errno 8] nodename nor servname provided, or not known" >&2\nexit 1\n', { mode: 0o755 });
+  const result = await gridJson({ transport: 'local', gridBinary: file }, 'remote', ['engines', 'forge']);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /grid engines failed \(1\): Could not reach grid forge/);
+});
+
+test('error envelopes on success and plain stderr lines are surfaced, tokens are not', async t => {
+  const dir = await temporary(t), file = join(dir, 'grid');
+  await writeFile(file, '#!/bin/sh\necho \'{"error": "relay refused https://host.test/relay?token=secret-value"}\'\nexit 0\n', { mode: 0o755 });
+  const reported = await gridJson({ transport: 'local', gridBinary: file }, 'remote', ['models', 'forge']);
+  assert.equal(reported.ok, false);
+  assert.match(reported.error, /grid models reported: relay refused/);
+  assert.doesNotMatch(reported.error, /secret-value/);
+  assert.match(reported.error, /token=…/);
+  assert.equal(cliDetail('', ''), null);
+  assert.equal(cliDetail('{"error": {"message": "boom"}}', ''), 'boom');
+  assert.equal(cliDetail('noise', 'last human line'), 'last human line');
+});
 test('gridSelect runs the write form of use as a plain command and confirms it by reading the selection back',async()=>{
   // `grid use <name> --json` prints a sentence, not JSON — parsed as JSON, every successful switch
   // from the viewer read as "did not return valid JSON". The write is plain; the read confirms.
@@ -64,4 +86,25 @@ test('gridSelect runs the write form of use as a plain command and confirms it b
   // A failed write is a failure, with the exit code, before any read.
   const failed=await gridSelect(machine,'remote','x',{},{run:async()=>({ok:false,code:2,stdout:'',stderr:'no such grid'}),readJson:async()=>{throw new Error('must not read');}});
   assert.equal(failed.ok,false);assert.match(failed.error,/grid use failed \(2\)/);
+});
+test('a join is labelled with the machine name Harness shows, whatever the agent passed',()=>{
+  // REGRESSION: the agent joined as `macbookpro-qwen3.6-35b` on a Mac Machines calls `macbok test local`.
+  assert.deepEqual(nameJoin(['join','g','--serve','m.gguf','--name','macbookpro-qwen3.6-35b','--max-concurrency','1'],'macbok test local'),
+    ['join','g','--serve','m.gguf','--max-concurrency','1','--name','macbok test local']);
+  assert.deepEqual(nameJoin(['join','g','--name=invented','--serve','m.gguf'],'M2'),['join','g','--serve','m.gguf','--name','M2']);
+  // Left off, Grid takes the host name (`mac.lan`): the runner fills it in.
+  assert.deepEqual(nameJoin(['join','g','--serve','m.gguf'],'M2'),['join','g','--serve','m.gguf','--name','M2']);
+  // Not a join, or no name to give: untouched.
+  assert.deepEqual(nameJoin(['leave','g','--engine','x','--name','y'],'M2'),['leave','g','--engine','x','--name','y']);
+  assert.deepEqual(nameJoin(['join','g','--name','kept'],null),['join','g','--name','kept']);
+});
+test('the name is read live for the machine the command targets',()=>{
+  const rows=[{machineId:'here',name:'macbok test local',current:true},{machineId:'studio',name:' Studio ',current:false}];
+  assert.equal(harnessNameFor({id:'local',transport:'local'},rows),'macbok test local');
+  assert.equal(harnessNameFor({id:'s',transport:'harness',machineId:'studio'},rows),'Studio');
+  // SSH targets have no Harness name, and discovery that failed says nothing.
+  assert.equal(harnessNameFor({id:'gpu',transport:'ssh',host:'gpu'},rows),null);
+  assert.equal(harnessNameFor({id:'local',transport:'local'},[]),null);
+  // A name that would read as a flag or break an argument is not passed.
+  for(const name of ['--all','a\nb','  '])assert.equal(harnessNameFor({id:'local',transport:'local'},[{current:true,name}]),null);
 });

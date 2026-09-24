@@ -232,9 +232,72 @@ typedef GitProcessStarter = Future<Process> Function(
   Map<String, String> environment,
 );
 
-/// Listing choices never checks out a branch or fetches from a remote.
+final _branchRefreshes = <String, Future<Map<String, List<String>?>>>{};
+
+/// Coalesce concurrent pickers, including linked worktrees of the same repo.
+/// Ask for names only; downloading objects is deferred until Start.
+Future<Map<String, List<String>?>> _refreshRemoteBranches(
+  String source, {
+  GitProcessStarter? startProcess,
+}) async {
+  final common = await _git(source, [
+    'rev-parse',
+    '--git-common-dir',
+  ], startProcess: startProcess);
+  if (common.code != 0) {
+    throw const RepositoryCloneException('Git is unavailable.');
+  }
+  final key = await _realPath(
+    p.isAbsolute(common.output) ? common.output : p.join(source, common.output),
+  );
+  if (_branchRefreshes[key] case final pending?) return pending;
+  final refresh = () async {
+    final remotes = await _git(source, ['remote'], startProcess: startProcess);
+    if (remotes.code != 0) {
+      throw const RepositoryCloneException('Git is unavailable.');
+    }
+    final results = await Future.wait([
+      for (final remote
+          in remotes.output.split('\n').where((s) => s.isNotEmpty))
+        () async {
+          try {
+            final result = await _git(
+              source,
+              ['ls-remote', '--heads', '--', remote],
+              timeout: const Duration(seconds: 8),
+              startProcess: startProcess,
+            );
+            return MapEntry(
+              remote,
+              result.code == 0
+                  ? [
+                      for (final line in result.output.split('\n'))
+                        if (line.split('\t') case [_, final ref]
+                            when ref.startsWith('refs/heads/'))
+                          ref.substring('refs/heads/'.length),
+                    ]
+                  : null,
+            );
+          } on RepositoryCloneException {
+            return MapEntry<String, List<String>?>(remote, null);
+          }
+        }(),
+    ]);
+    return Map<String, List<String>?>.fromEntries(results);
+  }();
+  _branchRefreshes[key] = refresh;
+  try {
+    return await refresh;
+  } finally {
+    _branchRefreshes.remove(key);
+  }
+}
+
+/// Read cached choices, or explicitly refresh remote branches first. Refresh
+/// failures retain usable local results and are reported separately.
 Future<Map<String, dynamic>> readLocalGitProject(
   String source, {
+  bool refresh = false,
   GitProcessStarter? startProcess,
 }) async {
   Future<({int code, String output})> git(List<String> arguments) =>
@@ -244,6 +307,17 @@ Future<Map<String, dynamic>> readLocalGitProject(
     final root = await git(['rev-parse', '--show-toplevel']);
     if (root.code != 0) {
       return root.code == 128 ? {'isGit': false} : {'error': 'GIT_UNAVAILABLE'};
+    }
+    Map<String, List<String>?>? discovered;
+    if (refresh) {
+      try {
+        discovered = await _refreshRemoteBranches(
+          source,
+          startProcess: startProcess,
+        );
+      } on RepositoryCloneException {
+        /* Keep saved choices available offline. */
+      }
     }
     final results = await Future.wait([
       git(['symbolic-ref', '--quiet', 'HEAD']),
@@ -265,10 +339,25 @@ Future<Map<String, dynamic>> readLocalGitProject(
           key.substring(7, key.length - kHarnessBranchKey.length - 1),
     };
     if (results[1].code != 0) return {'error': 'GIT_UNAVAILABLE'};
-    final refs = {
+    final branches = <Map<String, dynamic>>[
       for (final line in results[1].output.split('\n'))
-        if (line.split('\t') case [final ref, _, '']) ref,
-    };
+        if (line.split('\t') case [final ref, final name, ''])
+          {'ref': ref, 'name': name, 'remote': ref.startsWith('refs/remotes/')},
+    ];
+    for (final entry
+        in discovered?.entries ?? const <MapEntry<String, List<String>?>>[]) {
+      final names = entry.value;
+      if (names == null) continue;
+      final prefix = 'refs/remotes/${entry.key}/';
+      branches.removeWhere(
+        (branch) => (branch['ref'] as String).startsWith(prefix),
+      );
+      branches.addAll([
+        for (final name in names)
+          {'ref': '$prefix$name', 'name': '${entry.key}/$name', 'remote': true},
+      ]);
+    }
+    final refs = {for (final branch in branches) branch['ref']};
     // Where new work starts by default: the remote's default branch, as a
     // clone names it, else its main or master.
     final defaultRef = [
@@ -299,6 +388,10 @@ Future<Map<String, dynamic>> readLocalGitProject(
     }
     return {
       'isGit': true,
+      if (refresh)
+        'refreshed':
+            discovered != null &&
+            discovered.values.every((names) => names != null),
       'root': root.output,
       'branch': results[0].code == 0
           ? results[0].output.replaceFirst('refs/heads/', '')
@@ -307,17 +400,15 @@ Future<Map<String, dynamic>> readLocalGitProject(
       'mainBranch': ?mainBranch,
       'defaultRef': ?defaultRef,
       'branches': [
-        for (final line in results[1].output.split('\n'))
-          if (line.split('\t') case [final ref, final name, ''])
-            {
-              'ref': ref,
-              'name': name,
-              'remote': ref.startsWith('refs/remotes/'),
-              'worktree': ?checkedOut[ref],
-              if (ref.startsWith('refs/heads/') &&
-                  (marked.contains(name) || name.startsWith('harness/')))
-                'harness': true,
-            },
+        for (final branch in branches)
+          {
+            ...branch,
+            'worktree': ?checkedOut[branch['ref']],
+            if (branch['remote'] == false &&
+                (marked.contains(branch['name']) ||
+                    (branch['name'] as String).startsWith('harness/')))
+              'harness': true,
+          },
       ],
     };
   } on RepositoryCloneException {
@@ -367,7 +458,8 @@ Future<String> prepareGitProject(
   }
   // A new branch for the folder itself: [branchRef] names it and does not exist.
   final creating = !worktree && branchName != null && !existingBranch;
-  if (branchRef != null && !creating) {
+  final remote = worktree && !existingBranch ? _remoteBranch(branchRef) : null;
+  if (branchRef != null && !creating && remote == null) {
     final ref = await git(['show-ref', '--verify', '--hash', '--', branchRef]);
     if (ref.code != 0) {
       throw const RepositoryCloneException(
@@ -379,7 +471,6 @@ Future<String> prepareGitProject(
   // remote branch is fetched; a local one is fetched against its upstream and
   // the newer of the two taken, so nothing only the local one has is lost.
   // Offline, slow or refused, it starts from what is here.
-  final remote = worktree && !existingBranch ? _remoteBranch(branchRef) : null;
   var start = existingBranch
       ? 'refs/heads/$branchName'
       : creating
@@ -586,6 +677,24 @@ Future<String> prepareGitProject(
     throw const RepositoryCloneException(
       'Could not create a worktree folder. Check folder permissions, then retry.',
     );
+  }
+  if (!existingBranch && remote != null && remote.branch == branch) {
+    // Single-branch clones need a tracking rule for this branch. Add only
+    // the selected branch, at Start, never while reading search results.
+    final key = 'remote.${remote.remote}.fetch';
+    final configured = await git(['config', '--get-all', key]);
+    final mappings = configured.output
+        .split('\n')
+        .map((ref) => ref.replaceFirst(RegExp(r'^\+'), ''));
+    if (!mappings.contains(remote.refspec.substring(1)) &&
+        !mappings.contains('refs/heads/*:refs/remotes/${remote.remote}/*')) {
+      final configured = await git(['config', '--add', key, remote.refspec]);
+      if (configured.code != 0) {
+        throw const RepositoryCloneException(
+          'Could not set up branch tracking. Check Git permissions, then retry.',
+        );
+      }
+    }
   }
   final result = await git(
     existingBranch

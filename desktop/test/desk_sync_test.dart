@@ -13,6 +13,7 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/terminal/terminal_session.dart';
 
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 
@@ -198,6 +199,105 @@ void main() {
   });
 
   group('the window and the desk', () {
+    for (final destinationFirst in [false, true]) {
+      for (final closeSource in [false, true]) {
+        test(
+          'a remote pane move preserves its terminal (destination first: $destinationFirst, source closed: $closeSource)',
+          () async {
+            final api = _DeskApi();
+            final app = createApp()..api = api;
+            addTearDown(app.dispose);
+            final sent = <String>[];
+            final session =
+                TerminalSession(
+                    machineId: 'm',
+                    agentId: 'a0',
+                    agentName: 'Agent 0',
+                    engineId: 'codex',
+                    send: (type, _) async {
+                      sent.add(type);
+                      return true;
+                    },
+                    sendBinary: (_) async => true,
+                  )
+                  ..status = TerminalSessionStatus.controlling
+                  ..streamId = 'existing-stream';
+            session.terminal.write('output before the move');
+            final moved = app.adoptSessionForTest(session);
+            final source = app.activeSwarm;
+            app.newSwarm(name: 'Destination');
+            final destination = app.activeSwarm;
+            app.selectSwarm(source.id);
+            await app.deskStartForTest();
+            final tabs = [
+              if (!closeSource) tab(source.id),
+              tab(
+                destination.id,
+                name: 'Destination',
+                custom: true,
+                agents: ['a0'],
+              ),
+            ];
+            api.doc = DeskDoc(
+              revision: api.doc!.revision + 1,
+              tabs: destinationFirst ? tabs.reversed.toList() : tabs,
+            );
+
+            await app.deskFetchForTest();
+
+            expect(destination.panes.single, same(moved));
+            expect(moved.session, same(session));
+            expect(session.streamId, 'existing-stream');
+            expect(
+              session.terminal.buffer.getText(),
+              contains('output before the move'),
+            );
+            expect(
+              sent.where(
+                (type) => type == 'terminal_close' || type == 'terminal_open',
+              ),
+              isEmpty,
+            );
+          },
+        );
+      }
+    }
+
+    test(
+      'a remote move changing the focused pane does not claim terminal control',
+      () async {
+        final api = _DeskApi();
+        final app = createApp()..api = api;
+        addTearDown(app.dispose);
+        await app.addAgentToSwarm('m', 'a0');
+        await app.addAgentToSwarm('m', 'a1');
+        final source = app.activeSwarm;
+        app.newSwarm(name: 'Destination');
+        final destination = app.activeSwarm;
+        app.selectSwarm(source.id);
+        app.focusPane(source.panes.first.id);
+        await app.deskStartForTest();
+        expect(app.paneFocusByUser, isTrue);
+        api.doc = DeskDoc(
+          revision: api.doc!.revision + 1,
+          tabs: [
+            tab(source.id, agents: ['a1']),
+            tab(
+              destination.id,
+              name: 'Destination',
+              custom: true,
+              agents: ['a0'],
+            ),
+          ],
+        );
+
+        await app.deskFetchForTest();
+
+        expect(app.focusedPane?.agentId, 'a1');
+        expect(app.paneFocusByUser, isFalse);
+      },
+    );
+
     test('joins the desk: its own tabs get desk ids and are seeded, the desk\'s tabs appear as intent', () async {
       final api = _DeskApi()
         ..doc = DeskDoc(

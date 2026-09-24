@@ -240,13 +240,112 @@ void main() {
     // A pane-level notice (offline, unlinked) already explains itself.
     await pump(
       tester,
-      notice: (
+      notice: terminalNotice(
         label: 'Offline',
         icon: Icons.cloud_off,
         detail: 'Test host is offline.',
       ),
     );
     expect(takenOverTitle, findsNothing);
+    await finish(tester);
+  });
+
+  testWidgets('a notice with a way out gets the band, and its button works', (
+    tester,
+  ) async {
+    // The header's chip says the same in a corner at 11pt; this is where it can
+    // be read, and where the one action lives.
+    var checked = 0;
+    await pump(
+      tester,
+      notice: terminalNotice(
+        label: 'Not confirmed',
+        icon: Icons.help_outline,
+        detail:
+            'The engine is still running here; the daemon has not confirmed '
+            'which conversation it reopened.',
+        banner: true,
+        actionLabel: 'Check again',
+        onAction: () => checked++,
+      ),
+    );
+    // Twice: the header's chip, and the band that can be read.
+    expect(find.text('Not confirmed'), findsNWidgets(2));
+    expect(find.textContaining('still running here'), findsWidgets);
+    final button = find.widgetWithText(FilledButton, 'Check again');
+    expect(button, findsOneWidget);
+    // ⏎ belongs to taking the stream back; this action has no chord behind it.
+    expect(
+      find.descendant(of: button, matching: find.byIcon(Icons.keyboard_return)),
+      findsNothing,
+    );
+    await tester.tap(button);
+    await tester.pump();
+    expect(checked, 1);
+    await finish(tester);
+  });
+
+  testWidgets(
+    'an actionable notice that did not ask for the band stays a chip',
+    (tester) async {
+      // Link required, offline, unavailable: all have a button already, and a
+      // band on every one of those would cost rows in every tile.
+      await pump(
+        tester,
+        notice: terminalNotice(
+          label: 'Link required',
+          icon: Icons.link_off,
+          detail: 'Test host needs linking.',
+          actionLabel: 'Link',
+          onAction: () {},
+        ),
+      );
+      expect(find.byType(FilledButton), findsNothing);
+      expect(find.text('Link required'), findsOneWidget);
+      await finish(tester);
+    },
+  );
+
+  testWidgets('a notice with nothing to do stays in the header alone', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      notice: terminalNotice(
+        label: 'Offline',
+        icon: Icons.cloud_off,
+        detail: 'Test host is offline.',
+      ),
+    );
+    expect(find.byType(FilledButton), findsNothing);
+    // The chip carries it alone; the band is for what a person can answer.
+    expect(find.text('Offline'), findsOneWidget);
+    await finish(tester);
+  });
+
+  testWidgets('a noticed pane keeps its own band when the stream is taken', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      notice: terminalNotice(
+        label: 'Not confirmed',
+        icon: Icons.help_outline,
+        detail: 'Still checking.',
+        banner: true,
+        actionLabel: 'Check again',
+        onAction: () {},
+      ),
+    );
+    takeOver();
+    await tester.pump();
+    // A noticed pane is not "blocked" in the takeover sense — `_inputBlocked`
+    // excludes it, because nothing the takeover band offers would help a pane
+    // whose machine or launch is the problem. So the strip stays the notice's,
+    // and there is still exactly one band.
+    expect(takenOverTitle, findsNothing);
+    expect(find.text('Not confirmed'), findsNWidgets(2));
+    expect(find.widgetWithText(FilledButton, 'Check again'), findsOneWidget);
     await finish(tester);
   });
 
@@ -631,7 +730,7 @@ void main() {
     app.stateOf('m')!.nodeOnline = false;
     await pump(
       tester,
-      notice: (
+      notice: terminalNotice(
         label: 'Offline',
         icon: Icons.cloud_off,
         detail: 'Test host is offline.',

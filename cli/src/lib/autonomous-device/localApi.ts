@@ -24,6 +24,7 @@ const routes: Record<string, string> = {
 const errorStatus: Record<string, number> = {
   BAD_REQUEST: 400, UNKNOWN_DEVICE: 404, ALREADY_PAIRED: 409, BUSY: 409,
   DEVICE_NOT_FOUND: 404, BAD_CODE: 400, NO_INTENT: 409, STALE_PAIR: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503, TIMEOUT: 504, RATE_LIMITED: 429, EXPIRED: 410, CANCELLED: 409,
+  LOCAL_NETWORK_BLOCKED: 503,
 }
 
 function failure(status: number, code: string, message: string): AutonomousDeviceLocalResponse {

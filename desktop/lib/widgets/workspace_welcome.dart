@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../core/app_version.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/harness_background.dart';
@@ -8,39 +7,82 @@ import 'swarm_wallpaper.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
+import '../state/workspace_onboarding.dart';
 import '../terminal/terminal_text.dart';
 
 /// A quiet terminal welcome. Opening a command is always an explicit action.
 class WorkspaceWelcome extends StatefulWidget {
-  const WorkspaceWelcome({super.key, required this.onCommand});
+  const WorkspaceWelcome({super.key, required this.onCommand, this.onboarding});
 
   final ValueChanged<String> onCommand;
+  final WorkspaceOnboarding? onboarding;
 
   @override
   State<WorkspaceWelcome> createState() => _WorkspaceWelcomeState();
 }
 
 class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
-  late final _version = runningAppVersion().catchError((_) => 'development');
+  // Keep the last check visible for this visit. A new tab gets a new widget
+  // key and chooses its everyday shortcuts after all milestones are complete.
+  bool? _showOnboarding;
+  String? _scope;
 
-  static const _actions = [
-    ('agent.new', 'New Harness', 'to start a new harness'),
-    ('agent.open', 'Open Harness', 'to open a harness'),
-    ('swarm.new', 'New Tab', 'to open a new tab'),
-    ('app.store', 'Harness Store', 'to explore the store'),
+  static const _onboardingActions = [
+    (
+      'agent.new',
+      'New Harness',
+      'to start your first harness',
+      OnboardingStep.harnesses,
+    ),
+    (
+      'machines.list',
+      'Machines',
+      'to manage it from anywhere',
+      OnboardingStep.machines,
+    ),
+    (
+      'models.list',
+      'Models',
+      'to power it with a local model',
+      OnboardingStep.models,
+    ),
   ];
+  static const _everydayActions = [
+    ('agent.new', 'New Harness', 'to start a new harness', null),
+    ('agent.open', 'Open Harness', 'to open a harness', null),
+    ('app.store', 'Harness Store', 'to browse the harness store', null),
+  ];
+
+  @override
+  void didUpdateWidget(WorkspaceWelcome oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.onboarding != widget.onboarding) _showOnboarding = null;
+  }
 
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([terminalFontStore, appearancePrefsStore]),
+      listenable: Listenable.merge([
+        terminalFontStore,
+        appearancePrefsStore,
+        widget.onboarding,
+      ]),
       builder: (context, _) => _buildWelcome(context),
     );
   }
 
   Widget _buildWelcome(BuildContext context) {
     grid.AppTheme.watch(context);
+    final onboarding = widget.onboarding;
+    if (_scope != onboarding?.scope) {
+      _scope = onboarding?.scope;
+      _showOnboarding = null;
+    }
+    if (onboarding?.loaded == true) {
+      _showOnboarding ??= !onboarding!.complete;
+    }
+    final showOnboarding = onboarding != null && (_showOnboarding ?? true);
     final palette = grid.AppTheme.palette.value;
     final background = appearancePrefsStore.value.background;
     final hasArtwork = background != HarnessBackground.plain;
@@ -59,11 +101,14 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
     );
     final keymap = KeymapTheme.of(context)?.current ?? harnessDefaultKeymap;
     final rows = [
-      for (final (command, label, description) in _actions)
+      for (final (command, label, description, step)
+          in showOnboarding ? _onboardingActions : _everydayActions)
         (
           command: command,
           label: label,
           description: description,
+          step: step,
+          completed: step != null && onboarding?.completed(step) == true,
           hint: keymap
               .bindingsFor(KeymapContext.workspace)
               .where((binding) => binding.command == command)
@@ -82,12 +127,16 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       return width;
     }
 
+    final progressWidth = showOnboarding ? widthOf('✓  ') : 0.0;
     final prefixWidth = widthOf('press  ');
     final keyWidth = rows
         .map((row) => widthOf('${row.hint ?? row.label}    '))
         .reduce((a, b) => a > b ? a : b);
-    final descriptionWidth = widthOf('to start a new harness');
+    final descriptionWidth = rows
+        .map((row) => widthOf(row.description))
+        .reduce((a, b) => a > b ? a : b);
     final line = MediaQuery.textScalerOf(context).scale(style.fontSize!) * 1.5;
+    final footerInset = line + 52;
     return Material(
       key: const ValueKey('workspace-welcome'),
       color: grid.AppPalette.swarmWelcome,
@@ -99,77 +148,101 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
             child: SwarmWallpaper(background: background),
           ),
           LayoutBuilder(
-            builder: (context, constraints) => SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: (constraints.maxHeight - 48).clamp(
-                    0,
-                    double.infinity,
+            // Keep the text centered when it fits, but let large text scroll
+            // above the fixed Customize button rather than underneath it.
+            builder: (context, constraints) => Padding(
+              padding: EdgeInsets.only(bottom: footerInset),
+              child: SingleChildScrollView(
+                key: const ValueKey('welcome-scroll'),
+                padding: EdgeInsets.fromLTRB(24, footerInset + 24, 24, 24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: (constraints.maxHeight - footerInset * 2 - 48)
+                        .clamp(0, double.infinity),
                   ),
-                ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: prefixWidth + keyWidth + descriptionWidth,
-                    ),
-                    child: DefaultTextStyle(
-                      style: style,
-                      textAlign: TextAlign.center,
-                      child: Column(
-                        key: const ValueKey('workspace-welcome-text'),
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('HARNESS'),
-                          SizedBox(height: line),
-                          FutureBuilder<String>(
-                            future: _version,
-                            builder: (context, snapshot) =>
-                                Text('version ${snapshot.data ?? '…'}'),
-                          ),
-                          const Text('Open source software and hardware'),
-                          SizedBox(height: line * 2),
-                          for (final row in rows)
-                            TextButton(
-                              key: ValueKey('welcome-${row.command}'),
-                              onPressed: () => widget.onCommand(row.command),
-                              style: TextButton.styleFrom(
-                                foregroundColor: ink,
-                                textStyle: style,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 2,
-                                ),
-                                minimumSize: Size.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                shape: const RoundedRectangleBorder(),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  SizedBox(
-                                    width: prefixWidth,
-                                    child: Text(
-                                      row.hint == null ? 'click' : 'press',
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: keyWidth,
-                                    child: Text(
-                                      row.hint ?? row.label,
-                                      style: TextStyle(color: accent),
-                                      textAlign: TextAlign.left,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      row.description,
-                                      textAlign: TextAlign.left,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth:
+                            progressWidth +
+                            prefixWidth +
+                            keyWidth +
+                            descriptionWidth,
+                      ),
+                      child: DefaultTextStyle(
+                        style: style,
+                        textAlign: TextAlign.center,
+                        child: Column(
+                          key: const ValueKey('workspace-welcome-text'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              showOnboarding
+                                  ? 'Harness like a boss.'
+                                  : 'Follow your curiosity.',
+                              key: const ValueKey('welcome-tagline'),
                             ),
-                        ],
+                            SizedBox(height: line),
+                            for (final row in rows)
+                              TextButton(
+                                key: ValueKey('welcome-${row.command}'),
+                                onPressed: () => widget.onCommand(row.command),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: ink,
+                                  textStyle: style,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 2,
+                                  ),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  shape: const RoundedRectangleBorder(),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (row.step != null)
+                                      SizedBox(
+                                        width: progressWidth,
+                                        child: Text(
+                                          row.completed ? '✓' : '○',
+                                          key: ValueKey(
+                                            'welcome-progress-${row.step!.name}',
+                                          ),
+                                          semanticsLabel: row.completed
+                                              ? 'Completed'
+                                              : 'Not completed',
+                                          textAlign: TextAlign.left,
+                                          style: TextStyle(
+                                            color: row.completed ? accent : ink,
+                                          ),
+                                        ),
+                                      ),
+                                    SizedBox(
+                                      width: prefixWidth,
+                                      child: Text(
+                                        row.hint == null ? 'click' : 'press',
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: keyWidth,
+                                      child: Text(
+                                        row.hint ?? row.label,
+                                        style: TextStyle(color: accent),
+                                        textAlign: TextAlign.left,
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        row.description,
+                                        textAlign: TextAlign.left,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

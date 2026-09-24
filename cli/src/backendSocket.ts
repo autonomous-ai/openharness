@@ -1,3 +1,4 @@
+import { readGitPullRequest } from './lib/gitPullRequest.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { AutonomousDeviceRelay } from './lib/autonomous-device/relay.js'
@@ -26,17 +27,22 @@ import { env } from './config/env.js'
 import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
 import { VERSION } from './version.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
+import { AgentStopError } from './lib/stopAgentService.js'
 import { ENGINES, PROCESS_ENGINES, isTerminalEngine, type AgentEngine, type ProcessEngine } from './engines/types.js'
 import { listDir } from './lib/fsBrowse.js'
 import { linkCodexProfile, listCodexProfiles } from './lib/codexProfiles.js'
 import { gridCliPresence } from './lib/gridExec.js'
 import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGridFleetRequest } from './lib/gridFleetRpc.js'
+import { LocalModels } from './lib/localModels.js'
+import { ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { gridCapableEngines, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
-import { listAllGridModels, resolveGridTarget } from './lib/gridModels.js'
+import { forgetGridModels, gridInventory, listAllGridModels, onGridModelsChanged, resolveGridTarget, type GridSection } from './lib/gridModels.js'
+import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
 import { probeEngines } from './lib/engineProbe.js'
+import { readMachineResources } from './lib/machineResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
@@ -44,6 +50,7 @@ import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.j
 import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
+import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { installedDsh, listInstalledDsh } from './dsh/installed.js'
 import { OrchestratorService } from './orchestrator/service.js'
 import { OrchestratorError } from './orchestrator/model.js'
@@ -51,7 +58,7 @@ import { orchestratorRequest } from './orchestrator/wire.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { engineLabel } from './lib/agentNames.js'
-import { DSH_ID_RE } from './dsh/manifest.js'
+import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
 import type { DshInstallProgress } from './dsh/install.js'
 import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshRemoveId, dshRemoveReply } from './dsh/wire.js'
@@ -358,8 +365,47 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
   }
 }
 
+/** What `grid_models_list` answers and `grid_models_changed` pushes — one shape, so a window parses both
+ *  with one reader. `gridName` and `models` keep naming the own grid alone, for an app that predates
+ *  `grids`; each section's `state`, `seenAt` and `lastKnownAge` are additive. */
+function gridModelsPayload(gridName: string | null, grids: GridSection[]): Record<string, unknown> {
+  return {
+    gridName,
+    models: grids.find((g) => g.own)?.models ?? [],
+    grids,
+    // Which engines a Local model can be offered to at all. Static per CLI version — it is
+    // the set of launch contracts in `gridLaunch.ts` — and answered here, beside the list,
+    // so the picker can say "Cursor runs only on its own login" instead of offering a row
+    // whose retarget the daemon would refuse. An older app ignores the field; an older
+    // daemon omits it, which the app reads as "offer everything", as before.
+    localModelEngines: gridCapableEngines(),
+    supportsModelLaunch: true,
+    // Whether this MACHINE has a `grid` to run at all — `managed`, `path` or `missing` —
+    // as distinct from `gridName`, which is about the account. The Local model dialog was
+    // gating on the account alone and starting an agent whose second step is `grid`; this
+    // is what lets it, and the picker, say so first. An older app ignores the field.
+    gridCli: gridCliPresence(),
+  }
+}
+
 export class BackendSocket {
   private readonly gridFleet = new GridFleetRpc()
+  // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
+  // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
+  // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
+  private readonly localModels = new LocalModels({
+    stateDir: join(env.ADAPTER_DATA_DIR, 'local-models'),
+    machineName: () => this.machineDisplayName,
+    inventory: gridInventory,
+    onChanged: () => { forgetGridModels(); void this.pushGridModels() },
+  })
+  /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
+   *  until the first one arrives. */
+  private machineDisplayName: string | null = null
+  /** A read the window did not ask for changed what a picker would show: tell the window
+   *  (`grid_models_changed`), so its one picture stays current without polling. */
+  private readonly stopGridModelsPush = onGridModelsChanged(() => { void this.pushGridModels() })
+  private readonly apiConnections = new ApiConnections(env.ADAPTER_DATA_DIR)
   private ws: WebSocket | null = null
   private connecting = false
   /** A 401 on the upgrade is being answered with a token refresh; that refresh owns the next connect. */
@@ -750,6 +796,24 @@ export class BackendSocket {
   /** Which grid this machine's agents can be pointed at — for `harness status` and the models RPC. */
   gridName(): string | null { return this.harnessGridName }
 
+  /** This machine's name as the Machines list shows it — what a model it serves is labelled with. */
+  machineName(): string | null { return this.machineDisplayName }
+
+  /** The account's private grid, resolved the way the models RPC resolves it — for a harness
+   *  workspace that must be told which grid is "yours" rather than work it out or ask. */
+  privateGridName(): Promise<string | null> { return this.resolveGridName() }
+
+  /** `grid_models_changed` to the windows on this computer: the same payload `grid_models_list` answers,
+   *  built from the pictures as they stand — no read is started to build it, so a push never causes one. */
+  private async pushGridModels(): Promise<void> {
+    if (this.closed || this.localClients.size === 0) return
+    try {
+      const gridName = await this.resolveGridName()
+      const grids = await listAllGridModels(gridName, { refresh: false })
+      this.sendLocal({ type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids) })
+    } catch { /* the next ask answers the same thing */ }
+  }
+
   /**
    * The account's private grid: the backend's word when it gave one, else what this machine can
    * work out for itself (`lib/gridDerive.ts`). A backend that predates `machine_meta.gridName`
@@ -917,6 +981,7 @@ export class BackendSocket {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.stopGridModelsPush()
     this.orchestratorService?.stop()
     this.viewerForwarder.closeAll()
     if (this.heartbeat) this.heartbeat.stop()
@@ -1094,6 +1159,12 @@ export class BackendSocket {
   handleLocalFrame(connId: string, frame: Frame): void {
     if (!this.localClients.has(connId)) return
     this.enqueueDown(frame, connId, 'local')
+  }
+
+  /** The window's focused agent on this local connection — its terminal gets the short output window. */
+  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+    if (!this.localClients.has(connId)) return
+    this.terminalStreams?.setFocusedAgent(connId, agentId)
   }
 
   /** Route an authenticated local terminal frame without applying cloud E2EE. */
@@ -1282,7 +1353,7 @@ export class BackendSocket {
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = `${type}_result`
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1385,7 +1456,7 @@ export class BackendSocket {
     // than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
+    if (env.LOG_FRAMES && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && type !== 'orchestrator' && !SHARE_REQUEST_TYPES.has(type)) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => this.emitReply(connId, t, rid, p)
@@ -1485,12 +1556,20 @@ export class BackendSocket {
       if ('gridName' in meta) {
         this.harnessGridName = typeof meta.gridName === 'string' && meta.gridName.trim() ? meta.gridName.trim() : null
       }
+      // The same rule for the name: a frame that does not carry it leaves it as it was.
+      if ('name' in meta) this.machineDisplayName = typeof name === 'string' && name.trim() ? name.trim() : null
       this.onMachineMeta?.(typeof name === 'string' && name.trim() ? name.trim() : null)
       return
     }
 
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
+
+    if (type === 'api_connections') {
+      if (!local) { reply(type, requestId, { error: 'LOCAL_ONLY', detail: 'Manage APIs on this computer.' }); return }
+      reply(type, requestId, apiConnectionsRequest(this.apiConnections, payload))
+      return
+    }
 
     // Same-host only until remote viewer transport and remote task ownership exist.
     // Refuse before parsing project content; never send it to the relay as plaintext.
@@ -1518,6 +1597,24 @@ export class BackendSocket {
 
     try {
       switch (type) {
+        case 'machine_resources':
+          // Sampling CPU must not hold up typing or other machine requests.
+          void readMachineResources()
+            .then(resources => reply(type, requestId, { ...resources }))
+            .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
+          return
+        case 'grid_fleet_models_list':
+        case 'grid_fleet_model_start':
+        case 'grid_fleet_model_stop': {
+          // A daemon-owned operation survives panel closure and a lost reply.
+          // Keep hardware/catalog/network reads off the ordered terminal queue.
+          void this.resolveGridName().then(async grid => type === 'grid_fleet_models_list'
+            ? this.localModels.list(grid, payload.refresh === true)
+            : this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_start' ? 'start' : 'stop'))
+            .then(result => reply(type, requestId, { ...result }))
+            .catch(() => reply(type, requestId, { error: 'Models are unavailable. Try again.' }))
+          return
+        }
         case 'grid_fleet_capabilities':
           reply(type, requestId, { protocol: GRID_FLEET_PROTOCOL, gridCli: gridCliPresence(), maxTimeoutMs: GRID_FLEET_MAX_TIMEOUT_MS, thinkingControl: true })
           return
@@ -1826,7 +1923,8 @@ export class BackendSocket {
           // and `models` keep naming the own grid alone, for an app that predates `grids`.
           //
           // DETACHED from this connection's ordered RPC chain, like `engines_probe`: it waits on a
-          // grid reconcile (up to 6s), then `grid` spawns that each go to the network (up to 30s).
+          // grid reconcile (up to 6s), then a `grid ls` spawn and — for a grid this daemon has never
+          // read — up to 4s of its first read (`gridModels.ts`); every other grid answers from its picture.
           // The desktop asks for it in the same breath as `terminal_capabilities` and `agents_list`
           // on every connect, and awaited here it held both behind it — with no network, past the
           // app's 10s request timeout, on which the app forces a reconnect and asks all three again.
@@ -1835,9 +1933,8 @@ export class BackendSocket {
           // until the wifi came back. Request ids make the reply safe to land out of order.
           //
           // One computation at a time: detached, a second ask that lands while the first is still
-          // out (the app re-asks on every connect, and its own 12s timeout is shorter than the grid
-          // spawns' 30s) would start more `grid` processes for the same answer. Later askers share
-          // the one in flight; the cache in listGridModels covers the settled case.
+          // out (the app re-asks on every connect) would spawn another `grid ls` for the same answer.
+          // Later askers share the one in flight; each grid's reads are single-flight in the service.
           void (async () => {
             const gridName = await this.resolveGridName()
             const inFlight = this.gridModelsInFlight
@@ -1849,23 +1946,7 @@ export class BackendSocket {
                     if (this.gridModelsInFlight?.gridName === gridName) this.gridModelsInFlight = null
                   }),
                 }).grids
-            const grids = await listing
-            reply(type, requestId, {
-              gridName,
-              models: grids.find((g) => g.own)?.models ?? [],
-              grids,
-              // Which engines a Local model can be offered to at all. Static per CLI version — it is
-              // the set of launch contracts in `gridLaunch.ts` — and answered here, beside the list,
-              // so the picker can say "Cursor runs only on its own login" instead of offering a row
-              // whose retarget the daemon would refuse. An older app ignores the field; an older
-              // daemon omits it, which the app reads as "offer everything", as before.
-              localModelEngines: gridCapableEngines(),
-              // Whether this MACHINE has a `grid` to run at all — `managed`, `path` or `missing` —
-              // as distinct from `gridName`, which is about the account. The Local model dialog was
-              // gating on the account alone and starting an agent whose second step is `grid`; this
-              // is what lets it, and the picker, say so first. An older app ignores the field.
-              gridCli: gridCliPresence(),
-            })
+            reply(type, requestId, gridModelsPayload(gridName, await listing))
           })().catch(() => reply(type, requestId, { error: 'GRID_MODELS_FAILED' }))
           return
         }
@@ -2108,6 +2189,8 @@ export class BackendSocket {
           // Absent is the ordinary case and stays indistinguishable from a client that predates grids;
           // present-but-malformed is refused here rather than half-applied at launch, because an agent
           // that quietly ran on the engine's own login would look like it worked.
+          const model = parseNewAgentModel(engine, payload)
+          if (model.state === 'invalid') { reply(type, requestId, { error: 'INVALID_GRID', detail: model.detail }); return }
           const grid = parseGridLaunchOverride(payload.grid)
           if (grid.state === 'invalid') { reply(type, requestId, { error: 'INVALID_GRID', detail: grid.reason }); return }
           if (terminal && grid.state === 'ok') { reply(type, requestId, { error: 'INVALID_GRID', detail: 'a terminal has no engine to point at a grid' }); return }
@@ -2137,8 +2220,8 @@ export class BackendSocket {
             if (installed.manifest.kind === 'viewer') {
               reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} is a viewer package, not an agent` }); return
             }
-            if (installed.manifest.engine !== engine) {
-              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} runs on ${installed.manifest.engine}, not ${engine}` }); return
+            if (!dshSupportedEngines(installed.manifest).includes(engine)) {
+              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${engine} is not compatible` }); return
             }
             dsh = installed.id
           }
@@ -2196,13 +2279,19 @@ export class BackendSocket {
             name,
             agent,
           }
+          const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
           if (creationId !== undefined) {
             // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
             // New agent action carries a new one. Detach so a status check can pass a slow create
             // on this connection, just as engines_probe is detached above.
             const create = this.onCreateAgent
             try {
-              void this.agentCreations.run(creationId, creationFingerprint(projectFolder ? { ...input, projectFolder } : input), async () => {
+              void this.agentCreations.run(creationId, creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput), async () => {
+                if (model.state === 'ok') {
+                  const target = await resolveNewAgentModel(model.selection).catch(() => null)
+                  if (!target) return { state: 'failed', error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
+                  input.grid = target
+                }
                 let preparedFolder: string | undefined
                 if (projectFolder) {
                   try { preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
@@ -2231,6 +2320,11 @@ export class BackendSocket {
             return
           }
           // Clients predating receipts retain their existing response shape.
+          if (model.state === 'ok') {
+            const target = await resolveNewAgentModel(model.selection).catch(() => null)
+            if (!target) { reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }); return }
+            input.grid = target
+          }
           const result = await this.onCreateAgent(input)
           // `detail` carries the underlying cause (tmux's own message) so the person who clicked
           // Create can read it, rather than having to open a log on the machine that failed.
@@ -2298,7 +2392,13 @@ export class BackendSocket {
         case 'agent_delete': {
           const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
           if (!target) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
-          await this.onDeleteAgent?.(target)
+          if (!this.onDeleteAgent) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          try { await this.onDeleteAgent(target) }
+          catch (error) {
+            if (!(error instanceof AgentStopError)) throw error
+            reply(type, requestId, { error: error.code, detail: error.message })
+            return
+          }
           reply(type, requestId, { deleted: true })
           return
         }
@@ -2391,9 +2491,17 @@ export class BackendSocket {
           return
         }
 
+        case 'git_pull_request': {
+          const id = payload.agentId
+          const agent = typeof id === 'string' ? registry.resolve(id) : undefined
+          if (!agent?.cwd) { reply(type, requestId, { status: 'unavailable' }); return }
+          void readGitPullRequest(agent.cwd).then(result => reply(type, requestId, result))
+          return
+        }
+
         case 'git_project_info': {
           const path = typeof payload.path === 'string' ? payload.path : ''
-          void readGitProject(path)
+          void readGitProject(path, { refresh: payload.refresh === true })
             .then(result => reply(type, requestId, result))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
@@ -2575,7 +2683,8 @@ export class BackendSocket {
   }
 
   private async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
-    const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null })
+    const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null,
+      tokenUsage: agentTokenUsage.get(s) })
     return {
       ...frame,
       status: 'stopped',
@@ -2589,6 +2698,7 @@ export class BackendSocket {
   /** Map a registered tmux session onto the web's Project shape (tabs in ProjectTabs). */
   private toProject(s: RegisteredSession): Promise<AgentFrame> {
     return agentFrame(s, {
+      tokenUsage: agentTokenUsage.get(s),
       selectedModel: this.runtimeProfileProvider?.(s) ?? null,
       terminalAvailable: registry.terminalAvailable(s.agentId),
       dsh: this.dshFrameProvider?.(s) ?? null,

@@ -407,6 +407,55 @@ async function tailBytes(path: string, maxBytes: number): Promise<string> {
 }
 
 const CLAUDE_CONTINUATION_TAIL_BYTES = 4 * 1024
+/** Enough of a continuation to see whether anybody ever spoke in it. Its first turn is within a few
+ *  lines of the top — the records before it are bookkeeping (mode, file history, title, agent name). */
+const CLAUDE_CONTINUATION_HEAD_BYTES = 256 * 1024
+
+async function headBytes(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, 'r')
+  try {
+    const length = Math.min((await handle.stat()).size, maxBytes)
+    if (length <= 0) return ''
+    const buffer = Buffer.alloc(length)
+    await handle.read(buffer, 0, length, 0)
+    return buffer.toString('utf-8')
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * Whether a transcript holds a CONVERSATION, rather than being the file Claude opens for a session
+ * nobody has spoken in yet.
+ *
+ * `claude` writes the same `continued-in` marker for a BACKGROUND session as for a rollover, and the
+ * file it points at then holds two bookkeeping lines (`ai-title`, `agent-name`) and never grows,
+ * while the real conversation goes on in the original file. Following that marker moved an agent onto
+ * an empty session: its tile went quiet, and the conversation archived when the engine exited was the
+ * empty one — Open then asked `claude --resume <background id>`, which the CLI refuses outright
+ * ("is running as a background session … run `claude attach`"). Measured on one machine: of nine
+ * `continued-in` markers, three named a background session and every one of those files had exactly
+ * these two lines and no turn.
+ */
+async function hasConversationTurn(path: string): Promise<boolean> {
+  let head: string
+  try {
+    head = await headBytes(path, CLAUDE_CONTINUATION_HEAD_BYTES)
+  } catch {
+    return false
+  }
+  for (const line of head.split('\n')) {
+    if (!line.trim() || (!line.includes('"user"') && !line.includes('"assistant"'))) continue
+    try {
+      const record = JSON.parse(line) as { type?: unknown }
+      if (record.type === 'user' || record.type === 'assistant') return true
+    } catch { /* a line cut by the read bound, or one this version does not know */ }
+  }
+  // Nothing in the head, but more file than we read: a continuation can open on a `file-history-snapshot`
+  // large enough to push the first turn past the bound, and the thing being ruled out is two short
+  // lines. Anything this size is a conversation, so the bound must never be what refuses one.
+  return head.length >= CLAUDE_CONTINUATION_HEAD_BYTES
+}
 
 /**
  * Claude rolls a long conversation's transcript over to a NEW file on its own (compaction, a resume
@@ -443,6 +492,10 @@ export async function claudeContinuation(transcriptPath: string): Promise<Repair
   } catch {
     return null
   }
+  // A marker alone does not prove the conversation moved: the same one is written for a background
+  // session, whose file never holds a turn. Waiting for one costs nothing — this runs on every
+  // reconciler pass, so a continuation that is real binds on the pass after its first turn lands.
+  if (!await hasConversationTurn(nextPath)) return null
   return { sessionId: nextId, transcriptPath: nextPath }
 }
 

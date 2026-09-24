@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/bootstrapping_screen.dart';
-import 'package:harness/widgets/login_relay_diagram.dart';
+import 'package:harness/widgets/box_chrome.dart';
+import 'package:harness/widgets/terminal_progress.dart';
 
 Widget _host({
   String? message,
@@ -26,19 +27,21 @@ Widget _host({
 }
 
 void main() {
-  testWidgets('uses the app visual language and a truthful fallback status', (
+  testWidgets('is the terminal box, with a truthful fallback status', (
     tester,
   ) async {
     await tester.pumpWidget(_host());
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byType(LoginAurora), findsOneWidget);
-    expect(find.text('Getting Harness ready'), findsOneWidget);
+    // The first thing the app shows is the box the new tab uses, not a card
+    // with a headline: one terminal, from the first frame.
+    expect(find.byType(TerminalBox), findsOneWidget);
+    expect(find.text(r'$ harness start'), findsOneWidget);
     expect(find.text('Opening Harness…'), findsOneWidget);
-    expect(find.textContaining('few seconds'), findsOneWidget);
-
-    final logo = tester.widget<Image>(find.byType(Image));
-    expect((logo.image as AssetImage).assetName, 'assets/app_icon.png');
+    expect(find.byType(TerminalProgressLine), findsOneWidget);
+    // Nothing on the line is bigger than the terminal's own text.
+    final title = tester.widget<Text>(find.text(r'$ harness start'));
+    expect(title.style?.fontSize, boxMonoStyle().fontSize);
   });
 
   testWidgets('shows the daemon status as an accessible live update', (
@@ -56,16 +59,16 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('Reduce Motion freezes the indeterminate indicator', (
-    tester,
-  ) async {
+  testWidgets('Reduce Motion leaves the bar still', (tester) async {
     await tester.pumpWidget(_host(reduceMotion: true));
     await tester.pump(const Duration(milliseconds: 300));
 
-    final ticker = tester.widget<TickerMode>(
-      find.byKey(const Key('boot-status-ticker')),
+    expect(find.byType(TerminalProgressLine), findsOneWidget);
+    expect(
+      tester.binding.hasScheduledFrame,
+      isFalse,
+      reason: 'a bar that kept travelling would never settle',
     );
-    expect(ticker.enabled, isFalse);
   });
 
   testWidgets('fits the minimum window at the largest supported UI scale', (
@@ -80,7 +83,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Getting Harness ready'), findsOneWidget);
+    expect(find.text(r'$ harness start'), findsOneWidget);
     expect(find.text('Opening Harness…'), findsOneWidget);
   });
 }

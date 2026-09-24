@@ -30,7 +30,7 @@ const TYPES = {
   '.mol': 'chemical/x-mdl-molfile', '.mol2': 'chemical/x-mol2', '.pdb': 'chemical/x-pdb', '.xyz': 'chemical/x-xyz',
   '.smi': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
 }
-const PANE = { '/app.js': 'app.js', '/app.css': 'app.css', '/torsion-pane.mjs': 'torsion-pane.mjs' }
+const PANE = { '/app.js': 'app.js', '/app.css': 'app.css', '/torsion-pane.mjs': 'torsion-pane.mjs', '/files.mjs': 'files.mjs' }
 const VENDOR = { '3Dmol-min.js': join(here, 'node_modules/3dmol/build/3Dmol-min.js') }
 const STRUCTURE = new Set(['.sdf', '.mol', '.pdb', '.mol2'])
 
@@ -41,6 +41,13 @@ function safe(rel) {
 }
 function stat(full) { try { return statSync(full) } catch { return null } }
 function readJson(full) { try { return JSON.parse(readFileSync(full, 'utf8')) } catch { return null } }
+function attachment(name) {
+  const fallback = name.replace(/["\\]/g, '').replace(/[^\x20-\x7e]/g, '_') || 'download'
+  const header = `attachment; filename="${fallback}"`
+  if (fallback === name) return header
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+  return `${header}; filename*=UTF-8''${encoded}`
+}
 function send(res, code, body) {
   res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
@@ -63,7 +70,7 @@ function file(req, res, full, { download = false, cache = false } = {}) {
   const st = full && stat(full)
   if (!st || !st.isFile()) { send(res, 404, { error: 'not found' }); return }
   const headers = { 'content-type': TYPES[extname(full).toLowerCase()] ?? 'application/octet-stream', 'cache-control': cache ? 'max-age=3600' : 'no-store' }
-  if (download) headers['content-disposition'] = `attachment; filename="${basename(full).replace(/"/g, '')}"`
+  if (download) headers['content-disposition'] = attachment(basename(full))
   if (req.method === 'HEAD') { res.writeHead(200, { ...headers, 'content-length': st.size }); res.end(); return }
   const body = readFileSync(full) // before the head: a file that cannot be read is still answered, with a 500
   res.writeHead(200, headers); res.end(body)
@@ -255,7 +262,7 @@ createServer(async (req, res) => {
       const full = safe(url.searchParams.get('path'))
       if (!full || !stat(full)?.isFile()) { send(res, 404, { error: 'not found' }); return }
       const block = molBlock(readFileSync(full, 'utf8'))
-      res.writeHead(200, { 'content-type': 'chemical/x-mdl-molfile', 'content-disposition': `attachment; filename="${stemOf(basename(full))}.mol"`, 'cache-control': 'no-store' })
+      res.writeHead(200, { 'content-type': 'chemical/x-mdl-molfile', 'content-disposition': attachment(`${stemOf(basename(full))}.mol`), 'cache-control': 'no-store' })
       res.end(block); return
     }
     file(req, res, safe(path), { download: url.searchParams.has('download') })

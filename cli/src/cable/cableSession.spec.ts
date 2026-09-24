@@ -84,6 +84,7 @@ function makeHost(over: Partial<CableHost> = {}) {
     selectedMachine: () => 'mac-local',
     selectMachine: async () => ({ ok: true as const }),
     listSwarms: () => ({ selected: '', swarms: [] }),
+    listUnread: () => [],
     selectSwarm: vi.fn(),
     appName: () => 'harness',
     voiceLang: () => 'en',
@@ -138,7 +139,11 @@ describe('cable session', () => {
       // Machines FIRST: the dial paints its machine name from this list, so an agent list that lands
       // ahead of it shows a nameless placeholder for a frame. Swarms next, for the same reason: the line
       // naming the tab is drawn on the tile the agent list is about to build.
-      ['welcome', 'machines.begin', 'machine', 'machines.end', 'swarms', 'agents.begin', 'agent', 'agent', 'agents.end'],
+      //
+      // `notif.replace` LAST, and that order is the point too: it names agents, and a drawer row for one
+      // the carousel does not hold yet has nothing to draw itself against. A dial that has just greeted
+      // us is the one moment its drawer is known to be empty — its rows live in RAM.
+      ['welcome', 'machines.begin', 'machine', 'machines.end', 'swarms', 'agents.begin', 'agent', 'agent', 'agents.end', 'notif.replace'],
     )
     const welcome = port.sent[0]
     expect(welcome).toMatchObject({ t: 'welcome', app: 'harness', machine: { name: 'MacBook Pro' } })
@@ -230,7 +235,11 @@ describe('cable session', () => {
       // Machines FIRST: the dial paints its machine name from this list, so an agent list that lands
       // ahead of it shows a nameless placeholder for a frame. Swarms next, for the same reason: the line
       // naming the tab is drawn on the tile the agent list is about to build.
-      ['welcome', 'machines.begin', 'machine', 'machines.end', 'swarms', 'agents.begin', 'agent', 'agent', 'agents.end'],
+      //
+      // `notif.replace` LAST, and that order is the point too: it names agents, and a drawer row for one
+      // the carousel does not hold yet has nothing to draw itself against. A dial that has just greeted
+      // us is the one moment its drawer is known to be empty — its rows live in RAM.
+      ['welcome', 'machines.begin', 'machine', 'machines.end', 'swarms', 'agents.begin', 'agent', 'agent', 'agents.end', 'notif.replace'],
     )
     await session.stop()
   })

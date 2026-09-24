@@ -47,16 +47,18 @@ second server.
    pass. A selected sheet row can be pinned into it. The person can inspect the paired answers,
    mark a preference and keep their evidence in `.harness/question-trials/<id>/`. Read its
    `review.md`, `trial.json` and `column.json` when continuing their work. After they choose a
-   wording, retain it in `sheet.json`, save and read again. Only the changed column is asked again.
+   wording, **Use on whole sheet** retains it in `sheet.json`; read the updated file before editing.
+   Only the changed column is asked again.
 
 Question Lab deliberately samples hard rows and/or a spread; it does not estimate population
 accuracy. Its original and candidate are asked again together, so the original answer can differ
 from an older cached sheet cell. Human preferences are separate from model probabilities and are
 not ground-truth labels. Inspect each row's provider/model in `trial.json`; never write findings
 from an offline stand-in or an incomplete trial. A changed answer or higher confidence does not
-establish better wording. **Try on whole sheet** adds a separate runtime column; it does not edit
-`sheet.json`. Retain an accepted header there, keeping the person's source file and context. Kept
-packets include sampled text and metadata, remain readable after source deletion and are immutable.
+establish better wording. **Use on whole sheet** saves a separate question in
+`sheet.json`, keeping the original, source file and context. Read that file before editing; a
+`questionTrial` field records the kept trial that supplied a question and prevents duplicate adoption.
+Kept packets include sampled text and metadata, remain readable after source deletion and are immutable.
 Use a new trial for a new evaluation or review. Do not edit the generated packet or its answers.
 
 If the questions could not be answered (no key, the viewer is not running, errors), say so plainly.
@@ -159,8 +161,9 @@ folder in the workspace, so the person's folder stays tidy.
 - **`rows`**: only for a made-up sheet you write yourself (1 to 10,000, each with a non-empty `text`,
   optional `id`, plain fields, `group`, and `truth` labels that are never sent to Jev).
 
-What a person does in the pane (typed columns, row edits, sort, filters, the review line) is not
-saved to `sheet.json`. If they like a column they typed, add it to `columns` for them.
+Question Lab's **Use on whole sheet** saves its chosen question to `sheet.json`. Other pane changes
+(typed columns, row edits, sort, filters, the review line) are not saved to `sheet.json`. If they like
+a column they typed, add it to `columns` for them.
 
 ## The header grammar
 
@@ -231,12 +234,26 @@ a full pass takes most of a minute.
 - Their data stays in the workspace. The rows go to the Jev API to be answered and nowhere
   else. Never send it anywhere else, and never copy more of it into the chat than you need.
 
+## Offline practice and missing credit
+
+If the person requests offline practice, set `"offline": true` in **sheet.json** alongside the
+fictional rows and questions. The existing pane reloads it and uses the word-matching stand-in for
+both sheet cells and Question Lab, even when a live key is saved. Verify `sheet.offline: true` and
+`sheet.client: "mock"` in the verdict. Create the requested sheet in the pane; do not substitute a
+scratch script or a table in chat for the interactive workflow. Do not change credentials, edit the
+installed package, or start a second server. Practice results are not live model evidence.
+
+A provider error is a failed fill, not a completed sheet. Read the error and explain it. Offer
+offline practice when credit is unavailable; never silently switch real analysis to a stand-in.
+Only set `"offline": false` when the person asks to resume live use. Existing cells are recomputed
+on a mode change. Requests already in flight can finish, but their answers do not enter the new sheet.
+
 ## Without a key
 
-`"client": "mock"` in the verdict means there is no Jev key, and an offline stand-in that only
-matches words is answering. On a person's own data its answers are not good enough to act on, and
-the pane says so in a yellow bar. Do not write findings from them. Tell the person to paste a key
-into the **Jev · live mind** panel in the pane (an OpenRouter key from `openrouter.ai/keys` takes
+`"client": "mock"` in the verdict means offline practice is active or there is no Jev key. A
+word-matching stand-in is answering. Its answers are not good enough to act on, and the pane labels
+them as practice. Do not write findings from them. For requested real analysis without a key, tell
+the person to paste a key into the **Jev · live mind** panel in the pane (an OpenRouter key from `openrouter.ai/keys` takes
 about a minute). The key is saved on their machine in `~/.config/typesafe/credentials`, and every
 cell is then asked again. Never ask them to paste a key into the chat.
 
@@ -253,7 +270,8 @@ cell is then asked again. Never ask them to paste a key into the chat.
 
 - The person's own data is in the sheet (or they chose the sample, knowing it is made up).
 - `sheet.json` passes `toolchain/check.mjs`. Every choice option has a meaning. `context` is set.
-- The verdict shows your save was loaded, a live `client`, and every cell filled.
+- The verdict shows your save was loaded and every cell filled, with a live `client` for real analysis
+  or explicit offline practice when requested. A practice run does not meet the live-analysis checks.
 - You read `answers.csv`, opened the rows behind the main numbers, and wrote `findings.md`.
 - You told the person, in plain words: the three findings that matter, how sure Jev was, and the
   next question worth asking.

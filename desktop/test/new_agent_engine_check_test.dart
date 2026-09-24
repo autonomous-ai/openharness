@@ -102,7 +102,7 @@ void main() {
     );
     expect(find.textContaining('uses an older Harness CLI'), findsNothing);
     await tester.ensureVisible(find.byKey(const Key('new-agent-advanced')));
-    await tester.tap(find.byKey(const Key('new-agent-advanced')));
+    await expandNewAgentAdvanced(tester);
     await tester.pump();
     expect(
       find.textContaining('If harness-remote-box uses an older Harness CLI'),
@@ -142,7 +142,7 @@ void main() {
     );
     await chooseAgent(tester, 'codex');
     await tester.ensureVisible(find.byKey(const Key('new-agent-advanced')));
-    await tester.tap(find.byKey(const Key('new-agent-advanced')));
+    await expandNewAgentAdvanced(tester);
     await tester.pumpAndSettle();
     await tester.ensureVisible(
       find.byKey(const Key('new-agent-permission-mode')),
@@ -184,7 +184,12 @@ void main() {
     expect(retry, findsNothing);
     expect(find.text('20260907'), findsOneWidget);
     expect(find.text(pickedFolder), findsNothing);
-    expect(tester.widget<AgentPicker>(find.byType(AgentPicker)).value, 'codex');
+    expect(
+      tester
+          .widget<AgentPicker>(find.byKey(const Key('new-agent-agent-picker')))
+          .value,
+      'codex',
+    );
     expect(app.profileChecks, ['machine-1']);
     expect(
       find.byKey(const Key('new-agent-codex-profile-field')),
@@ -224,6 +229,7 @@ void main() {
     await tester.tap(find.byKey(const Key('new-agent-retry-check')));
     await tester.pump();
     await tester.pump();
+    await expandNewAgentAdvanced(tester);
     final otherMachine = find.byKey(
       const ValueKey('new-agent-machine-machine-2'),
     );
@@ -232,7 +238,7 @@ void main() {
     await tester.pumpAndSettle();
     await chooseAgent(tester, 'codex');
     await tester.ensureVisible(find.byKey(const Key('new-agent-advanced')));
-    await tester.tap(find.byKey(const Key('new-agent-advanced')));
+    await expandNewAgentAdvanced(tester);
     await tester.pumpAndSettle();
     expect(
       find.text('Checking whether Other computer supports Codex profiles…'),
@@ -251,7 +257,12 @@ void main() {
           .value,
       'machine-2',
     );
-    expect(tester.widget<AgentPicker>(find.byType(AgentPicker)).value, 'codex');
+    expect(
+      tester
+          .widget<AgentPicker>(find.byKey(const Key('new-agent-agent-picker')))
+          .value,
+      'codex',
+    );
     expect(find.text('20260907'), findsNothing);
     expect(app.launches, isEmpty);
     expect(tester.takeException(), isNull);
@@ -306,6 +317,7 @@ class _RetryNotifier extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,

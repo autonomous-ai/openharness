@@ -129,13 +129,14 @@ export function normalizeSheet(raw) {
     if (!parsed.ok) { errors.push(`column ${i + 1}: ${parsed.error}`); return }
     if (colIds.has(parsed.column.id)) { errors.push(`column ${i + 1}: id "${parsed.column.id}" is used twice`); return }
     colIds.add(parsed.column.id)
-    columns.push(parsed.column)
+    columns.push({ ...parsed.column, ...(typeof c?.questionTrial === 'string' && /^[0-9a-f-]{36}$/i.test(c.questionTrial) ? { questionTrial: c.questionTrial } : {}) })
   })
 
   let reviewBelow = Number(src.reviewBelow ?? 0.65)
   if (!Number.isFinite(reviewBelow) || reviewBelow < 0 || reviewBelow > 1) { errors.push('reviewBelow must be between 0 and 1'); reviewBelow = 0.65 }
   let concurrency = Math.round(Number(src.concurrency ?? 8))
   if (!Number.isFinite(concurrency) || concurrency < 1 || concurrency > 32) { errors.push('concurrency must be 1 to 32'); concurrency = 8 }
+  if (src.offline !== undefined && typeof src.offline !== 'boolean') errors.push('offline must be true or false')
 
   return {
     title: typeof src.title === 'string' && src.title.trim() ? src.title.trim().slice(0, 120) : 'Untitled sheet',
@@ -144,6 +145,8 @@ export function normalizeSheet(raw) {
     textLabel: typeof src.textLabel === 'string' && src.textLabel.trim() ? src.textLabel.trim().slice(0, 40) : 'Text',
     suggestions: Array.isArray(src.suggestions) ? src.suggestions.filter((s) => typeof s === 'string' && parseHeader(s).ok).slice(0, 24) : [],
     demo: src.demo !== false,
+    // An invalid practice setting must not accidentally send rows to a live provider.
+    offline: src.offline !== undefined && src.offline !== false,
     reviewBelow, concurrency, rows, columns, errors,
   }
 }

@@ -1,0 +1,46 @@
+{
+  "sourceLog": "/private/tmp/rapid-moose-profile-after.log",
+  "observations": [
+    {
+      "kind": "headless_debug_widget_elapsed",
+      "operation": "command_dock",
+      "agents": 2000,
+      "reopen": {
+        "samples": 50,
+        "medianMs": 38.298,
+        "p95Ms": 67.535,
+        "p99Ms": 90.107
+      },
+      "broadQuery": {
+        "samples": 50,
+        "medianMs": 29.916,
+        "p95Ms": 38.244,
+        "p99Ms": 78.494
+      },
+      "queryGrowth": {
+        "samples": 50,
+        "medianMs": 9.551,
+        "p95Ms": 17.999,
+        "p99Ms": 21.472
+      },
+      "narrowQuery": {
+        "samples": 50,
+        "medianMs": 29.877,
+        "p95Ms": 37.633,
+        "p99Ms": 93.919
+      },
+      "arrow": {
+        "samples": 50,
+        "medianMs": 5.984,
+        "p95Ms": 8.201,
+        "p99Ms": 10.185
+      },
+      "cmdPThenCmdO": {
+        "samples": 50,
+        "medianMs": 2.816,
+        "p95Ms": 4.224,
+        "p99Ms": 4.658
+      }
+    }
+  ]
+}

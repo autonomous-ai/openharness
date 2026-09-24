@@ -1,3 +1,8 @@
+import 'package:harness/core/models.dart';
+
+import 'support/resource_picker.dart';
+import 'keymap_host_test.dart' show key;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,10 +16,12 @@ import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 import 'swarm_switcher_test.dart' show selectedRow;
 
-Finder get attentionField => find.byWidgetPredicate(
-  (w) =>
-      w is TextField &&
-      w.decoration?.hintText == 'Find a question, agent, or project',
+Finder get attentionField => resourceField;
+Finder get selectedHarness => find.descendant(
+  of: find.byKey(const ValueKey('swarm-search-result-list')),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is Semantics && widget.properties.selected == true,
+  ),
 );
 
 void main() {
@@ -71,7 +78,9 @@ void main() {
     'attention opens in one frame, owns typing, and returns to prior work through Cmd+P',
     (tester) async {
       final app = createApp();
-      app.machineStates['m']!.nodeOnline = true;
+      app.machineStates['m']!
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
       final firstInput = <TerminalBinaryFrame>[];
       final secondInput = <TerminalBinaryFrame>[];
       final firstPane = app.adoptSessionForTest(terminal('a0', firstInput));
@@ -93,15 +102,10 @@ void main() {
         tester.widget<TextField>(attentionField).focusNode!.hasFocus,
         isTrue,
       );
-      expect(
-        (ModalRoute.of(
-          tester.element(attentionField),
-        ) as TransitionRoute).transitionDuration,
-        Duration.zero,
-      );
       expect(find.byType(BackdropFilter), findsNothing);
+      expect(find.byType(Dialog), findsNothing);
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
-      expect(find.byType(Dialog), findsOneWidget);
+      expect(resourceScope(''), findsOneWidget);
       await tester.enterText(attentionField, 'region host');
       await tester.pump();
       expect(find.text('Choose the deployment region'), findsOneWidget);
@@ -139,6 +143,7 @@ void main() {
       final panes = [...app.panes];
       final machine = app.machineStates['m']!;
       for (var i = 0; i < 25; i++) {
+        app.rememberOpenedHarness('m', 'a$i');
         machine.blockedAgents['a$i'] = waitingQuestion(
           'a$i',
           prompt: 'Question $i?',
@@ -147,49 +152,53 @@ void main() {
       }
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
-      expect(find.byType(ListTile).evaluate().length, lessThan(25));
-      for (var i = 0; i < 12; i++) {
+      expect(
+        find
+            .byType(InkWell)
+            .evaluate()
+            .where((e) => (e.widget.key?.toString() ?? '').contains('agent:'))
+            .length,
+        lessThan(25),
+      );
+      for (var i = 0; i < 13; i++) {
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pump();
-        expect(selectedRow, findsOneWidget);
-        final row = tester.getRect(selectedRow);
-        final list = tester.getRect(find.byType(ListView));
+        expect(selectedHarness, findsOneWidget);
+        final row = tester.getRect(selectedHarness);
+        final list = tester.getRect(
+          find.byKey(const ValueKey('swarm-search-result-list')),
+        );
         expect(row.top, greaterThanOrEqualTo(list.top));
         expect(row.bottom, lessThanOrEqualTo(list.bottom));
       }
       await tester.pump();
-      final selection = tester.widget<ListTile>(selectedRow).key;
-      expect(selection, ValueKey(agentDestinationId('m', 'a12')));
-      final list = tester.getRect(find.byType(ListView));
-      final row = tester.getRect(selectedRow);
+      final selection = resourceSearch(tester).selected!.id;
+      expect(selection, agentDestinationId('m', 'a13'));
+      final list = tester.getRect(
+        find.byKey(const ValueKey('swarm-search-result-list')),
+      );
+      final row = tester.getRect(selectedHarness);
       expect(row.top, greaterThanOrEqualTo(list.top));
       expect(row.bottom, lessThanOrEqualTo(list.bottom));
       machine.blockedAgents['a30'] = waitingQuestion('a30', ageOrder: -1);
       app.dismissError();
       await tester.pump();
       await tester.pump();
-      expect(tester.widget<ListTile>(selectedRow).key, selection);
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+      expect(resourceSearch(tester).selected!.id, selection);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(
-        tester.widget<ListTile>(selectedRow).key,
-        ValueKey(agentDestinationId('m', 'a13')),
+        resourceSearch(tester).selected!.id,
+        agentDestinationId('m', 'a14'),
       );
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
-      expect(tester.widget<ListTile>(selectedRow).key, selection);
-      machine.blockedAgents.remove('a12');
+      expect(resourceSearch(tester).selected!.id, selection);
+      machine.blockedAgents.remove('a13');
       app.dismissError();
       await tester.pump();
-      expect(find.text('Question 12?'), findsNothing);
-      expect(
-        tester.widget<ListTile>(selectedRow).key,
-        ValueKey(agentDestinationId('m', 'a13')),
-      );
+      expect(find.text('Question 13?'), findsNothing);
+      expect(selectedHarness, findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(attentionField, findsNothing);
@@ -205,26 +214,31 @@ void main() {
     (tester) async {
       final app = createApp();
       final machine = app.machineStates['m']!;
+      app.rememberOpenedHarness('m', 'missing');
       machine.blockedAgents['missing'] = waitingQuestion('missing');
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyI, shift: true);
-      expect(find.text('Unavailable'), findsOneWidget);
-      expect(tester.widget<ListTile>(selectedRow).enabled, isFalse);
+      expect(find.textContaining('Offline', findRichText: true), findsWidgets);
+      final unavailable = find.byKey(
+        ValueKey(agentDestinationId('m', 'missing')),
+      );
+      expect(tester.widget<InkWell>(unavailable).onTap, isNull);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(attentionField, findsOneWidget);
       expect(app.panes, isEmpty);
       await tester.enterText(attentionField, 'not found');
       await tester.pump();
-      expect(find.text('No matching questions'), findsOneWidget);
+      expect(find.text('No matching harnesses'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(attentionField, findsOneWidget);
+      await tester.enterText(attentionField, '');
       machine.blockedAgents.clear();
       app.dismissError();
       await tester.pump();
-      expect(find.text('No agents need your input'), findsOneWidget);
-      await tester.tap(find.byTooltip('Close notifications'));
+      expect(find.text('No harnesses need your input'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.pumpWidget(const SizedBox());

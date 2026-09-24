@@ -1,4 +1,3 @@
-import 'package:harness/terminal/terminal_font_store.dart';
 
 import 'dart:async';
 import 'dart:io';
@@ -6,7 +5,6 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/desktop_window.dart';
-import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/theme/color_palette.dart';
 
 const _windowChannel = MethodChannel('window_manager');
@@ -129,9 +127,6 @@ void main() {
     expect(nativeCalls.single.method, 'configure');
     expect(nativeCalls.single.arguments, {
       'palette': HarnessPalette.graphite.nativeColors,
-      'fontFamily': terminalFontStore.value.fontFamily,
-      'fontSize': AppType.chromeSize,
-      'fontFallbacks': terminalFontStore.value.fontFamilyFallback,
     });
     expect(calls.indexOf('native:configure'), lessThan(calls.indexOf('show')));
   }, skip: !Platform.isMacOS);
@@ -147,9 +142,6 @@ void main() {
       await setup;
       expect(nativeCalls.single.arguments, {
         'palette': palette.nativeColors,
-        'fontFamily': terminalFontStore.value.fontFamily,
-        'fontSize': AppType.chromeSize,
-        'fontFallbacks': terminalFontStore.value.fontFamilyFallback,
       });
       expect(
         calls.indexOf('native:configure'),

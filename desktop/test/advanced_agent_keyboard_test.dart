@@ -1,3 +1,6 @@
+import 'support/launch_menu.dart';
+
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -108,7 +111,11 @@ void main() {
         expect(connection.launches, isEmpty);
         expect(agentSearch, findsNothing);
         expect(
-          tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+          tester
+              .widget<AgentPicker>(
+                find.byKey(const Key('new-agent-agent-picker')),
+              )
+              .value,
           'opencode',
         );
         expect(find.byType(AlertDialog), findsOneWidget);
@@ -123,7 +130,9 @@ void main() {
         if (agentSearch.evaluate().isEmpty) await openAgentSearch(tester);
         final editor = tester.widget<TextField>(agentSearch);
         final chosen = tester
-            .widget<AgentPicker>(find.byType(AgentPicker))
+            .widget<AgentPicker>(
+              find.byKey(const Key('new-agent-agent-picker')),
+            )
             .value;
         tester.testTextInput.updateEditingValue(
           const TextEditingValue(
@@ -140,7 +149,11 @@ void main() {
         expect(editor.focusNode!.hasPrimaryFocus, isTrue);
         expect(connection.launches, isEmpty);
         expect(
-          tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+          tester
+              .widget<AgentPicker>(
+                find.byKey(const Key('new-agent-agent-picker')),
+              )
+              .value,
           chosen,
         );
         await tester.pumpWidget(const SizedBox());
@@ -191,7 +204,9 @@ void main() {
     expect(agentSearch, findsNothing);
     expect(connection.launches, isEmpty);
     expect(
-      tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+      tester
+          .widget<AgentPicker>(find.byKey(const Key('new-agent-agent-picker')))
+          .value,
       'opencode',
     );
     map.apply('''{"bindings":[
@@ -216,18 +231,22 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     await mount(tester, app);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await key(tester, LogicalKeyboardKey.enter);
     await key(tester, LogicalKeyboardKey.period, cmd: true);
     await tester.pumpAndSettle();
-    await openAgentSearch(tester);
-    await tester.enterText(agentSearch, 'opencode');
+    await openLaunchRow(tester, 'agent');
+    final input = find.byKey(const ValueKey('new-harness-query'));
+    await tester.enterText(input, 'opencode');
     await tester.pump();
     // Ctrl-M is a configured picker alias, absent from the fallback shortcuts.
     await key(tester, LogicalKeyboardKey.keyM, ctrl: true);
-    expect(agentSearch, findsNothing);
+    expect(harnessChoicesActive(tester), isFalse);
     expect(
-      tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+      tester
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+          .controller
+          .engine,
       'opencode',
     );
     expect(connection.launches, isEmpty);

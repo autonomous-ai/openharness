@@ -1,0 +1,158 @@
+{
+  "date": "2026-09-23 (UTC)",
+  "client": {
+    "hardware": "Apple M2 Max",
+    "memoryGiB": 64,
+    "os": "macOS 26.6.2",
+    "flutter": "3.47.2",
+    "dart": "3.13.2",
+    "node": "22.23.1"
+  },
+  "desktopProductionBase": "cc5be5e96aee494fd072a11ca93cdc9708185043",
+  "desktopToolingBuild": "aca80aff7c440c24a9337e6b3f225b3884ddc83a",
+  "terminalProbeRevision": "c1deb5e6",
+  "installedClientDaemonVersion": "0.2.89",
+  "nativeHistoryBase": "e566f0af",
+  "nativeHistoryAfter": "9b20d50a",
+  "nativeHistorySourceSHA256": {
+    "before": "0e726abb3ca482a68a437aa2733c1e15e5a5dbd315bdad5f0091efb7210e5067",
+    "after": "5435fef1dc5997758f95ade81e7fe3dfebc762311fde65164046ebccc6883517"
+  },
+  "sampling": "Serial on an active developer workstation; no own builds/tests during timing. Other applications remained running. Route modes are daemon-reported.",
+  "excluded": [
+    "4090 rig at owner request",
+    "pre-schema-3 transport calibration/routing experiments",
+    "core focus/layout calibration failures; no failed run used in tables",
+    "one idle resource sample with unverified window state"
+  ],
+  "artifacts": [
+    {
+      "file": "core-1-1.json",
+      "sha256": "0f789d9b32bb515cfca556094e546531992ffff61e254f038fbce979e38295eb"
+    },
+    {
+      "file": "core-1-background-idle.json",
+      "sha256": "6e6f63b0a8f011b6cd46d742859f8ba7478d08de9cb93f663cdfd33ff40747a2"
+    },
+    {
+      "file": "core-1-foreground-idle.json",
+      "sha256": "0e7065434ae217c9c726487b52b97426a1635cf7d1bdf168694af68ced86509d"
+    },
+    {
+      "file": "core-16-1.json",
+      "sha256": "768d1984ea1e511f21a6dc12a1f7d934bd4968b7ddade6186634a9317b56cf78"
+    },
+    {
+      "file": "core-16-background-idle.json",
+      "sha256": "06c24dd36c247a5513b59183975c5f4be9470a2e36c70558bc1e789a1c2c314f"
+    },
+    {
+      "file": "core-16-foreground-idle.json",
+      "sha256": "ae41233368291a35df30a49eb03b63cacd39ce73fc77a9d027572579a50ce635"
+    },
+    {
+      "file": "core-16-full-background-output.json",
+      "sha256": "1caf00c1d69ddab5dd6fca62348a837070690c5f5c653eafc78f7d8e97b5fbb8"
+    },
+    {
+      "file": "core-16-full-foreground-output.json",
+      "sha256": "40be4c8d97e74276a6201a7093af34a2acf7a48ac802f339f555862b1afdb91d"
+    },
+    {
+      "file": "core-16-full-scrollback.json",
+      "sha256": "8037cf6b3fb980de827fad54b6f4a5d668a4f0336a34740fd57d7a9f3ea5c9e8"
+    },
+    {
+      "file": "core-48-1.json",
+      "sha256": "c35ddbc6e1abb2d616edf3c5ea8dad08655f0b85f3307d7aaefabf03accb758d"
+    },
+    {
+      "file": "core-48-background-idle.json",
+      "sha256": "e72379d38a816e8252b6932b4b30c4b86a6937fda70ee4dd1cb9da06906919a4"
+    },
+    {
+      "file": "core-48-foreground-idle.json",
+      "sha256": "d35370c3a3f5d05405aac86bc13137659ab0bbaf55a50a362378c4a061935013"
+    },
+    {
+      "file": "diagnostics/core-foreground-guard-failure.json",
+      "sha256": "ae0452feba55e9a64291c94e4a5462a923d476866575d6f504e83ed5c59e8817"
+    },
+    {
+      "file": "diagnostics/exclusions.json",
+      "sha256": "84e1ab339c359221bad3ff4a0b02830a9fd5caa1c6a0e575f6c4a40cd6539cd0"
+    },
+    {
+      "file": "diagnostics/native-history-cc5-calibration.json",
+      "sha256": "862b7b15274bd45a2dae9febf52c0284ef054c037c95bcb152e84ba83eb92a6a"
+    },
+    {
+      "file": "diagnostics/resource-window-state-unverified.json",
+      "sha256": "1324eff1878b935a0373c4e12d5aa1b440d5bb55a3ce968c87dbaa4836744d53"
+    },
+    {
+      "file": "full-scrollback-resource-load.json",
+      "sha256": "1e7b09b77c6f24bca51536933bb7532c449961b4f8aae2f8c313fcea4e313f12"
+    },
+    {
+      "file": "home-imac-1.json",
+      "sha256": "7749c7b1bd5d8373445c248cf1da87b3bd6798c7f9587f26b54759d2b067b72d"
+    },
+    {
+      "file": "home-imac-2.json",
+      "sha256": "2ae300f319a87302e4eaef7f6aa89fbeaf1bf30d913a41ace89b187dc254f176"
+    },
+    {
+      "file": "home-imac-3.json",
+      "sha256": "155c2611dcada8bd6f66f6192cb48e7f427a35f3248227e566c466b41962a9fd"
+    },
+    {
+      "file": "local-1.json",
+      "sha256": "c86279430d6a68f07a234348748530145c440b445e9ac95a69b00dfea65494c5"
+    },
+    {
+      "file": "local-2.json",
+      "sha256": "e688fc52eadebc5b187a2a12b35d837a9f9649b36d4d589118019599970cb823"
+    },
+    {
+      "file": "local-3.json",
+      "sha256": "a2c46c4d346e427509c70aa1aa5e9c777a1237e82d568a06dfcbcf8a65560d8a"
+    },
+    {
+      "file": "native-history-current-after-1.json",
+      "sha256": "0bcb561276f4ccb7d8039c2e547c84551c9a21ebe0283c96d0d2552c1eafc160"
+    },
+    {
+      "file": "native-history-current-after-2.json",
+      "sha256": "17b85829774c2d4a53d474623a2ea62a288669a31841c6dce21dad39cdf98e0c"
+    },
+    {
+      "file": "native-history-current-after-3.json",
+      "sha256": "5349046be365f4d6cbfa5fd36f8146020aa8458f08084f49072e4c3c2fbf2018"
+    },
+    {
+      "file": "native-history-current-before-1.json",
+      "sha256": "43476ebf141c5c793bb4dcd4f233b46ad235707556e1cae0a9c3cef681be2353"
+    },
+    {
+      "file": "native-history-current-before-2.json",
+      "sha256": "13f0f7de5ff773301389e8cdeb5ddd5d1b7844efaac7ccac54d7f02134b6bf51"
+    },
+    {
+      "file": "native-history-current-before-3.json",
+      "sha256": "e01267554a139ba75fb6c5fadf1cf7a5e8785fbe37137e67561edf60b3b6a489"
+    },
+    {
+      "file": "office-imac-1.json",
+      "sha256": "b07afcb384e9514e0ecc0dede3a3f10d38796a3ca76c106774a0fd1e374f8b3f"
+    },
+    {
+      "file": "office-imac-2.json",
+      "sha256": "ad56597f3d50a7fd7ad90e68fbe6e6eb6c264f83a9c939d924f4c08a8f70f2cd"
+    },
+    {
+      "file": "office-imac-3.json",
+      "sha256": "eb1a13ce4a23631c590f8b65dd4eac8c91ffea56b8591fd7a0261c87bcef0f20"
+    }
+  ]
+}

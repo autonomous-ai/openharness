@@ -28,6 +28,8 @@ import 'support/real_fonts.dart';
 
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/widgets/prompt_context.dart';
+import 'package:harness/shared/theme/status_line_style.dart';
+import 'package:harness/widgets/status_line.dart';
 
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -144,20 +146,20 @@ void main() {
         expect(Focus.of(tester.element(label)).hasFocus, isTrue);
       }
 
-      await focus('prompt-style-powerline');
+      await focus('prompt-style-robbyrussell');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(store.value.prompt.style, PromptStyle.powerline);
+      expect(store.value.prompt.statusStyle, StatusLineStyle.robbyrussell);
       await focus('prompt-branch');
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();
       expect(store.value.prompt.branch, isFalse);
       expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('prompt-preview')),
-          matching: find.text('main'),
-        ),
-        findsNothing,
+        tester
+            .widget<StatusLine>(find.byKey(const ValueKey('prompt-preview')))
+            .parts
+            .text,
+        isNot(contains('main')),
       );
       final reopened = AppearancePrefsStore(storage: storage);
       addTearDown(reopened.dispose);
@@ -202,7 +204,7 @@ void main() {
           expect(find.byType(SettingsScreen), findsOneWidget);
           await tester.tap(find.text('Customize'));
         } else {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await chord(tester, LogicalKeyboardKey.keyP, shift: true);
           await tester.enterText(
             find.byKey(const ValueKey('swarm-search-input')),
             '> customize',
@@ -213,7 +215,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(SettingsScreen), findsNothing);
         expect(find.byType(HarnessCustomizePane), findsOneWidget);
-        expect(find.byType(PromptContextView), findsWidgets);
+        expect(find.byType(StatusLine), findsWidgets);
         expect(tester.getRect(find.byKey(pane.cellKey)), before);
         final panel = tester.getRect(find.byType(HarnessCustomizePane));
         expect(panel.right, 1280);
@@ -289,7 +291,7 @@ void main() {
       final lineHeights = [
         for (final state in states) state.renderTerminal.lineHeight,
       ];
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> customize',
@@ -300,19 +302,23 @@ void main() {
       // Publish the same preference notifications as the controls without
       // persisting this test's choices into the developer's saved preferences.
       appearancePrefsStore.value = appearancePrefsStore.value.copyWith(
-        prompt: const PromptPrefs(style: PromptStyle.powerline),
+        prompt: const PromptPrefs(statusStyle: StatusLineStyle.pure),
       );
       await tester.pumpAndSettle();
-      for (final pane in panes) {
-        final header = find.descendant(
-          of: find.byKey(pane.cellKey),
+      final status = tester.widget<StatusLine>(
+        find.descendant(
+          of: find.byKey(const ValueKey('workspace-pane-context')),
+          matching: find.byType(StatusLine),
+        ),
+      );
+      expect(status.parts.text, contains('Test host'));
+      expect(
+        find.descendant(
+          of: find.byKey(panes.first.cellKey),
           matching: find.byType(PromptContextView),
-        );
-        expect(
-          find.descendant(of: header, matching: find.byType(ClipPath)),
-          findsWidgets,
-        );
-      }
+        ),
+        findsNothing,
+      );
       await _capture(tester, boundary, 'live-panes-customization');
       await tester.tap(find.byKey(const ValueKey('customize-appearance')));
       await tester.pumpAndSettle();
@@ -442,9 +448,9 @@ void main() {
       expect(find.byKey(const ValueKey('harness-start-results')), findsNothing);
       expect(tester.widget<TextField>(start).controller!.text, 'Keep my query');
       expect(tester.takeException(), isNull);
-      for (final style in PromptStyle.values) {
+      for (final style in StatusLineStyle.values) {
         appearancePrefsStore.value = appearancePrefsStore.value.copyWith(
-          prompt: PromptPrefs(style: style),
+          prompt: PromptPrefs(statusStyle: style),
         );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);

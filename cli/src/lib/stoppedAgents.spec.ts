@@ -125,6 +125,27 @@ it('reserves allocation across daemon restarts and different receipt IDs', async
   expect(store.beginResume(saved.agentId)).not.toBeNull()
 })
 
+// A reservation left behind by a crash can be half-written, and that is exactly the one the
+// age-based takeover in `resumeAgentService` has to be able to clear.
+it('reports how long a reservation has been held, and clears a half-written one', async () => {
+  const { store, saved } = await fixture()
+  const before = Date.now()
+  expect(store.resumeReservedAt(saved.agentId)).toBeNull()
+  const token = store.beginResume(saved.agentId)!
+  const held = store.resumeReservedAt(saved.agentId)
+  expect(held).not.toBeNull()
+  expect(held!).toBeGreaterThanOrEqual(before - 1000)
+
+  writeFileSync(join(directory, 'stopped-agents', `${saved.agentId}.resume`), '{"token": "trunc')
+  // A caller clearing ITS OWN reservation still has to read the marker to know it is its own.
+  expect(() => store.finishResume(saved.agentId, token)).toThrow()
+  expect(store.resumeReservedAt(saved.agentId)).not.toBeNull()
+  // A caller taking it over is not asking whose it is.
+  store.finishResume(saved.agentId)
+  expect(store.resumeReservedAt(saved.agentId)).toBeNull()
+  expect(store.beginResume(saved.agentId)).not.toBeNull()
+})
+
 it('keeps readable archives discoverable beside corrupt, unsupported and mismatched records', async () => {
   const { saved, store } = await fixture()
   expect(store.list()).toEqual([])

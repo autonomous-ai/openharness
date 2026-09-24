@@ -1,3 +1,6 @@
+import type { DeviceInputStatus } from './input.js'
+import type { AutonomousDeviceStore } from './store.js'
+import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { createHash, randomUUID } from 'node:crypto'
 
 export type AutonomousDeviceFrame = Record<string, unknown> & { type: string }
@@ -5,13 +8,15 @@ export type ReceiptState = 'queued' | 'delivered' | 'started' | 'completed' | 'r
 export interface AutonomousDeviceReceipt {
   idempotencyKey: string; deliveryId: string; operation: string; state: ReceiptState
   agentId: string; machineId: string; serverInstanceId: string; turnId: string | null
+  input?: Pick<DeviceInputStatus, 'mode' | 'phase'>
   error: { code: string; message: string } | null; at: number
 }
-export interface AutonomousDeviceAgent { agentId: string; name: string; engine: string; state: string }
+export interface AutonomousDeviceAgent { agentId: string; name: string; engine: string; state: string; packageId?: string | null; workspace?: string | null; runtime?: string }
 
 const AGENT_RECAP_MAX_CHARS = 200
 export interface AutonomousDeviceDelivery { deliveryId: string; sessionId: string; state: ReceiptState; reason?: string }
 export interface AutonomousDeviceServiceOptions {
+  store?: AutonomousDeviceStore
   machineId: string; serverInstanceId?: string; now?: () => number
   agents: () => AutonomousDeviceAgent[]
   requestAppFocus?: (agentId: string, expiresAt: number, focusRevision: string) => boolean
@@ -72,6 +77,11 @@ export class AutonomousDeviceService {
   private readonly entries = new Map<string, Entry>()
   private readonly deliveries = new Map<string, Entry>()
   private readonly turns = new Map<string, Entry>()
+  // Transcript adapters expose session boundaries, not engine input/turn IDs. Once
+  // inputs overlap, a session-wide done cannot prove which request finished.
+  private readonly ambiguousTurns = new Set<string>()
+  private readonly openTurns = new Set<string>()
+  private readonly pendingStarts = new Set<string>()
   private readonly questions = new Map<string, { requestId: string; questions: unknown }>()
   private events: AutonomousDeviceFrame[] = []
   private sequence = 0
@@ -210,22 +220,50 @@ export class AutonomousDeviceService {
   }
   private update(entry: Entry, state: ReceiptState, code?: string): void {
     if (['completed', 'rejected'].includes(entry.receipt.state)) return
-    if (state === 'delivered' && entry.receipt.state === 'started') return
+    if ((state === 'delivered' || state === 'started') && entry.receipt.state === 'started') return
     entry.receipt.state = state
     entry.receipt.at = this.now()
     entry.receipt.error = code ? { code, message: code === 'NOT_CONFIRMED' ? 'Delivery could not be confirmed; inspect the agent before retrying.' : code } : null
     if (state === 'started') {
       entry.receipt.turnId ??= randomUUID()
-      this.turns.set(entry.receipt.agentId, entry)
+      const agentId = entry.receipt.agentId
+      const previous = this.turns.get(agentId)
+      if (this.openTurns.has(agentId) || this.ambiguousTurns.has(agentId) || (previous && previous !== entry)) {
+        this.ambiguousTurns.add(agentId)
+        this.turns.delete(agentId)
+        if (previous) this.update(previous, 'unknown', 'OVERLAPPING_INPUTS')
+        this.update(entry, 'unknown', 'OVERLAPPING_INPUTS')
+        return
+      }
+      this.turns.set(agentId, entry)
+      this.pendingStarts.add(agentId)
     }
     this.event('receipt.updated', entry.receipt.agentId, { receipt: structuredClone(entry.receipt), idempotencyKey: entry.receipt.idempotencyKey })
   }
+  agentGone(agentId: string): void {
+    this.turns.delete(agentId)
+    this.openTurns.delete(agentId)
+    this.pendingStarts.delete(agentId)
+    this.ambiguousTurns.delete(agentId)
+    for (const entry of this.deliveries.values()) {
+      if (entry.receipt.agentId === agentId && entry.receipt.operation === 'turn.send'
+        && !['completed', 'rejected'].includes(entry.receipt.state)) this.update(entry, 'unknown', 'AGENT_GONE')
+    }
+  }
+  inputStatus(event: DeviceInputStatus): void {
+    const entry = this.deliveries.get(event.deliveryId)
+    if (!entry || entry.receipt.agentId !== event.sessionId) return
+    if (['completed', 'rejected'].includes(entry.receipt.state)) return
+    entry.receipt.input = { mode: event.mode, phase: event.phase }
+    this.event('receipt.updated', event.sessionId, { receipt: structuredClone(entry.receipt), idempotencyKey: entry.receipt.idempotencyKey })
+  }
   delivery(event: AutonomousDeviceDelivery): void {
     const entry = this.deliveries.get(event.deliveryId)
-    if (!entry) return
+    if (!entry || entry.receipt.agentId !== event.sessionId) return
     this.update(entry, event.state, event.reason)
   }
   revoke(deviceId: string): void {
+    this.options.store?.revoke(deviceId)
     for (const [key, entry] of this.entries) if (entry.deviceId === deviceId) {
       this.options.cancelDelivery(entry.receipt.deliveryId)
       this.deliveries.delete(entry.receipt.deliveryId)
@@ -257,10 +295,22 @@ export class AutonomousDeviceService {
     for (const event of this.events) if (Number(event.eventId) > Number(resume?.cursor)) send(event)
   }
   turnStarted(agentId: string): void {
+    this.openTurns.add(agentId)
+    if (!this.pendingStarts.delete(agentId)) {
+      const previous = this.turns.get(agentId)
+      if (previous) {
+        this.turns.delete(agentId)
+        this.ambiguousTurns.add(agentId)
+        this.update(previous, 'unknown', 'OVERLAPPING_INPUTS')
+      }
+    }
     const entry = this.turns.get(agentId)
     this.event('turn.started', agentId, entry ? { turnId: entry.receipt.turnId, idempotencyKey: entry.receipt.idempotencyKey } : {})
   }
   turnEnded(agentId: string, aborted = false): void {
+    this.ambiguousTurns.delete(agentId)
+    this.openTurns.delete(agentId)
+    this.pendingStarts.delete(agentId)
     const entry = this.turns.get(agentId)
     if (entry) {
       this.update(entry, aborted ? 'unknown' : 'completed', aborted ? 'TURN_INTERRUPTED' : undefined)
@@ -282,13 +332,15 @@ export class AutonomousDeviceService {
       this.event(p.kind === 'summary' ? 'turn.summary' : p.kind === 'tool' ? 'turn.tool' : 'agent.error', agentId, full ? { ...p, fullText: full } : p)
     }
   }
+  get capabilities(): string[] { return [...AUTONOMOUS_DEVICE_CAPABILITIES, 'input.status.v1', ...(this.options.store ? DEVICE_STORE_CAPABILITIES : [])] }
   async request(deviceId: string, req: Record<string, unknown>): Promise<AutonomousDeviceFrame> {
     const type = typeof req.type === 'string' ? req.type : 'invalid'
     const response = (data: Record<string, unknown>): AutonomousDeviceFrame => ({ type: `${type}_result`, requestId: req.requestId, ...data })
     let reserved: Entry | undefined
     try {
       if (!UUID.test(String(req.requestId))) fail('INVALID_REQUEST', 'requestId must be a UUIDv4')
-      if (!AUTONOMOUS_DEVICE_CAPABILITIES.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
+      if (type === 'input.status.v1' || !this.capabilities.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
+      if ((DEVICE_STORE_CAPABILITIES as readonly string[]).includes(type)) return response(await this.options.store!.request(deviceId, req))
       const allowed = ['type', 'requestId', ...(['agents.list', 'focus.get', 'focus.ensure'].includes(type) ? [] : type === 'receipt.get' ? ['idempotencyKey'] : type === 'focus.step' ? ['direction', 'idempotencyKey', 'focusRevision'] : type === 'scroll' ? ['phase', 'dy', 'velocity'] : ['machineId', 'agentId']),
         ...(MUTATIONS.has(type) ? ['idempotencyKey'] : []), ...(type === 'turn.send' ? ['text', 'focusRevision'] : type === 'question.answer' ? ['questionRequestId', 'answers', 'focusRevision'] : type === 'recap' ? ['n'] : [])]
       if (Object.keys(req).some(k => !allowed.includes(k))) fail('INVALID_REQUEST', 'Unknown request field')
@@ -364,7 +416,7 @@ export class AutonomousDeviceService {
         reserved.receipt.error = { code: 'INTERNAL', message: 'Reserved operation could not be confirmed' }
         return response({ status: 'accepted', receipt: structuredClone(reserved.receipt) })
       }
-      return response({ error: { code: e instanceof RequestError ? e.code : 'INTERNAL', message: e instanceof RequestError ? e.message : 'Request failed' } })
+      return response({ error: { code: e instanceof RequestError || e instanceof DeviceStoreError ? e.code : 'INTERNAL', message: e instanceof RequestError || e instanceof DeviceStoreError ? e.message : 'Request failed' } })
     }
   }
 }

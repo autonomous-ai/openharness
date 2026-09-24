@@ -31,7 +31,8 @@ class _Connection extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) {
     calls.add((type, Map.of(payload)));
-    return answer?.call(type, payload) ?? Future.value({});
+    return answer?.call(type, payload) ??
+        Future.value(type == 'agent_delete' ? {'deleted': true} : {});
   }
 }
 

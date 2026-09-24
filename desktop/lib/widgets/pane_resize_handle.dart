@@ -204,7 +204,7 @@ class _PaneResizeHandleState extends State<PaneResizeHandle> {
                 child: AnimatedContainer(
                   duration: MediaQuery.disableAnimationsOf(context)
                       ? Duration.zero
-                      : const Duration(milliseconds: 100),
+                      : grid.AppMotion.hover,
                   width: _horizontal ? 3 : 36,
                   height: _horizontal ? 36 : 3,
                   decoration: BoxDecoration(

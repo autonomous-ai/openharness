@@ -34,7 +34,7 @@ test('fresh initialization follows the CLI\'s active selection when there is one
   const selected=[];const select=async(_host,mode,grid)=>{selected.push([mode,grid]);return {ok:true,active:grid};};
   const {config,connection}=await initializeWorkspace(dir,{profilePath,discover,runJson,select,email:async()=>'tuan.dev@autonomous.ai'});
   assert.equal(config.grid,'autonomous.ai');assert.equal(connection.source,'Grid selection');
-  assert.deepEqual(calls.filter(c=>c[1]==='engines'),[['remote','engines','autonomous.ai']]);
+  assert.deepEqual(calls.filter(c=>c[1]==='engines'),[['remote','engines','autonomous.ai','--no-wake']]);
   assert.deepEqual(selected,[],'an existing selection is never rewritten');
 });
 test('with no selection yet, the signed-in user\'s own private grid is chosen AND selected, so the CLI agrees',async t=>{

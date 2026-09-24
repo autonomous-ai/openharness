@@ -79,6 +79,7 @@ export class Panel {
       const val = el('span', 'val', '0')
       const slider = document.createElement('input')
       slider.type = 'range'
+      slider.setAttribute('aria-label', `Control ${a.name}`)
       const [lo, hi] = a.range ?? [-1, 1]
       slider.min = String(lo); slider.max = String(hi); slider.step = String((hi - lo) / 1000)
       slider.addEventListener('input', () => this.h.onCtrl(a.id, Number(slider.value)))
@@ -107,6 +108,7 @@ export class Panel {
       if (j.type === 'hinge' || j.type === 'slide') {
         slider = document.createElement('input')
         slider.type = 'range'
+        slider.setAttribute('aria-label', `Pose ${j.name}`)
         const [lo, hi] = j.range ?? (j.type === 'hinge' ? [-Math.PI, Math.PI] : [-1, 1])
         slider.min = String(lo); slider.max = String(hi); slider.step = String((hi - lo) / 1000)
         slider.addEventListener('input', () => this.h.onJoint(j.id, Number(slider.value)))

@@ -290,8 +290,15 @@ function applyShared(v) {
   if (!draggingReview) { $('reviewRange').value = S.reviewBelow; $('reviewVal').textContent = S.reviewBelow.toFixed(2) }
   if (v.ghost) applyGhost(v.ghost)
   if (v.client) S.client = v.client
-  // Own data with no key: say plainly that the stand-in is not the real model.
-  $('standin').classList.toggle('hidden', !(S.own && S.client === 'mock'))
+  if (typeof v.offline === 'boolean') S.offline = v.offline
+  // The shared HUD describes machine-wide credentials. A practice project deliberately ignores them.
+  document.querySelector('[data-jev-hud]').hidden = !!S.offline
+  $('costLabel').textContent = S.client === 'mock' ? 'est. live cost' : 'cost so far'
+  // Label practice for sample rows too, including when a live key is present on this machine.
+  $('standin').classList.toggle('hidden', S.client !== 'mock')
+  $('standin').textContent = S.offline
+    ? 'Offline practice. A word-matching stand-in fills these cells and Question Lab. No new live model calls are made. These answers do not establish model quality.'
+    : 'These are not real model answers. An offline stand-in is matching words. Connect a key in the Jev · live mind panel to ask the real model.'
   renderFilterChip()
   dirty.top = dirty.hist = dirty.find = true
 }

@@ -35,6 +35,8 @@ vi.mock('ioredis', () => {
     unsubscribe = vi.fn(async () => 1)
     quit = vi.fn(async () => 'OK')
     on = vi.fn()
+    eval = vi.fn(async () => 0)
+    get = vi.fn(async (_key: string): Promise<string | null> => null)
     pipelines: FakePipeline[] = []
     pipeline() { const p = new FakePipeline(); this.pipelines.push(p); return p }
     opts: unknown
@@ -42,13 +44,18 @@ vi.mock('ioredis', () => {
   }
   return { Redis: FakeRedis }
 })
-vi.mock('../config/env.js', () => ({ env: { REDIS_URL: 'redis://test' } }))
+vi.mock('../config/env.js', () => ({ env: {
+  REDIS_URL: 'redis://test',
+  HARNESS_NEW_MACHINE_PER_HOUR: 5, HARNESS_NEW_MACHINE_PER_DAY: 20,
+  HARNESS_NEW_DEVICE_PER_HOUR: 5, HARNESS_NEW_DEVICE_PER_DAY: 20,
+} }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }))
 
 const bus = await import('./bus.js')
 type MockFn = ReturnType<typeof vi.fn>
 const pub = state.instances[0] as unknown as {
   publish: MockFn; subscribe: MockFn; opts: unknown
+  eval: MockFn; get: MockFn
   pipelines: Array<{ calls: Array<{ cmd: string; args: unknown[] }> }>
 }
 
@@ -122,5 +129,61 @@ describe('setAgentClientCountsBatch HEXPIRE fallback', () => {
     const created = pipelinesOf().slice(before)
     const expireCalls = created.flatMap((p) => p.calls).filter((c) => c.cmd === 'expire')
     expect(expireCalls).toHaveLength(0)
+  })
+})
+
+describe('clearDevicePresence', () => {
+  beforeEach(() => { pub.eval.mockClear(); pub.get.mockClear(); pub.eval.mockResolvedValue(0) })
+
+  it('reports `cleared` when the key is gone afterwards, and only deletes on a token match', async () => {
+    pub.get.mockResolvedValue(null)
+    expect(await bus.clearDevicePresence('dev-1', 'tok-1')).toBe('cleared')
+    const [script, keyCount, key, token] = pub.eval.mock.calls[0]
+    expect(script).toContain("redis.call('del', KEYS[1])")
+    expect(script).toContain('== ARGV[1]')
+    expect(keyCount).toBe(1)
+    expect(key).toContain('dev-1')
+    expect(token).toBe('tok-1')
+  })
+
+  it('reports `superseded` when a newer connection still holds the key', async () => {
+    pub.get.mockResolvedValue('tok-2')
+    expect(await bus.clearDevicePresence('dev-1', 'tok-1')).toBe('superseded')
+  })
+
+  it('reports `unknown` — never `superseded` — when Redis is unreachable', async () => {
+    pub.eval.mockRejectedValue(new Error('ECONNREFUSED'))
+    expect(await bus.clearDevicePresence('dev-1', 'tok-1')).toBe('unknown')
+    pub.eval.mockResolvedValue(0)
+    pub.get.mockRejectedValue(new Error('ECONNREFUSED'))
+    expect(await bus.clearDevicePresence('dev-1', 'tok-1')).toBe('unknown')
+  })
+})
+
+describe('consumeNewIdQuota', () => {
+  beforeEach(() => { pub.eval.mockReset() })
+
+  it('counts an hour and a day window per kind and user, in one atomic call', async () => {
+    pub.eval.mockResolvedValue([1, 1])
+    expect(await bus.consumeNewIdQuota('device', 'u1')).toBe(true)
+    const [script, keyCount, ...rest] = pub.eval.mock.calls[0]
+    expect(script).toContain("redis.call('incr', key)")
+    expect(keyCount).toBe(2)
+    expect(rest.slice(0, 2)).toEqual(['newid:device:u1:h', 'newid:device:u1:d'])
+    expect(rest.slice(2)).toEqual([3_600_000, 86_400_000])
+  })
+
+  it('allows up to the limit and refuses past it, in either window', async () => {
+    pub.eval.mockResolvedValue([5, 5])
+    expect(await bus.consumeNewIdQuota('machine', 'u1')).toBe(true)
+    pub.eval.mockResolvedValue([6, 6])
+    expect(await bus.consumeNewIdQuota('machine', 'u1')).toBe(false)
+    pub.eval.mockResolvedValue([1, 21])
+    expect(await bus.consumeNewIdQuota('machine', 'u1')).toBe(false)
+  })
+
+  it('fails open when Redis is unreachable', async () => {
+    pub.eval.mockRejectedValue(new Error('ECONNREFUSED'))
+    expect(await bus.consumeNewIdQuota('device', 'u1')).toBe(true)
   })
 })

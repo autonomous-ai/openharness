@@ -1,11 +1,16 @@
 /** Version facts only: reading the Store never fetches or executes package code. */
 import type { InstalledDshRecord } from './installed.js'
-import type { DshRegistryEntry } from './registry.js'
+import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
 export const GIT_REVISION_RE = /^[a-f0-9]{40}$/i
 
 export function samePackageSource(installed: InstalledDshRecord, entry: DshRegistryEntry): boolean {
-  const normalize = (source: string): string => source.replace(/\/$/, '').replace(/\.git$/, '')
+  const normalize = (source: string): string => {
+    const repo = source.replace(/\/$/, '').replace(/\.git$/, '')
+    // This is the same official repository before its rename. Do not infer aliases from ids
+    // or follow arbitrary redirects: a catalog entry must never replace a private fork.
+    return repo === 'https://github.com/autonomous-ai/autonomous-harness' ? HARNESS_MONOREPO : repo
+  }
   return normalize(installed.source) === normalize(entry.repo) && (installed.path ?? '') === (entry.path ?? '')
 }
 

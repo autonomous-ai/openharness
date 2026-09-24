@@ -1,3 +1,4 @@
+import { prepareHarnessLaunch } from './runtime.js'
 import { updateDsh } from './update.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
@@ -8,7 +9,7 @@ import { env } from '../config/env.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, readInstalledIndex, upsertInstalledRecord } from './installed.js'
 import { installDsh, removeDsh, type DshInstallProgress } from './install.js'
 import { materializeWorkspace } from './materialize.js'
-import { dshUpdateInfo } from './updates.js'
+import { dshUpdateInfo, samePackageSource } from './updates.js'
 import { type DshRegistryEntry } from './registry.js'
 import { dshListRows } from './wire.js'
 
@@ -158,8 +159,9 @@ describe('package updates', { timeout: 30_000 }, () => {
       const workspace = join(root, 'workspace')
       mkdirSync(workspace)
       await materializeWorkspace(before, workspace)
+      const launch = prepareHarnessLaunch(before, workspace, 'claude', 'session')
       write(workspace, { 'project.txt': 'my finished work\n', 'AGENTS.md': 'my custom instructions\n', '.harness/verdict.json': '{"ready":true}', 'notes.md': 'my notes' })
-      const skill = join(workspace, '.claude', 'skills', 'task')
+      const skill = join(launch.env.HARNESS_SKILLS_DIR!, 'task')
       const link = readlinkSync(skill)
       const dir = path ? join(repo, path) : repo
       write(dir, { 'skills/task/SKILL.md': '# Updated skill\n', 'AGENTS.md': '# New instructions\n', 'template/project.txt': 'new template\n' })
@@ -211,6 +213,51 @@ describe('package updates', { timeout: 30_000 }, () => {
     expect(dshUpdateInfo(installedDsh(id)!, unrelated).updateAvailable).toBe(false)
     expect((await update(unrelated)).ok).toBe(true)
     expect(installedDsh(id)?.commit).toBe(ref)
+  })
+
+  it('offers the official repository rename as an update without treating other sources or folders as aliases', async () => {
+    const repo = create('store/agents/thing')
+    await installDsh({ source: repo, path: 'store/agents/thing' })
+    const record = { ...installedDsh(id)!, source: 'https://github.com/autonomous-ai/autonomous-harness.git/', revision: 'a'.repeat(40) }
+    const entry = { ...catalog(repo, record.commit!, record.path ?? undefined), repo: 'https://github.com/autonomous-ai/openharness', ref: 'b'.repeat(40), revision: 'c'.repeat(40) }
+    expect(dshUpdateInfo(record, entry)).toMatchObject({ updateAvailable: true, availableCommit: entry.ref })
+    expect(samePackageSource({ ...record, source: entry.repo }, { ...entry, repo: record.source })).toBe(true)
+    for (const source of [
+      'https://github.com/someone/autonomous-harness',
+      'https://github.com/someone/openharness',
+      'https://example.test/autonomous-ai/autonomous-harness',
+      'https://github.com/autonomous-ai/autonomous-harness-extra',
+    ]) expect(dshUpdateInfo({ ...record, source }, entry).updateAvailable).toBe(false)
+    expect(dshUpdateInfo(record, { ...entry, path: 'store/agents/other' }).updateAvailable).toBe(false)
+    expect(dshUpdateInfo({ ...record, linked: true }, entry).updateAvailable).toBe(false)
+  })
+
+  it('updates a legacy official install from the canonical catalog source and preserves its workspace', async () => {
+    const path = 'store/agents/thing'
+    const repo = create(path)
+    await installDsh({ source: repo, path, ref: 'main' })
+    const before = installedDsh(id)!
+    const workspace = join(root, 'my-project')
+    mkdirSync(workspace)
+    await materializeWorkspace(before, workspace)
+    write(workspace, { 'project.txt': 'my authored work\n' })
+    const legacy = 'https://github.com/autonomous-ai/autonomous-harness'
+    const canonical = 'https://github.com/autonomous-ai/openharness'
+    upsertInstalledRecord({ ...before, source: legacy, ref: 'viewer-packages' })
+    write(join(repo, path), { 'AGENTS.md': '# Current featured experience\n' })
+    const entry = { ...catalog(repo, commit(repo), path), repo: canonical }
+    // Exercise real clone/setup/doctor without the network. Using the legacy URL would fail.
+    vi.stubEnv('GIT_CONFIG_COUNT', '2')
+    vi.stubEnv('GIT_CONFIG_KEY_0', `url.${repo}.insteadOf`)
+    vi.stubEnv('GIT_CONFIG_VALUE_0', canonical)
+    vi.stubEnv('GIT_CONFIG_KEY_1', `url.${join(root, 'retired-repo')}.insteadOf`)
+    vi.stubEnv('GIT_CONFIG_VALUE_1', legacy)
+    const result = await update(entry)
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(installedDsh(id)).toMatchObject({ source: canonical, ref: entry.ref, commit: entry.ref, revision: entry.revision })
+    expect(readFileSync(join(before.dir, 'AGENTS.md'), 'utf8')).toBe('# Current featured experience\n')
+    expect(readFileSync(join(workspace, 'project.txt'), 'utf8')).toBe('my authored work\n')
+    expect(dshUpdateInfo(installedDsh(id)!, entry).updateAvailable).toBe(false)
   })
 
   it('records local clone sources absolutely so updates do not depend on the original working directory', async () => {

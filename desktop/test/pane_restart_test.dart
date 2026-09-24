@@ -1,7 +1,6 @@
-import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_screen_test.dart' show mount, terminal;
@@ -44,7 +43,7 @@ void main() {
       'The engine could not restart.',
     ),
   ]) {
-    testWidgets('pane restarts its own harness and reports $reply', (
+    testWidgets('File restart targets the focused harness and reports $reply', (
       tester,
     ) async {
       final connection = _RestartConnection(reply);
@@ -53,23 +52,37 @@ void main() {
       final first = app.adoptSessionForTest(terminal('a0', []));
       final session = first.session;
       final second = app.adoptSessionForTest(terminal('a1', []));
-      await mount(tester, app);
-      expect(app.focusedPane, same(second));
-      final controls = find.byType(PaneHeaderActions).first;
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: tester.getCenter(controls));
-      await tester.pump(const Duration(milliseconds: 120));
-      await tester.tap(
-        find.descendant(
-          of: controls,
-          matching: find.byTooltip('Restart Harness'),
+      const channel = MethodChannel('harness/swarm_tabs');
+      final updates = <Map>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
         ),
+      );
+      await mount(tester, app, nativeTabs: true);
+      expect(app.focusedPane, same(second));
+      app.focusPane(first.id);
+      await tester.pump();
+      expect((updates.last['paneActions'] as Map)['restartAgent'], isTrue);
+      tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        channel.name,
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('restartAgent'),
+        ),
+        (_) {},
       );
       await tester.pumpAndSettle();
       // Each pane header's model picker also asks for grid_models_list as it mounts; the restart is
       // the one request that is not that.
       final sent = connection.calls
-          .where((call) => call.$1 != 'grid_models_list')
+          .where((call) => call.$1 == 'agent_restart')
           .toList();
       expect(sent, hasLength(1));
       expect(sent.single.$1, 'agent_restart');
@@ -85,17 +98,7 @@ void main() {
       app.machineStates['m']!.nodeOnline = false;
       app.notifyListeners();
       await tester.pump();
-      final restart = tester.widget<IconButton>(
-        find.descendant(
-          of: controls,
-          matching: find.byWidgetPredicate(
-            (widget) =>
-                widget is IconButton && widget.tooltip == 'Restart Harness',
-          ),
-        ),
-      );
-      expect(restart.onPressed, isNull);
-      await mouse.removePointer();
+      expect((updates.last['paneActions'] as Map)['restartAgent'], isFalse);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     });

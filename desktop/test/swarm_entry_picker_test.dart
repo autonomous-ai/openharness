@@ -27,7 +27,7 @@ void main() {
           tester.widget<TextField>(_startInput).focusNode!.requestFocus();
         }
         await tester.pump();
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
         expect(tester.widget<TextField>(_input).controller!.text, '>');
         expect(
           find.textContaining('run command', findRichText: true),
@@ -195,7 +195,7 @@ void main() {
           expect(app.activeSwarm.isNewTabPage, isTrue);
           final created = app.activeSwarmId;
           expect(_results, findsNothing);
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
           expect(_results, findsOneWidget);
           expect(_startInput, findsNothing);
           if (dismissal == 'outside') {
@@ -226,7 +226,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(_input, 'Agent 12');
       await tester.pump();
       final text = tester.widget<TextField>(_input).controller!;
@@ -247,7 +247,7 @@ void main() {
       expect(_results, findsNothing);
       expect(_startInput, findsOneWidget);
       expect(tester.widget<TextField>(_startInput).focusNode!.hasFocus, isTrue);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       expect(tester.widget<TextField>(_input).controller!.text, '>');
       expect(
         tester.widget<TextField>(_input).decoration!.hintText,
@@ -269,7 +269,7 @@ void main() {
     app.newSwarm();
     final destination = app.activeSwarmId;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(_input, 'Agent 0');
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

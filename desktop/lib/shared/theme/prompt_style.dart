@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'status_line_style.dart';
+
 const kHarnessPromptMarker = '>_';
 
 enum PromptStyle {
@@ -22,9 +24,11 @@ class PromptPrefs {
     this.machine = true,
     this.project = true,
     this.branch = true,
+    this.statusStyle = StatusLineStyle.standard,
   });
 
   final PromptStyle style;
+  final StatusLineStyle statusStyle;
   final bool color, machine, project, branch;
 
   PromptPrefs copyWith({
@@ -33,12 +37,14 @@ class PromptPrefs {
     bool? machine,
     bool? project,
     bool? branch,
+    StatusLineStyle? statusStyle,
   }) => PromptPrefs(
     style: style ?? this.style,
     color: color ?? this.color,
     machine: machine ?? this.machine,
     project: project ?? this.project,
     branch: branch ?? this.branch,
+    statusStyle: statusStyle ?? this.statusStyle,
   );
 
   Map<String, Object> toJson() => {
@@ -47,6 +53,7 @@ class PromptPrefs {
     'machine': machine,
     'project': project,
     'branch': branch,
+    'statusStyle': statusStyle.name,
   };
 
   factory PromptPrefs.fromJson(Object? json) {
@@ -58,6 +65,7 @@ class PromptPrefs {
       machine: flag('machine'),
       project: flag('project'),
       branch: flag('branch'),
+      statusStyle: StatusLineStyle.fromId(json['statusStyle']),
     );
   }
 
@@ -65,13 +73,15 @@ class PromptPrefs {
   bool operator ==(Object other) =>
       other is PromptPrefs &&
       other.style == style &&
+      other.statusStyle == statusStyle &&
       other.color == color &&
       other.machine == machine &&
       other.project == project &&
       other.branch == branch;
 
   @override
-  int get hashCode => Object.hash(style, color, machine, project, branch);
+  int get hashCode =>
+      Object.hash(style, statusStyle, color, machine, project, branch);
 }
 
 /// Identity supplied by the catalog, never inferred by parsing display text.

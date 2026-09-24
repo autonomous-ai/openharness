@@ -92,7 +92,7 @@ void main() {
     expect(find.byType(SettingsScreen), findsNothing);
     expect(find.byType(Placeholder), findsOneWidget);
     expect(find.byType(HarnessCustomizePane), findsOneWidget);
-    for (final label in ['Pane', 'Appearance', 'Terminal']) {
+    for (final label in ['Status', 'Appearance', 'Terminal']) {
       expect(find.text(label), findsOneWidget);
     }
     await tester.tap(find.byKey(const ValueKey('customize-appearance')));

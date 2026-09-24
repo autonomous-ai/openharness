@@ -2,138 +2,140 @@ import 'package:flutter/material.dart';
 
 import '../bootstrap/environment_provisioner.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import 'login_relay_diagram.dart';
+import 'box_chrome.dart';
+import 'terminal_progress.dart';
 
-/// The quiet read-only gate shown before either sign-in or environment setup.
+/// The read-only gate shown before either sign-in or environment setup.
 ///
-/// This is deliberately not part of the environment setup wizard: a computer that
-/// is already ready should never look as though it has entered an installer.
-/// The ready state has no artificial dwell or action; it stays visible only
-/// while the app asks the local Harness CLI whether this user is signed in.
+/// Printed as a session, not as a screen: a prompt line, one line per thing
+/// checked with its answer in the same column, a bar counting what is done, and
+/// a cursor waiting at the end. Everything is the terminal's face at the
+/// terminal's size — one cell size, the way a terminal has one (owner,
+/// 2026-09-23). A person who has lived in a terminal has read this exact shape
+/// ten thousand times, which is the welcome.
+///
+/// The figure is honest because it is counted: each dependency the provisioner
+/// probed is a line, and the bar is how many of them have answered.
+///
+/// This is deliberately not part of the environment setup wizard: a computer
+/// that is already ready should never look as though it has entered an
+/// installer. The ready state has no artificial dwell or action; it stays
+/// visible only while the app asks the local Harness CLI whether this user is
+/// signed in.
 class EnvironmentPreflightScreen extends StatelessWidget {
   const EnvironmentPreflightScreen({super.key, required this.readiness});
 
   final EnvironmentReadiness readiness;
 
+  /// What each dependency is called in the print-out. The enum names the thing
+  /// the app runs; these name it the way the person would say it.
+  static const _labels = {
+    EnvironmentStep.tmux: 'tmux',
+    EnvironmentStep.harness: 'harness cli',
+    EnvironmentStep.clipboard: 'clipboard helper',
+  };
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final ready = readiness.isReady;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final steps = readiness.steps.entries
+        .where((entry) => _labels.containsKey(entry.key))
+        .toList();
+    final settled = steps.where((entry) => _settled(entry.value)).length;
+    final value = steps.isEmpty ? (ready ? 1.0 : null) : settled / steps.length;
 
     return Scaffold(
-      backgroundColor: grid.AppPalette.panelBg,
-      body: Stack(
-        children: [
-          const Positioned.fill(child: LoginAurora()),
-          Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(32),
-                  decoration: BoxDecoration(
-                    color: grid.AppGlass.surfaceFill,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: grid.AppCard.shadow,
-                  ),
-                  child: Semantics(
-                    key: const Key('environment-status'),
-                    container: true,
-                    liveRegion: true,
-                    label: 'Harness setup status',
-                    child: AnimatedSwitcher(
-                      duration: reduceMotion
-                          ? Duration.zero
-                          : const Duration(milliseconds: 180),
-                      child: ready
-                          ? const _ReadyContent(
-                              key: ValueKey('environment-ready'),
-                            )
-                          : const _CheckingContent(
-                              key: ValueKey('environment-checking'),
+      backgroundColor: grid.AppPalette.swarmField,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 470),
+            child: TerminalBox(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                child: Semantics(
+                  key: const Key('environment-status'),
+                  container: true,
+                  liveRegion: true,
+                  label: 'Harness setup status',
+                  value: ready ? 'Environment ready' : 'Checking this computer',
+                  child: ExcludeSemantics(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$kBootPrompt harness doctor',
+                          style: boxMonoStyle(weight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 8),
+                        for (final entry in steps) ...[
+                          TerminalCheckLine(
+                            label: _labels[entry.key]!,
+                            status: _status(entry.value),
+                            ink: _ink(entry.value),
+                          ),
+                          const SizedBox(height: 1),
+                        ],
+                        const SizedBox(height: 9),
+                        TerminalProgressLine(
+                          value: ready ? 1 : value,
+                          color: ready ? grid.AppPalette.online : null,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                ready
+                                    ? 'all checks passed · opening your workspace'
+                                    : 'read-only: nothing is installed by this check',
+                                style: boxMonoStyle(
+                                  color: ready ? null : kBoxFaint,
+                                ),
+                              ),
                             ),
+                            const SizedBox(width: 6),
+                            const TerminalCursor(),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
-}
 
-class _CheckingContent extends StatelessWidget {
-  const _CheckingContent({super.key});
+  /// A step that has answered, whichever answer it gave.
+  static bool _settled(EnvironmentStepStatus status) => switch (status) {
+    EnvironmentStepStatus.pending || EnvironmentStepStatus.running => false,
+    _ => true,
+  };
 
-  @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      SizedBox(
-        width: 34,
-        height: 34,
-        child: MediaQuery.disableAnimationsOf(context)
-            ? Icon(
-                Icons.hourglass_empty_rounded,
-                size: 34,
-                color: Theme.of(context).colorScheme.primary,
-              )
-            : const CircularProgressIndicator(strokeWidth: 2.5),
-      ),
-      const SizedBox(height: 24),
-      Text(
-        'Checking this computer',
-        textAlign: TextAlign.center,
-        style: grid.AppType.display(),
-      ),
-      const SizedBox(height: 8),
-      Text(
-        'Verifying the tools Harness needs. This check is read-only and nothing is being installed.',
-        textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.bodySmall,
-      ),
-    ],
-  );
-}
+  /// The word in the right-hand column, in a terminal's vocabulary.
+  static String _status(EnvironmentStepStatus status) => switch (status) {
+    EnvironmentStepStatus.ready => 'ok',
+    EnvironmentStepStatus.notApplicable => 'n/a',
+    EnvironmentStepStatus.failed => 'fail',
+    EnvironmentStepStatus.unavailable => 'missing',
+    EnvironmentStepStatus.needsTerminal => 'needs a terminal',
+    EnvironmentStepStatus.running => '..',
+    EnvironmentStepStatus.pending => '--',
+  };
 
-class _ReadyContent extends StatelessWidget {
-  const _ReadyContent({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final success = grid.AppPalette.online;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: success.withValues(alpha: 0.12),
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: Icon(Icons.check_rounded, size: 28, color: success),
-        ),
-        const SizedBox(height: 20),
-        Text(
-          'Environment ready',
-          textAlign: TextAlign.center,
-          style: grid.AppType.display(),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'All required tools passed verification.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ],
-    );
-  }
+  static Color? _ink(EnvironmentStepStatus status) => switch (status) {
+    EnvironmentStepStatus.ready => grid.AppPalette.online,
+    EnvironmentStepStatus.failed ||
+    EnvironmentStepStatus.unavailable => grid.AppPalette.dangerFill,
+    EnvironmentStepStatus.needsTerminal => grid.AppPalette.warn,
+    _ => null,
+  };
 }

@@ -221,12 +221,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .draft-head, .keep-row { display: flex; gap: 10px; align-items: center; }
 .draft-head { margin-bottom: 6px; }
 #draft-details { color: var(--h-ink2); font-size: 11px; }
+#take-level { color: var(--h-err); font-size: 12px; margin: 6px 0; }
 .grow { flex: 1; }
 #take-wave { display: block; width: 100%; height: 52px; border-radius: 5px; background: var(--h-card); cursor: pointer; }
 #take-audio { display: block; width: 100%; height: 34px; margin: 6px 0; }
 #take-markers { display: flex; gap: 6px; overflow-x: auto; padding: 0 0 8px; }
 #take-markers:empty { display: none; }
 #take-markers button { white-space: nowrap; font-size: 11px; color: var(--h-accent); }
+#performance [aria-pressed="true"] { border-color: var(--h-accent); background: color-mix(in srgb, var(--h-accent) 14%, var(--h-bg)); }
+#take-loop { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+#loop-details { color: var(--h-ink2); font-size: 11px; overflow-wrap: anywhere; }
 #take-name { flex: 1; max-width: 480px; }
 #performance #keep-take { background: var(--h-accent); color: white; border-color: var(--h-accent); white-space: nowrap; }
 #take-message { padding: 0 14px 10px; color: var(--h-ink2); font-size: 12px; }

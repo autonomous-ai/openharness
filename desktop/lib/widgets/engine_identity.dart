@@ -420,7 +420,7 @@ const _harnesses = <String, EngineIdentity>{
   // branding/app_icon.svg); ours, like Circuit's and Workshop's.
   'autonomous/autonomous-grid': EngineIdentity(
     id: 'autonomous/autonomous-grid',
-    label: 'Grid',
+    label: 'Model Manager',
     category: 'Local AI',
     tagline: 'Deploy open-weight models across your machines and watch the fleet live',
     creator: 'Autonomous',

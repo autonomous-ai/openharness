@@ -1,12 +1,17 @@
 # App logo
 
-`harness-logo-3.svg` is the current logo, the untouched SVG supplied on 2026-09-22
-("Logo Harness_3"): the figure on the green tile inside a near-black circle and
-square with a 2.2-unit outline, the circle touching the top of the tile. It ships
-as drawn — no inset and no small-size stroke boost — so at 64px and below the
-circle and square fade to a faint line and the figure carries the icon.
+`harness-logo-4.svg` is the current logo, the untouched SVG supplied on 2026-09-23
+("Logo Harness_4"): the same figure on the green tile, with the circle pulled in
+off the tile's edges (r 179.5 about 200.5, 199.5) and the square redrawn around
+it. It ships as drawn — no inset and no small-size stroke boost — so at 64px and
+below the circle and square fade to a faint line and the figure carries the icon.
+Unlike the rounds before it this revision carries no clip path: its own rounded
+tile is the first element and nothing is drawn outside it.
 
 Earlier rounds, kept for reference:
+
+- `harness-logo-3.svg`: the untouched SVG supplied on 2026-09-22, which shipped
+  with the circle touching the top of the tile.
 
 - `harness-polymath.svg`: the untouched SVG supplied on 2026-09-21.
 - `harness-polymath-v2.svg`: its refinement, which shipped in #184 on the macOS

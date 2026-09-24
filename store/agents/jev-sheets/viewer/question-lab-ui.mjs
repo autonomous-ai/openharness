@@ -26,7 +26,7 @@ export function initQuestionLab({ post, getState, getSelected }) {
       </section>
       <section id="qlRun" class="ql-run" hidden>
         <div class="ql-question-pair"><div><span>ORIGINAL</span><p id="qlOldHeader"></p></div><div><span>NEW WORDING</span><p id="qlNewHeader"></p></div></div>
-        <div class="ql-summary"><div id="qlNumbers"></div><div class="ql-actions"><button id="qlCancel">Cancel remaining calls</button><button id="qlKeep" class="primary">Keep this trial</button><a id="qlDownload" class="ql-button" hidden>Download trial.zip</a><button id="qlApply" hidden>Try on whole sheet</button></div></div>
+        <div class="ql-summary"><div id="qlNumbers"></div><div class="ql-actions"><button id="qlCancel">Cancel remaining calls</button><button id="qlKeep" class="primary">Keep this trial</button><a id="qlDownload" class="ql-button" hidden>Download trial.zip</a><button id="qlApply" hidden>Use on whole sheet</button></div></div>
         <p id="qlInterpret" class="ql-caption"></p>
       </section>
       <section id="qlHistoryList" class="ql-history" hidden></section>
@@ -111,9 +111,10 @@ export function initQuestionLab({ post, getState, getSelected }) {
     $('qlCancel').disabled = busy || !!trial?.cancelRequested
     $('qlChanged').disabled = busy
     $('qlApply').hidden = !trial?.kept || trial.status !== 'complete'
-    $('qlApply').disabled = busy || !!trial?.stale
-    $('qlApply').textContent =
-      `Try on whole sheet · ${getState()?.rows.length ?? trial?.population ?? 0} rows`
+    const saved = trial && getState()?.columns.some((c) => c.questionTrial === trial.id && c.header === trial.candidate.header)
+    $('qlApply').disabled = busy || !!trial?.stale || !!saved
+    $('qlApply').textContent = saved ? 'Saved in project' :
+      `Use on whole sheet · ${getState()?.rows.length ?? trial?.population ?? 0} rows`
     $('qlDownload').hidden = !trial?.kept
     $('qlKeep').hidden = !!trial?.kept
   }
@@ -666,9 +667,8 @@ export function initQuestionLab({ post, getState, getSelected }) {
       const res = await call('labApply', { id: trial.id })
       if (!res.ok) throw new Error(res.error)
       message(
-        `Added a separate column; ${res.applied.reused} trial rows reused. It will fill as the sheet runs. This column lasts in this pane; ask your agent to retain the wording in sheet.json.`
+        `Question saved in your project; ${res.applied.reused} trial rows reused. The original question is unchanged. Your chosen wording will still be here when you reopen the sheet.`
       )
-      $('qlApply').textContent = 'Column added'
     })
   )
   $('qlHistory').addEventListener('click', () => guard(showHistory))

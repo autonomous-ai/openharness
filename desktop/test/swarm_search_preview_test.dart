@@ -33,6 +33,7 @@ Future<void> seedPreviews(AppNotifier app) async {
         name: name,
         engine: engine,
         terminalAvailable: true,
+        lastActivityAt: DateTime.now().subtract(const Duration(minutes: 33)),
         project: AgentProject(
           name: id == 'a0' ? 'storefront' : 'workbench',
           cwd: '/work/${id == 'a0' ? 'storefront' : 'workbench'}',
@@ -99,7 +100,7 @@ void main() {
     await seedPreviews(app);
     app.adoptSessionForTest(terminal('a69', []));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Workspace sync');
     await tester.pump();
@@ -173,7 +174,7 @@ void main() {
           if (inline) {
             await tester.tap(field);
           } else {
-            await chord(tester, LogicalKeyboardKey.keyO);
+            await chord(tester, LogicalKeyboardKey.keyP);
           }
           await tester.enterText(field, 'Checkout retries');
           await tester.pump();
@@ -285,7 +286,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         }
         await tester.enterText(field, 'Checkout retries');
         await tester.pump();
@@ -382,7 +383,7 @@ void main() {
       );
       app.adoptSessionForTest(terminal('a69', []));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -421,21 +422,33 @@ void main() {
       await mount(tester, app);
       tester.view.physicalSize = size;
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
       );
       await tester.pump(const Duration(milliseconds: 200));
       expect(tester.takeException(), isNull);
-      final preview = tester.getRect(
-        find.byKey(const ValueKey('swarm-search-preview')),
-      );
-      final list = tester.getRect(
-        find.byKey(const ValueKey('swarm-search-result-list')),
-      );
-      if (size.width < 864) {
-        expect(preview.bottom, lessThanOrEqualTo(list.top));
+      final preview = find.byKey(const ValueKey('swarm-search-preview'));
+      expect(preview, findsOneWidget);
+      if (size.width < 848) {
+        expect(
+          tester.getRect(preview).top,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+                .bottom,
+          ),
+        );
+      } else {
+        expect(
+          tester.getRect(preview).left,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+                .left,
+          ),
+        );
       }
       final directory = Platform.environment['HARNESS_PREVIEW_CAPTURE_DIR'];
       if (directory != null) {
