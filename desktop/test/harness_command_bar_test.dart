@@ -14,7 +14,7 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/harness_command_bar.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:xterm/xterm.dart';
 
 import 'support/real_fonts.dart';
@@ -413,34 +413,29 @@ void main() {
       await tester.enterText(input, 'Plan the arm calibration');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pumpAndSettle();
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(input, findsNothing);
       final prompt = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       expect(prompt.machineId, 'm');
       expect(prompt.engine, 'studio/arm');
       expect(prompt.project.folder, isNull);
       expect(prompt.task, 'Plan the arm calibration');
       expect(prompt.field, NewHarnessField.projectMenu);
-      expect(find.byKey(const ValueKey('new-harness-input')), findsOneWidget);
-      await tester.tap(
-        find.byKey(const ValueKey(NewHarnessController.newProjectId)),
-      );
-      await tester.pump();
-      expect(prompt.field, NewHarnessField.projectName);
       expect(
-        tester
-            .widget<TextField>(find.byKey(const ValueKey('new-harness-input')))
-            .focusNode!
-            .hasFocus,
-        isTrue,
+        find.byKey(const ValueKey('new-harness-field-project')),
+        findsOneWidget,
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'new-harness-form',
       );
       // Opening the experimental prompt saves this draft and removes its dock.
       await chord(tester, LogicalKeyboardKey.keyJ, shift: true);
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       expect(input, findsOneWidget);
       expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
       expect(app.allPanes, hasLength(1));

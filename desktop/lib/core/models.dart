@@ -395,7 +395,7 @@ class Agent {
       (engine == 'claude' || engine == 'codex') &&
       sessionId?.isNotEmpty == true;
 
-  /// Whether Harness Monitor may pause this harness and bring it back.
+  /// Whether the Harnesses panel may pause this harness and bring it back.
   ///
   /// Every engine can, and the daemon says so per engine through [resumeMode]
   /// — a client that kept its own allow-list is how the two drifted, with

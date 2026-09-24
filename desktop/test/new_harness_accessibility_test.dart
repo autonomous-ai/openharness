@@ -5,11 +5,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_binary.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' show mount;
 import 'support/mixed_agents.dart';
+import 'support/launch_menu.dart' show harnessChoicesActive;
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -36,9 +37,26 @@ void main() {
         .performAction(row.id, SemanticsAction.tap);
     await tester.pump();
     expect(
-      tester.widget<NewHarnessBox>(find.byType(NewHarnessBox)).controller.field,
+      tester
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+          .controller
+          .field,
       NewHarnessField.agent,
     );
+    expect(input, isEmpty);
+    // Pointer users can open the same choices and return to field navigation.
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-agent')));
+    await tester.pump();
+    expect(harnessChoicesActive(tester), isTrue);
+    await tester.tap(find.byKey(const ValueKey('new-harness-option-claude')));
+    await tester.pump();
+    final box = tester
+        .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+        .controller;
+    expect(box.engine, 'claude');
+    expect(harnessChoicesActive(tester), isFalse);
+    await key(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.machine);
     expect(input, isEmpty);
     semantics.dispose();
     await tester.pumpWidget(const SizedBox());

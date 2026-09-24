@@ -73,6 +73,27 @@ input; Harness transport is noninteractive, so sign-in prompts belong in that ma
 the default execution machine. Model files and `join`/`leave` operations belong on the machine
 that runs the engine; listing, routing and requests can run on the controller.
 
+## First local model: help from this conversation
+
+The Models panel normally handles discovery and Start/Stop directly. If the user asks this
+conversation to help set up a local model, begin inspecting
+this computer immediately. This is the short onboarding path: coding and everyday work, one
+person, a responsive first reply, and enough free memory for other apps. Prefer a suitable
+model already running or downloaded. Inspect device-info and the live catalog, choose one
+comfortable fit, and explain the download size and memory needs in plain words. Offer
+**Start this model** and **Other options** through the question tool. That single choice
+covers installing the required engine and downloading/starting the recommended model.
+Choose context from the model's measured fit and the session's needs. Do not ask the user to
+choose an engine, quantization, token count, concurrency, or vision setting. Use suitable
+existing defaults; extra questions belong to explicit advanced requests. Keep setup on this
+computer. Other machines are available when the user asks for them.
+
+Use the tracked fleet runner for hardware checks, downloads, and startup, so the viewer retains
+progress while the conversation is closed or interrupted. After the model appears in discovery,
+run `"$GRID_FLEET" verify --grid GRID --model MODEL_ALIAS` once. This bounded check records
+readiness only after a real reply. On failure, report the problem and offer recovery. On success,
+say **"Your model is running. Select it from the model picker in a session."** The setup ends at a usable model.
+
 ## Start a model
 
 Slow steps are a real stop: a download or an engine build is asked about through the question tool
@@ -173,9 +194,7 @@ for the relay to list it (a call before that answers `No providers available for
 is "not yet", not "broken"):
 
     until "$GRID_FLEET" run -- models GRID 2>/dev/null | grep -qx 'MODEL_ALIAS'; do sleep 10; done
-    eval "$("$GRID_FLEET" run -- info GRID --env)" && curl -s --max-time 420 "$OPENAI_BASE_URL/chat/completions" \
-      -H "Authorization: Bearer $OPENAI_API_KEY" -H 'content-type: application/json' \
-      -d '{"model":"MODEL_ALIAS","messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":8}'
+    "$GRID_FLEET" verify --grid GRID --model MODEL_ALIAS
 
 ⚠️ Not `chat` for this check. `chat` sets no output limit and the engine's default is tens of
 thousands of tokens, so a small model that runs away answering "ok" holds the slot for minutes — and
@@ -192,8 +211,8 @@ one step larger from the same list (tiny models loop), or more requests at once,
 not acceptance. Then `"$GRID_FLEET" refresh`.
 
 **7. Say where it is.** "<alias> is running on <machine>, N at a time, vision on/off. Pick it from
-the model dropdown at the top of any agent's pane, and that agent switches to it." The window's
-Models menu only lists Local models; it does not switch. Don't offer to wire it into an agent's
+the model dropdown at the top of any agent's pane, and that agent switches to it." In the Models
+panel, **Use** returns to the person's session or opens one when needed. Don't offer to wire it into an agent's
 config or add a provider — the picker is the whole hand-off.
 
 ## Change a running model

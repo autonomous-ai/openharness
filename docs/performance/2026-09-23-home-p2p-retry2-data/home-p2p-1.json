@@ -1,0 +1,101 @@
+{
+  "schema": 4,
+  "success": false,
+  "startedAt": "2026-09-23T22:56:28.011Z",
+  "label": "home",
+  "sourceRevision": "853239bb737599d71a659889e8315a9e3beb6d31",
+  "boundary": "client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input",
+  "client": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "transportImplementation": "isolated production RemoteRelayPool from source; loopback client and relay share one Node process",
+    "installedDaemonVersionNotOnMeasuredPath": "0.2.99"
+  },
+  "samplesPerWorkload": 200,
+  "warmupsPerWorkload": 10,
+  "controlSamples": 30,
+  "controlObservations": [],
+  "observations": [],
+  "stagesMs": {
+    "select": 1351.952916,
+    "readyForRequests": 1731.399375,
+    "createTerminal": 621.623458,
+    "attach": 3005.55225,
+    "startProbe": 666.8720000000003,
+    "waitForRequestedRoute": 35076.086625
+  },
+  "cleanup": {
+    "created": true,
+    "deleted": true
+  },
+  "linkModes": [
+    {
+      "atMs": 5777.718542,
+      "mode": "relay"
+    }
+  ],
+  "requestedRoute": "p2p",
+  "routeVerification": "nominated ICE pair, stream membership, and both binary wire directions for each echo",
+  "targetProtocolVersion": 3,
+  "target": "Darwin:x86_64",
+  "routeAtStart": {
+    "route": "relay",
+    "ready": false,
+    "migrating": false,
+    "pair": null,
+    "sent": {
+      "p2p": 0,
+      "relay": 2
+    },
+    "received": {
+      "p2p": 0,
+      "relay": 9
+    }
+  },
+  "negotiation": "no data channel",
+  "turnHosts": [],
+  "error": "Requested p2p unavailable; actual route relay",
+  "failureDiagnostics": {
+    "outputBytes": 6541,
+    "keyframes": 1,
+    "mode": "relay",
+    "inputSeq": 0
+  },
+  "finishedAt": "2026-09-23T22:57:09.892Z",
+  "summaries": [
+    {
+      "load": "idle",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    },
+    {
+      "load": "redraw_20hz",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    }
+  ],
+  "controlSummaries": [
+    {
+      "route": "machine",
+      "samples": 0,
+      "failures": 0,
+      "p50Ms": null,
+      "p95Ms": null,
+      "p99Ms": null,
+      "maxMs": null
+    }
+  ],
+  "summariesByTerminalMode": [],
+  "publicationRedactions": [
+    "failureDiagnostics.outputTail"
+  ]
+}

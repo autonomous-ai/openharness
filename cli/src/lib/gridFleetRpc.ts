@@ -46,7 +46,7 @@ export class GridFleetRpc {
     return !!job
   }
 
-  async run(owner: string, id: string, request: GridFleetRequest): Promise<GridFleetResult> {
+  async run(owner: string, id: string, request: GridFleetRequest, onOutput?: (chunk: string) => void, maxOutput = MAX_OUTPUT): Promise<GridFleetResult> {
     const fail = (code: number, error: string): GridFleetResult => ({ ok: false, code, stdout: '', stderr: '', error })
     if (!owner || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) return fail(2, 'Invalid Grid request identity.')
     const key = JSON.stringify([owner, id])
@@ -77,8 +77,9 @@ export class GridFleetRpc {
         const capture = (which: 'stdout' | 'stderr', chunk: string) => {
           if (stopped) return
           output[which].append(chunk)
-          if (Buffer.byteLength(output.stdout.text) + Buffer.byteLength(output.stderr.text) > MAX_OUTPUT) {
-            stop('Grid output exceeded 512 KiB; use a narrower query.'); return
+          onOutput?.(chunk)
+          if (Buffer.byteLength(output.stdout.text) + Buffer.byteLength(output.stderr.text) > maxOutput) {
+            stop(`Grid output exceeded ${maxOutput / 1024} KiB; use a narrower query.`); return
           }
         }
         child.stdout.setEncoding('utf8').on('data', (data: string) => capture('stdout', data))

@@ -290,6 +290,29 @@ void main() {
         {"keys":"f9","command":"picker.refresh","when":"picker"}
       ]}''');
         await _mount(tester, app, keymap: map, manager: manager);
+        if (manager) {
+          // The legacy entry forwards to the new Machines panel and keeps
+          // the live picker keymap across that nested route.
+          await key(tester, LogicalKeyboardKey.enter);
+          await key(tester, LogicalKeyboardKey.escape);
+          expect(find.text('Machines'), findsOneWidget);
+          await key(tester, LogicalKeyboardKey.keyR, cmd: true);
+          expect(app.refreshes, 0);
+          await key(tester, LogicalKeyboardKey.f9);
+          expect(app.refreshes, 1);
+          map.apply(
+            '{"bindings":[{"keys":"f4","command":"picker.cancel","when":"picker"}]}',
+          );
+          await tester.pump();
+          await key(tester, LogicalKeyboardKey.f7);
+          expect(find.text('Machines'), findsOneWidget);
+          await key(tester, LogicalKeyboardKey.f4);
+          await tester.pumpAndSettle();
+          expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+          expect(find.text('Machines'), findsOneWidget);
+          await tester.pumpWidget(const SizedBox());
+          return;
+        }
         await key(tester, LogicalKeyboardKey.enter);
         await key(tester, LogicalKeyboardKey.escape);
         expect(_input, findsOneWidget);

@@ -274,7 +274,7 @@ void main() {
       find.byKey(ValueKey(search.selected!.id)),
     );
     expect(selected.selected, isTrue);
-    expect(find.byKey(const ValueKey('swarm-row-action')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-search-count')), findsNothing);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
     expect(input, isEmpty);
     await tester.pumpWidget(const SizedBox());

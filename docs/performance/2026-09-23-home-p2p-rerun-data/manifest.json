@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "complete": true,
+  "missingTrials": [],
+  "note": "Console logs remain private. Only listed fields were removed; timings and route evidence are unchanged.",
+  "artifacts": [
+    {
+      "file": "plan.json",
+      "sha256": "fb68d73b454b20d5ed17086a9311441ab0a87fcd06468c22a873b904686f53d9",
+      "redactions": []
+    },
+    {
+      "file": "home-p2p-1.json",
+      "sha256": "175abdc9bbe81257cfa364389442079d540602f6e7cabf9624409237940c713a",
+      "sourceSha256": "e3befef9bbba9d18168704ca61093bdc5541ae03368a418c01eaec158ebef3c3",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "home-p2p-2.json",
+      "sha256": "aa00b5ca11e344c153f83558d15fa6579b2af485f309aa8b28db4168a25d5958",
+      "sourceSha256": "c9ef049bc1cf2817edb25680fda8eda5d54d65ec8545878226abea3d32934cfc",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "home-p2p-3.json",
+      "sha256": "fedf8f09b9dbe219f39e7de241f72b48840677598146dd283c36a65a93e48e0b",
+      "sourceSha256": "f16722d6a5e2497476ff1f2715e29a6b9fe6a8368d27da02176b358aab9c88c6",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ]
+    },
+    {
+      "file": "environment.json",
+      "sha256": "0aff311c3f311d2cf5cb57ec22f8fcb49a0d3927461b2ad3c33686ab007fda60",
+      "redactions": []
+    },
+    {
+      "file": "cleanup-audit.json",
+      "sha256": "cd9c119c6e767f9878df6bc293ea41bf40debc423a13bf1cfa060c1efa09549b",
+      "redactions": []
+    },
+    {
+      "file": "negotiation.json",
+      "sha256": "9a3432fff40a9049553aa401f55b2fd238b8b0152d545dab9f7af741ad32e5d9",
+      "redactions": [],
+      "note": "Selected facts only; source log checksums are recorded in the artifact."
+    }
+  ]
+}

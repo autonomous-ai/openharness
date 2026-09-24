@@ -69,7 +69,7 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await tester.tap(find.byTooltip('Harness Monitor'));
+    await tester.tap(find.byTooltip('Harnesses'));
     await tester.pumpAndSettle();
   }
 
@@ -230,13 +230,13 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byTooltip('Harnesses'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
         findsNothing,
       );
-      final managerIcon = tester.getRect(find.byTooltip('Harness Monitor'));
+      final managerIcon = tester.getRect(find.byTooltip('Harnesses'));
       expect(
         managerIcon.right,
         lessThan(
@@ -373,7 +373,7 @@ void main() {
     (tester) async {
       await open(tester);
       expect(find.byType(HarnessSessionManager), findsOneWidget);
-      expect(find.text('Harness Monitor'), findsOneWidget);
+      expect(find.text('Harnesses'), findsOneWidget);
       expect(find.text('Running 1'), findsOneWidget);
       expect(find.text('Paused 1'), findsOneWidget);
       expect(find.text('Ready'), findsNothing);
@@ -513,7 +513,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byTooltip('Harnesses'));
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -904,7 +904,7 @@ void main() {
       expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byTooltip('Harnesses'));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },
@@ -971,6 +971,12 @@ void main() {
         'engine': 'claude',
         'sessionId': 'conversation',
         'terminal': {'available': true},
+        'project': {
+          'name': 'autonomous-harness-desktop-with-a-long-project-name',
+          'cwd': '/work/autonomous-harness-desktop-with-a-long-project-name',
+          'branch':
+              'feat/centered-new-harness-session-picker-with-long-details',
+        },
         'updatedAt': DateTime.now()
             .subtract(const Duration(minutes: 8))
             .toIso8601String(),
@@ -1004,6 +1010,23 @@ void main() {
       await tester.runAsync(loadPreviewFonts);
       debugDisableShadows = false;
       addTearDown(() => debugDisableShadows = true);
+      app.machineStates['m']!.machine = const Machine(
+        machineId: 'm',
+        name: 'M2',
+        authMode: MachineAuthMode.remote,
+      );
+      app.machineStates['m']!.agents[0] = const Agent(
+        id: 'a0',
+        name: 'Improve multiple-machine experience',
+        engine: 'codex',
+        sessionId: 'conversation',
+        terminalAvailable: true,
+        project: AgentProject(
+          name: 'autonomous-harness',
+          cwd: '/work/autonomous-harness',
+          branch: 'improve-multiple-machine-experience',
+        ),
+      );
       app.machineStates['m']!.agents.addAll([
         const Agent(
           id: 'review',
@@ -1011,7 +1034,11 @@ void main() {
           engine: 'codex',
           sessionId: 'review-history',
           terminalAvailable: true,
-          project: _project,
+          project: AgentProject(
+            name: 'autonomous-harness',
+            cwd: '/work/autonomous-harness',
+            branch: 'feat/centered-new-harness-session-picker',
+          ),
         ),
         const Agent(
           id: 'api',
@@ -1115,6 +1142,22 @@ void main() {
         find.byType(MaterialApp),
         matchesGoldenFile(Uri.file('$renderDir/sessions.png')),
       );
+      tester.view.physicalSize = const Size(880, 560);
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(Uri.file('$renderDir/minimum-window.png')),
+      );
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(Uri.file('$renderDir/scaled-text.png')),
+      );
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+      tester.view.physicalSize = const Size(1280, 800);
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('session-filter:needsInput')));
       await tester.pumpAndSettle();
       await expectLater(

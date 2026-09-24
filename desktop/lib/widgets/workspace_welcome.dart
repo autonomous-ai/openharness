@@ -18,8 +18,8 @@ class WorkspaceWelcome extends StatelessWidget {
   static const _actions = [
     ('agent.new', 'New Harness', 'to start a new harness'),
     ('agent.open', 'Open Harness', 'to open a harness'),
+    ('machines.list', 'Machines', 'to connect your machines'),
     ('app.store', 'Harness Store', 'to browse the harness store'),
-    ('keyboard.help', 'Keyboard Shortcuts', 'to see keyboard shortcuts'),
   ];
 
   @override

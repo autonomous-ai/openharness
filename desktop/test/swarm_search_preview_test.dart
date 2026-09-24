@@ -33,6 +33,7 @@ Future<void> seedPreviews(AppNotifier app) async {
         name: name,
         engine: engine,
         terminalAvailable: true,
+        lastActivityAt: DateTime.now().subtract(const Duration(minutes: 33)),
         project: AgentProject(
           name: id == 'a0' ? 'storefront' : 'workbench',
           cwd: '/work/${id == 'a0' ? 'storefront' : 'workbench'}',
@@ -428,14 +429,19 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 200));
       expect(tester.takeException(), isNull);
-      final preview = tester.getRect(
-        find.byKey(const ValueKey('swarm-search-preview')),
-      );
-      final list = tester.getRect(
-        find.byKey(const ValueKey('swarm-search-result-list')),
-      );
-      if (size.width < 864) {
-        expect(preview.bottom, lessThanOrEqualTo(list.top));
+      final preview = find.byKey(const ValueKey('swarm-search-preview'));
+      if (size.width < 848) {
+        expect(preview, findsNothing);
+      } else {
+        expect(preview, findsOneWidget);
+        expect(
+          tester.getRect(preview).left,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+                .left,
+          ),
+        );
       }
       final directory = Platform.environment['HARNESS_PREVIEW_CAPTURE_DIR'];
       if (directory != null) {

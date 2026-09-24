@@ -455,7 +455,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
                         Expanded(
                           child: Text(
                             _machineId == null
-                                ? 'Machines Manager'
+                                ? 'Machines'
                                 : machine?.machine.displayName ??
                                       _machineTitle ??
                                       'Machine',

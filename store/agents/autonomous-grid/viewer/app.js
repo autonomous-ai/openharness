@@ -54,7 +54,7 @@
     $('map-subtitle').textContent=snapshot.nodes.length>12?`12 of ${snapshot.nodes.length} engines · see every engine in Rack`:'Every machine has a place.';
     $('map-empty').hidden=graphNodes.length>0;
     $('hub').hidden=graphNodes.length===0;
-    $('empty-message').textContent=snapshot.status==='unconfigured'?'Ask the Grid agent to connect one of your existing grids, or help you create your first fleet.':snapshot.status==='unavailable'?'Grid isn’t reachable yet. Ask the agent to check your connection, choose a grid, or start one.':'Ask the Grid agent to discover this machine and deploy your first model.';
+    $('empty-message').textContent=snapshot.status==='unconfigured'?'Ask the Model Manager to connect one of your existing grids, or help you create your first fleet.':snapshot.status==='unavailable'?'Grid isn’t reachable yet. Ask the agent to check your connection, choose a grid, or start one.':'Ask the Model Manager to discover this machine and deploy your first model.';
     $('hub-status').textContent=available?`${snapshot.summary.enginesOnline || 0} engines online`:'awaiting connection';
     const ids=new Set(graphNodes.map(n=>n.id));
     for (const [id,b] of nodeButtons) if (!ids.has(id)) { b.remove();nodeButtons.delete(id); }
@@ -90,7 +90,7 @@
   }
   const pair=(label,value)=>`<div class="detail-pair"><span>${escape(label)}</span><strong>${escape(value)}</strong></div>`;
   const detailMetric=(label,value,unit,hint='')=>`<div class="detail-metric"><span class="label">${escape(label)}</span><span class="value">${fmt(value)} <small>${escape(unit)}</small></span>${hint?`<span class="hint">${escape(hint)}</span>`:''}</div>`;
-  function prompt(text) {return `<div class="ask-prompt"><span>ASK YOUR GRID AGENT</span><p>${escape(text)}</p><button class="copy-prompt" type="button" data-prompt="${escape(text)}">Copy request ↗</button></div>`;}
+  function prompt(text) {return `<div class="ask-prompt"><span>ASK YOUR MODEL MANAGER</span><p>${escape(text)}</p><button class="copy-prompt" type="button" data-prompt="${escape(text)}">Copy request ↗</button></div>`;}
   function gpuDetails(g) {
     const used=finite(g.memoryUsedGb)&&g.memoryGb>0?Math.max(0,Math.min(100,g.memoryUsedGb/g.memoryGb*100)):0;
     return `<div class="gpu-detail"><div class="model-entry"><span class="model-glyph">▧</span><span class="model-title">${escape(g.name)}<span class="model-caption">${fmt(g.memoryUsedGb)} / ${fmt(g.memoryGb)} GB used</span></span></div><div class="memory-track"><span style="width:${used}%"></span></div><div class="memory-labels"><span>${fmt(g.utilizationPct)}% load</span><span>${fmt(g.temperatureC)} °C · ${fmt(g.powerW)} W</span></div></div>`;
@@ -275,7 +275,7 @@
   document.addEventListener('click',async event=>{
     const close=event.target.closest('[data-close]'),selection=event.target.closest('[data-select]'),copy=event.target.closest('[data-prompt]');
     if(close){selected=null;render();}else if(selection)select(selection.dataset.select);
-    else if(copy){try{await navigator.clipboard.writeText(copy.dataset.prompt);toast('Request copied. Paste it into your Grid agent.');}catch{toast('Select the request text and paste it into your Grid agent.');}}
+    else if(copy){try{await navigator.clipboard.writeText(copy.dataset.prompt);toast('Request copied. Paste it into your Model Manager.');}catch{toast('Select the request text and paste it into your Model Manager.');}}
   });
   new ResizeObserver(()=>resize()).observe(stage);
   const stream=new EventSource('events');
