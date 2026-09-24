@@ -37,13 +37,12 @@ import 'phone_sheet.dart';
 /// on screen says so, and on a dialog that reads "enter to submit answer" a
 /// strip of every other key it names reads as "Enter is missing". `/` is the
 /// slot to give up: a dialog has no prompt to start a command in.
-class TerminalKeyBar extends StatelessWidget {
+class TerminalKeyBar extends StatefulWidget {
   const TerminalKeyBar({
     super.key,
     required this.terminal,
     required this.enabled,
     required this.onDismissKeyboard,
-    this.onClearPrompt,
     this.onPromptEdited,
     this.onPickImage,
     this.onTakePhoto,
@@ -55,10 +54,6 @@ class TerminalKeyBar extends StatelessWidget {
   /// An agent's question dialog is on the pane: `/` gives its slot to `⏎` —
   /// see the class docblock.
   final bool questionOpen;
-
-  /// The `clear` key: empties the prompt being typed into. Null leaves the key
-  /// out.
-  final VoidCallback? onClearPrompt;
 
   /// Called after `tab` or `/` changed the prompt without the software
   /// keyboard knowing — so its buffer can be emptied before it edits words the
@@ -79,10 +74,16 @@ class TerminalKeyBar extends StatelessWidget {
   final VoidCallback? onPickImage;
   final VoidCallback? onTakePhoto;
 
-  bool get _canSendImage => onPickImage != null || onTakePhoto != null;
+  @override
+  State<TerminalKeyBar> createState() => _TerminalKeyBarState();
+}
+
+class _TerminalKeyBarState extends State<TerminalKeyBar> {
+  bool get _canSendImage =>
+      widget.onPickImage != null || widget.onTakePhoto != null;
 
   void _send(void Function() action) {
-    if (!enabled) return;
+    if (!widget.enabled) return;
     HapticFeedback.selectionClick();
     action();
   }
@@ -93,8 +94,8 @@ class TerminalKeyBar extends StatelessWidget {
   /// one of the two wired goes straight there instead — a sheet with a single
   /// row is a tap spent on nothing.
   void _sendImage(BuildContext context) {
-    final pick = onPickImage;
-    final photo = onTakePhoto;
+    final pick = widget.onPickImage;
+    final photo = widget.onTakePhoto;
     if (pick == null) {
       photo?.call();
       return;
@@ -121,62 +122,82 @@ class TerminalKeyBar extends StatelessWidget {
     );
   }
 
+  /// Armed modifiers, spent by the next key this bar sends.
+  ///
+  /// ⚠️ **They are the app's own, and they have to be: a software keyboard's
+  /// Shift never reaches an app.** Gboard is a separate program that hands over
+  /// the RESULT — a character — and keeps its own shift state to itself; there
+  /// is no way to ask whether it is held. A hardware keyboard does report
+  /// modifiers, which is why this is a phone problem and not a widget.terminal one.
+  /// Every widget.terminal app on a phone solves it the same way, with a modifier row
+  /// of its own.
+  ///
+  /// ⚠️ **Sticky, not held.** A thumb cannot hold one key and press another on
+  /// a row this size, so `ctrl` is tapped, stays lit, and is spent by the next
+  /// keystroke — or tapped again to put it down.
+  bool _ctrl = false;
+  bool _shift = false;
+
+  void _toggleCtrl() => setState(() => _ctrl = !_ctrl);
+  void _toggleShift() => setState(() => _shift = !_shift);
+
+  /// Sends [key] with whatever is armed, and puts the modifiers down.
+  ///
+  /// ⚠️ Cleared even when nothing was armed: this is the one path every key of
+  /// the bar takes, so an armed modifier can never survive a keystroke and land
+  /// on the one after it.
+  void _sendKey(TerminalKey key, {bool edits = false}) {
+    widget.terminal.keyInput(key, ctrl: _ctrl, shift: _shift);
+    if (edits) widget.onPromptEdited?.call();
+    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     // What drives an engine and a phone keyboard lacks: leave a mode, walk
     // history, move through a menu.
-    final onClearPrompt = this.onClearPrompt;
     final keys = <Widget>[
-      _key(label: 'esc', onTap: () => terminal.keyInput(TerminalKey.escape)),
+      _key(label: 'esc', onTap: () => _sendKey(TerminalKey.escape)),
       // Completes a path or a command, and moves through Claude Code's menus.
-      _key(
-        label: 'tab',
-        onTap: () {
-          terminal.keyInput(TerminalKey.tab);
-          onPromptEdited?.call();
-        },
-      ),
-      if (onClearPrompt != null) _key(label: 'clear', onTap: onClearPrompt),
+      _key(label: 'tab', onTap: () => _sendKey(TerminalKey.tab, edits: true)),
+      // ⚠️ **The two modifiers stand together, before the keys they modify.**
+      // Apart — one here, one at the far end of the row — they read as two
+      // unrelated keys that happen to light up, and the pair a thumb reaches
+      // for in sequence (`ctrl` then an arrow) crossed the whole strip. Side by
+      // side and to the LEFT of the arrows, the row reads in the order it is
+      // pressed.
+      _key(label: 'shift', armed: _shift, onTap: _toggleShift),
+      _key(label: 'ctrl', armed: _ctrl, onTap: _toggleCtrl),
       _key(
         icon: LucideIcons.arrowLeft300,
         semanticLabel: 'Left',
-        onTap: () => terminal.keyInput(TerminalKey.arrowLeft),
+        onTap: () => _sendKey(TerminalKey.arrowLeft),
       ),
       _key(
         icon: LucideIcons.arrowUp300,
         semanticLabel: 'Up',
-        onTap: () => terminal.keyInput(TerminalKey.arrowUp),
+        onTap: () => _sendKey(TerminalKey.arrowUp),
       ),
       _key(
         icon: LucideIcons.arrowDown300,
         semanticLabel: 'Down',
-        onTap: () => terminal.keyInput(TerminalKey.arrowDown),
+        onTap: () => _sendKey(TerminalKey.arrowDown),
       ),
       _key(
         icon: LucideIcons.arrowRight300,
         semanticLabel: 'Right',
-        onTap: () => terminal.keyInput(TerminalKey.arrowRight),
+        onTap: () => _sendKey(TerminalKey.arrowRight),
       ),
-      // Last before the rule, beside the image key: how a slash command
-      // starts, and a phone keyboard buries `/` a layer down. Enter in its
-      // place while a question is open — after the arrows, which is the order
-      // a dialog is answered in.
-      if (questionOpen)
+      // Last before the rule, and only while an agent's question is open —
+      // after the arrows, which is the order a dialog is answered in.
+      if (widget.questionOpen)
         _key(
           icon: LucideIcons.cornerDownLeft300,
           semanticLabel: 'Enter',
           // Sent as the key, not as text: the keyboard's buffer holds nothing
           // a dialog cares about, and Return is `\r` to every TUI here.
-          onTap: () => terminal.keyInput(TerminalKey.enter),
-        )
-      else
-        _key(
-          label: '/',
-          onTap: () {
-            terminal.textInput('/');
-            onPromptEdited?.call();
-          },
+          onTap: () => _sendKey(TerminalKey.enter),
         ),
     ];
     // ⚠️ **Neither of these sends a byte anywhere**, and that is why they sit
@@ -198,7 +219,7 @@ class TerminalKeyBar extends StatelessWidget {
         icon: LucideIcons.chevronDown300,
         semanticLabel: 'Hide keyboard',
         alwaysEnabled: true,
-        onTap: onDismissKeyboard,
+        onTap: widget.onDismissKeyboard,
       ),
     ];
 
@@ -256,50 +277,125 @@ class TerminalKeyBar extends StatelessWidget {
     IconData? icon,
     String? semanticLabel,
     bool alwaysEnabled = false,
+    bool armed = false,
     required VoidCallback onTap,
   }) {
     assert((label == null) != (icon == null), 'a key carries one of the two');
-    final live = enabled || alwaysEnabled;
-    final foreground = live ? AppPalette.textPrimary : AppPalette.textFaint;
+    final live = widget.enabled || alwaysEnabled;
     return Semantics(
       button: true,
       label: semanticLabel ?? label,
       // Named so a test can reach the icon keys, which carry no text.
       key: ValueKey('terminal-key-${semanticLabel ?? label}'),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      child: _KeyCap(
+        label: label,
+        icon: icon,
+        live: live,
+        armed: armed,
         onTap: alwaysEnabled ? onTap : () => _send(onTap),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-          height: 34,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: AppGlass.surfaceFill,
-            borderRadius: BorderRadius.circular(7),
-            border: Border.all(color: AppGlass.lift),
+      ),
+    );
+  }
+}
+
+/// One key of the bar, lit while a thumb is on it.
+///
+/// ⚠️ **The lift is not decoration: this row had no press state at all.** Every
+/// other control on the phone answers a touch — a card sinks, a row fills — and
+/// these keys did nothing, so the only proof a tap had landed was whatever the
+/// agent did about it a moment later. On `esc` in a menu, or an arrow walking
+/// history, that moment is long enough to tap again and overshoot.
+///
+/// ⚠️ Held from the DOWN, released on up or cancel. A key that lit on the way
+/// up would light after the work was already done, which is the one moment the
+/// feedback is worth nothing.
+class _KeyCap extends StatefulWidget {
+  const _KeyCap({
+    required this.label,
+    required this.icon,
+    required this.live,
+    required this.armed,
+    required this.onTap,
+  });
+
+  final String? label;
+  final IconData? icon;
+  final bool live;
+
+  /// A modifier that is DOWN, waiting for the key it belongs to.
+  ///
+  /// ⚠️ Drawn like a press that has not been let go, because that is what it
+  /// is — the same lift a thumb makes, held. A modifier with its own look would
+  /// be a third state to learn for a row of eight keys.
+  final bool armed;
+  final VoidCallback onTap;
+
+  @override
+  State<_KeyCap> createState() => _KeyCapState();
+}
+
+class _KeyCapState extends State<_KeyCap> {
+  bool _down = false;
+
+  void _set(bool down) {
+    if (_down == down || !mounted) return;
+    setState(() => _down = down);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final lit = (_down || widget.armed) && widget.live;
+    final foreground = lit
+        ? AppPalette.accentOnSurface
+        : widget.live
+        ? AppPalette.textPrimary
+        : AppPalette.textFaint;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // ⚠️ The tap still fires from `onTap`, not from these: a finger that
+      // slides off the key must light it and then leave without sending
+      // anything, which is what `onTapCancel` is for.
+      onTapDown: (_) => _set(true),
+      onTapUp: (_) => _set(false),
+      onTapCancel: () => _set(false),
+      onTap: widget.onTap,
+      child: AnimatedContainer(
+        // Quick enough to read as the key answering the finger rather than
+        // fading after it.
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOut,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: lit
+              ? AppPalette.accent.withValues(alpha: 0.24)
+              : AppGlass.surfaceFill,
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(
+            color: lit ? AppPalette.accentOnSurface : AppGlass.lift,
           ),
-          child: icon != null
-              ? Icon(icon, size: 16, color: foreground)
-              // Shrinks rather than clips: ten keys share a phone's width, and
-              // `clear` is the widest word among them.
-              : Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 3),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      label!,
-                      maxLines: 1,
-                      style: TextStyle(
-                        fontSize: 13,
-                        height: 1,
-                        color: foreground,
-                        fontWeight: FontWeight.w500,
-                      ),
+        ),
+        child: widget.icon != null
+            ? Icon(widget.icon, size: 16, color: foreground)
+            // Shrinks rather than clips: ten keys share a phone's width, and
+            // `clear` is the widest word among them.
+            : Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    widget.label!,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1,
+                      color: foreground,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ),
-        ),
+              ),
       ),
     );
   }

@@ -1475,18 +1475,37 @@ class _TerminalPageState extends State<TerminalPage>
                                       onPress: _pressHint,
                                     ),
                                   ),
-                                if (!_ownsInput)
-                                  Positioned(
-                                    right: TerminalActionColumn.inset,
-                                    bottom: TerminalActionColumn.bottomInset,
-                                    child: TerminalActionColumn(
-                                      voice: widget.voice,
-                                      session: session,
-                                      onSearch: _openSearch,
-                                      unread:
-                                          widget.notifier.agentNotices.unread,
-                                    ),
+                                // ⚠️ **Search stays while the keyboard is up; the
+                                // mic goes.** Typing says what the mic says, so
+                                // with a keyboard on screen the two are one
+                                // errand and the key bar is already under the
+                                // thumb. Search is not: another harness, another
+                                // machine, and nothing on the key bar reaches
+                                // them — so hiding the column whole meant
+                                // putting the keyboard away first just to look
+                                // something up.
+                                //
+                                // It moves to the TOP of the pane rather than
+                                // staying put. Down here it floats over the
+                                // prompt being typed into, which is exactly
+                                // what the keyboard is for; up there it covers
+                                // the oldest rows on screen.
+                                Positioned(
+                                  right: TerminalActionColumn.inset,
+                                  top: _ownsInput
+                                      ? TerminalActionColumn.topInset
+                                      : null,
+                                  bottom: _ownsInput
+                                      ? null
+                                      : TerminalActionColumn.bottomInset,
+                                  child: TerminalActionColumn(
+                                    voice: widget.voice,
+                                    session: session,
+                                    onSearch: _openSearch,
+                                    searchOnly: _ownsInput,
+                                    unread: widget.notifier.agentNotices.unread,
                                   ),
+                                ),
                               ],
                             ),
                           ),

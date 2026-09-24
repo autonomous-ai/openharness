@@ -114,7 +114,6 @@ class _TerminalInputDockState extends State<TerminalInputDock>
       builder: (context, _) => TerminalKeyBar(
         terminal: widget.session.terminal,
         enabled: widget.session.acceptsInput,
-        onClearPrompt: widget.session.clearPrompt,
         onPromptEdited: widget.session.resetInputBuffer,
         onDismissKeyboard: widget.onDismiss,
         onPickImage: widget.onPickImage,
