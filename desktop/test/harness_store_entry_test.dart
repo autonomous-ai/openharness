@@ -40,9 +40,7 @@ void main() {
           if (native) {
             await configured.native(tester, 'store');
           } else {
-            final button = find.byKey(const ValueKey('swarm-store-button'));
-            expect(tester.getRect(button).bottom, lessThanOrEqualTo(40));
-            await tester.tap(button);
+            await key(tester, LogicalKeyboardKey.keyS, cmd: true);
           }
           await tester.pump();
         }

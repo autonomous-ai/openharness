@@ -4,6 +4,9 @@ import 'dart:ui' show SemanticsAction;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/terminal/terminal_theme.dart';
+import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_form.dart';
@@ -306,7 +309,13 @@ void main() {
             .first,
       );
       // Dark grey: darker than an idle row's faint, so it recedes.
-      expect(studio.style!.color, Colors.white.withValues(alpha: .28));
+      expect(
+        studio.style!.color,
+        terminalThemeFor(
+          grid.AppTheme.palette.value,
+          terminalThemeStore.value,
+        ).foreground.withValues(alpha: .28),
+      );
       final handle = tester.ensureSemantics();
       expect(tester.getSemantics(_option('studio')).hint, 'Link required');
       handle.dispose();

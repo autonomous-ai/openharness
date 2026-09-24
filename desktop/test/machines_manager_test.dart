@@ -1,3 +1,5 @@
+import 'support/workspace_tools.dart';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -87,18 +89,10 @@ void main() {
       ..loaded = true;
     await mount(tester, app);
     await tester.pumpAndSettle();
-    Badge badge(String name) =>
-        tester.widget<Badge>(find.byKey(ValueKey('swarm-$name-badge')));
-    expect(badge('machines').isLabelVisible, isTrue);
-    expect((badge('machines').label as Text).data, '1');
-    expect(badge('models').isLabelVisible, isTrue);
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
-    await tester.pumpAndSettle();
-    expect(badge('machines').isLabelVisible, isFalse);
-    expect(badge('models').isLabelVisible, isTrue);
-    await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
-    await tester.pumpAndSettle();
-    expect(badge('models').isLabelVisible, isFalse);
+    expect(find.byKey(const ValueKey('swarm-machines-badge')), findsNothing);
+    expect(find.byKey(const ValueKey('swarm-models-badge')), findsNothing);
+    await openWorkspaceTool(tester, 'machines');
+    await openWorkspaceTool(tester, 'models');
     expect(find.text('Models'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -110,8 +104,7 @@ void main() {
     };
     await app.modelManager.refresh();
     await tester.pumpAndSettle();
-    expect(badge('models').isLabelVisible, isFalse);
-    await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
+    await openWorkspaceTool(tester, 'models');
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Local').first);
     await tester.pumpAndSettle();
@@ -122,18 +115,13 @@ void main() {
 
   for (final nativeTabs in [false, true]) {
     testWidgets(
-      'toolbar panels switch in one click without stacking (native=$nativeTabs)',
+      'workspace tools switch without stacking (native=$nativeTabs)',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.nodeOnline = true;
         final input = <TerminalBinaryFrame>[];
         app.adoptSessionForTest(terminal('a0', input));
         await mount(tester, app, nativeTabs: nativeTabs);
-        final buttons = {
-          'machineList': find.byKey(const ValueKey('swarm-machines-button')),
-          'models': find.byKey(const ValueKey('swarm-models-button')),
-          'sessions': find.byTooltip('Harnesses'),
-        };
         final panels = {
           'machineList': find.byKey(const ValueKey('machines-panel')),
           'models': find.byType(ModelsPanel),
@@ -145,13 +133,22 @@ void main() {
             await tester.pumpAndSettle();
             await action;
           } else {
-            await tester.tap(buttons[command]!);
+            await openWorkspaceTool(
+              tester,
+              {
+                'machineList': 'machines',
+                'models': 'models',
+                'sessions': 'harnesses',
+              }[command]!,
+            );
             await tester.pumpAndSettle();
           }
         }
 
         for (final from in panels.keys) {
           for (final to in panels.keys) {
+            // Opening command search dismisses the old panel first.
+            if (!nativeTabs && from == 'sessions' && to == 'sessions') continue;
             await open(from);
             await open(to);
             for (final entry in panels.entries) {
@@ -238,41 +235,30 @@ void main() {
     app.dispose();
   });
 
-  testWidgets(
-    'Cmd M and the toolbar open Machines and restore terminal input',
-    (tester) async {
-      final app = createApp();
-      app.stateOf('m')!.nodeOnline = true;
-      final input = <TerminalBinaryFrame>[];
-      app.adoptSessionForTest(terminal('a0', input));
-      await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyM, cmd: true);
-      await tester.pumpAndSettle();
-      expect(find.text('Machines'), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      final machines = find.byKey(const ValueKey('swarm-machines-button'));
-      final models = find.byKey(const ValueKey('swarm-models-button'));
-      expect(
-        tester.getCenter(machines).dx,
-        lessThan(tester.getCenter(models).dx),
-      );
-      expect(
-        tester.getCenter(models).dx,
-        lessThan(tester.getCenter(find.byTooltip('Harnesses')).dx),
-      );
-      await tester.tap(machines);
-      await tester.pumpAndSettle();
-      expect(find.text('Machines'), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      tester.testTextInput.enterText('x');
-      await tester.idle();
-      expect(String.fromCharCodes(input.single.bytes), 'x');
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    },
-  );
+  testWidgets('Cmd M opens Machines and restore terminal input', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.stateOf('m')!.nodeOnline = true;
+    final input = <TerminalBinaryFrame>[];
+    app.adoptSessionForTest(terminal('a0', input));
+    await mount(tester, app);
+    await key(tester, LogicalKeyboardKey.keyM, cmd: true);
+    await tester.pumpAndSettle();
+    expect(find.text('Machines'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await openWorkspaceTool(tester, 'machines');
+    await tester.pumpAndSettle();
+    expect(find.text('Machines'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    tester.testTextInput.enterText('x');
+    await tester.idle();
+    expect(String.fromCharCodes(input.single.bytes), 'x');
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   testWidgets(
     'clicking a linked machine scopes work by ID even when names match',
@@ -297,7 +283,7 @@ void main() {
             ];
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+      await openWorkspaceTool(tester, 'machines');
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('machine-m')));
       await tester.pumpAndSettle();
@@ -374,7 +360,7 @@ void main() {
       ..connectionStatus = ConnectionStatus.connected;
     app.adoptSessionForTest(terminal('a0', []));
     await mount(tester, app);
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceTool(tester, 'machines');
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('machine-fresh')));
     await tester.pumpAndSettle();

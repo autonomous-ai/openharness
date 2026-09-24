@@ -1,5 +1,9 @@
 # Terminal prompts in OpenHarness
 
+For current dialog presentation, follow the
+[terminal dialog design system](terminal-dialogs.md). It supersedes the older
+visual descriptions below, including dock placement and chrome.
+
 The terminal is the workspace. Search and creation are temporary prompts over
 it, using the same monospace family, compact text rows, a thin border, and a
 visible cursor. No backdrop dims the running agents. No permanent status bar

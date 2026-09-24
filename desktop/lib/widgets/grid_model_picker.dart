@@ -45,6 +45,10 @@ bool modelPickerSupports(String? engine) =>
 /// The list is fetched when the menu opens rather than held in state, because it is live: an engine
 /// can join or leave a grid between two openings, and an offer nobody is serving any more is worse
 /// than a moment's spinner.
+class GridModelPickerController extends ChangeNotifier {
+  void open() => notifyListeners();
+}
+
 class GridModelPicker extends StatefulWidget {
   final AppNotifier notifier;
   final String machineId;
@@ -75,6 +79,11 @@ class GridModelPicker extends StatefulWidget {
   final String? engineLabel;
   final bool compact;
 
+  /// Native workspace chrome opens the same picker without duplicating its
+  /// label in every pane. The menu anchors to the top of the Flutter surface.
+  final bool menuOnly;
+  final GridModelPickerController? controller;
+
   const GridModelPicker({
     super.key,
     required this.notifier,
@@ -86,6 +95,8 @@ class GridModelPicker extends StatefulWidget {
     this.webSearch,
     this.engineLabel,
     this.compact = false,
+    this.menuOnly = false,
+    this.controller,
   });
 
   @override
@@ -112,6 +123,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
     _last = widget.notifier.gridPictures[widget.machineId];
     widget.notifier.gridPictures.addListener(_pictureChanged);
     widget.notifier.foreground.addListener(_foregroundChanged);
+    widget.controller?.addListener(_openFromController);
     // A reading that lands while the menu is open redraws its Subscription row, rather than
     // leaving "Checking usage…" there until the next open.
     _usage.addListener(_redrawOpenMenu);
@@ -196,6 +208,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
   @override
   void didUpdateWidget(GridModelPicker oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.controller != oldWidget.controller) {
+      oldWidget.controller?.removeListener(_openFromController);
+      widget.controller?.addListener(_openFromController);
+    }
     if (widget.currentModel == oldWidget.currentModel) return;
     if (_expecting && _settles(widget.currentModel)) {
       _expiry?.cancel();
@@ -250,6 +266,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
   void dispose() {
     widget.notifier.gridPictures.removeListener(_pictureChanged);
     widget.notifier.foreground.removeListener(_foregroundChanged);
+    widget.controller?.removeListener(_openFromController);
     _expiry?.cancel();
     // A pane can go away under an open menu — closed, moved, or its swarm switched — and an overlay
     // entry outlives the State that inserted it.
@@ -276,6 +293,8 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// from cache in between, which is why opening this menu does not cost a request.
   Map<String, Object?>? _subscriptionRow() =>
       subscriptionRowFor(widget.engineLabel, _usage.rows);
+
+  void _openFromController() => unawaited(_open());
 
   Future<void> _open() async {
     if (_loading) return;
@@ -317,12 +336,14 @@ class _GridModelPickerState extends State<GridModelPicker> {
         Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (box == null || overlay == null) return;
     final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
-    final position = RelativeRect.fromLTRB(
-      origin.dx,
-      origin.dy + box.size.height + 6,
-      overlay.size.width - origin.dx - box.size.width,
-      0,
-    );
+    final position = widget.menuOnly
+        ? RelativeRect.fromLTRB(overlay.size.width - 12, 0, 12, 0)
+        : RelativeRect.fromLTRB(
+            origin.dx,
+            origin.dy + box.size.height + 6,
+            overlay.size.width - origin.dx - box.size.width,
+            0,
+          );
 
     final chosen = await _showMenu(
       position: position,
@@ -475,6 +496,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
+    if (widget.menuOnly) return const SizedBox.shrink();
     final sentence = _webSearchSentence;
     final current =
         widget.currentModel ??

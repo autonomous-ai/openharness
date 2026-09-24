@@ -62,13 +62,12 @@ void main() {
     grid.AppType.captionSize,
   };
 
-  /// Every visible text is on the fixed scale, in the system face or the
-  /// terminal's — and never at the terminal's own size unless it is one of the
-  /// scale's steps. Returns each text's size so a caller can compare them
-  /// across a terminal zoom.
+  /// General UI keeps its fixed scale; the status bar follows the terminal.
+  /// Return general UI sizes for comparisons across a terminal zoom.
   Map<String, double> checkText(WidgetTester tester, {int atLeast = 4}) {
     final sizes = <String, double>{};
-    void check(InlineSpan span, TextStyle inherited) {
+    var checked = 0;
+    void check(InlineSpan span, TextStyle inherited, {bool terminal = false}) {
       final style = inherited.merge(span.style);
       if (span is TextSpan) {
         final text = span.text?.trim();
@@ -78,16 +77,26 @@ void main() {
               'lucide',
               'LucideIcons',
             ].any((icon) => style.fontFamily?.contains(icon) == true)) {
-          expect(ramp, contains(style.fontSize), reason: text);
-          expect(
-            [grid.AppType.sansFamily, grid.AppType.monoFamily],
-            contains(style.fontFamily),
-            reason: text,
-          );
-          sizes[text!] = style.fontSize!;
+          checked++;
+          if (terminal) {
+            expect(style.fontSize, terminalFontStore.size, reason: text);
+            expect(
+              style.fontFamily,
+              terminalFontStore.value.fontFamily,
+              reason: text,
+            );
+          } else {
+            expect(ramp, contains(style.fontSize), reason: text);
+            expect(
+              [grid.AppType.sansFamily, grid.AppType.monoFamily],
+              contains(style.fontFamily),
+              reason: text,
+            );
+            sizes[text!] = style.fontSize!;
+          }
         }
         for (final child in span.children ?? <InlineSpan>[]) {
-          check(child, style);
+          check(child, style, terminal: terminal);
         }
       }
     }
@@ -111,7 +120,17 @@ void main() {
               .isNotEmpty) {
         continue;
       }
-      check((element.widget as RichText).text, const TextStyle());
+      check(
+        (element.widget as RichText).text,
+        const TextStyle(),
+        terminal: find
+            .descendant(
+              of: find.byKey(const ValueKey('workspace-status-bar')),
+              matching: find.byWidget(element.widget),
+            )
+            .evaluate()
+            .isNotEmpty,
+      );
     }
     for (final widget in tester.widgetList<EditableText>(
       find.byType(EditableText),
@@ -122,7 +141,7 @@ void main() {
         terminalFontStore.size,
       }, contains(widget.style.fontSize));
     }
-    expect(sizes.length, greaterThanOrEqualTo(atLeast));
+    expect(checked, greaterThanOrEqualTo(atLeast));
     expect(tester.takeException(), isNull);
     return sizes;
   }
@@ -230,7 +249,7 @@ void main() {
   });
 
   testWidgets(
-    'tabs keep the UI scale while welcome and setup screens follow terminal zoom',
+    'tabs, welcome, and setup screens follow terminal zoom while general UI keeps its scale',
     (tester) async {
       final app = createApp();
       final map = MemoryKeymap();

@@ -1980,7 +1980,8 @@ class _TerminalHeader extends StatelessWidget {
         : null;
     // Reserve space for the visible model name and the pane controls.
     // Engines without a picker keep their existing header width.
-    final showModelPicker = !readOnly && modelPickerSupports(session.engineId);
+    final showModelPicker =
+        !compact && !readOnly && modelPickerSupports(session.engineId);
     // The picker: a model id up to 220px, its arrow and padding.
     final pickerWidth = showModelPicker ? 250.0 : 0.0;
     // The model, then the one ⋮ menu that holds every pane action.
@@ -1997,9 +1998,10 @@ class _TerminalHeader extends StatelessWidget {
             builder: (context, constraints) {
               final scale = grid.appTextScaleOf(context);
               final narrow = constraints.maxWidth < 560 * math.max(1, scale);
-              // Keep PR state visible before spending space on branch prose.
-              // A compact badge also fits beside the compact action menu.
+              // Workspace panes show PR state once in the main status bar.
+              // Standalone terminals retain their own PR badge.
               final showPr =
+                  !compact &&
                   agent != null &&
                   project?.shownBranch != null &&
                   constraints.maxWidth >= 360 * math.max(1, scale);
@@ -2267,32 +2269,34 @@ class _TerminalHeader extends StatelessWidget {
                       viewerColor: agent == null
                           ? null
                           : agentIdentity(agent).color,
-                      details: Tooltip(
-                        message: [
-                          if (forkedFrom != null)
-                            'Forked from ${forkedFrom.name}',
-                          if (project != null) project.cwd,
-                          ?project?.branchDetail,
-                          machineName,
-                        ].join('\n'),
-                        child: PromptContextView(
-                          contextData: PromptContext(
-                            // This computer goes without saying.
-                            machine: machine?.isLocalMachine == true
-                                ? null
-                                : machineName,
-                            // The folder as it was chosen and its repository's branch;
-                            // the full working folder is in the tooltip.
-                            project: narrow ? null : project?.label,
-                            // Not a branch Harness made up that waits for the
-                            // session's name, nor a commit an agent checked out.
-                            branch: narrow ? null : project?.shownBranch,
-                            leading: !narrow && forkedFrom != null
-                                ? 'forked from ${forkedFrom.name}'
-                                : null,
-                          ),
-                        ),
-                      ),
+                      details: compact
+                          ? const SizedBox.shrink()
+                          : Tooltip(
+                              message: [
+                                if (forkedFrom != null)
+                                  'Forked from ${forkedFrom.name}',
+                                if (project != null) project.cwd,
+                                ?project?.branchDetail,
+                                machineName,
+                              ].join('\n'),
+                              child: PromptContextView(
+                                contextData: PromptContext(
+                                  // This computer goes without saying.
+                                  machine: machine?.isLocalMachine == true
+                                      ? null
+                                      : machineName,
+                                  // The folder as it was chosen and its repository's branch;
+                                  // the full working folder is in the tooltip.
+                                  project: narrow ? null : project?.label,
+                                  // Not a branch Harness made up that waits for the
+                                  // session's name, nor a commit an agent checked out.
+                                  branch: narrow ? null : project?.shownBranch,
+                                  leading: !narrow && forkedFrom != null
+                                      ? 'forked from ${forkedFrom.name}'
+                                      : null,
+                                ),
+                              ),
+                            ),
                     ),
                   ),
                 ],

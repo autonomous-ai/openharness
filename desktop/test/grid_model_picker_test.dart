@@ -156,6 +156,45 @@ void main() {
     expect(find.textContaining('usage'), findsOneWidget);
   });
 
+  testWidgets(
+    'workspace context opens the shared picker without a pane label',
+    (tester) async {
+      build(
+        models: [
+          {'id': 'local-model', 'node': 'M2'},
+        ],
+      );
+      final controller = GridModelPickerController();
+      addTearDown(controller.dispose);
+      String? selected;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              engineLabel: 'codex',
+              controller: controller,
+              menuOnly: true,
+              onSelected: (model) => selected = model.id,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('OpenAI'), findsNothing);
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.text('local-model'), findsOneWidget);
+      await tester.tap(find.text('local-model'));
+      await tester.pumpAndSettle();
+      expect(selected, 'local-model');
+      await tester.pumpWidget(const SizedBox());
+      controller.open();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('compact model menu stays on screen, and Escape closes it', (
     tester,
   ) async {

@@ -6,7 +6,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/widgets/engine_identity.dart';
-import 'package:harness/widgets/box_chrome.dart' show kBoxFaint;
+import 'package:harness/widgets/search_result_text.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
@@ -75,31 +75,38 @@ void main() {
       await configured.mount(tester, app, map);
       await key(tester, LogicalKeyboardKey.keyO, cmd: true);
       final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
-      expect(tester.widget<ListTile>(row).leading, isA<EngineMark>());
-      for (final value in [
-        'M2',
-        'openharness',
-        'feature/login-redirect',
-        '33m',
-      ]) {
-        expect(
-          find.descendant(of: row, matching: find.text(value)),
-          findsOneWidget,
-        );
-      }
-      for (final label in ['M2', 'openharness', 'feature/login-redirect']) {
-        final text = tester.widget<Text>(
-          find.descendant(of: row, matching: find.text(label)),
-        );
-        expect(text.style!.fontFamily, terminalFontStore.value.fontFamily);
-        expect(text.style!.fontSize, terminalFontStore.size);
-        expect(text.style!.height, terminalFontStore.value.height);
-        expect(text.style!.color, kBoxFaint);
-      }
-      final create = tester.widget<ListTile>(
-        find.byKey(const ValueKey(kSwarmCreateRowId)),
+      expect(
+        find.descendant(of: row, matching: find.byType(EngineMark)),
+        findsNothing,
       );
-      expect(create.leading, isA<Icon>());
+      expect(
+        find.descendant(of: row, matching: find.text('33m')),
+        findsOneWidget,
+      );
+      final detail = tester.widget<SearchResultText>(
+        find.descendant(
+          of: row,
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is SearchResultText && widget.text.contains('git:'),
+          ),
+        ),
+      );
+      for (final label in ['M2', 'openharness', 'feature/login-redirect']) {
+        expect(detail.text, contains(label));
+      }
+      expect(detail.style.fontFamily, terminalFontStore.value.fontFamily);
+      expect(detail.style.fontSize, terminalFontStore.size);
+      expect(detail.style.height, terminalFontStore.value.height);
+      final create = find.byKey(const ValueKey(kSwarmCreateRowId));
+      expect(
+        find.descendant(of: create, matching: find.text('New Harness')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: create, matching: find.byType(Icon)),
+        findsNothing,
+      );
       expect(find.text('Harness:'), findsNothing);
       expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
       expect(tester.takeException(), isNull);

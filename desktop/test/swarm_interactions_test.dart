@@ -196,7 +196,7 @@ void main() {
       await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
       await tester.pump();
       final selected = find.byWidgetPredicate(
-        (w) => w is ListTile && w.selected,
+        (w) => w is Semantics && w.properties.selected == true,
       );
       expect(
         find.descendant(of: selected, matching: find.text('Agent 10')),

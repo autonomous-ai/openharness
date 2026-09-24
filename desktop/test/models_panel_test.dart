@@ -1,3 +1,5 @@
+import 'support/workspace_tools.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -684,12 +686,11 @@ void main() {
     );
     final tab = app.activeSwarmId;
     final panes = app.panes.map((pane) => pane.id).toList();
-    final button = find.byKey(const ValueKey('swarm-models-button'));
     app.modelManager.start();
     await app.modelManager.refresh();
     await tester.pump();
     expect(find.text('Explore models'), findsNothing);
-    await tester.tap(button);
+    await openWorkspaceTool(tester, 'models');
     await tester.pump();
     await tester.tap(find.textContaining('Local').first);
     await tester.pump();
@@ -706,7 +707,7 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    await tester.tap(button);
+    await openWorkspaceTool(tester, 'models');
     await tester.pump();
     await tester.runAsync(() async {
       for (final asset in [
@@ -727,12 +728,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     final panel = tester.getRect(find.byType(ModelsPanel));
     expect(panel.right, 1190);
-    expect(panel.top, greaterThan(tester.getRect(button).bottom));
+    expect(panel.top, greaterThan(40));
     expect(panel.width, 640);
-    expect(
-      tester.getRect(button).right,
-      lessThan(tester.getRect(find.byTooltip('Harnesses')).left),
-    );
     expect(find.byType(Dialog), findsNothing);
     expect(find.text('Search models…'), findsOneWidget);
     expect(find.text('All 14'), findsOneWidget);
@@ -759,7 +756,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     expect(find.byType(ModelsPanel), findsNothing);
-    await tester.tap(button);
+    await openWorkspaceTool(tester, 'models');
     await tester.pump();
     await tester.tapAt(const Offset(50, 400));
     await tester.pump();

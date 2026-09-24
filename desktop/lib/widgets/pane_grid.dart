@@ -1243,21 +1243,10 @@ class _PaneCell extends StatelessWidget {
             // The rim is always drawn — it is what gives an unfocused card its
             // edge, now that no shared line does. It only CHANGES COLOUR on
             // focus, so nothing resizes as focus moves.
-            border: Border.all(
-              // FOCUS IS THE ENGINE'S OWN COLOUR, not the app's blue.
-              //
-              // One colour per pane, and only its EXTENT changes: the engine's
-              // line runs along the top edge normally and around all four when
-              // the pane is focused. The blue ring said the same thing in a
-              // second colour — and, worse, the old treatment blanked the band
-              // underneath it, so the focused pane was the one pane on the grid
-              // that no longer told you which engine it was running. It went
-              // quiet exactly when you looked at it.
-              //
-              // Only meaningful with company: a ring around the only tile would
-              // be decoration, since there is nowhere else focus could be.
-              color: !_single && focused ? AppColors.accent : AppColors.border,
-              width: 1,
+            border: Border.fromBorderSide(
+              // A lone pane needs no focus distinction. Dialogs use this same
+              // rim in its focused state while they own the keyboard.
+              terminalPaneBorder(focused: !_single && focused),
             ),
           ),
           // Attention, drawn OVER the terminal and inside the border above, so a

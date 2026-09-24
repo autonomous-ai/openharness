@@ -1,3 +1,5 @@
+import 'support/workspace_tools.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -224,11 +226,11 @@ void main() {
       );
       await tester.pumpAndSettle();
     }
-    await tester.tap(
-      workspace
-          ? find.byKey(const ValueKey('swarm-machines-button'))
-          : find.text('open machines'),
-    );
+    if (workspace) {
+      await openWorkspaceTool(tester, 'machines');
+    } else {
+      await tester.tap(find.text('open machines'));
+    }
     await tester.pumpAndSettle();
   }
 
@@ -389,7 +391,6 @@ void main() {
       app.add('server', 'Build server', online: false);
       await mount(tester, size: const Size(1280, 800), workspace: true);
       final panel = find.byKey(const ValueKey('machines-panel'));
-      final icon = find.byKey(const ValueKey('swarm-machines-button'));
       expect(find.byType(Dialog), findsNothing);
       for (final barrier in tester.widgetList<ModalBarrier>(
         find.byType(ModalBarrier),
@@ -400,12 +401,8 @@ void main() {
           reason: 'The workspace stays undimmed',
         );
       }
-      expect(
-        tester.getRect(panel).top,
-        greaterThan(tester.getRect(icon).bottom),
-      );
+      expect(tester.getRect(panel).top, greaterThan(40));
       expect(tester.getRect(panel).right, closeTo(1270, 2));
-      expect(tester.widget<IconButton>(icon).isSelected, isTrue);
       expect(remoteInput, findsNothing);
       expect(localInput, findsNothing);
       expect(find.text('Set password'), findsOneWidget);
@@ -457,7 +454,7 @@ void main() {
       await capture(tester, 'machines-toolbar-set-password');
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      await tap(tester, icon);
+      await openWorkspaceTool(tester, 'machines');
       expect(localInput, findsNothing);
       await tap(tester, find.byKey(const ValueKey('connect-machine-remote')));
       expect(tester.widget<TextField>(remoteInput).focusNode!.hasFocus, isTrue);
@@ -470,12 +467,14 @@ void main() {
       await tester.tapAt(const Offset(30, 200));
       await tester.pumpAndSettle();
       expect(panel, findsNothing);
-      expect(tester.widget<IconButton>(icon).isSelected, isFalse);
       await mount(tester, workspace: true, brightness: Brightness.light);
-      expect(find.byType(ToolbarIcon), findsNWidgets(3));
+      expect(find.byType(ToolbarIcon), findsNothing);
       expect(panel, findsOneWidget);
       await tap(tester, find.byTooltip('Close Machines'));
-      expect(icon.hitTestable(), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('swarm-new-tab-button')).hitTestable(),
+        findsOneWidget,
+      );
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -1216,7 +1215,7 @@ void main() {
       expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
       await tap(tester, find.byTooltip('Close Machines'));
       expect(
-        find.byKey(const ValueKey('swarm-machines-button')).hitTestable(),
+        find.byKey(const ValueKey('swarm-new-tab-button')).hitTestable(),
         findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());

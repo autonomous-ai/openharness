@@ -85,11 +85,11 @@ void main() {
       revision.value = 2;
       await tester.pump();
       expect(find.text('Renamed terminal'), findsOneWidget);
-      expect(find.text('harness/codex-0922-1136'), findsOneWidget);
+      expect(find.text('harness/codex-0922-1136'), findsNothing);
       expect(
         find.text('desktop'),
-        findsOneWidget,
-        reason: 'A subfolder shows as itself, beside its repository branch.',
+        findsNothing,
+        reason: 'Project context belongs to the shared workspace status line.',
       );
       expect(find.text('codex-0922-1136'), findsNothing);
       app.machineStates['m']!.agents = [
@@ -111,8 +111,8 @@ void main() {
       await tester.pump();
       expect(
         find.text('harness'),
-        findsOneWidget,
-        reason: 'A worktree root shows as its repository, never its folder.',
+        findsNothing,
+        reason: 'Compact pane headers do not repeat project context.',
       );
       expect(
         find.text('codex-0922-1136'),
@@ -137,7 +137,7 @@ void main() {
       ];
       revision.value = 4;
       await tester.pump();
-      expect(find.text('harness'), findsOneWidget);
+      expect(find.text('harness'), findsNothing);
       expect(
         find.text('tester/brave-otter'),
         findsNothing,
@@ -159,7 +159,7 @@ void main() {
       ];
       revision.value = 5;
       await tester.pump();
-      expect(find.text('harness'), findsOneWidget);
+      expect(find.text('harness'), findsNothing);
       expect(
         find.textContaining('Detached'),
         findsNothing,
@@ -207,7 +207,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} header keeps its details in view and its actions in the ⋮ menu',
+      '${local ? 'local' : 'remote'} compact header keeps actions in the menu without repeating context or moving its title',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -250,31 +250,10 @@ void main() {
           find.byType(TerminalView),
         );
         final titleBounds = tester.getRect(title);
-        expect(find.text('harness'), findsOneWidget);
-        expect(find.text('main'), findsOneWidget);
-        if (local) {
-          // This computer goes without saying.
-          expect(find.text('Test host'), findsNothing);
-          expect(
-            tester.getRect(find.text('harness')).left,
-            greaterThan(titleBounds.right),
-          );
-        } else {
-          expect(
-            tester.getRect(find.text('Test host')).left,
-            greaterThan(titleBounds.right),
-          );
-          expect(
-            tester.getRect(find.text('harness')).left,
-            greaterThan(tester.getRect(find.text('Test host')).right),
-          );
-        }
-        expect(
-          tester.getRect(find.text('main')).left,
-          greaterThan(tester.getRect(find.text('harness')).right),
-        );
-        // One ⋮ menu, always in view, instead of a row of icons that took the details' place
-        // on hover.
+        expect(find.text('harness'), findsNothing);
+        expect(find.text('main'), findsNothing);
+        expect(find.text('Test host'), findsNothing);
+        // Context belongs to the main app bar; pane actions stay in one menu.
         expect(
           find.descendant(of: controls, matching: find.byType(IconButton)),
           findsOneWidget,
@@ -284,8 +263,8 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Stop Harness'), findsOneWidget);
         expect(find.text('Share harness'), findsOneWidget);
-        // The details stay in view, and neither the title nor the terminal moves.
-        expect(find.text('main').hitTestable(), findsOneWidget);
+        // Neither the title nor the retained terminal moves when the menu opens.
+        expect(find.text('main'), findsNothing);
         expect(tester.getRect(title), titleBounds);
         expect(
           tester.widget<TerminalView>(find.byType(TerminalView)),

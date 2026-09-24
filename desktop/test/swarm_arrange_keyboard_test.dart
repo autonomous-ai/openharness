@@ -36,7 +36,9 @@ void main() {
         await tester.pump();
         final label = find.descendant(
           of: strip,
-          matching: find.text(app.activeSwarm.name),
+          matching: find.text(
+            '${app.swarms.indexOf(app.activeSwarm) + 1}:${app.activeSwarm.name}',
+          ),
         );
         expect(label, findsOneWidget);
         final viewport = tester.getRect(strip);

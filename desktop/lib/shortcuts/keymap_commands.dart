@@ -364,6 +364,13 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'linkMachine',
   ),
   const HarnessCommand(
+    'harnesses.list',
+    'Harnesses',
+    ShortcutGroup.actions,
+    nativeAction: 'sessions',
+    keywords: ['manage', 'running', 'paused', 'sessions'],
+  ),
+  const HarnessCommand(
     'project.add',
     'Add project',
     ShortcutGroup.actions,
