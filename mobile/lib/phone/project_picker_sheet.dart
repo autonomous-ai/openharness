@@ -114,7 +114,7 @@ class _ProjectPickerState extends State<_ProjectPicker> {
                 // week has a handful of folders and the answer is already on screen, where a
                 // keyboard would bury it.
                 autofocus: false,
-                hintText: 'Search project',
+                hintText: 'Search recent folders',
                 onChanged: (value) => setState(() => _query = value),
                 onClear: () => setState(() {
                   _controller.clear();

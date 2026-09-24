@@ -788,7 +788,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
                             SettingsRow(
                               title: 'Search project',
                               nested: true,
-                              detail: 'Find one by name or path',
+                              // ⚠️ It says RECENT, because this row is where the Recent list went.
+                              // "Find one by name or path" read as though it searched the machine's
+                              // disk — it searches the folders already worked in, and a row that
+                              // promises more than it holds is worse than one that promises less.
+                              detail: 'Recent folders, by name or path',
                               leading: Icon(
                                 LucideIcons.search300,
                                 size: 18,
