@@ -3067,11 +3067,11 @@ class AppNotifier extends ChangeNotifier {
   /// the store. Reusing the cold-start restore is what keeps this from becoming a
   /// second, subtly different way to build a grid.
   ///
-  /// [revision] is the sign-out's own, when it has one: the explicit sign-out
-  /// already invalidated the previous work, and a second invalidation here would
-  /// orphan its own wait. A session that ended underneath us passes none and
-  /// invalidates for itself — the in-flight work belongs to the account that
-  /// just left.
+  /// [revision] is the caller's own, when it has one: an explicit sign-out and
+  /// a session that ended underneath us have both already invalidated the
+  /// previous work, and a second invalidation here would orphan the sign-out's
+  /// wait and clear the expiry's [sessionExpired]. Without one this invalidates
+  /// for itself — the in-flight work belongs to the account that just left.
   Future<void> _becomeGuest({String? banner, int? revision}) async {
     revision ??= _invalidateAuthWork();
     final before = localMachineState?.machine.machineId;
@@ -3381,7 +3381,7 @@ class AppNotifier extends ChangeNotifier {
     if (status == AppStatus.unauthenticated || isGuest) {
       return; // idempotent: several sources can race here
     }
-    _invalidateAuthWork();
+    final revision = _invalidateAuthWork();
     cliLogin.cancel();
     _sessionExpired = true;
     currentUser = null;
@@ -3403,8 +3403,12 @@ class AppNotifier extends ChangeNotifier {
     // and goes on serving this computer, so the agents that were running are
     // still running. This computer's tiles stay (under the id it serves now),
     // the other machines' leave, and the banner says why the list got shorter.
+    //
+    // The work was invalidated above, so the guest transition runs under THIS
+    // revision: invalidating again would clear [sessionExpired], and the banner
+    // would read as a failed sign-in rather than as the session having ended.
     _closedHistory.clear();
-    unawaited(_becomeGuest(banner: message));
+    unawaited(_becomeGuest(banner: message, revision: revision));
   }
 
   /// Remove the old account's live objects without overwriting its saved desk.
