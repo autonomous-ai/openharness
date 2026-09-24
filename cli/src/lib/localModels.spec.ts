@@ -151,6 +151,17 @@ describe('local model discovery and lifecycle', () => {
     expect((await service.list('home')).models[0].operation?.phase).toBe('done')
   })
 
+  it('keeps a failed Grid registration refresh retryable without starting or downloading', async () => {
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('sync') ? { ...ok(), ok: false } : original(args, output))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home')).models[0].operation).toMatchObject({ phase: 'failed', stage: 'checking' })
+    expect(calls.some(args => args.includes('join') || args.includes('pull'))).toBe(false)
+    run.mockImplementation(original)
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home')).models[0].state).toBe('running')
+  })
+
   it('never offers Stop for an external endpoint or another machine', async () => {
     serving = true
     await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ endpoint_url: 'http://localhost:1234', models: ['Small-Q4.gguf'] }] }))

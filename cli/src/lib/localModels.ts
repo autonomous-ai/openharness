@@ -362,7 +362,12 @@ export class LocalModels {
     const must = async (args: string[], message: string, output?: (chunk: string) => void) => {
       if (!(await this.run(args, output, 30 * 60_000)).ok) throw new ModelError(message)
     }
-    if (operation.action === 'start') await this.loadCatalog()
+    if (operation.action === 'start') {
+      await this.loadCatalog()
+      // Leaving the last engine removes Grid's local registration. Restore the
+      // account's existing grids before resolving ownership or joining again.
+      await must(['--remote', 'sync'], 'Models could not be checked. Try again.')
+    }
     const owned = await this.owned(grid)
     const candidate = [...this.candidates, ...await this.known(grid, owned)].find(c => c.id === operation.modelId)
     const instance = owned.find(o => candidate ? o.file === candidate.file : operation.modelId === `local:${o.file}`)
