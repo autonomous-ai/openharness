@@ -2255,6 +2255,24 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     await socket.stop()
   })
 
+  it("keeps the machine's own name, for the models it serves — a rename updates it, a frame without one does not", async () => {
+    const socket = new BackendSocket('token')
+    const namesSeen: Array<string | null> = []
+    socket.onMachineMeta = (n) => { namesSeen.push(n) }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    expect(socket.machineName()).toBeNull()
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: ' M2 ', gridName: 'someone-7f3a91c4' } } })
+    await vi.waitFor(() => expect(socket.machineName()).toBe('M2'))
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'Studio' } } })
+    await vi.waitFor(() => expect(socket.machineName()).toBe('Studio'))
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { gridName: 'someone-7f3a91c4' } } })
+    await vi.waitFor(() => expect(namesSeen).toHaveLength(3))
+    expect(socket.machineName()).toBe('Studio')
+    await socket.stop()
+  })
+
   it('refuses a machine_meta that arrived over the LOCAL socket — only the backend may name the grid', async () => {
     const socket = new BackendSocket('token')
     const namesSeen: Array<string | null> = []

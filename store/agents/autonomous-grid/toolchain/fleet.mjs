@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { verifyModel } from '../lib/verify.mjs';
 import { join, resolve } from 'node:path';
-import { atomicJson, DEFAULT_CONFIG, execute, readConfig, runTracked } from '../lib/fleet.mjs';
+import { atomicJson, DEFAULT_CONFIG, execute, harnessNameFor, nameJoin, readConfig, runTracked } from '../lib/fleet.mjs';
 import { createCollector } from '../lib/telemetry.mjs';
 import { discoverMachines } from '../lib/harness.mjs';
 import { connectWorkspace, initializeWorkspace, mergeMachines, readStatus } from '../lib/connect.mjs';
@@ -77,7 +77,9 @@ try {
     if (!machine) throw new Error(`Unknown machine ${machineId}. Add it to grid-fleet.json first.`);
     const abort = new AbortController();
     process.once('SIGINT', () => abort.abort()); process.once('SIGTERM', () => abort.abort());
-    const result = await runTracked(workspace, machine, config.mode, gridArgs, { signal: abort.signal, thinking });
+    // A join is labelled with the machine's name as Harness Machines shows it, read now — see nameJoin.
+    const named = gridArgs[0] === 'join' ? nameJoin(gridArgs, harnessNameFor(machine, await discoverMachines().catch(() => []))) : gridArgs;
+    const result = await runTracked(workspace, machine, config.mode, named, { signal: abort.signal, thinking });
     if (!result.ok && result.error) console.error(result.error);
     process.exitCode = result.code;
   } else {

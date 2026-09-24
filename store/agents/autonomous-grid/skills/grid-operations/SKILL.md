@@ -172,15 +172,18 @@ on disk. When the person asks for text only, rename the projector yourself
 
     "$GRID_FLEET" run --machine MACHINE -- pull OWNER/REPO:EXACT_FILE.gguf
     "$GRID_FLEET" run --machine MACHINE -- join GRID --serve EXACT_FILE.gguf --advertise-as MODEL_ALIAS \
-      --name MACHINE-MODEL --max-concurrency N --ctx-size CTX --endpoint-port PORT
+      --max-concurrency N --ctx-size CTX --endpoint-port PORT
 
-`--advertise-as` is the name the person will see in their model picker; `--name` is the machine's
-display name — different things. `--max-concurrency N` is 1 unless they asked for more; don't pass
+`--advertise-as` is the name the person will see in their model picker. **Don't pass `--name`:**
+the runner sets it on every `join` to the machine's name as Harness Machines shows it right now, and
+replaces any you give — it is the label under the model in every picker, and a name made up here
+(`macbookpro-qwen3.6-35b`) or Grid's host-name default (`mac.lan`) read as a different computer.
+Say the machine by that same name. `--max-concurrency N` is 1 unless they asked for more; don't pass
 `--parallel` (grid derives the slot count from it) and don't pass `--jinja` (on by default in the
 engine grid ships). Never pin `--ctx-size` under 65536 — a window that small cannot hold a coding
 agent's own prompt (a 32K engine here refused an agent's first request of 59,561 tokens). Use
 explicit ports when several instances share a host. An existing Ollama, vLLM, MLX or LM Studio
-engine can join with `--at URL -m MODEL --name NAME`; do not install a second engine needlessly.
+engine can join with `--at URL -m MODEL` (the runner names it too); do not install a second engine needlessly.
 
 Choose a reasoning budget deliberately. Grid's GPU default can spend more tokens thinking than a
 small output limit permits, yielding no final answer. For an everyday low-latency assistant, start

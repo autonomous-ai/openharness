@@ -88,6 +88,10 @@ interface Owned { file: string; selector: string; aliases: string[]; nodeId: str
 interface Receipt { spec: 1; grid: string; operation?: ModelOperation }
 interface Options {
   stateDir: string; processEnv?: NodeJS.ProcessEnv
+  /** This machine's name as Harness shows it. Grid labels an engine with its `--name`, and without
+   * one it takes the host name — so a model started here read `mac.lan` under "On your machines"
+   * while Machines called the same computer `M2`. */
+  machineName?: () => string | null | undefined
   run?: (args: string[], output?: (chunk: string) => void, timeout?: number) => Promise<GridFleetResult>
   request?: typeof fetch
 }
@@ -570,10 +574,13 @@ export class LocalModels {
         // optimistic the same way. So the most the model is sized for is tried first, and each size
         // that cannot compute is taken back down and halved — to the 64K floor, never below it.
         const first = candidate.context ?? await this.trainedWindow(candidate.file) ?? UNREAD_CONTEXT
+        const named = this.options.machineName?.()?.trim()
+        const machineName = named && validArg(named) ? named : undefined
         let started = false, outOfMemory = false
         for (const ctx of contextLadder(first)) {
           const port = await freePort()
           const joined = await this.run(['--remote', 'join', grid, '--serve', candidate.file,
+            ...(machineName ? ['--name', machineName] : []),
             '--max-concurrency', '1', '--ctx-size', String(ctx), '--endpoint-port', String(port),
             '--reasoning-budget', '0',
             ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])], undefined, 30 * 60_000)
