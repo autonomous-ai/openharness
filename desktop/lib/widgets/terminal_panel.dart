@@ -753,7 +753,18 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// there is the "called during build" error the crash log was full of.
   /// Deferred one frame, the retake lands on a built tree.
   void _autoTakeControlAfterBuild() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoTakeControl());
+    final session = widget.session;
+    final request = widget.focusRequest;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !widget.focused ||
+          !widget.focusByUser ||
+          widget.focusRequest != request ||
+          !identical(widget.session, session)) {
+        return;
+      }
+      _autoTakeControl();
+    });
   }
 
   /// A keystroke was typed into a pane that cannot take it. Flash the banner

@@ -449,6 +449,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       upload: session.uploadProgress,
       focused: app.isPaneFocused(pane.id),
       focusRequest: app.isPaneFocused(pane.id) ? app.paneFocusRequest : 0,
+      focusByUser: app.paneFocusByUser,
       single: app.panes.length == 1,
       pinned: app.isPanePinned(pane),
       zoomed: app.zoomedPaneId == pane.id,
@@ -1540,7 +1541,7 @@ class _PaneContent extends StatelessWidget {
                   notifier.toggleZoomPane();
                 }
               : null,
-          onRendererFocus: () => notifier.focusPane(pane.id),
+          onRendererFocus: () => notifier.focusPaneFromRenderer(pane.id),
           paneDrag: single
               ? null
               : PaneDragHandle(
