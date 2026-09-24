@@ -361,10 +361,22 @@ class Agent {
       resumeMode == 'fresh' ||
       (resumeMode == 'conversation' && (sessionId?.isEmpty ?? true));
 
+  /// Whether [resumed] is this paused harness brought back as its resume promised — the desktop's
+  /// bar: the SAME conversation, since a different session id is the daemon having started
+  /// something else. Unless a fresh one was all it could be ([resumesFreshConversation], on either
+  /// side): then a new id is the machine doing as it was told.
+  ///
+  /// [reportedResumed] is the daemon's own `resumed` flag, where it sent one: a `false` there is a
+  /// fallback to a new session, whatever the ids say.
+  bool resumedAsPromised(Agent resumed, {bool reportedResumed = true}) =>
+      resumesFreshConversation ||
+      resumed.resumesFreshConversation ||
+      (reportedResumed && resumed.sessionId == sessionId);
+
+  static const _resumeModes = {'shell', 'conversation', 'fresh'};
+
   static String? _safeResumeMode(Object? raw) =>
-      raw is String && const {'shell', 'conversation', 'fresh'}.contains(raw)
-      ? raw
-      : null;
+      raw is String && _resumeModes.contains(raw) ? raw : null;
 
   static String? _safeEngine(Object? raw) {
     if (raw is! String || raw.isEmpty || raw.length > 64) return null;
@@ -558,14 +570,21 @@ class AgentProject {
   String get label {
     final checkout = root;
     if (checkout == null) return name;
-    String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
-    if (trimmed(checkout) == trimmed(cwd)) return name;
+    if (_withoutTrailingSeparator(checkout) == _withoutTrailingSeparator(cwd)) {
+      return name;
+    }
     return cwd
-            .split(RegExp(r'[/\\]'))
+            .split(_pathSeparator)
             .where((part) => part.isNotEmpty)
             .lastOrNull ??
         name;
   }
+
+  static final _pathSeparator = RegExp(r'[/\\]');
+  static final _trailingSeparators = RegExp(r'[/\\]+$');
+
+  static String _withoutTrailingSeparator(String path) =>
+      path.replaceFirst(_trailingSeparators, '');
 
   /// The branch, or null when the daemon reported none or reported it blank.
   String? get branchLabel {
@@ -574,7 +593,9 @@ class AgentProject {
   }
 
   /// On a commit rather than a branch: an agent reading or testing one.
-  bool get detached => branch?.startsWith(kDetachedBranchPrefix) == true;
+  ///
+  /// Read from [branchLabel], the same trimmed value [branchDetail] cuts the commit out of.
+  bool get detached => branchLabel?.startsWith(kDetachedBranchPrefix) == true;
 
   /// The branch worth showing beside [label] — the desktop's `shownBranch`: none while Harness's
   /// made-up name waits for the session's, and none on no branch at all. [branchLabel] stays the

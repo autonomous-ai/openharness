@@ -2495,6 +2495,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           return summarizeTurnText(text, signal, userMessage, session?.engine ?? 'claude', gateway, previousRecap)
         },
       }
+  // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
+  // announced: the person asked to hear from the main agent once, not from every sub-agent. The dial
+  // hears it as `silent` on its summary card; the apps as `subagent` on `turn_ended` (below).
+  const isSubagentSession = (sessionId: string): boolean => {
+    const agentId = registry.bySession(sessionId)?.agentId
+    if (!agentId) return false
+    const role = backend.orchestratorRoleOf(agentId)
+    return role?.role === 'worker' || (role?.role === 'director' && role.busy)
+  }
   const mirror = new CommanderMirror({
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
@@ -2505,14 +2514,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ...summarizer,
     nameFor: (sessionId) => { const s = registry.bySession(sessionId); return s ? projectDisplayName(s) : undefined },
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
-    // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
-    // announced: the person asked to hear from the main agent once, not from every sub-agent.
-    isSubagent: (sessionId) => {
-      const agentId = registry.bySession(sessionId)?.agentId
-      if (!agentId) return false
-      const role = backend.orchestratorRoleOf(agentId)
-      return role?.role === 'worker' || (role?.role === 'director' && role.busy)
-    },
+    isSubagent: isSubagentSession,
     // A claude sub-agent still at work is one whose transcript is still growing:
     // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
     // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
@@ -2654,6 +2656,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // skips these; every other consumer ignores an unknown field. Measured before this existed: one
       // agent credited with 42 turns in a single second, all re-reads.
       if (event.type === 'turn_started' && (opts?.resumed || opts?.replay)) frame.replay = true
+      // The end of a turn carries the two facts an app needs to decide whether it is NEWS, in the clear
+      // for the same reason: `replay` — a turn re-read from disk, not one finishing now — and `subagent`
+      // — the dial's `silent`, a specialist's turn nobody asked to hear about. The phone notifies on
+      // neither. Absent = false, so an app that predates these reads every end as it always did.
+      if (event.type === 'turn_ended') {
+        if (opts?.resumed || opts?.replay) frame.replay = true
+        if (isSubagentSession(sessionId)) frame.subagent = true
+      }
       backend.send(frame)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())

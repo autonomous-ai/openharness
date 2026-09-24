@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/notify/agent_unread.dart';
+import 'package:harness_mobile/notify/unread_marks.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 
@@ -42,9 +44,15 @@ class TerminalActionColumn extends StatefulWidget {
     required this.voice,
     required this.session,
     required this.onSearch,
+    this.unread,
   });
 
   final VoiceInputController voice;
+
+  /// Agents that finished while you were on this one. Search is where they are
+  /// reached from, so it wears their count — the dial's bell pill. Null draws
+  /// the plain button.
+  final AgentUnread? unread;
 
   /// Null while the terminal is still attaching: the mic is drawn dimmed and
   /// dead, since there is nothing to talk to yet.
@@ -128,11 +136,13 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
           const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null),
         const SizedBox(height: TerminalActionColumn._underMic),
         _centred(
-          TerminalRoundAction(
-            key: const ValueKey('terminal-search'),
-            icon: LucideIcons.search300,
-            label: 'Search harnesses and machines',
-            onTap: widget.onSearch,
+          _withUnread(
+            TerminalRoundAction(
+              key: const ValueKey('terminal-search'),
+              icon: LucideIcons.search300,
+              label: 'Search harnesses and machines',
+              onTap: widget.onSearch,
+            ),
           ),
         ),
       ],
@@ -188,6 +198,12 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
         ],
       ),
     );
+  }
+
+  Widget _withUnread(Widget button) {
+    final unread = widget.unread;
+    if (unread == null) return button;
+    return UnreadCountBadge(unread: unread, child: button);
   }
 
   Widget _centred(Widget child) => SizedBox(

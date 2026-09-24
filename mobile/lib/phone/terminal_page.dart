@@ -1483,6 +1483,8 @@ class _TerminalPageState extends State<TerminalPage>
                                       voice: widget.voice,
                                       session: session,
                                       onSearch: _openSearch,
+                                      unread:
+                                          widget.notifier.doneNotices.unread,
                                     ),
                                   ),
                               ],

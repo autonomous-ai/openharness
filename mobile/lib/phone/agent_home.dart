@@ -428,7 +428,10 @@ class _AgentHomeState extends State<AgentHome> {
   AgentEntry? _firstOfLastTab(List<AgentEntry> entries) {
     final notifier = widget.notifier;
     if (notifier.deskTabs.isEmpty) return null;
-    final tabs = deskGroups(notifier, entries).where((tab) => !tab.isEmpty);
+    final tabs = [
+      for (final tab in deskGroups(notifier, entries))
+        if (!tab.isEmpty) tab,
+    ];
     final last = notifier.activeDeskTabId;
     final tab =
         tabs.where((tab) => tab.id == last).firstOrNull ?? tabs.firstOrNull;

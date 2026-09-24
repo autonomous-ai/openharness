@@ -96,13 +96,16 @@ void main() {
       await tester.pump();
 
       // PROJECT and ENGINE are folded shut — the page says what is chosen and
-      // opens onto the choices. Recent is a second fold inside PROJECT.
+      // opens onto the choices. The folders already worked in are behind Search
+      // project, which is a sheet rather than a second fold.
       await tester.tap(find.text('Choose a folder'));
       await tester.pump();
-      await tester.tap(find.text('Recent'));
+      await tester.tap(find.text('Search project'));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       await tester.tap(find.text('grid'));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       // Claude is the engine the form starts on, and the ENGINE row now shows
       // it rather than offering it — so there is nothing to tap.
       await tester.pump();

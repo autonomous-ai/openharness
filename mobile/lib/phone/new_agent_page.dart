@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/codex_profiles.dart';
+import 'package:harness_mobile/core/permission_modes.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
@@ -15,7 +16,9 @@ import 'agent_index.dart';
 import 'branch_picker_sheet.dart';
 import 'phone_header.dart';
 import 'phone_navigation.dart';
+import 'new_agent_draft.dart';
 import 'phone_status.dart';
+import 'project_picker_sheet.dart';
 import 'settings_row.dart';
 
 /// Starting an agent from the phone: a folder on that machine, and an engine to
@@ -93,11 +96,24 @@ class _NewAgentPageState extends State<NewAgentPage> {
   LocalCodexProfile? _codexProfile;
   bool _codexProfilesLoaded = false;
 
-  /// Whether the Recent row is folded open.
+  /// How far the harness may go without asking — the desktop's Approvals row.
   ///
-  /// Starts shut every time, and closes again on a pick: what it lists are answers, and once one is
-  /// taken the list has nothing left to say.
-  bool _recentOpen = false;
+  /// ⚠️ **Per engine, and reset with it.** Claude's "Accept edits" is not a mode Codex has, and a
+  /// mode an engine lacks is refused by the CLI at launch — so switching engine drops back to
+  /// [kDefaultPermissionMode] rather than carrying a choice across. See
+  /// `core/permission_modes.dart`.
+  String _permissionMode = kDefaultPermissionMode;
+
+  /// Whether the approval rows are folded open, like the engine list above them.
+  bool _approvalsOpen = false;
+
+  /// The modes the chosen engine offers, empty for one that has none to choose between — the row
+  /// is then left out rather than drawn dead.
+  List<PermissionMode> get _permissionModes =>
+      _engine == null ? const [] : permissionModesOf(_engine!);
+
+  PermissionMode? get _permissionModeChoice =>
+      _permissionModes.where((mode) => mode.id == _permissionMode).firstOrNull;
 
   /// What the machine said about [_folder]'s repository, and which folder it
   /// answered about.
@@ -139,6 +155,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
   @override
   void initState() {
     super.initState();
+    _restoreDraft();
     // After the first frame, not during it: `probeEngines` can notify synchronously, and a notify
     // while this page is still being mounted marks the listeners above it dirty mid-build — the
     // "setState() called during build" assertion.
@@ -151,6 +168,71 @@ class _NewAgentPageState extends State<NewAgentPage> {
       widget.notifier.projectHistory.load().then((_) {
         if (mounted) setState(() {});
       }),
+    );
+  }
+
+  @override
+  void dispose() {
+    _keepDraft();
+    super.dispose();
+  }
+
+  /// Takes back what the form was left holding — see [NewAgentDraft].
+  ///
+  /// ⚠️ **The machine comes from the draft, not from the page's argument**, which is what the
+  /// desktop does (`_machineId = draft?.machineId ?? machineId`): the form was opened from a
+  /// terminal or a list that names ONE machine, and a draft that came back on a different one
+  /// would be a folder path belonging to a machine that has never heard of it.
+  ///
+  /// Nothing is restored for a machine the account no longer has. The whole draft goes with it,
+  /// rather than half of it: a folder and a branch are answers about a machine, and re-hanging
+  /// them on another is how a form comes back subtly wrong.
+  void _restoreDraft() {
+    final draft = newAgentDraft;
+    if (draft == null) return;
+    if (widget.notifier.stateOf(draft.machineId) == null) {
+      newAgentDraft = null;
+      return;
+    }
+    _machineId = draft.machineId;
+    _engine = draft.engine;
+    _permissionMode = draft.permissionMode;
+    _folder = draft.folder;
+    _project = draft.project;
+    _projectLabel = draft.projectLabel;
+    _worktree = draft.worktree ?? false;
+    _branchRef = draft.branchRef;
+    _branchName = draft.branchName;
+    _placeholder = draft.placeholder;
+    _git = draft.git;
+    _gitFolder = draft.gitFolder;
+    _codexProfile = draft.codexProfile;
+  }
+
+  /// Leaves the form's answers where the next open will find them. Called from [dispose], so it
+  /// covers every way out — Back, a swipe, the route being replaced — except the one that must
+  /// not be covered: [_create] clears the draft the moment a harness exists.
+  void _keepDraft() {
+    // Nothing chosen and nothing typed is not a draft; it is the form as it opens. Kept, it would
+    // pin the page to whichever machine was last looked at for the rest of the run.
+    if (_folder == null && _project == null && _branchName == null) {
+      newAgentDraft = null;
+      return;
+    }
+    newAgentDraft = NewAgentDraft(
+      machineId: _machineId,
+      engine: _engine,
+      permissionMode: _permissionMode,
+      folder: _folder,
+      project: _project,
+      projectLabel: _projectLabel,
+      worktree: _worktree,
+      branchRef: _branchRef,
+      branchName: _branchName,
+      placeholder: _placeholder,
+      git: _git,
+      gitFolder: _gitFolder,
+      codexProfile: _codexProfile,
     );
   }
 
@@ -180,7 +262,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _folder = null;
       _project = null;
       _projectLabel = null;
-      _recentOpen = false;
       _git = null;
       _gitFolder = null;
       _gitLoading = false;
@@ -276,13 +357,20 @@ class _NewAgentPageState extends State<NewAgentPage> {
           ? 'A fresh folder, made on the machine'
           : null);
 
-  String get _engineLabel => _engine == null
-      ? 'Choose an agent'
-      : allEngines
-                .where((identity) => identity.id == _engine)
-                .firstOrNull
-                ?.label ??
-            _engine!;
+  String get _engineLabel =>
+      _engine == null ? 'Choose an agent' : _engineName(_engine!);
+
+  /// What this form calls an engine.
+  ///
+  /// ⚠️ **"Claude Code", not "Claude", and only here.** The desktop's launcher says the same
+  /// (`new_harness.dart`: `id == 'claude' ? 'Claude Code' : engineIdentity(id).label`) while its
+  /// engine table keeps the bare `Claude` for everywhere else — a pane header, a row on the Agents
+  /// list. The launcher is the one screen naming the PROGRAM rather than the harness running it,
+  /// and "Claude" alone reads there as a model.
+  String _engineName(String id) => id == 'claude'
+      ? 'Claude Code'
+      : allEngines.where((identity) => identity.id == id).firstOrNull?.label ??
+            id;
 
   /// What the BRANCH row says is about to happen, in the words of the thing it
   /// will do. Null leaves the row showing the branch alone.
@@ -392,12 +480,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
   bool get _browsed => _folder != null && !_recent.contains(_folder);
 
   /// The recent folder currently chosen, for the folded row to show, or null.
-  String? get _pickedRecent =>
-      _folder != null && _recent.contains(_folder) ? _folder : null;
-
-  String get _recentCount =>
-      _recent.length == 1 ? '1 folder' : '${_recent.length} folders';
-
   /// The last segment of a path, for the row's title. No `package:path` here — these are the remote
   /// machine's paths, and its separator is not this device's to assume.
   String _basename(String path) {
@@ -492,6 +574,27 @@ class _NewAgentPageState extends State<NewAgentPage> {
     unawaited(_loadGit(chosen));
   }
 
+  /// The searchable list of folders already worked in — the desktop's project menu, which is the
+  /// same history this page's Recent row lists.
+  ///
+  /// ⚠️ **It folds Recent shut on the way back.** Both are the same list, and leaving one open
+  /// under an answer taken from the other left the folder ticked in two places at once.
+  Future<void> _searchProject() async {
+    final chosen = await showProjectPickerSheet(
+      context,
+      folders: _recent,
+      selected: _folder,
+    );
+    if (chosen == null || !mounted) return;
+    setState(() {
+      _folder = chosen;
+      _project = null;
+      _projectLabel = null;
+      _error = null;
+    });
+    unawaited(_loadGit(chosen));
+  }
+
   Future<void> _create() async {
     final folder = _folder, engine = _engine, project = _project;
     if ((folder == null && project == null) || engine == null || _creating) {
@@ -529,6 +632,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
       // this required so the ordinary case cannot be left out by accident.
       folder: folder ?? '',
       projectFolder: request,
+      // Omitted for an engine with no modes, rather than sent as the default: the CLI refuses a
+      // mode an engine lacks, and "the default" is the machine's to decide there.
+      permissionMode: _permissionModes.isEmpty ? null : _permissionMode,
       // Only for Codex, and only when chosen: omitted, the machine launches
       // with its own default CODEX_HOME.
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
@@ -536,6 +642,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     );
     if (!mounted) return;
     if (error == null) {
+      // The harness exists: the draft that described it would be a second one waiting to be made
+      // by accident. See [NewAgentDraft].
+      newAgentDraft = null;
       _open(creation.agentId);
       return;
     }
@@ -670,8 +779,67 @@ class _NewAgentPageState extends State<NewAgentPage> {
                               setState(() => _projectOpen = !_projectOpen),
                         ),
                         if (_projectOpen) ...[
+                          // ⚠️ **First, and above the three ways of naming a folder the machine
+                          // does not know yet** — the desktop's own order, and the right one: on a
+                          // machine that has been worked on, the answer is nearly always a folder
+                          // that already exists. Absent where there is no history to search; the
+                          // Recent row below is absent then too, for the same reason.
+                          if (_recent.isNotEmpty)
+                            SettingsRow(
+                              title: 'Search project',
+                              nested: true,
+                              // ⚠️ It says RECENT, because this row is where the Recent list went.
+                              // "Find one by name or path" read as though it searched the machine's
+                              // disk — it searches the folders already worked in, and a row that
+                              // promises more than it holds is worse than one that promises less.
+                              detail: 'Recent folders, by name or path',
+                              leading: Icon(
+                                LucideIcons.search300,
+                                size: 18,
+                                color: AppPalette.textSecondary,
+                              ),
+                              trailing: Icon(
+                                LucideIcons.chevronRight300,
+                                size: 18,
+                                color: AppPalette.textFaint,
+                              ),
+                              onTap: () => unawaited(_searchProject()),
+                            ),
                           SettingsRow(
-                            title: 'New project',
+                            title: 'Clone Repository',
+                            nested: true,
+                            detail:
+                                _projectSourceNote ??
+                                (_project?.repository == null
+                                    ? 'Clone a GitHub repository'
+                                    : _projectLabel),
+                            leading: Icon(
+                              LucideIcons.gitBranch300,
+                              size: 18,
+                              color: AppPalette.textSecondary,
+                            ),
+                            trailing: _check(_project?.repository != null),
+                            onTap: !_canMakeProject
+                                ? null
+                                : () => unawaited(_pickRepository()),
+                          ),
+                          // Shows its path only when the choice is this row's own. A folder picked
+                          // from RECENT below is already named there, and printing it here too would
+                          // put one answer under two ticks.
+                          SettingsRow(
+                            title: 'Open Folder',
+                            nested: true,
+                            detail: _browsed ? _folder : null,
+                            leading: Icon(
+                              LucideIcons.folderSearch300,
+                              size: 18,
+                              color: AppPalette.textSecondary,
+                            ),
+                            trailing: _check(_browsed),
+                            onTap: () => unawaited(_browse()),
+                          ),
+                          SettingsRow(
+                            title: 'New Project',
                             nested: true,
                             detail:
                                 _projectSourceNote ??
@@ -696,89 +864,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                     _error = null;
                                   }),
                           ),
-                          // Shows its path only when the choice is this row's own. A folder picked
-                          // from RECENT below is already named there, and printing it here too would
-                          // put one answer under two ticks.
-                          SettingsRow(
-                            title: 'Browse…',
-                            nested: true,
-                            detail: _browsed ? _folder : null,
-                            leading: Icon(
-                              LucideIcons.folderSearch300,
-                              size: 18,
-                              color: AppPalette.textSecondary,
-                            ),
-                            trailing: _check(_browsed),
-                            onTap: () => unawaited(_browse()),
-                          ),
-                          SettingsRow(
-                            title: 'Git…',
-                            nested: true,
-                            detail:
-                                _projectSourceNote ??
-                                (_project?.repository == null
-                                    ? 'Clone a GitHub repository'
-                                    : _projectLabel),
-                            leading: Icon(
-                              LucideIcons.gitBranch300,
-                              size: 18,
-                              color: AppPalette.textSecondary,
-                            ),
-                            trailing: _check(_project?.repository != null),
-                            onTap: !_canMakeProject
-                                ? null
-                                : () => unawaited(_pickRepository()),
-                          ),
-                          // The fourth source, folded shut. Its entries are answers already given
-                          // rather than a way of choosing, so they stay out of sight until asked
-                          // for — a machine used for months would otherwise bury the three rows
-                          // above under its own history.
-                          //
-                          // ⚠️ Absent entirely when there is no history, rather than opening onto
-                          // nothing. Nobody's first agent has a recent folder.
-                          if (_recent.isNotEmpty)
-                            SettingsRow(
-                              title: 'Recent',
-                              nested: true,
-                              detail: _recentOpen
-                                  ? null
-                                  : (_pickedRecent ?? _recentCount),
-                              leading: Icon(
-                                LucideIcons.history300,
-                                size: 18,
-                                color: AppPalette.textSecondary,
-                              ),
-                              trailing: Icon(
-                                _recentOpen
-                                    ? LucideIcons.chevronUp300
-                                    : LucideIcons.chevronDown300,
-                                size: 18,
-                                color: AppPalette.textFaint,
-                              ),
-                              onTap: () =>
-                                  setState(() => _recentOpen = !_recentOpen),
-                            ),
-                          if (_recentOpen)
-                            for (final path in _recent)
-                              SettingsRow(
-                                title: _basename(path),
-                                detail: path,
-                                nested: true,
-                                // No leading glyph: the indent under an open Recent is what says
-                                // these belong to it, and a second icon column would put them back
-                                // level with the sources above.
-                                trailing: _check(_folder == path),
-                                onTap: () {
-                                  setState(() {
-                                    _folder = path;
-                                    _project = null;
-                                    _projectLabel = null;
-                                    _recentOpen = false;
-                                    _error = null;
-                                  });
-                                  unawaited(_loadGit(path));
-                                },
-                              ),
                         ],
                       ],
                     ),
@@ -821,7 +906,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                         if (_engineOpen)
                           for (final identity in _shownEngines) ...[
                             SettingsRow(
-                              title: identity.label,
+                              title: _engineName(identity.id),
                               nested: true,
                               detail: _engineNote(identity.id),
                               leading: EngineMark(
@@ -831,6 +916,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
                               trailing: _check(_engine == identity.id),
                               onTap: () => setState(() {
                                 _engine = identity.id;
+                                // See [_permissionMode]: a mode is one engine's
+                                // word, and the CLI refuses another's.
+                                _permissionMode = kDefaultPermissionMode;
                                 _error = null;
                               }),
                             ),
@@ -883,6 +971,59 @@ class _NewAgentPageState extends State<NewAgentPage> {
                           ),
                       ],
                     ),
+                    // ⚠️ **Its own caption, the way the desktop gives it its own row.** Approvals
+                    // is not a detail of which engine was picked — it is the one choice here that
+                    // decides what the harness may do to the machine while nobody is watching, and
+                    // a phone is exactly where nobody is watching. Folded under AGENT beside the
+                    // Codex profile, it read as another engine setting.
+                    //
+                    // Left out entirely for an engine with nothing to choose between: a row saying
+                    // "Not used by this agent" is a row that has to be read to learn it says
+                    // nothing.
+                    if (_permissionModes.isNotEmpty) ...[
+                      const SettingsCaption('APPROVALS'),
+                      SettingsGroup(
+                        children: [
+                          SettingsRow(
+                            title:
+                                _permissionModeChoice?.label ?? 'Auto-approve',
+                            detail: _permissionModeChoice?.detail,
+                            leading: Icon(
+                              LucideIcons.shieldCheck300,
+                              size: 18,
+                              color: _permissionModeChoice?.risky == true
+                                  ? AppPalette.warn
+                                  : AppPalette.textSecondary,
+                            ),
+                            trailing: Icon(
+                              _approvalsOpen
+                                  ? LucideIcons.chevronUp300
+                                  : LucideIcons.chevronDown300,
+                              size: 18,
+                              color: AppPalette.textFaint,
+                            ),
+                            onTap: () => setState(
+                              () => _approvalsOpen = !_approvalsOpen,
+                            ),
+                          ),
+                          if (_approvalsOpen)
+                            for (final mode in _permissionModes)
+                              SettingsRow(
+                                title: mode.label,
+                                detail: mode.detail,
+                                nested: true,
+                                // The one that turns the engine's own safety net off wears the
+                                // danger ink every other row on this phone uses for "this cannot
+                                // be taken back". It is a mode like any other to the CLI, and not
+                                // to the person reading the list.
+                                destructive: mode.risky,
+                                trailing: _check(_permissionMode == mode.id),
+                                onTap: () =>
+                                    setState(() => _permissionMode = mode.id),
+                              ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -952,19 +1093,39 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// wrong thing.
   List<Widget> _branchSection() {
     final info = _repository;
-    if (info == null && !_gitLoading && !_gitFailed) return const [];
-    if (info == null && _gitFailed) {
+    // ⚠️ **Always drawn, whatever the folder turns out to be** — the desktop keeps Branch and
+    // Worktree on the form and answers both with "Not a Git repository" (`new_harness_form.dart`,
+    // `_blocked`). A section that comes and goes with the folder makes a person wonder what else
+    // they have not been shown, and a missing Branch row is indistinguishable from an app that
+    // cannot do branches. Where there is nothing to choose the rows are inert rather than absent.
+    if (info == null && !_gitLoading) {
+      // A machine that could not answer is not the same as a folder that is not a checkout, and
+      // the difference is worth a sentence: one of them is worth trying again.
+      final reason = _gitFailed
+          ? 'The machine did not answer'
+          : 'Not a Git repository';
       return [
         const SettingsCaption('BRANCH'),
         SettingsGroup(
           children: [
             SettingsRow(
-              title: 'Could not read the repository',
-              detail:
-                  'The machine did not answer. The harness still starts in '
-                  'the folder, on the branch it is on.',
+              title: 'Branch',
+              value: reason,
+              detail: _gitFailed
+                  ? 'The harness still starts in the folder, on the branch it '
+                        'is on.'
+                  : null,
               leading: Icon(
                 LucideIcons.gitBranch300,
+                size: 18,
+                color: AppPalette.textFaint,
+              ),
+            ),
+            SettingsRow(
+              title: 'Worktree',
+              value: reason,
+              leading: Icon(
+                LucideIcons.gitFork300,
                 size: 18,
                 color: AppPalette.textFaint,
               ),
@@ -1003,7 +1164,18 @@ class _NewAgentPageState extends State<NewAgentPage> {
           // to the branch, with it on the harness gets a checkout of its own —
           // so it has to be readable at the same time as the answer it
           // qualifies.
-          if (info != null)
+          if (info == null)
+            // Still reading. Drawn without an answer rather than left out, so
+            // the row does not arrive under a thumb already on its way down.
+            SettingsRow(
+              title: 'Worktree',
+              leading: Icon(
+                LucideIcons.gitFork300,
+                size: 18,
+                color: AppPalette.textFaint,
+              ),
+            )
+          else
             SettingsRow(
               title: 'Worktree',
               detail: _worktree
