@@ -163,6 +163,13 @@ export interface TerminalStreamManagerDeps {
   streamingAvailable: boolean
   now?: () => number
   diagnostic?: (event: string, fields: Record<string, unknown>) => void
+  /**
+   * An agent's terminal just took input (a keystroke or a paste) from the stream that holds it — never
+   * from a watcher, whose input is refused before it gets here. Called on every accepted frame, so it
+   * must be cheap and must not throw; the daemon starts a sleeping grid from it (the keystroke prewarm,
+   * grid-reads-without-waking issue 03), which is why it lives here, below every client that types.
+   */
+  onInput?: (agentId: string) => void
 }
 
 function sizeFrom(payload: FramePayload): TerminalStreamSize | null {
@@ -619,6 +626,7 @@ export class TerminalStreamManager {
     }
     state.lastInputSeq = inputSeq
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
+    this.tookInput(state)
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
     // keystroke order is already fixed by the time it returns its promise — and the seq above is
     // spent, so the next frame cannot race this one. Awaiting the reply held the whole local
@@ -643,6 +651,13 @@ export class TerminalStreamManager {
       // surface only as a process-level unhandledRejection.
       this.diagnostic(state, 'input_report_failed', { reason: error instanceof Error ? error.message : String(error) })
     })
+  }
+
+  /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
+  private tookInput(state: ActiveStream): void {
+    try { this.deps.onInput?.(state.agentId) } catch (error) {
+      this.diagnostic(state, 'input_listener_failed', { reason: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   private async resize(connId: string, payload: FramePayload): Promise<void> {
@@ -685,6 +700,7 @@ export class TerminalStreamManager {
       return
     }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
+    this.tookInput(state)
     const result = await state.handle.pasteRaw(text)
     if (result.state !== 'succeeded') {
       this.sendError(state.connId, 'TERMINAL_PASTE_FAILED', { streamId: state.streamId, message: result.reason })

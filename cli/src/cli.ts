@@ -68,7 +68,7 @@ import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
 import { reconcileGridAttach, gridNamesLocal, createGridAttachRunner } from './lib/gridAttach.js'
 import { signedInGridEmail, resetGridDeriveMemo } from './lib/gridDerive.js'
-import { forgetGridModels } from './lib/gridModels.js'
+import { forgetGridModels, gridAnnotation, keystrokePrewarm, observeMachineList, onGridModelsChanged, warmGridModels } from './lib/gridModels.js'
 import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
@@ -1938,8 +1938,34 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     streamingAvailable: tmuxBackend != null,
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
+    // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
+    // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
+    // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
+    onInput: (agentId) => {
+      const grid = registry.resolve(agentId)?.grid
+      if (grid) void keystrokePrewarm(grid).catch(() => {})
+    },
   })
   backend.setTerminalStreamManager(terminalStreams)
+  // An agent's frame says what its grid's picture says (`grid.state`, and a `grid.note` when its model
+  // will not answer). The picture changes on reads nobody waited for, so the frames of the agents whose
+  // annotation moved are pushed again — only those, and only when it moved.
+  const announcedGrid = new Map<string, string>()
+  onGridModelsChanged(() => {
+    const onGrid = registry.advertised().filter((s) => s.grid)
+    const present = new Set(onGrid.map((s) => s.agentId))
+    for (const agentId of [...announcedGrid.keys()]) if (!present.has(agentId)) announcedGrid.delete(agentId)
+    for (const s of onGrid) {
+      const said = JSON.stringify(gridAnnotation(s.grid))
+      if (announcedGrid.get(s.agentId) === said) continue
+      announcedGrid.set(s.agentId, said)
+      syncSession(s)
+    }
+  })
+  // The pictures saved before this start, back in memory with nothing read from any grid: an agent's
+  // frame carries its grid's state and note, and a keystroke can start its grid, before any window asks
+  // for the list (after a self-update, a phone may be the only one typing).
+  void warmGridModels().catch(() => {})
   // `agentReconciler` is declared further down; this closure only ever runs for a frame, and no
   // socket is connected until well after that declaration (backend.connect() is the last thing
   // this function does).
@@ -3402,6 +3428,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Read fresh each time — a re-login swaps it under a daemon that never restarted.
     () => readAuthSession()?.machineId ?? null,
   )
+  // Which of the owner's other computers have been reading offline — a label on the models only they
+  // serve on a sleeping grid, never a removal (grid-reads-without-waking issue 03).
+  machineListCache.listen((body) => observeMachineList(body, computerId()))
 
   /**
    * `GET /api/machines` for local clients, answered from the last known-good list when the backend leg

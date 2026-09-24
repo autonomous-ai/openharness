@@ -13,25 +13,31 @@
  * - the account's OWN grid, whose status the owner can read, is read at most once per asleep episode.
  *
  * The credentialed model-list read is gone from every automatic path. What still wakes a grid is a
- * person's act, and it does not go through here.
+ * person's act (issue 03): an explicit wake, moving an agent onto a sleeping grid, the first keystroke
+ * into a pane whose agent runs on one — each decided here, from the picture, and sent through
+ * `gridWake.ts`, the one module that reads a grid with its credential. Beside that, the picture says
+ * which rows only a computer of the account's that seems offline serves (`gridPresence.ts`): a label,
+ * never a removal.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { env as config } from '../config/env.js'
 import { gridCredentialsPath } from './gridCredentials.js'
 import { signedInGridEmail } from './gridDerive.js'
-import { gridExec, gridJson } from './gridExec.js'
-import { contextWindowHint } from './gridLaunch.js'
-import { resolveGridMcpUrl } from './gridMcpUrl.js'
+import { gridJson } from './gridExec.js'
 import {
-  emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, unspelled, withAsleep,
-  withSpellings, withUnknown, type GridPicture, type LocalRecord, type PictureState, type SectionView, type ServedHere,
+  emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, servesAModel, unspelled, withAsleep,
+  withSpellings, withUnknown, withWindows, type GridPicture, type LocalRecord, type PictureState, type RowUnavailable,
+  type SectionView, type ServedHere,
 } from './gridPicture.js'
+import { ComputerPresence, computersIn, MACHINE_LIST_FRESH_MS } from './gridPresence.js'
 import {
   OWNER_ASLEEP_STATUS, readBase, readDiscoveryIds, readGridInfo, readOverview, readViaCli, type GridInfo, type GridRead,
   type ReadNode,
 } from './gridReader.js'
+import type { GridLaunchOverride } from './gridLaunch.js'
+import { PrewarmDebounce, wakeRead, type RelayAccess, type WakePurpose } from './gridWake.js'
 import { readRunRecords } from './localModels.js'
 
 export interface GridModel {
@@ -39,7 +45,14 @@ export interface GridModel {
   id: string
   /** Which machine answers it, or empty when the grid does not say. Display only. */
   node: string
+  /** Every computer serving it seems offline — sent only to a client that asked for row state
+   *  ([presentGridSections]); an older one reads it in `node` instead. */
+  unavailable?: RowUnavailable
 }
+
+/** How an explicit wake that did not show models ended: the grid did not come up in time, or came up
+ *  with nobody serving anything. */
+export type WakeOutcome = 'not_started' | 'nobody_serving'
 
 /** One grid this computer is signed into, with what it serves — the picker's section. */
 export interface GridSection {
@@ -56,6 +69,8 @@ export interface GridSection {
   state?: PictureState
   seenAt?: string | null
   lastKnownAge?: number | null
+  /** Additive (issue 03): the last explicit wake of this grid did not show models — while it stands. */
+  wakeOutcome?: WakeOutcome
 }
 
 /** What the Model Manager is told about the grid it runs on (`localModels.ts`'s `GridInventory`). */
@@ -85,6 +100,17 @@ const CHANGE_COALESCE_MS = 250
  *  what it has. Kept well inside the app's 12s `grid_models_list` timeout, which the grid-name wait
  *  (`GRID_ATTACH_WAIT_MS`, 6s) shares: a read slower than this lands behind the answer and is pushed. */
 const FIRST_READ_WAIT_MS = 4_000
+
+/** An explicit wake re-reads the grid, without a credential, this often and for this long after its one
+ *  credentialed read — long enough for a master to boot and its providers to report (issue 03). */
+const WAKE_REREAD_MS = 3_000
+const WAKE_WINDOW_MS = 45_000
+
+/** How long a wake that showed no models keeps saying so. */
+const WAKE_OUTCOME_STANDS_MS = 10 * 60_000
+
+/** A grid seen awake this recently needs no prewarm: an agent moved onto it will find it up. */
+const RECENTLY_AWAKE_MS = 60_000
 
 interface GridRow { name: string; type: string; id: string }
 
@@ -119,7 +145,33 @@ interface Tracked {
   /** The last awake overview's own node objects, for the Model Manager. Not persisted. */
   rawNodes: Record<string, unknown>[]
   pending: Promise<void> | null
+  /** An explicit wake running for this grid; a second ask joins it. */
+  waking: Promise<void> | null
+  /** How the last explicit wake ended when it showed no models, and when. */
+  wakeOutcome: { outcome: WakeOutcome; at: number } | null
+  /** What a picker was last told about this grid — what an agent's note is read from, with no I/O. */
+  lastView: GridView | null
 }
+
+/** One grid's section as this service builds it: the picture's view, and the wake it may be in. */
+type GridView = Omit<SectionView, 'models'> & { models: GridModel[]; wakeOutcome?: WakeOutcome }
+
+/** What a prewarm did: `fired` one credentialed read, or why it did not. */
+export type PrewarmOutcome =
+  | 'fired' | 'debounced' | 'awake' | 'absent' | 'offline'
+  /** Keystroke only: the agent's grid is not one this daemon is tracking, or it is not asleep. */
+  | 'untracked' | 'not-asleep'
+
+/** A grid as a launch names it: its network id (what it is tracked and persisted under) and its name. */
+export interface GridRef { networkId: string; gridName: string }
+
+/** Where an agent's inference goes (`gridAssignment.ts`) — all a prewarm or a note needs of it. */
+export interface AgentGridTarget { baseUrl: string; model: string | null }
+
+/** What is said about an agent already on a grid model (issue 03): that grid's state, and a note when its
+ *  model will not answer — every computer serving it seems offline, or the latest list no longer has it. */
+export interface GridNote { reason: 'offline' | 'not_served'; model: string; machine?: string }
+export interface GridAnnotation { state: PictureState; note?: GridNote }
 
 export interface GridModelsDeps {
   now: () => number
@@ -131,6 +183,10 @@ export interface GridModelsDeps {
   email: () => string | null
   /** [FIRST_READ_WAIT_MS], injectable so a test need not wait it out. */
   firstReadWaitMs: number
+  /** The explicit wake's pause between re-reads — injectable, so a test's clock moves instead. */
+  sleep: (ms: number) => Promise<void>
+  /** Run `run` in `ms`, with nothing else to trigger it (an expiry); answers how to call it off. */
+  after: (ms: number, run: () => void) => () => void
 }
 
 const defaultDeps: GridModelsDeps = {
@@ -139,6 +195,12 @@ const defaultDeps: GridModelsDeps = {
   gridHome: () => dirname(gridCredentialsPath()),
   email: () => signedInGridEmail(),
   firstReadWaitMs: FIRST_READ_WAIT_MS,
+  sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.() }),
+  after: (ms, run) => {
+    const timer = setTimeout(run, ms)
+    timer.unref?.()
+    return () => clearTimeout(timer)
+  },
 }
 
 /**
@@ -152,8 +214,12 @@ export class GridModelsService {
   private readonly deps: GridModelsDeps
   private readonly tracked = new Map<string, Tracked>()
   private readonly listeners = new Set<() => void>()
+  private readonly presence = new ComputerPresence()
+  private readonly debounce = new PrewarmDebounce()
   private rows: GridRow[] | null = null
   private changeTimer: NodeJS.Timeout | null = null
+  /** Called off by the next machine list: fires only when none came in time, and the labels lapse. */
+  private cancelStaleList: (() => void) | null = null
 
   constructor(deps: Partial<GridModelsDeps> = {}) {
     this.deps = { ...defaultDeps, ...deps }
@@ -168,7 +234,26 @@ export class GridModelsService {
   /** Resolves once every read already started has landed — for a test, and for a caller that must see
    *  the answer a read it triggered produced. */
   async settled(): Promise<void> {
-    await Promise.all([...this.tracked.values()].map((tracked) => tracked.pending?.catch(() => {})))
+    await Promise.all([...this.tracked.values()].flatMap((tracked) => [tracked.pending?.catch(() => {}), tracked.waking]))
+  }
+
+  /**
+   * Every picture this computer saved, taken back into memory with nothing read from any grid — at daemon
+   * start, so an agent's frame carries its grid's state and note, and a keystroke can start its grid, from
+   * the first moment: before any window has asked for the list, and when none ever does (a phone typing).
+   */
+  async warm(): Promise<void> {
+    const folder = join(this.deps.dataDir(), PICTURES_DIR)
+    const names = await readdir(folder).catch(() => [] as string[])
+    await Promise.all(names.filter((name) => name.endsWith('.json')).map(async (name) => {
+      try {
+        const saved = JSON.parse(await readFile(join(folder, name), 'utf8')) as SavedPicture
+        if (typeof saved.networkId !== 'string' || !saved.networkId) return
+        const gridName = typeof saved.name === 'string' ? saved.name : ''
+        const tracked = await this.track({ id: saved.networkId, name: gridName, type: '' }, saved.own === true ? true : undefined)
+        await this.view(tracked)
+      } catch { /* not a picture this module wrote; the list will read that grid when asked */ }
+    }))
   }
 
   /** Every read is due again — for a caller that has just changed what a grid serves, or which grid is
@@ -189,11 +274,14 @@ export class GridModelsService {
    * has never seen is waited for, and only for [FIRST_READ_WAIT_MS]: an answer made of nothing is worse
    * than a short wait, and a timed-out ask is worse than both.
    */
-  async sections(ownGridName: string | null, opts: { refresh?: boolean } = {}): Promise<GridSection[]> {
+  async sections(ownGridName: string | null, opts: { refresh?: boolean; wake?: readonly string[] } = {}): Promise<GridSection[]> {
     const rows = await this.gridRows(ownGridName)
     const sections = await Promise.all(rows.map(async (row) => {
       const tracked = await this.track(row, row.name === ownGridName)
-      if (opts.refresh !== false && this.due(tracked)) {
+      // A person asked for this one to start: its wake is running before the answer is built, so the
+      // answer says "waking" — and a wake's own re-reads stand in for the refresh below.
+      if (opts.wake?.includes(row.name)) this.startWake(tracked)
+      if (opts.refresh !== false && !tracked.waking && this.due(tracked)) {
         const refreshing = this.refresh(tracked)
         if (!tracked.known) await this.within(refreshing, this.deps.firstReadWaitMs)
         else void refreshing.catch(() => {})
@@ -254,11 +342,12 @@ export class GridModelsService {
       tracked = {
         id: row.id, name: row.name, own: false, picture: emptyPicture(), loaded: false, known: false, saved: '',
         readAt: null, readTtl: 0, info: null, episodeRead: false, seen: new Set(), spelled: new Set(), rawNodes: [],
-        pending: null,
+        pending: null, waking: null, wakeOutcome: null, lastView: null,
       }
       this.tracked.set(row.id, tracked)
     }
-    tracked.name = row.name
+    // A warmed grid may know only its id; the list's name is better than none.
+    if (row.name) tracked.name = row.name
     if (own !== undefined) tracked.own = own
     if (!tracked.loaded) {
       tracked.loaded = true
@@ -288,29 +377,37 @@ export class GridModelsService {
 
   /** One refresh per grid at a time; every asker shares it. */
   private refresh(tracked: Tracked): Promise<void> {
-    tracked.pending ??= this.read(tracked).finally(() => { tracked.pending = null })
-    return tracked.pending
+    const pending = tracked.pending ?? this.read(tracked).then(() => {}).finally(() => { tracked.pending = null })
+    tracked.pending = pending
+    return pending
   }
 
-  private async read(tracked: Tracked): Promise<void> {
+  /**
+   * One credential-less read, applied. `waking`: an explicit wake's re-read, which goes to the grid even
+   * where an automatic look would not (the own grid past its one read per asleep episode). Answers the
+   * read it made, or null when the episode rule stood in for one.
+   */
+  private async read(tracked: Tracked, waking = false): Promise<GridRead | null> {
     const before = JSON.stringify(await this.signature(tracked))
     const info = await this.info(tracked)
     const asleepByStatus = tracked.own && info?.status === OWNER_ASLEEP_STATUS
+    let made: GridRead | null = null
     // The own grid, while its status says asleep, is read exactly once per asleep episode — to fetch the
     // platform's record of what it served — and then left alone until the status changes.
-    if (asleepByStatus && tracked.episodeRead) {
+    if (asleepByStatus && tracked.episodeRead && !waking) {
       await this.apply(tracked, { kind: 'asleep', lastKnown: null }, null)
     } else {
       tracked.episodeRead = asleepByStatus
       const base = readBase(info?.gridUrl ?? null)
-      let read: GridRead = base ? await readOverview(base) : { kind: 'unreachable' }
+      made = base ? await readOverview(base) : { kind: 'unreachable' }
       // Only when nothing answered at all — never to second-guess an answer the grid gave.
-      if (read.kind === 'unreachable') read = await readViaCli(tracked.name)
-      await this.apply(tracked, read, base)
+      if (made.kind === 'unreachable') made = await readViaCli(tracked.name)
+      await this.apply(tracked, made, base)
     }
     await this.save(tracked)
     tracked.known = true
     if (JSON.stringify(await this.signature(tracked)) !== before) this.changed()
+    return made
   }
 
   private async info(tracked: Tracked): Promise<GridInfo | null> {
@@ -341,7 +438,7 @@ export class GridModelsService {
     const isMine = (node: ReadNode): boolean => !!email && node.providerEmail?.trim().toLowerCase() === email
     const previous = tracked.picture
     let picture = mergeAwake(previous, read.nodes, now, isMine, (name, key) => provenStopped(previous, here, name, key))
-    picture = { ...picture, caseMap: withSpellings(picture.caseMap, [...read.curatedIds, ...here.records.flatMap((r) => r.ids)]) }
+    picture = withWindows({ ...picture, caseMap: withSpellings(picture.caseMap, [...read.curatedIds, ...here.records.flatMap((r) => r.ids)]) }, read.windows)
     const unknownIds = unspelled(picture, read.nodes).filter((key) => !tracked.spelled.has(key))
     if (unknownIds.length && base) {
       unknownIds.forEach((key) => tracked.spelled.add(key))
@@ -350,6 +447,8 @@ export class GridModelsService {
     tracked.picture = picture
     tracked.rawNodes = read.rawNodes
     tracked.readTtl = AWAKE_MEMO_MS
+    // A wake that showed nothing stops saying so once the grid is found serving.
+    if (servesAModel(read.nodes)) tracked.wakeOutcome = null
     // What this computer serves is re-learnt from what is live now: the grid has just said what it serves.
     tracked.seen = new Set(liveKeys(here.records))
   }
@@ -365,30 +464,197 @@ export class GridModelsService {
     return { records, seen: tracked.seen, own: tracked.own }
   }
 
-  private async view(tracked: Tracked): Promise<Omit<SectionView, 'models'> & { models: GridModel[] }> {
-    return sectionView(tracked.picture, await this.servedHere(tracked), this.deps.now())
+  private async view(tracked: Tracked): Promise<GridView> {
+    const now = this.deps.now()
+    const view = sectionView(tracked.picture, await this.servedHere(tracked), now, (name) => this.presence.seemsOffline(name, now))
+    const outcome = tracked.wakeOutcome && now - tracked.wakeOutcome.at < WAKE_OUTCOME_STANDS_MS ? tracked.wakeOutcome.outcome : null
+    const shown: GridView = {
+      ...view,
+      // A wake in flight is the state, whatever its re-reads have found so far.
+      state: tracked.waking ? 'waking' : view.state,
+      ...(outcome && !tracked.waking ? { wakeOutcome: outcome } : {}),
+    }
+    tracked.lastView = shown
+    return shown
   }
 
-  /** What a push is about: the rows and the state — not the ages, which move every second. */
+  /** What a push is about: the rows (labels included), the state and a wake's outcome — not the ages,
+   *  which move every second. */
   private async signature(tracked: Tracked): Promise<unknown> {
     const view = await this.view(tracked)
-    return { models: view.models, state: view.state }
+    return { models: view.models, state: view.state, wakeOutcome: view.wakeOutcome }
   }
 
+  /** Coalesced: the views are rebuilt first, so a listener reading an agent's note sees the change. */
   private changed(): void {
     if (this.changeTimer) return
     this.changeTimer = setTimeout(() => {
       this.changeTimer = null
-      for (const listener of this.listeners) {
-        try { listener() } catch { /* a listener's failure is its own */ }
-      }
+      void Promise.all([...this.tracked.values()].map((tracked) => this.view(tracked).catch(() => null))).then(() => {
+        for (const listener of this.listeners) {
+          try { listener() } catch { /* a listener's failure is its own */ }
+        }
+      })
     }, CHANGE_COALESCE_MS)
     this.changeTimer.unref?.()
   }
 
+  // ── a person's act (issue 03) ─────────────────────────────────────────────────────────────────────
+
+  /** What was read about `tracked` is stale now: a person has just acted on it. The picture stays. */
+  private dropMemo(tracked: Tracked): void {
+    tracked.readAt = null
+    tracked.info = null
+    tracked.episodeRead = false
+  }
+
+  /**
+   * An explicit wake — "Show models", the viewer's "Wake now". Returns at once (the answer being built
+   * says "waking"); behind it, ONE credentialed read marked `(wake)`, then credential-less re-reads every
+   * [WAKE_REREAD_MS] for up to [WAKE_WINDOW_MS], merged like any read, until one finds a node serving.
+   * A second ask while it runs joins it.
+   */
+  private startWake(tracked: Tracked): void {
+    if (tracked.waking) return
+    this.dropMemo(tracked)
+    tracked.wakeOutcome = null
+    // A prewarm right behind a wake would pay for the same boot twice.
+    this.debounce.mark(tracked.id, this.deps.now())
+    void this.credentialedRead(tracked, 'wake')
+    tracked.waking = this.wake(tracked).catch(() => {}).finally(() => {
+      tracked.waking = null
+      // The status said asleep when this began; whatever it says now is asked afresh.
+      tracked.info = null
+      this.changed()
+    })
+    this.changed()
+  }
+
+  private async wake(tracked: Tracked): Promise<void> {
+    let cameUp = false
+    for (let reread = 0; reread < WAKE_WINDOW_MS / WAKE_REREAD_MS; reread++) {
+      await this.deps.sleep(WAKE_REREAD_MS)
+      const read = await this.readNow(tracked)
+      if (read?.kind !== 'awake') continue
+      cameUp = true
+      if (servesAModel(read.nodes)) return
+    }
+    tracked.wakeOutcome = { outcome: cameUp ? 'nobody_serving' : 'not_started', at: this.deps.now() }
+    // It stops being said with no read to notice: tell the windows when it does.
+    this.deps.after(WAKE_OUTCOME_STANDS_MS, () => this.changed())
+  }
+
+  /** A wake's re-read: after any read already out, and never shared with the automatic path's memo. */
+  private async readNow(tracked: Tracked): Promise<GridRead | null> {
+    while (tracked.pending) await tracked.pending.catch(() => {})
+    let answered: GridRead | null = null
+    tracked.pending = this.read(tracked, true).then((read) => { answered = read }).finally(() => { tracked.pending = null })
+    await tracked.pending
+    return answered
+  }
+
+  /** One credentialed read marked `purpose`, detached — unless one went out for this grid in the last
+   *  ten minutes. */
+  private sendPrewarm(tracked: Tracked, purpose: WakePurpose, now: number, access?: RelayAccess): PrewarmOutcome {
+    if (!this.debounce.allows(tracked.id, now)) return 'debounced'
+    this.debounce.mark(tracked.id, now)
+    void this.credentialedRead(tracked, purpose, access)
+    return 'fired'
+  }
+
+  /** The credentialed read itself ([wakeRead]). Its answer lists each model's context window, which the
+   *  picture keeps for the next move onto that grid — the one thing it teaches that no free read did. */
+  private async credentialedRead(tracked: Tracked, purpose: WakePurpose, access?: RelayAccess): Promise<void> {
+    const name = tracked.name || (await this.gridRows(null)).find((row) => row.id === tracked.id)?.name
+    if (!name) return
+    const windows = await wakeRead(name, purpose, access)
+    if (!windows) return
+    tracked.picture = withWindows(tracked.picture, windows)
+    await this.save(tracked)
+  }
+
+  /**
+   * An agent was just moved onto `model` on `gridName`: start that grid while the pane restarts — when
+   * its picture says asleep or it was not seen awake in the last minute. Not when the model is not in the
+   * picture, and not when every computer serving it seems offline: a boot nobody can answer on is wasted.
+   * The move never waits on this, and is never refused by it.
+   */
+  async retargetPrewarm(grid: GridRef, model: string, access?: RelayAccess): Promise<PrewarmOutcome> {
+    // By the id the move already resolved: no `grid ls` of its own behind a click.
+    const tracked = await this.track({ id: grid.networkId, name: grid.gridName, type: '' })
+    const now = this.deps.now()
+    const { state, seenAt } = tracked.picture
+    const view = await this.view(tracked)
+    this.dropMemo(tracked)
+    if (state !== 'asleep' && seenAt !== null && now - seenAt < RECENTLY_AWAKE_MS) return 'awake'
+    const row = servedRow(view.models, model)
+    if (!row) return 'absent'
+    if (row.unavailable) return 'offline'
+    return this.sendPrewarm(tracked, 'prewarm', now, access)
+  }
+
+  /**
+   * Someone typed into a terminal whose agent runs on `target`: when that grid's picture says asleep,
+   * start it while they type. Asked on EVERY input, so it answers from memory — the picture and the view
+   * a picker was last given — and the ten-minute debounce is checked first.
+   */
+  async keystrokePrewarm(target: AgentGridTarget | null | undefined): Promise<PrewarmOutcome> {
+    const tracked = target ? this.trackedFor(target.baseUrl) : null
+    if (!tracked || !target) return 'untracked'
+    if (tracked.picture.state !== 'asleep' || tracked.waking) return 'not-asleep'
+    const now = this.deps.now()
+    if (!this.debounce.allows(tracked.id, now)) return 'debounced'
+    const rows = target.model ? tracked.lastView?.models : undefined
+    const row = rows && servedRow(rows, target.model!)
+    if (rows && !row) return 'absent'
+    if (row?.unavailable) return 'offline'
+    this.dropMemo(tracked)
+    return this.sendPrewarm(tracked, 'prewarm-key', now)
+  }
+
+  /** The grid an agent's inference goes to: the tracked grid whose id is a segment of its relay's path. */
+  private trackedFor(baseUrl: string): Tracked | null {
+    let segments: string[]
+    try { segments = new URL(baseUrl).pathname.split('/').filter(Boolean) } catch { return null }
+    return [...this.tracked.values()].find((tracked) => !tracked.id.startsWith(NAME_ONLY_PREFIX) && segments.includes(tracked.id)) ?? null
+  }
+
+  /**
+   * What an agent frame says about the agent's grid, from what a picker was last told — no I/O, so a
+   * frame costs nothing. Null for an agent on no grid this daemon is tracking.
+   */
+  annotation(target: AgentGridTarget | null | undefined): GridAnnotation | null {
+    const tracked = target ? this.trackedFor(target.baseUrl) : null
+    const view = tracked?.lastView
+    if (!tracked || !view || !target) return null
+    if (!target.model || view.state === 'waking') return { state: view.state }
+    const row = servedRow(view.models, target.model)
+    if (row?.unavailable) return { state: view.state, note: { reason: 'offline', model: row.id, machine: row.unavailable.machine } }
+    // "No longer lists" needs a list: a grid never read says nothing about any model.
+    if (!row && tracked.picture.listAt !== null) return { state: view.state, note: { reason: 'not_served', model: target.model } }
+    return { state: view.state }
+  }
+
+  /** A machine list this daemon just read (`GET /api/machines`, or null when signed out): which of the
+   *  account's other computers seem offline. Re-tells clients only when a verdict changed. */
+  observeMachines(body: unknown, localComputerId: string): void {
+    const list = computersIn(body, localComputerId) ?? { computers: [], guest: true }
+    if (this.presence.observe(list, this.deps.now())) this.changed()
+    // A list that stops coming (this computer lost the backend) stops labelling, with no read to notice.
+    this.cancelStaleList?.()
+    this.cancelStaleList = this.deps.after(MACHINE_LIST_FRESH_MS + 1_000, () => this.changed())
+  }
+
+  /** The context window `model` was last reported with on the grid tracked as `networkId`, read without a
+   *  credential — what a launch tells the engine to compact inside. */
+  async contextWindow(grid: GridRef, model: string): Promise<number | undefined> {
+    const tracked = await this.track({ id: grid.networkId, name: grid.gridName, type: '' })
+    return tracked.picture.windows[idKey(model)]
+  }
+
   private file(tracked: Tracked): string {
     const name = createHash('sha256').update(tracked.id).digest('hex').slice(0, 24)
-    return join(this.deps.dataDir(), 'grid-pictures', `${name}.json`)
+    return join(this.deps.dataDir(), PICTURES_DIR, `${name}.json`)
   }
 
   private async load(tracked: Tracked): Promise<void> {
@@ -410,11 +676,25 @@ export class GridModelsService {
       const file = this.file(tracked)
       await mkdir(dirname(file), { recursive: true, mode: 0o700 })
       const temp = `${file}.${randomUUID()}.tmp`
-      await writeFile(temp, JSON.stringify({ networkId: tracked.id, picture: tracked.picture }), { mode: 0o600 })
+      const saved: SavedPicture = { networkId: tracked.id, name: tracked.name, own: tracked.own, picture: tracked.picture }
+      await writeFile(temp, JSON.stringify(saved), { mode: 0o600 })
       await rename(temp, file)
       tracked.saved = text
     } catch { /* the picture is still in memory; the next read tries again */ }
   }
+}
+
+/** A picture as saved: which grid it is (its name and whether it is the account's own, so a daemon that
+ *  just started can use it before `grid ls` is asked — both absent from a file written before issue 03). */
+interface SavedPicture { networkId?: unknown; name?: unknown; own?: unknown; picture?: unknown }
+
+/** Where pictures are kept, under the data directory. */
+const PICTURES_DIR = 'grid-pictures'
+
+/** The row a view offers for `model`, whatever its case. */
+function servedRow(rows: readonly GridModel[], model: string): GridModel | undefined {
+  const key = idKey(model)
+  return rows.find((row) => idKey(row.id) === key)
 }
 
 function liveKeys(records: readonly LocalRecord[]): string[] {
@@ -432,9 +712,57 @@ export async function listGridModels(gridName: string | null): Promise<GridModel
   return service.models(gridName.trim())
 }
 
-/** Every grid this computer is signed into, each with its models, own grid first. */
-export function listAllGridModels(ownGridName: string | null, opts: { refresh?: boolean } = {}): Promise<GridSection[]> {
+/** The pictures this computer saved, back in memory ([GridModelsService.warm]) — at daemon start. */
+export function warmGridModels(): Promise<void> {
+  return service.warm()
+}
+
+/** Every grid this computer is signed into, each with its models, own grid first. `wake` names the
+ *  sections a person asked to start (issue 03's explicit wake). */
+export function listAllGridModels(ownGridName: string | null, opts: { refresh?: boolean; wake?: readonly string[] } = {}): Promise<GridSection[]> {
   return service.sections(ownGridName, opts)
+}
+
+/**
+ * The sections as a client that did or did not ask for row state reads them. One that did (`rowState`)
+ * gets each label as `unavailable` beside a plain `node`; an older one, which would draw neither, reads
+ * the label in the node text — "<computer> · seems offline" — and nothing else changes for it.
+ */
+export function presentGridSections(sections: GridSection[], opts: { rowState: boolean }): GridSection[] {
+  if (opts.rowState) return sections
+  return sections.map((section) => ({
+    ...section,
+    models: section.models.map(({ unavailable, ...row }) => unavailable ? { ...row, node: `${unavailable.machine} · seems offline` } : row),
+  }))
+}
+
+/** An agent was just moved onto the grid model `launch` names — start that grid while the pane restarts,
+ *  if it needs it ([GridModelsService.retargetPrewarm]), with the relay and credential the move resolved.
+ *  A launch with no model (Auto) names nothing to check, and starts nothing. */
+export async function retargetPrewarm(launch: GridLaunchOverride): Promise<PrewarmOutcome | null> {
+  if (!launch.model) return null
+  return service.retargetPrewarm({ networkId: launch.networkId, gridName: launch.networkName }, launch.model,
+    { baseUrl: launch.baseUrl, apiKey: launch.apiKey })
+}
+
+/** Input reached a terminal whose agent runs on `target` ([GridModelsService.keystrokePrewarm]). */
+export function keystrokePrewarm(target: AgentGridTarget | null | undefined): Promise<PrewarmOutcome> {
+  return service.keystrokePrewarm(target)
+}
+
+/** What an agent frame says about the grid the agent is on ([GridModelsService.annotation]). */
+export function gridAnnotation(target: AgentGridTarget | null | undefined): GridAnnotation | null {
+  return service.annotation(target)
+}
+
+/** The context window `model` was last reported with on `grid`, read without a credential. */
+export function gridContextWindow(grid: GridRef, model: string): Promise<number | undefined> {
+  return service.contextWindow(grid, model)
+}
+
+/** A machine list this daemon just read, or null when signed out ([GridModelsService.observeMachines]). */
+export function observeMachineList(body: unknown, localComputerId: string): void {
+  service.observeMachines(body, localComputerId)
 }
 
 /** The Model Manager's inventory of the own grid (`LocalModels`' injected `inventory`). */
@@ -456,111 +784,4 @@ export function onGridModelsChanged(listener: () => void): () => void {
 export function resetGridModels(deps: Partial<GridModelsDeps> = {}): GridModelsService {
   service = new GridModelsService(deps)
   return service
-}
-
-/** A row of the relay's `/models`: the id it routes, and the context window it reports for it. */
-interface RelayModel { id: string; contextWindow?: number }
-
-/**
- * The relay's own catalogue. Empty when it cannot be asked — callers read that as "fall back".
- *
- * ⚠️ A SIGNED-IN read, so on a sleeping grid it WAKES it. Asked only by [resolveGridTarget], i.e. when
- * a person moves an agent onto a model or starts one there — an act that needs the grid anyway. Never
- * from the model list or any other read made on the app's own schedule (grid-reads-without-waking).
- */
-async function relayModels(baseUrl: string, apiKey: string): Promise<RelayModel[]> {
-  try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/models`, {
-      headers: { authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!response.ok) return []
-    const body = await response.json() as { data?: Array<{ id?: unknown; context_window?: unknown }> }
-    return (body.data ?? []).flatMap((m) => {
-      if (typeof m.id !== 'string' || !m.id) return []
-      const contextWindow = contextWindowHint(m.context_window)
-      return [{ id: m.id, ...(contextWindow ? { contextWindow } : {}) }]
-    })
-  } catch {
-    return []
-  }
-}
-
-
-/** `grid info --env` prints shell exports; these are the two that matter. */
-const ENV_LINE = /^export\s+(OPENAI_BASE_URL|OPENAI_API_KEY)=(.*)$/gm
-
-/** What `resolveGridTarget` answers: the launch override an engine is built from. */
-export interface GridTarget {
-  networkId: string
-  networkName: string
-  baseUrl: string
-  /** A live credential — see the function comment. */
-  apiKey: string
-  model: string
-  /** The control plane's web-tools MCP endpoint. Absent when it could not be obtained; the agent
-   *  then runs on the grid with no web tools, and the daemon log says why. */
-  mcpUrl?: string
-  /** The model's context window as the relay reports it, so the engine can be told to compact
-   *  inside it (`GridLaunchOverride.contextWindow`). Absent when the relay did not say. */
-  contextWindow?: number
-}
-
-/**
- * Everything an engine needs to be pointed at `gridName`, resolved on THIS machine.
- *
- * Deliberately not something a client sends. The app names a model; the endpoint and the credential
- * are read here, from the `grid` CLI that is already signed in, so no grid credential ever crosses
- * the relay and there is one source of truth for an address the app could not know anyway.
- *
- * ⚠️ The returned `apiKey` is a live credential. It goes into the engine's ENVIRONMENT and never into
- * argv or a log line — `gridLaunch.ts` is what enforces that, and this value must keep travelling
- * through it rather than around it.
- *
- * Web tools ride on the same credential: the control plane's MCP server accepts the inference token,
- * so `mcpUrl` is the only thing added here, and it is added FIRST. `grid mcp config` renews the token
- * when it is within a month of expiry and persists the renewal; `info --env` never renews, so asked
- * in the other order it could hand inference an older token than the one the web tools hold — both
- * valid, and a mismatch nobody would think to look for. A missing `mcpUrl` degrades rather than
- * refuses: inference is the feature, web search is an accessory (`gridMcpUrl.ts`).
- */
-export async function resolveGridTarget(gridName: string | null, model: string): Promise<GridTarget | null> {
-  if (!gridName?.trim() || !model.trim()) return null
-  const mcpUrl = await resolveGridMcpUrl(gridName)
-  const info = await gridExec(['--remote', 'info', gridName, '--env'])
-  if (info.code !== 'OK') return null
-  const { baseUrl, apiKey } = readEnvExports(info.stdout)
-  if (!baseUrl || !apiKey) return null
-  // The grid's own id, for the record the launch is written into. Falls back to the name, which is
-  // unique on this account and is all the launch actually needs to be re-derivable. The relay's
-  // catalogue alongside it, not after: it is only for the window, and a click waits on both.
-  const [{ value: rows }, served] = await Promise.all([
-    gridJson<Array<{ grid?: unknown; id?: unknown }>>(['--remote', 'ls']),
-    relayModels(baseUrl, apiKey),
-  ])
-  const row = Array.isArray(rows) ? rows.find((r) => r.grid === gridName) : undefined
-  // Exact first: the relay is case-sensitive about ids and the picker sends the relay's spelling.
-  const listed = served.find((m) => m.id === model) ?? served.find((m) => m.id.toLowerCase() === model.toLowerCase())
-  return {
-    networkId: typeof row?.id === 'string' ? row.id : gridName,
-    networkName: gridName,
-    baseUrl,
-    apiKey,
-    model,
-    ...(mcpUrl ? { mcpUrl } : {}),
-    ...(listed?.contextWindow ? { contextWindow: listed.contextWindow } : {}),
-  }
-}
-
-/** The two exports out of `grid info --env`. ⚠️ Values are SHELL-QUOTED — a base URL read with the
- *  quotes still on produces a request to a host that does not exist. */
-function readEnvExports(stdout: string): { baseUrl: string; apiKey: string } {
-  let baseUrl = ''
-  let apiKey = ''
-  for (const match of stdout.matchAll(ENV_LINE)) {
-    const value = match[2]!.trim().replace(/^["']|["']$/g, '')
-    if (match[1] === 'OPENAI_BASE_URL') baseUrl = value
-    else apiKey = value
-  }
-  return { baseUrl, apiKey }
 }

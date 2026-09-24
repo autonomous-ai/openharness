@@ -50,8 +50,10 @@ Remote telemetry does not by itself grant administrative access to each serving 
   Harness connections use Node 22's WebSocket and bounded, noninteractive commands; use the machine's
   terminal for interactive sign-in. No remote command is automatically retried after a lost connection.
 - `viewer.mjs` polls `info`, `engines`, `models`, remote `stats`, and managed hosts' `device-info`.
-  It serves a read-only loopback viewer and SSE updates. No credential files, full CLI output,
-  arbitrary workspace files, or mutation endpoints are exposed to the browser.
+  It serves a loopback viewer and SSE updates. Its only writes are the grid to look at and **Wake
+  now** on a resting grid, which asks the Harness daemon to start it (`lib/wake.mjs`); remote reads
+  carry `--no-wake`, so nothing else the viewer does starts a grid. No credential files, full CLI
+  output, or arbitrary workspace files are exposed to the browser.
 - The viewer uses only reported metrics. Local Grid currently exposes less live telemetry than
   remote Grid. Missing temperature or speed reads `—`; a failed refresh preserves a visibly stale
   observation. Speeds are per-engine last decode estimates, never summed into a fictional fleet rate.

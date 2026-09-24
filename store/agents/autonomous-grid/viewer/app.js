@@ -59,7 +59,7 @@
     $('map-subtitle').textContent=snapshot.nodes.length>12?`12 of ${snapshot.nodes.length} engines · see every engine in Rack`:'Every machine has a place.';
     $('map-empty').hidden=graphNodes.length>0;
     $('hub').hidden=graphNodes.length===0;
-    $('empty-message').textContent=snapshot.status==='asleep'?'Resting to save resources. It starts by itself when you send a message.':snapshot.status==='unconfigured'?'Ask the Model Manager to connect one of your existing grids, or help you create your first fleet.':snapshot.status==='unavailable'?'Grid isn’t reachable yet. Ask the agent to check your connection, choose a grid, or start one.':'Ask the Model Manager to discover this machine and deploy your first model.';
+    $('empty-message').textContent=snapshot.status==='asleep'?window.harnessViewerWake.RESTING:snapshot.status==='unconfigured'?'Ask the Model Manager to connect one of your existing grids, or help you create your first fleet.':snapshot.status==='unavailable'?'Grid isn’t reachable yet. Ask the agent to check your connection, choose a grid, or start one.':'Ask the Model Manager to discover this machine and deploy your first model.';
     $('hub-status').textContent=snapshot.status==='asleep'?'asleep':snapshot.status==='updating'?'earlier reading':available?`${snapshot.summary.enginesOnline || 0} engines online`:'awaiting connection';
     const ids=new Set(graphNodes.map(n=>n.id));
     for (const [id,b] of nodeButtons) if (!ids.has(id)) { b.remove();nodeButtons.delete(id); }
@@ -86,8 +86,31 @@
       const usage=finite(n.memoryUsedGb)&&n.memoryTotalGb>0?Math.min(100,n.memoryUsedGb/n.memoryTotalGb*100):null;
       b.innerHTML=`<span class="node-head"><span class="node-name">${escape(n.name)}</span><span class="node-dot"></span></span><span class="node-model" style="display:block">${escape(n.models[0] || 'No models')}${n.models.length>1?` +${n.models.length-1}`:''}</span><span class="node-reading">${metricMarkup(n)}</span>${usage!==null?`<span class="node-bar" style="display:block"><span style="width:${usage}%"></span></span>`:''}<span class="node-hardware">${escape(n.hardware || n.engine)}</span>`;
     }
-    renderRack();renderInspector();renderActivity();resize();status();
+    renderRack();renderInspector();renderActivity();renderWake();resize();status();
   }
+  // The asleep view's "Wake now" — the one control on this page that may start a grid. The daemon does
+  // the starting (viewer.mjs, lib/wake.mjs); this draws what the snapshot says about it (wake.js).
+  let wakeShown=null;
+  function renderWake() {
+    const view=window.harnessViewerWake.wakeView(snapshot);
+    $('wake-bar').hidden=view.hidden;
+    if(!view.hidden){$('wake-message').textContent=view.message;$('wake-now').hidden=!view.button;$('wake-now').disabled=view.disabled;}
+    // Started and seen serving, the bar is gone: the toast is what says the click worked.
+    const state=snapshot?.wake?.state||null;
+    if(wakeShown==='waking'&&state==='awake')toast(snapshot.wake.message);
+    wakeShown=state;
+  }
+  $('wake-now').addEventListener('click',async()=>{
+    $('wake-now').disabled=true;
+    try{
+      const r=await fetch('api/wake',{method:'POST',headers:{'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(12_000)});
+      const body=await r.json().catch(()=>({}));
+      if(!r.ok)throw new Error(body.error||'Could not start it right now.');
+      // The answer carries the run; the stream brings the same a moment later (or already has).
+      if(body.wake&&snapshot&&snapshot.grid===body.wake.grid)snapshot={...snapshot,wake:body.wake};
+    }catch(err){toast(err.message||'Could not start it right now.');}
+    finally{renderWake();}
+  });
   function select(id) {selected=selected===id?null:id;for(const [key,b]of nodeButtons)b.setAttribute('aria-pressed',String(key===selected));renderInspector();renderRack();draw();}
   function renderRack() {
     if(!snapshot)return;

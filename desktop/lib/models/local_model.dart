@@ -14,13 +14,22 @@ class LocalModel {
     this.requests,
     this.windowSeconds,
     this.operation,
+    this.gridAsleep = false,
   });
   final String id, name, state;
   final String? quant;
   final double? sizeBytes, tokensPerSecond, requests, windowSeconds;
   final bool recommended, canStart, canStop;
   final LocalModelOperation? operation;
+
+  /// Running here, parked while the account's own grid sleeps (`gridAsleep`). It answers again by
+  /// itself on the next message, so the row says so rather than reading as a plain `running`. An
+  /// older daemon never sends it.
+  final bool gridAsleep;
   bool get running => state == 'running';
+
+  /// Running, and resting until somebody sends a message — see [gridAsleep].
+  bool get resting => running && gridAsleep;
   bool get downloaded => state == 'downloaded' || running;
 
   factory LocalModel.fromJson(Map<String, dynamic> data) => LocalModel(
@@ -36,6 +45,7 @@ class LocalModel {
     requests: _number(data['requests']),
     windowSeconds: _number(data['windowSeconds']),
     operation: LocalModelOperation.parse(data['operation']),
+    gridAsleep: data['gridAsleep'] == true,
   );
 }
 

@@ -87,6 +87,7 @@ export class MachineListCache {
   /** The CONTENT `saveCache` last wrote (timestamp excluded), so an unchanged list costs no disk write. */
   private lastWrittenContent = ''
   private lastWrittenAt = 0
+  private readonly listeners = new Set<(body: Record<string, unknown> | null) => void>()
 
   constructor(
     private readonly fetchMachines: () => Promise<{ status: number; body: Record<string, unknown> }>,
@@ -99,6 +100,21 @@ export class MachineListCache {
   ) {
     this.path = machineListCachePath(dataDir)
     this.loadCache()
+  }
+
+  /**
+   * Be told of every list this cache takes as known-good (its body, as the backend answered it), and of a
+   * sign-out (null). For readers that keep their own history of it — which of the owner's computers have
+   * been reading offline, and for how long (`lib/gridPresence.ts`).
+   */
+  listen(listener: (body: Record<string, unknown> | null) => void): void {
+    this.listeners.add(listener)
+  }
+
+  private tell(body: Record<string, unknown> | null): void {
+    for (const listener of this.listeners) {
+      try { listener(body) } catch { /* a listener's failure is its own */ }
+    }
   }
 
   /** Synchronous by contract — see the file header. */
@@ -165,6 +181,7 @@ export class MachineListCache {
     this.bodyOwner = this.owner()
     this.fetchedAt = Date.now()
     this.saveCache()
+    this.tell(body)
     return true
   }
 
@@ -228,6 +245,7 @@ export class MachineListCache {
     this.bodyOwner = null
     this.fetchedAt = 0
     this.saveCache()
+    this.tell(null)
   }
 
   /** So a daemon that starts offline still draws the list the user saw last time. */

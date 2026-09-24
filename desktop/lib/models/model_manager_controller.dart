@@ -422,6 +422,23 @@ class ModelManagerController extends ChangeNotifier {
     }
   }
 
+  /// "Show models" on a resting shared section: ask this computer's daemon to wake [sectionName]
+  /// (see [AppNotifier.wakeGridModels]) and show its answer — the section starting up — at once.
+  /// What follows lands through the app's picture, as every other change does.
+  Future<void> wake(String sectionName) async {
+    final owner = machine;
+    if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
+      return;
+    }
+    final answer = await app.wakeGridModels(
+      owner.machine.machineId,
+      sectionName,
+    );
+    if (!_current(owner) || !answer.reachable) return;
+    models = app.gridPictures[owner.machine.machineId] ?? answer;
+    _changed();
+  }
+
   Future<void> toggle(LocalModel model) async {
     final owner = machine;
     if (owner == null || busy || !inventoryAvailable) return;

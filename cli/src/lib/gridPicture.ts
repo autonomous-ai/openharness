@@ -9,6 +9,7 @@
  * answer or record, or this computer's own run records. Everything that is not evidence leaves the list
  * stale, never shorter, and never wakes anything.
  */
+import type { OfflineReading } from './gridPresence.js'
 import type { LastKnown, ReadNode } from './gridReader.js'
 
 /**
@@ -74,10 +75,20 @@ export interface GridPicture {
   nodes: PictureNode[]
   /** lower-case id → exact id. */
   caseMap: Record<string, string>
+  /** lower-case id → the model's context window, as the last awake read that reported one said. */
+  windows: Record<string, number>
 }
 
 export function emptyPicture(): GridPicture {
-  return { spec: 1, state: 'unknown', seenAt: null, listAt: null, nodes: [], caseMap: {} }
+  return { spec: 1, state: 'unknown', seenAt: null, listAt: null, nodes: [], caseMap: {}, windows: {} }
+}
+
+/** `windows` (keyed without case) with a read's figures folded in — the latest figure for a model wins. */
+export function withWindows(picture: GridPicture, windows: Record<string, number>): GridPicture {
+  if (!Object.keys(windows).length) return picture
+  const merged = { ...picture.windows, ...windows }
+  const kept = Object.entries(merged).slice(-MAX_SAVED_WINDOWS)
+  return { ...picture, windows: Object.fromEntries(kept) }
 }
 
 /** The join key for a model id across every source: trimmed, without case. (Not `localModels.ts`'s own
@@ -115,6 +126,11 @@ export function unspelled(picture: GridPicture, nodes: readonly ReadNode[]): str
     }
   }
   return [...missing]
+}
+
+/** Whether an awake answer names a node that serves anything — a router serves nothing of its own. */
+export function servesAModel(nodes: ReadonlyArray<{ engine: string; models: readonly string[] }>): boolean {
+  return nodes.some((node) => node.engine !== ROUTER_ENGINE && node.models.length > 0)
 }
 
 const listed = (key: string, at: number): PictureModel => ({ key, seenAt: at, absentSince: null, absentReads: 0 })
@@ -241,10 +257,21 @@ export function provenStopped(picture: GridPicture, here: ServedHere, name: stri
   return here.own || same[0]!.isMine
 }
 
+/** A row nobody may be able to answer right now — a label on it, never a reason to leave it out. */
+export interface RowUnavailable {
+  reason: 'offline'
+  /** The computer's name as the Machines list shows it. */
+  machine: string
+  /** ISO-8601 of the first offline read. */
+  since: string
+}
+
 /** One row of the picker's section: the id an engine is pointed at, and which machine answers it. */
 export interface GridModelRow {
   id: string
   node: string
+  /** Every computer serving it seems offline (issue 03). Absent otherwise. */
+  unavailable?: RowUnavailable
 }
 
 export interface SectionView {
@@ -257,33 +284,58 @@ export interface SectionView {
 }
 
 /**
- * What the picker is told about one grid. While the grid is not awake, this computer's own live records
- * are shown under its name (a model this computer serves is never "set up your first model"), and a row
- * this computer has proof it stopped is taken out at once.
+ * Whether the account's computer behind the grid node `name` seems offline — the caller's answer from the
+ * machine list (`gridPresence.ts`). Asked only while a grid is not awake, and only about nodes that are the
+ * account's own.
  */
-export function sectionView(picture: GridPicture, here: ServedHere, now: number): SectionView {
+export type SeemsOffline = (name: string) => OfflineReading | null
+
+/**
+ * What the picker is told about one grid. While the grid is not awake, this computer's own live records
+ * are shown under its name (a model this computer serves is never "set up your first model"), a row
+ * this computer has proof it stopped is taken out at once, and a row that only the account's own
+ * computers serve, every one of which seems offline, is LABELLED — never taken out.
+ */
+export function sectionView(picture: GridPicture, here: ServedHere, now: number, seemsOffline: SeemsOffline = () => null): SectionView {
   const awake = picture.state === 'awake'
   const caseMap = withSpellings(picture.caseMap, here.records.flatMap((record) => record.ids))
-  const rows: GridModelRow[] = []
-  const offered = new Set<string>()
-  const offer = (key: string, node: string): void => {
-    if (!key || offered.has(key)) return
-    offered.add(key)
-    rows.push({ id: caseMap[key] ?? key, node })
-  }
+  /** key → the node entries serving it, in the order the picture lists them; `namedBy` → the one whose
+   *  name the row shows (the first to list it, or this computer for a model only its records serve). */
+  const serving = new Map<string, PictureNode[]>()
+  const namedBy = new Map<string, string>()
   for (const node of picture.nodes) {
     if (node.engine === ROUTER_ENGINE) continue
     for (const model of node.models) {
-      if (!awake && provenStopped(picture, here, node.name, model.key)) continue
-      offer(model.key, node.name)
+      if (!model.key || (!awake && provenStopped(picture, here, node.name, model.key))) continue
+      if (!namedBy.has(model.key)) namedBy.set(model.key, node.name)
+      serving.set(model.key, [...serving.get(model.key) ?? [], node])
     }
   }
+  const servedHere = new Set<string>()
   if (!awake) {
     for (const record of here.records) {
       if (record.pid === null || !record.alive) continue
-      for (const id of record.ids) offer(idKey(id), record.name)
+      for (const id of record.ids) {
+        const key = idKey(id)
+        if (!key) continue
+        servedHere.add(key)
+        if (!namedBy.has(key)) namedBy.set(key, record.name)
+      }
     }
   }
+  const unavailable = (key: string): RowUnavailable | undefined => {
+    // Awake, the grid itself says what answers; served here, this computer is the answer.
+    if (awake || servedHere.has(key)) return undefined
+    const readings = (serving.get(key) ?? []).map((node) => here.own || node.isMine ? seemsOffline(node.name) : null)
+    if (!readings.length || readings.some((reading) => !reading)) return undefined
+    const first = readings[0]!
+    const since = Math.min(...readings.map((reading) => reading!.since))
+    return { reason: 'offline', machine: first.machine, since: new Date(since).toISOString() }
+  }
+  const rows = [...namedBy].map(([key, node]): GridModelRow => {
+    const label = unavailable(key)
+    return { id: caseMap[key] ?? key, node, ...(label ? { unavailable: label } : {}) }
+  })
   return {
     models: rows,
     state: picture.state,
@@ -299,6 +351,7 @@ const MAX_SAVED_NODES = 256
 const MAX_SAVED_MODELS_PER_NODE = 256
 const MAX_SAVED_TEXT = 256
 const MAX_SAVED_SPELLINGS = 4096
+const MAX_SAVED_WINDOWS = 4096
 
 /** A picture read back from disk, or null when it is not one this module wrote. Never trusts the file. */
 export function parsePicture(value: unknown): GridPicture | null {
@@ -328,6 +381,13 @@ export function parsePicture(value: unknown): GridPicture | null {
       if (typeof exact === 'string' && exact && idKey(exact) === key) caseMap[key] = exact.slice(0, MAX_SAVED_TEXT)
     }
   }
+  // Absent from a picture written before issue 03: nothing is known, which is what an empty map says.
+  const windows: Record<string, number> = {}
+  if (record.windows && typeof record.windows === 'object' && !Array.isArray(record.windows)) {
+    for (const [key, window] of Object.entries(record.windows as Record<string, unknown>).slice(0, MAX_SAVED_WINDOWS)) {
+      if (key && key === idKey(key) && typeof window === 'number' && Number.isSafeInteger(window) && window > 0) windows[key.slice(0, MAX_SAVED_TEXT)] = window
+    }
+  }
   return {
     spec: 1,
     // Waking is a person's request in flight, and that request died with the process that made it.
@@ -336,5 +396,6 @@ export function parsePicture(value: unknown): GridPicture | null {
     listAt: time(record.listAt),
     nodes,
     caseMap,
+    windows,
   }
 }

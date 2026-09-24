@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from '../engines/types.js'
 import { gridCapableEngines } from './gridLaunch.js'
-import { forgetGridModels, listGridModels, resolveGridTarget } from './gridModels.js'
+import { forgetGridModels, listGridModels } from './gridModels.js'
+import { resolveGridTarget } from './gridTarget.js'
 import { parseNewAgentModel, resolveNewAgentModel } from './newAgentModel.js'
 
-vi.mock('./gridModels.js', () => ({ forgetGridModels: vi.fn(), listGridModels: vi.fn(), resolveGridTarget: vi.fn() }))
+vi.mock('./gridModels.js', () => ({ forgetGridModels: vi.fn(), listGridModels: vi.fn() }))
+vi.mock('./gridTarget.js', () => ({ resolveGridTarget: vi.fn() }))
 const choice = { gridModel: 'Qwen-35B', gridName: 'my-grid' }
 const target = { networkId: 'g', networkName: 'my-grid', baseUrl: 'https://fixture.invalid/relay/v1', apiKey: 'fixture-key', model: 'Qwen-35B' }
 beforeEach(() => vi.resetAllMocks())

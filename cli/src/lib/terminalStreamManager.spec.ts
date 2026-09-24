@@ -153,6 +153,34 @@ describe('TerminalStreamManager', () => {
     expect(sent.at(-1)?.payload.code).toBe('TERMINAL_AGENT_NOT_FOUND')
   })
 
+  it('tells the daemon an agent took input from its controller — never from a watcher, never for input it refused', async () => {
+    // The keystroke prewarm (grid-reads-without-waking issue 03) hangs off this: typing into a pane whose
+    // agent runs on a sleeping grid starts that grid. A read-only watcher's input reaches no pty, so it
+    // must start nothing either.
+    const typed: string[] = []
+    await manager.stop()
+    manager = newManager({ onInput: (agentId) => { typed.push(agentId) } })
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40 })
+    const controller = sent.find((frame) => frame.type === 'terminal_ready' && frame.connId === 'web-1')!.payload.streamId as string
+    await manager.handleFrame('web-2', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40, takeover: false,
+    })
+    const watcher = sent.find((frame) => frame.type === 'terminal_ready' && frame.connId === 'web-2')!
+    expect(watcher.payload.readOnly).toBe(true)
+
+    await manager.handleBinary('web-2', {
+      kind: TerminalBinaryKind.input, streamId: watcher.payload.streamId as string, seq: 0, compressed: false, bytes: Buffer.from('x'),
+    })
+    await manager.handleBinary('web-1', {
+      kind: TerminalBinaryKind.input, streamId: controller, seq: 5, compressed: false, bytes: Buffer.from('out of order'),
+    })
+    expect(typed).toEqual([])
+
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId: controller, seq: 0, compressed: false, bytes: Buffer.from('x') })
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.paste, streamId: controller, seq: 0, compressed: false, bytes: Buffer.from('hello') })
+    expect(typed).toEqual(['agent-1', 'agent-1'])
+  })
+
   it('opens with a keyframe, streams coalesced output, and writes ordered raw input', async () => {
     await manager.handleFrame('web-1', 'terminal_open', {
       requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40, compression: ['zlib'],
