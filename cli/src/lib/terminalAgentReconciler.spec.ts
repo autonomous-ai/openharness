@@ -392,6 +392,57 @@ describe('verified process adoption', () => {
     expect(validate).toHaveBeenCalledWith(tmux, { engine: 'claude', processIdentity: undefined })
   })
 
+  it('sees a resumed row that has its conversation but not yet its process', async () => {
+    // `resumePendingAgent` keeps the archived sessionId and clears processIdentity, so this row can
+    // only be matched by its route. It used to be skipped for having an id at all — leaving the one
+    // row that is waiting to be confirmed invisible to every scan, and its launch state stuck.
+    const current = {
+      ...session([tmux]),
+      sessionId: 'archived-conversation',
+      processIdentity: null,
+      resumeOnly: true as const,
+      active: false,
+      launch: { state: 'failed' as const, error: 'RESUME_UNCONFIRMED', detail: 'not confirmed' },
+    }
+    const onObserved = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'], herdrSessionOrder: [],
+      onDiscovered: vi.fn(), onObserved, onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => probe(
+        [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }],
+        [observed([tmux])],
+      ),
+    })
+
+    await reconciler.trigger()
+
+    expect(onObserved).toHaveBeenCalledOnce()
+    expect(onObserved.mock.calls[0][1]).toBe(current)
+  })
+
+  it('leaves a bound row with its own process to process identity alone', async () => {
+    // Both an id and a process: the stricter rule still holds, so another engine in the same pane
+    // cannot inherit this row's transcript through the route.
+    const current = { ...session([tmux]), sessionId: 'bound-conversation' }
+    const onObserved = vi.fn()
+    const intruder: DiscoveredTerminalAgent = {
+      ...observed([tmux]),
+      processIdentity: { pid: 999, executable: 'claude', startMarker: 'Tue Sep 24 09:00:00 2026' },
+    }
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'], herdrSessionOrder: [],
+      onDiscovered: vi.fn(), onObserved, onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => probe(
+        [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }],
+        [intruder],
+      ),
+    })
+
+    await reconciler.trigger()
+
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
   it('reports no adopted agent when the registry callback rejects the process', async () => {
     const onDiscovered = vi.fn()
     const reconciler = new TerminalAgentReconciler({

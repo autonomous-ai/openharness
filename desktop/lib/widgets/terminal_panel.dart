@@ -52,6 +52,14 @@ typedef TerminalNotice = ({
   /// the state is merely reported and nothing here would fix it.
   String? actionLabel,
   VoidCallback? onAction,
+
+  /// Whether this one also earns the band across the top of the pane, over the
+  /// output. The chip is the resting place for a notice; the band is for the
+  /// few that are CONFUSING as well as blocking — a pane still printing while
+  /// its keyboard is locked — where the sentence has to be read, not hovered.
+  /// An offline machine is neither confusing nor rare, and a band on every one
+  /// of those would cost rows in every tile.
+  bool banner,
 });
 
 /// A [TerminalNotice] without spelling out the fields it does not have.
@@ -65,12 +73,14 @@ TerminalNotice terminalNotice({
   required IconData icon,
   String? actionLabel,
   VoidCallback? onAction,
+  bool banner = false,
 }) => (
   label: label,
   detail: detail,
   icon: icon,
   actionLabel: actionLabel,
   onAction: onAction,
+  banner: banner,
 );
 
 class TerminalPanel extends StatefulWidget {
@@ -1668,6 +1678,13 @@ class _TerminalPanelState extends State<TerminalPanel>
                     // frozen output itself, where the eyes already are, and
                     // stays through `opening` so the pane does not jump when
                     // it is answered.
+                    //
+                    // It also carries a pane-level notice that has something to
+                    // DO about itself (a failed start offering Check again or
+                    // Restart). One strip, never two: a noticed pane is already
+                    // excluded from `_inputBlocked` — nothing the takeover band
+                    // offers would help a pane whose machine or launch is the
+                    // problem — so these two conditions cannot both hold.
                     if (_inputBlocked ||
                         (_retakingControl &&
                             session.status == TerminalSessionStatus.opening))
@@ -1689,6 +1706,14 @@ class _TerminalPanelState extends State<TerminalPanel>
                               ? () => unawaited(_takeControl())
                               : null,
                         ),
+                      )
+                    else if (widget.notice case final notice?
+                        when notice.banner && notice.onAction != null)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _ControlBanner.notice(notice),
                       ),
                     if (session.uploadProgress != null ||
                         _previewProgress != null)
@@ -2345,21 +2370,38 @@ class _ControlBanner extends StatelessWidget {
   /// null from an older daemon or a taker that did not introduce itself.
   final String? takerName;
 
+  /// The pane-level notice this band is speaking for instead, when it is one a
+  /// person can act on. Null for the takeover band above.
+  final TerminalNotice? notice;
+
   const _ControlBanner({
     required this.busy,
     required this.nudged,
     required this.nudge,
     required this.onTakeControl,
     this.takerName,
-  });
+  }) : notice = null;
 
-  String get title => busy
+  /// The band for a notice that offers a way out — the same strip, the same
+  /// wording rules, so a pane never grows a second one. The header's chip says
+  /// the same thing in a corner; this is where it can be read.
+  const _ControlBanner.notice(TerminalNotice this.notice)
+    : busy = false,
+      nudged = false,
+      nudge = 0,
+      onTakeControl = null,
+      takerName = null;
+
+  String get title => notice != null
+      ? notice!.label
+      : busy
       ? 'Taking control…'
       : takerName == null
       ? 'Another app took control of this terminal'
       : '$takerName took control of this terminal';
 
   String? get detail {
+    if (notice != null) return notice!.detail;
     if (busy) return null;
     if (nudged) return 'Keys are ignored — press ⏎ to take control.';
     return 'Typing is paused. Click here or press ⏎ to take control.';
@@ -2368,7 +2410,11 @@ class _ControlBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final ink = AppColors.warning;
+    // A notice that failed is red; everything else on this strip is the amber
+    // of "paused, and you can do something about it".
+    final ink = notice != null && notice!.icon == Icons.error_outline
+        ? AppColors.danger
+        : AppColors.warning;
     final detail = this.detail;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     // Composited over the pane's own ground, as [UpdateNotice] is over the
@@ -2413,7 +2459,9 @@ class _ControlBanner extends StatelessWidget {
                 // its own under the title rather than running off the edge.
                 final narrow =
                     constraints.maxWidth < 340 * grid.appTextScaleOf(context);
-                final lead = !busy
+                final lead = notice != null
+                    ? Icon(notice!.icon, size: 16, color: ink)
+                    : !busy
                     ? Icon(Icons.lock_outline, size: 16, color: ink)
                     : SizedBox(
                         width: 16,
@@ -2463,7 +2511,15 @@ class _ControlBanner extends StatelessWidget {
                     ],
                   ),
                 );
-                final button = busy
+                final button = notice != null
+                    ? (notice!.actionLabel == null
+                          ? null
+                          : _ControlBannerButton(
+                              label: notice!.actionLabel!,
+                              onPressed: notice!.onAction,
+                              showReturnKey: false,
+                            ))
+                    : busy
                     ? null
                     : _ControlBannerButton(onPressed: onTakeControl);
                 if (narrow) {
@@ -2499,7 +2555,16 @@ class _ControlBanner extends StatelessWidget {
 /// the accent.
 class _ControlBannerButton extends StatelessWidget {
   final VoidCallback? onPressed;
-  const _ControlBannerButton({required this.onPressed});
+  final String label;
+
+  /// ⏎ is drawn only where the key really does this — taking the stream back
+  /// (`_onTerminalKey`). A notice's action has no chord behind it.
+  final bool showReturnKey;
+  const _ControlBannerButton({
+    required this.onPressed,
+    this.label = 'Take control',
+    this.showReturnKey = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2515,19 +2580,21 @@ class _ControlBannerButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(child: Text('Take control', style: grid.AppType.label())),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-            decoration: BoxDecoration(
-              border: Border.all(color: onAccent.withValues(alpha: 0.6)),
-              borderRadius: BorderRadius.circular(4),
+          Flexible(child: Text(label, style: grid.AppType.label())),
+          if (showReturnKey) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                border: Border.all(color: onAccent.withValues(alpha: 0.6)),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Semantics(
+                label: 'Return',
+                child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
+              ),
             ),
-            child: Semantics(
-              label: 'Return',
-              child: Icon(Icons.keyboard_return, size: 12, color: onAccent),
-            ),
-          ),
+          ],
         ],
       ),
     );

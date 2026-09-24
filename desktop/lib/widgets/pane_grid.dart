@@ -1,5 +1,6 @@
 import '../sharing/shared_harness_panel.dart';
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -1470,12 +1471,31 @@ class _PaneContent extends StatelessWidget {
               'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
         );
       } else if (agent.launchState == 'failed') {
+        // A resume the daemon could not CONFIRM is not a start that failed: the
+        // engine is usually still running in this pane, which is why output
+        // keeps arriving while the keyboard is locked. Asking again is cheap —
+        // the daemon re-checks a resume it never confirmed rather than
+        // relaunching (`resumeStoppedAgent.ts`) — so that is the button, and
+        // Restart is kept for the failures where something really must be
+        // started again.
+        final unconfirmed = agent.launchError == 'RESUME_UNCONFIRMED';
         notice = terminalNotice(
-          label: 'Start failed',
-          icon: Icons.error_outline,
-          detail:
-              agent.launchDetail ??
-              'The engine failed to start. Terminal output is preserved.',
+          label: unconfirmed ? 'Not confirmed' : 'Start failed',
+          icon: unconfirmed ? Icons.help_outline : Icons.error_outline,
+          detail: unconfirmed
+              ? 'The engine is still running here; the daemon has not confirmed '
+                    'which conversation it reopened.'
+              : agent.launchDetail ??
+                    'The engine failed to start. Terminal output is preserved.',
+          // The one notice that needs saying out loud rather than hovering:
+          // the pane keeps printing while its keyboard is locked, and nothing
+          // about a chip explains that.
+          banner: true,
+          actionLabel: unconfirmed ? 'Check again' : 'Restart',
+          onAction: unconfirmed
+              ? () => unawaited(notifier.selectAgent(pane.machineId, agent.id))
+              : () =>
+                    restartHarness(context, notifier, pane.machineId, agent.id),
         );
       } else {
         notice = null;

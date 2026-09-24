@@ -5979,10 +5979,22 @@ class AppNotifier extends ChangeNotifier {
       _announceOpenPanesToDial();
     }
     if (agent.launchState == 'failed' && previous?.launchState != 'failed') {
-      _lastError = agent.launchDetail ?? 'Failed to start ${agent.name}';
-      // The launch already ran and failed (e.g. the engine's automatic
-      // install failed) — reloading the machine list will not install it.
-      _lastErrorRetryable = false;
+      // Only where the person would otherwise never see it. A harness with a
+      // pane open says this in the pane, with the button that answers it
+      // (`pane_grid`'s notice) — and this push reaches EVERY client watching
+      // the machine, so the window-wide band told people who had pressed
+      // nothing to go and check a harness they were not looking at.
+      final shown = allPanes.any(
+        (pane) =>
+            pane.machineId == machine.machine.machineId &&
+            pane.agentId == agent.id,
+      );
+      if (!shown) {
+        _lastError = agent.launchDetail ?? 'Failed to start ${agent.name}';
+        // The launch already ran and failed (e.g. the engine's automatic
+        // install failed) — reloading the machine list will not install it.
+        _lastErrorRetryable = false;
+      }
     }
   }
 
