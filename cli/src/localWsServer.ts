@@ -32,6 +32,8 @@ export interface LocalWsBackend {
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
+  /** The agent this window has focused, or null — which of its terminals gets the short output window. */
+  setLocalTerminalFocus?: (connId: string, agentId: string | null) => void
 }
 
 export interface LocalWsServerOptions {
@@ -457,6 +459,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           const agentId = (parsed?.payload as Record<string, unknown> | undefined)?.agentId
           if (parsed?.type === 'app_focus') {
             if (agentId === null || (typeof agentId === 'string' && agentId)) {
+              // Ahead of the dial's revision check below: that gate is about which agent the voice
+              // follows, and a stale one says nothing about which terminal is in front of the person.
+              // Only this daemon's own streams — a relayed machine's live on that machine's daemon.
+              if (!relay && boundMachineId === options.machineId) options.backend.setLocalTerminalFocus?.(connId, agentId)
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
               if (options.onAppFocusState?.(boundMachineId, agentId, connId,
                 typeof revision === 'string' ? revision : undefined) === false) return

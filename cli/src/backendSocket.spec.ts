@@ -2418,3 +2418,25 @@ describe('machines_changed relay', () => {
     await socket.stop()
   })
 })
+
+describe('local terminal focus', () => {
+  it('passes a registered window\'s focus to its terminals, and ignores a connection it never registered', async () => {
+    const socket = new BackendSocket('token')
+    const setFocusedAgent = vi.fn()
+    socket.setTerminalStreamManager({
+      setFocusedAgent,
+      closeConnection: vi.fn(async () => undefined),
+      closeConnectionsWhere: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    } as unknown as TerminalStreamManager)
+    socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
+
+    socket.setLocalTerminalFocus('local:window', 'agent-1')
+    socket.setLocalTerminalFocus('local:window', null)
+    socket.setLocalTerminalFocus('local:stranger', 'agent-1')
+    expect(setFocusedAgent.mock.calls).toEqual([['local:window', 'agent-1'], ['local:window', null]])
+
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+})

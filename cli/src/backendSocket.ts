@@ -1109,6 +1109,12 @@ export class BackendSocket {
     this.enqueueDown(frame, connId, 'local')
   }
 
+  /** The window's focused agent on this local connection — its terminal gets the short output window. */
+  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+    if (!this.localClients.has(connId)) return
+    this.terminalStreams?.setFocusedAgent(connId, agentId)
+  }
+
   /** Route an authenticated local terminal frame without applying cloud E2EE. */
   async handleLocalBinary(connId: string, frame: TerminalBinaryClear): Promise<void> {
     if (!this.localClients.has(connId)) return

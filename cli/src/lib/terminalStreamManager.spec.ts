@@ -878,4 +878,66 @@ describe('TerminalStreamManager', () => {
     expect(binarySent.length).toBe(afterLeadingEdge + 1)
     expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
   })
+
+  it('gives the short window only to the terminal the loopback window has focused', async () => {
+    await manager.stop()
+    manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+
+    // A burst after a quiet gap; returns how long its trailing frame took to go out.
+    const trailingWindow = async (): Promise<number> => {
+      await vi.advanceTimersByTimeAsync(20)
+      sink!.onData(Buffer.from('lead'))
+      const afterLeadingEdge = binarySent.length
+      sink!.onData(Buffer.from('one'))
+      sink!.onData(Buffer.from('two'))
+      for (let ms = 1; ms <= 8; ms++) {
+        await vi.advanceTimersByTimeAsync(1)
+        if (binarySent.length > afterLeadingEdge) {
+          expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwo')
+          return ms
+        }
+      }
+      throw new Error('burst never flushed')
+    }
+
+    // Focus elsewhere before the open: this terminal is a background tile.
+    manager.setFocusedAgent('local:desktop', 'agent-other')
+    await manager.handleFrame('local:desktop', 'terminal_open', {
+      requestId: 'open-focus', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    expect(await trailingWindow()).toBe(8)
+
+    // Focus moves onto it: the open stream follows, no reopen needed.
+    manager.setFocusedAgent('local:desktop', 'agent-1')
+    expect(await trailingWindow()).toBe(2)
+
+    // No terminal focused at all.
+    manager.setFocusedAgent('local:desktop', null)
+    expect(await trailingWindow()).toBe(8)
+
+    // Focus is a loopback matter: anything else keeps 8ms whatever it is told.
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-web-focus', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    manager.setFocusedAgent('web-1', 'agent-1')
+    expect(await trailingWindow()).toBe(8)
+  })
+
+  it('forgets a loopback window\'s focus when it disconnects', async () => {
+    await manager.stop()
+    manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+    manager.setFocusedAgent('local:desktop', 'agent-other')
+    await manager.closeConnection('local:desktop')
+
+    // Reconnected under the same id and silent about focus: back to the short window.
+    await manager.handleFrame('local:desktop', 'terminal_open', {
+      requestId: 'open-after-close', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await vi.advanceTimersByTimeAsync(20)
+    sink!.onData(Buffer.from('lead'))
+    const afterLeadingEdge = binarySent.length
+    sink!.onData(Buffer.from('tail'))
+    await vi.advanceTimersByTimeAsync(2)
+    expect(binarySent.length).toBe(afterLeadingEdge + 1)
+  })
 })

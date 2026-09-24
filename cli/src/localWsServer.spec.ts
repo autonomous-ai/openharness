@@ -15,6 +15,7 @@ class FakeBackend implements LocalWsBackend {
   frames: Frame[] = []
   binaries: TerminalBinaryClear[] = []
   unregisters: string[] = []
+  focuses: Array<[string, string | null]> = []
 
   registerLocalClient(connId: string, sink: LocalClientSink): boolean {
     this.connId = connId
@@ -29,6 +30,9 @@ class FakeBackend implements LocalWsBackend {
   }
   async handleLocalBinary(_connId: string, frame: TerminalBinaryClear): Promise<void> {
     this.binaries.push(frame)
+  }
+  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+    this.focuses.push([connId, agentId])
   }
 }
 
@@ -311,6 +315,54 @@ describe('local CLI WebSocket', () => {
     expect(focus).toHaveBeenCalledWith(machineId, 'first', expect.any(String), 'old:0')
     expect(dial).not.toHaveBeenCalled()
     expect(backend.frames).toHaveLength(0)
+    ws.close()
+  })
+
+  it('tells this daemon\'s terminals which one is focused, even when the dial refuses the move', async () => {
+    const backend = new FakeBackend()
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    // A stale revision keeps the dial where it is; it says nothing about the terminal in front of the person.
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: () => false })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'focused', focusRevision: 'old:0' } }))
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: '' } }))   // malformed: ignored
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: null } }))
+    await vi.waitFor(() => expect(backend.focuses).toHaveLength(2))
+    expect(backend.focuses).toEqual([[backend.connId, 'focused'], [backend.connId, null]])
+    ws.close()
+  })
+
+  it('never hands a relayed machine\'s focus to this daemon\'s terminals', async () => {
+    const backend = new FakeBackend()
+    const relayPool = {
+      acquire: async (_machineId: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'other-machine', e2ee: false } })
+        return { send: async () => {}, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') },
+      invalidate: () => {},
+    }
+    const states: Array<string | null> = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, {
+      machineId, backend, autonomousEnv: 'test',
+      relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
+      onAppFocusState: (_machine, agent) => { states.push(agent) },
+    })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'other-machine', localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'remote-agent' } }))
+    await vi.waitFor(() => expect(states).toEqual(['remote-agent']))
+    expect(backend.focuses).toEqual([])
     ws.close()
   })
 
