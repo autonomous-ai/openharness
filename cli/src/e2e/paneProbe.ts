@@ -61,6 +61,14 @@ export const STARTUP_DIALOGS: ReadonlyArray<{ id: string; match: RegExp; keys: s
   { id: 'codex-trust', match: /Do you trust the contents of this directory/, keys: ['1', 'Enter'] },
   // codex: "Update available! x -> y" 1. Update now / 2. Skip / 3. Skip until next version
   { id: 'codex-update', match: /Update available!/, keys: ['2', 'Enter'] },
+  // codex 0.156: "Hooks need review — 2 hooks are new or changed" with the cursor on "Review hooks".
+  // The hooks are the harness's own (how it tracks the agent), so "Trust all and continue" is what a
+  // person using the harness answers too — Down once from "Review hooks", then Enter.
+  { id: 'codex-hooks-trust', match: /Hooks need review/, keys: ['Down', 'Enter'] },
+  // codex: "GPT-5.5 retires on <date>. Switch to <next> to continue" 1. Try new model / 2. Use existing
+  // model. Keep the model the run was configured with: a test that quietly changes its own model is
+  // no longer the test that was asked for.
+  { id: 'codex-model-retire', match: /retires on [^\n]*\n?[^\n]*Switch to|1\. Try new model/, keys: ['2', 'Enter'] },
   // claude: "Do you trust the files in this folder?" — Enter accepts the highlighted "Yes, proceed"
   { id: 'claude-trust', match: /Do you trust the files in this folder/, keys: ['Enter'] },
   // claude: a project .mcp.json must be approved — Enter accepts the highlighted "Use this and all future MCP servers"
@@ -98,16 +106,34 @@ export function quotaResets(text: string): string | null {
 }
 
 /**
+ * The dialog that is actually waiting — the LOWEST one on screen, not the first in the list. A fresh
+ * codex stacks them (the hooks review, then the model notice under it), and the earlier text stays
+ * in the scrollback after it is answered; picking by list order answered a screen that was already
+ * gone and sent its keys into the one that was not. One answer per dialog per round of dismissals.
+ */
+function activeDialog(screen: string, answered: readonly string[]): (typeof STARTUP_DIALOGS)[number] | undefined {
+  let best: (typeof STARTUP_DIALOGS)[number] | undefined
+  let at = -1
+  for (const d of STARTUP_DIALOGS) {
+    if (answered.includes(d.id)) continue
+    const all = [...screen.matchAll(new RegExp(d.match.source, d.match.flags.includes('g') ? d.match.flags : d.match.flags + 'g'))]
+    const last = all.length ? all[all.length - 1].index! : -1
+    if (last > at) { at = last; best = d }
+  }
+  return best
+}
+
+/**
  * Answer any startup dialog on screen, then wait for the pane to settle again. Returns the ids of
  * the dialogs answered (evidence). Bounded: a dialog that comes back after being answered is left
  * alone after `max` rounds so the check that follows records it as stuck, with the dialog on the tail.
  */
-export async function dismissStartupDialogs(tmux: Tmux, pane: string, opts: ProbeOptions = {}, max = 3): Promise<string[]> {
+export async function dismissStartupDialogs(tmux: Tmux, pane: string, opts: ProbeOptions = {}, max = 5): Promise<string[]> {
   const o = { ...DEFAULTS, ...opts }
   const answered: string[] = []
   for (let round = 0; round < max; round++) {
     const screen = await tmux.capture(pane, o.tailLines)
-    const dialog = STARTUP_DIALOGS.find((d) => d.match.test(screen))
+    const dialog = activeDialog(screen, answered)
     if (!dialog) break
     for (const k of dialog.keys) {
       await tmux.key(pane, k)
@@ -183,15 +209,17 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
   while (tmux.now() - start < o.checkTimeoutMs) {
     await tmux.sleep(o.pollMs)
     tail = await tmux.capture(pane, o.tailLines)
+    const echo = tail.lastIndexOf(ref)
+    const afterEcho = echo >= 0 ? tail.slice(echo + ref.length) : null
     // A modal can land in the middle of a turn (claude's gateway notice); answer it and keep waiting.
-    const modal = STARTUP_DIALOGS.find((d) => d.match.test(tail) && !dialogs.includes(d.id))
+    // Only one that appeared after THIS prompt: startup screens answered before it stay in the
+    // scrollback, and answering them again would send their keys into the running turn.
+    const modal = activeDialog(afterEcho ?? tail, dialogs)
     if (modal) {
       for (const k of modal.keys) { await tmux.key(pane, k); await tmux.sleep(300) }
       dialogs.push(modal.id)
       continue
     }
-    const echo = tail.lastIndexOf(ref)
-    const afterEcho = echo >= 0 ? tail.slice(echo + ref.length) : null
     // Out of usage: said once, right after our prompt. Only text after THIS prompt's echo counts
     // (or, when the echo scrolled away, only if the screen did not already say it before we typed).
     const answer = afterEcho ?? (QUOTA_EXHAUSTED.test(before) ? '' : tail)

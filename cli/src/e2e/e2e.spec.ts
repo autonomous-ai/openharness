@@ -303,6 +303,24 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'tool', resets: 'try again at 6:02 PM' })
   })
 
+  it('answers codex 0.156\'s stacked startup screens — the one on top first, each once', async () => {
+    const logs = fakeLogs()
+    const pane = fakePane((p) => { if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' } return null })
+    // What the pane held on grid-dev: the hooks review, and the model notice drawn under it.
+    await pane.type('%1', 'Hooks need review\n  2 hooks are new or changed.\n›    Review hooks\n     Trust all and continue')
+    await pane.type('%1', 'GPT-5.5 retires on October 14, 2026. Switch to GPT-5.6 Sol to continue working in Codex.\n› 1. Try new model\n  2. Use existing model')
+    pane.typed.length = 0
+    const answered = await dismissStartupDialogs(pane, '%1', { settleMs: 1, pollMs: 1 })
+    // Bottom one first (the model notice keeps the configured model), then the hooks (trust them).
+    expect(answered).toEqual(['codex-model-retire', 'codex-hooks-trust'])
+    expect(pane.typed).toEqual(['<2>', '<Enter>', '<Down>', '<Enter>'])
+    // And the step typed after them is not disturbed by their text still being in the scrollback.
+    pane.typed.length = 0
+    const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })
+    expect(out.status).toBe('ok')
+    expect(pane.typed).toHaveLength(1)
+  })
+
   it('marks a step stuck when the pane never shows the marker, and stops the leg there', async () => {
     const logs = fakeLogs()
     const pane = fakePane((p) => {
