@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -174,6 +175,8 @@ class _MachinesPanelState extends State<_MachinesPanel>
     with WidgetsBindingObserver {
   AppNotifier get app => widget.notifier;
   final _panelFocus = FocusNode(debugLabel: 'Machines');
+  final _setupKey = GlobalKey();
+  final _serverSetupKey = GlobalKey();
   bool _showSetup = false, _server = false, _signingIn = false;
   bool _downloadFailed = false;
   String? _expandedMachine;
@@ -387,11 +390,13 @@ class _MachinesPanelState extends State<_MachinesPanel>
 
   /// Put the keyboard back on the list once something it opened is gone, so the
   /// arrows and Escape work again without a click. A menu that closed BY
-  /// choosing an action leaves a sheet behind it; that sheet keeps the
-  /// keyboard.
+  /// choosing an action may focus an inline field or open a sheet; either
+  /// keeps the keyboard.
   void _restoreFocus() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !_modalOpen) _panelFocus.requestFocus();
+      if (mounted && !_modalOpen && !_panelFocus.hasFocus) {
+        _panelFocus.requestFocus();
+      }
     });
   }
 
@@ -517,68 +522,50 @@ class _MachinesPanelState extends State<_MachinesPanel>
     );
   }
 
-  Widget _actions(MachineState machine) {
-    final label = 'Options for ${machine.machine.displayName}';
+  Widget _actions(
+    MachineState machine, {
+    required Widget child,
+    VoidCallback? onEditPassword,
+  }) {
     final controller = _rowMenu(machine.machine.machineId);
-    // `AppMenuItem` does not dismiss its anchor (the other menus in the app
-    // close theirs by hand too), and a menu left open would swallow the Escape
-    // that should close the panel.
     void choose(String action) {
       controller.close();
       unawaited(_modal(() => _machineAction(action, machine)));
     }
 
-    return SizedBox(
-      width: 32,
-      height: 32,
-      // ⚠️ A `MenuAnchor`, not a `PopupMenuButton`. A popup menu is a Navigator
-      // ROUTE, and this panel is an overlay entry the app inserted on top of
-      // the navigator — so the menu opened UNDER the list, which is why it used
-      // to hide the whole panel to show three items. Hiding is what a person
-      // saw as their machines vanishing the moment they clicked "…". A
-      // MenuAnchor renders through an `OverlayPortal` above its own anchor, so
-      // the list stays where it is and the menu sits over it, styled like every
-      // other menu in the app.
-      child: MenuAnchor(
-        controller: controller,
-        // Clear of the button it hangs from; Flutter keeps the rest on screen.
-        alignmentOffset: const Offset(0, 4),
-        onOpen: () => _openRowMenu = controller,
-        onClose: () {
-          if (identical(_openRowMenu, controller)) _openRowMenu = null;
-          _restoreFocus();
-        },
-        menuChildren: [
-          AppMenuItem(label: 'Rename', onPressed: () => choose('rename')),
-          if (!machine.isLocalMachine)
-            AppMenuItem(
-              label: 'Remove from account…',
-              onPressed: () => choose('delete'),
-            ),
-          if (machine.isLocalMachine)
-            AppMenuItem(
-              label: 'Connection settings…',
-              onPressed: () => choose('advanced'),
-            ),
-        ],
-        builder: (context, _, _) => Tooltip(
-          message: label,
-          child: IconButton(
-            padding: EdgeInsets.zero,
-            // An IconButton asks for a 48px tap target by default, which this
-            // 32px row slot would silently shrink; state the box it has.
-            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-            onPressed: () =>
-                controller.isOpen ? controller.close() : controller.open(),
-            icon: Icon(
-              LucideIcons.ellipsis,
-              semanticLabel: label,
-              size: 16,
-              color: grid.AppPalette.textFaint,
-            ),
+    // Anchor the context menu inside this overlay so it stays above the list.
+    return MenuAnchor(
+      controller: controller,
+      onOpen: () {
+        if (!identical(_openRowMenu, controller)) _openRowMenu?.close();
+        _openRowMenu = controller;
+      },
+      onClose: () {
+        if (identical(_openRowMenu, controller)) _openRowMenu = null;
+        _restoreFocus();
+      },
+      menuChildren: [
+        if (onEditPassword != null)
+          AppMenuItem(
+            label: 'Change password',
+            onPressed: () {
+              controller.close();
+              onEditPassword();
+            },
           ),
-        ),
-      ),
+        AppMenuItem(label: 'Rename', onPressed: () => choose('rename')),
+        if (!machine.isLocalMachine)
+          AppMenuItem(
+            label: 'Remove from account…',
+            onPressed: () => choose('delete'),
+          ),
+        if (machine.isLocalMachine)
+          AppMenuItem(
+            label: 'Connection settings…',
+            onPressed: () => choose('advanced'),
+          ),
+      ],
+      child: child,
     );
   }
 
@@ -626,15 +613,16 @@ class _MachinesPanelState extends State<_MachinesPanel>
         const SizedBox(height: 6),
         const _Detail('Back here, click Connect and enter that password.'),
         const SizedBox(height: 12),
-        _button(
-          _server ? 'Hide server setup' : 'Set up a server…',
-          () => setState(() => _server = !_server),
-        ),
+        _button(_server ? 'Hide server setup' : 'Set up a server…', () {
+          setState(() => _server = !_server);
+          if (_server) _revealSetup(_serverSetupKey);
+        }),
         if (_server) ...[
           const SizedBox(height: 6),
           const _Detail('Run these on your server over SSH:'),
           const SizedBox(height: 8),
           Container(
+            key: _serverSetupKey,
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
             decoration: BoxDecoration(
               color: grid.AppPalette.textPrimary.withValues(alpha: .05),
@@ -691,7 +679,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         : connected
         ? 'Connected'
         : 'Connecting…';
-    final options = machine.machine.isShared ? null : _actions(machine);
+    Widget menu(Widget child) => _actions(machine, child: child);
     if (!offline &&
         (machine.needsLink || linking) &&
         _expandedMachine == id &&
@@ -700,7 +688,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         key: ValueKey('connect-password-$id'),
         app: app,
         machine: machine,
-        options: options,
+        menuBuilder: (child, _) => menu(child),
         autofocus: _focusMachine == id,
         onLinked: _onboardingConnect == id ? () => widget.onOpen(id) : null,
         resources: _resources[id],
@@ -715,42 +703,25 @@ class _MachinesPanelState extends State<_MachinesPanel>
     return _MachineRow(
       key: ValueKey('machine-$id'),
       name: name,
-      annotation: offline
-          ? 'Offline'
-          : linking || !connected && !machine.needsLink
-          ? 'Connecting…'
-          : machine.machine.isShared
-          ? 'Shared with you'
-          : null,
+      annotation: machine.machine.isShared ? 'Shared with you' : null,
       onTap: !offline && ready
           ? () => widget.onOpen(id)
           : canConnect
           ? connect
           : null,
-      subtitle: Tooltip(
-        message: offline ? 'Open Harness on $name to bring it online.' : status,
-        child: _MachineDetails(machine: machine, resources: _resources[id]),
-      ),
-      action:
-          !offline &&
-              ready &&
-              machine.agents.isEmpty &&
-              !machine.machine.isShared
-          ? _button(
-              'New harness',
-              () => widget.onOpen(id),
-              key: ValueKey('open-machine-$id'),
-              primary: true,
-            )
-          : canConnect
+      subtitle: _machineDetails(machine, _resources[id]),
+      hint: offline ? 'Open Harness on $name to bring it online.' : status,
+      action: canConnect
           ? _button(
               'Connect',
               connect,
               key: ValueKey('connect-machine-$id'),
               primary: true,
+              width: 120,
             )
           : null,
-      options: options,
+      menuBuilder: machine.machine.isShared ? null : menu,
+      offline: offline,
     );
   }
 
@@ -764,7 +735,9 @@ class _MachinesPanelState extends State<_MachinesPanel>
         machine: machine,
         resources: _resources[machine.machine.machineId],
         setupRequest: _setupRequest,
-        options: _actions(machine),
+        menuBuilder: (child, editPassword) =>
+            _actions(machine, child: child, onEditPassword: editPassword),
+        onOpen: () => widget.onOpen(machine.machine.machineId),
         onClose: widget.onClose,
       );
     }
@@ -784,9 +757,29 @@ class _MachinesPanelState extends State<_MachinesPanel>
     );
   }
 
+  void _revealSetup(GlobalKey key) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = key.currentContext;
+      if (!mounted || target == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          target,
+          alignment: 0,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        ),
+      );
+    });
+  }
+
   Widget _addMachine(bool empty) {
-    void toggle() => setState(() => _showSetup = !_showSetup);
+    void toggle() {
+      setState(() => _showSetup = !_showSetup);
+      if (_showSetup) _revealSetup(_setupKey);
+    }
+
     return Column(
+      key: _setupKey,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _MachineRow(
@@ -986,21 +979,26 @@ class _MachineRow extends StatelessWidget {
     this.icon = LucideIcons.monitor,
     this.subtitle,
     this.action,
-    this.options,
+    this.menuBuilder,
+    this.offline = false,
     this.onTap,
+    this.hint,
   });
   final String name;
   final bool local;
   final String? annotation;
   String? get _annotation => annotation ?? (local ? 'This computer' : null);
   final IconData icon;
-  final Widget? subtitle, action, options;
+  final Widget? subtitle, action;
+  final Widget Function(Widget child)? menuBuilder;
+  final bool offline;
   final VoidCallback? onTap;
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
     final row = Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
       child: LayoutBuilder(
         builder: (context, constraints) {
           // At larger text sizes, keep the details legible instead of squeezing
@@ -1015,7 +1013,14 @@ class _MachineRow extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(icon, size: 22, color: grid.AppPalette.textSecondary),
+                  Icon(
+                    offline ? LucideIcons.monitorOff : icon,
+                    size: 22,
+                    semanticLabel: offline ? '$name: Offline' : null,
+                    color: offline
+                        ? grid.AppPalette.textFaint
+                        : grid.AppPalette.textSecondary,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1060,13 +1065,11 @@ class _MachineRow extends StatelessWidget {
                     const SizedBox(width: 12),
                     action!,
                   ],
-                  const SizedBox(width: 4),
-                  options ?? const SizedBox(width: 32),
                 ],
               ),
               if (stacked)
                 Padding(
-                  padding: const EdgeInsets.only(top: 10, right: 36),
+                  padding: const EdgeInsets.only(top: 10),
                   child: Align(alignment: Alignment.centerRight, child: action),
                 ),
             ],
@@ -1074,19 +1077,50 @@ class _MachineRow extends StatelessWidget {
         },
       ),
     );
+    final content = Builder(
+      builder: (context) {
+        final menu = menuBuilder == null
+            ? null
+            : MenuController.maybeOf(context);
+        void openMenu([Offset? position]) => menu?.open(position: position);
+        final tile = onTap == null && menu == null
+            ? row
+            : Focus(
+                skipTraversal: true,
+                onKeyEvent: (_, event) {
+                  if (menu != null &&
+                      event is KeyDownEvent &&
+                      (event.logicalKey == LogicalKeyboardKey.contextMenu ||
+                          event.logicalKey == LogicalKeyboardKey.f10 &&
+                              HardwareKeyboard.instance.isShiftPressed)) {
+                    openMenu();
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: InkWell(
+                  onTap: onTap,
+                  onSecondaryTapDown: menu == null
+                      ? null
+                      : (details) => openMenu(details.localPosition),
+                  onLongPress: menu == null ? null : openMenu,
+                  borderRadius: BorderRadius.circular(8),
+                  child: row,
+                ),
+              );
+        return Semantics(
+          container: true,
+          explicitChildNodes: true,
+          customSemanticsActions: menu == null
+              ? null
+              : {CustomSemanticsAction(label: 'Options for $name'): openMenu},
+          child: hint == null ? tile : Tooltip(message: hint!, child: tile),
+        );
+      },
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
-      child: Semantics(
-        container: true,
-        explicitChildNodes: true,
-        child: onTap == null
-            ? row
-            : InkWell(
-                onTap: onTap,
-                borderRadius: BorderRadius.circular(8),
-                child: row,
-              ),
-      ),
+      child: menuBuilder?.call(content) ?? content,
     );
   }
 }
@@ -1105,45 +1139,46 @@ class _MachineStatus extends StatelessWidget {
   );
 }
 
-class _MachineDetails extends StatelessWidget {
-  const _MachineDetails({required this.machine, this.resources});
-  final MachineState machine;
-  final MachineResources? resources;
-
-  String _gb(double bytes) {
+Widget? _machineDetails(MachineState machine, MachineResources? resources) {
+  String gb(double bytes) {
     final gb = bytes / (1024 * 1024 * 1024);
     return gb
         .toStringAsFixed(gb < 10 ? 1 : 0)
         .replaceFirst(RegExp(r'\.0$'), '');
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final reachable =
-        machine.nodeOnline != false &&
-        !machine.needsLink &&
-        machine.connectionStatus == ConnectionStatus.connected;
+  final String details;
+  if (machine.nodeOnline == false) {
+    return null;
+  } else if (machine.needsLink) {
+    return null;
+  } else if (machine.connectionStatus != ConnectionStatus.connected) {
+    details = 'Connecting…';
+  } else {
     final count =
-        reachable &&
-            (machine.agentLoadStatus == AgentLoadStatus.loaded ||
-                machine.agents.isNotEmpty)
+        machine.agentLoadStatus == AgentLoadStatus.loaded ||
+            machine.agents.isNotEmpty
         ? machine.agents.length
         : null;
-    final stats = reachable ? resources : null;
-    final cpu = stats?.cpuPercent?.round();
-    final used = stats?.memoryUsedBytes, total = stats?.memoryTotalBytes;
-    final memory = used == null || total == null
-        ? '—'
-        : '${_gb(used)}/${_gb(total)} GB';
-    return Text(
-      '${count ?? '—'} ${count == 1 ? 'harness' : 'harnesses'} · CPU ${cpu == null ? '—' : '$cpu%'} · RAM $memory',
-      key: ValueKey('machine-stats-${machine.machine.machineId}'),
-      style: grid.AppType.monoMeta(
-        height: 1.3,
-        color: grid.AppPalette.textSecondary,
-      ),
-    );
+    final cpu = resources?.cpuPercent?.round();
+    final used = resources?.memoryUsedBytes,
+        total = resources?.memoryTotalBytes;
+    final values = [
+      if (count != null) '$count ${count == 1 ? 'harness' : 'harnesses'}',
+      if (cpu != null) 'CPU $cpu%',
+      if (used != null && total != null) 'RAM ${gb(used)}/${gb(total)} GB',
+    ];
+    if (values.isEmpty) return null;
+    details = values.join(' · ');
   }
+  return Text(
+    details,
+    key: ValueKey('machine-stats-${machine.machine.machineId}'),
+    style: grid.AppType.monoMeta(
+      height: 1.3,
+      color: grid.AppPalette.textSecondary,
+    ),
+  );
 }
 
 /// The same small, inline form for incoming passwords and outgoing links.
@@ -1154,7 +1189,8 @@ class _MachinePassword extends StatefulWidget {
     required this.app,
     required this.machine,
     required this.onClose,
-    this.options,
+    this.menuBuilder,
+    this.onOpen,
     this.resources,
     this.autofocus = false,
     this.setupRequest = 0,
@@ -1163,7 +1199,9 @@ class _MachinePassword extends StatefulWidget {
   final AppNotifier app;
   final MachineState machine;
   final VoidCallback onClose;
-  final Widget? options;
+  final Widget Function(Widget child, VoidCallback? onEditPassword)?
+  menuBuilder;
+  final VoidCallback? onOpen;
   final MachineResources? resources;
   String? get machineId =>
       machine.isLocalMachine ? null : machine.machine.machineId;
@@ -1335,15 +1373,26 @@ class _MachinePasswordState extends State<_MachinePassword> {
     });
   }
 
-  Widget _row({required Widget subtitle, Widget? action, String? annotation}) =>
+  Widget _row({Widget? subtitle, Widget? action, VoidCallback? onTap}) =>
       _MachineRow(
         key: ValueKey('machine-${widget.machine.machine.machineId}'),
         name: widget.machine.machine.displayName,
         local: _local,
-        annotation: annotation,
         subtitle: subtitle,
         action: action,
-        options: widget.options,
+        onTap: onTap,
+        menuBuilder: widget.menuBuilder == null
+            ? null
+            : (child) => widget.menuBuilder!(
+                child,
+                _local &&
+                        !_loading &&
+                        !_busy &&
+                        !_editing &&
+                        _status?.hasPassword == true
+                    ? _editPassword
+                    : null,
+              ),
       );
 
   @override
@@ -1365,16 +1414,11 @@ class _MachinePasswordState extends State<_MachinePassword> {
     if (_local && !_editing) {
       final available = _status!.hasPassword;
       return _row(
-        annotation: available ? 'This computer · Available' : null,
-        subtitle: _MachineDetails(
-          machine: widget.machine,
-          resources: widget.resources,
-        ),
-        action: _button(
-          available ? 'Change password' : 'Set password',
-          _editPassword,
-          primary: true,
-        ),
+        subtitle: _machineDetails(widget.machine, widget.resources),
+        onTap: widget.onOpen,
+        action: available
+            ? null
+            : _button('Set password', _editPassword, primary: true, width: 120),
       );
     }
     final form = Column(
@@ -1532,18 +1576,22 @@ class _MachinePasswordState extends State<_MachinePassword> {
           ),
       ],
     );
-    return TerminalPromptKeys(
-      inputFocus: _input,
-      composing: () => _composing,
-      cancel: widget.onClose,
-      accept: () {
-        if (_input.hasFocus) {
-          _submit();
-        } else {
-          activatePromptControl();
-        }
-      },
-      child: _row(subtitle: form),
+    return _row(
+      // Keep form shortcuts inside the row's MenuAnchor, so its traversal
+      // shortcuts cannot intercept Escape or remapped password controls.
+      subtitle: TerminalPromptKeys(
+        inputFocus: _input,
+        composing: () => _composing,
+        cancel: widget.onClose,
+        accept: () {
+          if (_input.hasFocus) {
+            _submit();
+          } else {
+            activatePromptControl();
+          }
+        },
+        child: form,
+      ),
     );
   }
 }
@@ -1553,6 +1601,7 @@ Widget _button(
   VoidCallback? onPressed, {
   Key? key,
   bool primary = false,
+  double width = 140,
 }) {
   final button = TextButton(
     key: key,
@@ -1574,7 +1623,7 @@ Widget _button(
   if (!primary) return button;
   return Builder(
     builder: (context) => SizedBox(
-      width: MediaQuery.textScalerOf(context).scale(140),
+      width: MediaQuery.textScalerOf(context).scale(width),
       child: button,
     ),
   );

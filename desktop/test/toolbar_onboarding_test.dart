@@ -408,7 +408,11 @@ void main() {
           await tap(tester, find.text('Save'));
         }
         expect(app.password, '123456');
-        expect(find.text('Change password'), findsOneWidget);
+        expect(find.text('Set password'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('make-available-password')),
+          findsNothing,
+        );
         expect(journey.completed(OnboardingStep.machines), isFalse);
         await tester.pumpWidget(const SizedBox());
       },
