@@ -88,15 +88,10 @@ class _PullRequestBadgeState extends State<PullRequestBadge> {
     return Tooltip(
       message: 'PR #$number · $state — Open on GitHub',
       child: TextButton(
-        // The small folder line's height and type: it sits under the pane's name, beside the
-        // folder and branch.
         style: TextButton.styleFrom(
-          minimumSize: Size.zero,
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          visualDensity: VisualDensity.compact,
-          // Room for descenders, as on the folder line beside it.
-          textStyle: grid.AppType.monoLabel(height: 1.3).copyWith(fontSize: 10),
+          minimumSize: const Size(0, 28),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          textStyle: grid.AppType.monoLabel(),
         ),
         onPressed: found
             ? () async {

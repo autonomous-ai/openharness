@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -208,7 +207,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} header keeps details under the name and shows actions on hover',
+      '${local ? 'local' : 'remote'} header keeps its details in view and its actions in the ⋮ menu',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -253,18 +252,17 @@ void main() {
         final titleBounds = tester.getRect(title);
         expect(find.text('harness'), findsOneWidget);
         expect(find.text('main'), findsOneWidget);
-        // Folder, branch and machine sit on the line under the name.
         if (local) {
           // This computer goes without saying.
           expect(find.text('Test host'), findsNothing);
           expect(
-            tester.getRect(find.text('harness')).top,
-            greaterThan(titleBounds.bottom - 1),
+            tester.getRect(find.text('harness')).left,
+            greaterThan(titleBounds.right),
           );
         } else {
           expect(
-            tester.getRect(find.text('Test host')).top,
-            greaterThan(titleBounds.bottom - 1),
+            tester.getRect(find.text('Test host')).left,
+            greaterThan(titleBounds.right),
           );
           expect(
             tester.getRect(find.text('harness')).left,
@@ -275,7 +273,8 @@ void main() {
           tester.getRect(find.text('main')).left,
           greaterThan(tester.getRect(find.text('harness')).right),
         );
-        // One ⋮ menu, always in view, instead of a row of icons that appeared on hover.
+        // One ⋮ menu, always in view, instead of a row of icons that took the details' place
+        // on hover.
         expect(
           find.descendant(of: controls, matching: find.byType(IconButton)),
           findsOneWidget,
