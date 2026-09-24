@@ -1457,6 +1457,7 @@ class _TerminalPageState extends State<TerminalPage>
                                     machineName:
                                         machine?.machine.displayName ?? '',
                                     agent: agent,
+                                    session: session,
                                   ),
                                 ),
                             ],
@@ -1562,7 +1563,11 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  void _showActions({required String machineName, required Agent agent}) {
+  void _showActions({
+    required String machineName,
+    required Agent agent,
+    TerminalSession? session,
+  }) {
     final agentName = agent.name;
     showPhoneSheet(
       context,
@@ -1580,7 +1585,19 @@ class _TerminalPageState extends State<TerminalPage>
       sections: [
         PhoneSheetSection(
           caption: 'Harness',
-          actions: [..._agentActions(agent)],
+          actions: [
+            // First, because it is the one used mid-conversation: iOS has no paste gesture on a
+            // terminal (long-press is selection there), and the soft keyboard has no paste key.
+            // Hidden rather than dimmed while the stream is read-only: reclaiming is the header's
+            // job, and a paste that silently goes nowhere is worse than no row.
+            if (session != null && session.acceptsInput)
+              PhoneSheetAction(
+                icon: LucideIcons.clipboardPaste300,
+                label: 'Paste',
+                onTap: () => unawaited(_pasteClipboard(session)),
+              ),
+            ..._agentActions(agent),
+          ],
         ),
         PhoneSheetSection(
           caption: 'App',
@@ -1688,6 +1705,63 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     ),
   ];
+
+  /// Pastes the clipboard's text into the agent, as one paste rather than as typing.
+  ///
+  /// Text only: Flutter's [Clipboard] reads `text/plain` and nothing else, and the native image
+  /// reader is desktop-only, so a picture goes through the key bar's image button instead. Unlike
+  /// the desktop's ⌘V there is no Ctrl+V fallthrough: the agent runs on another machine, whose
+  /// engine would read THAT machine's clipboard rather than this phone's.
+  ///
+  /// iOS asks before handing the clipboard over; a refusal reads back as empty.
+  Future<void> _pasteClipboard(TerminalSession session) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    void report(String message) {
+      if (mounted) messenger?.showSnackBar(SnackBar(content: Text(message)));
+    }
+
+    // ⚠️ **The paste lands only in the stream Paste was tapped on.** Reading the clipboard crosses
+    // a platform boundary and can wait on the system's permission prompt, and in that time the page
+    // can have been swiped away, its pane replaced, or its stream reconnected or taken over.
+    final streamId = session.streamId;
+    bool stillOwnsPaste() =>
+        mounted &&
+        widget.isActive &&
+        identical(
+          widget.notifier
+              .paneOfAgent(widget.machineId, widget.agentId)
+              ?.session,
+          session,
+        ) &&
+        session.acceptsInput &&
+        session.streamId == streamId;
+
+    final String? text;
+    try {
+      text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    } on PlatformException {
+      report('Could not read the clipboard.');
+      return;
+    }
+    if (text == null || text.isEmpty) {
+      report('There is no text on the clipboard.');
+      return;
+    }
+    if (!stillOwnsPaste()) {
+      report('The terminal changed before the paste, so nothing was sent.');
+      return;
+    }
+    // The same choice the desktop's paste makes: one atomic paste frame where the machine's CLI
+    // knows it, otherwise xterm's own paste (bracketed when the program asked for it).
+    final machine = widget.notifier.stateOf(widget.machineId);
+    if (machine != null && machine.terminalPasteRawAvailable) {
+      if (!await session.pasteText(text)) {
+        report('The paste could not be sent.');
+      }
+    } else {
+      session.terminal.paste(text);
+    }
+  }
 
   /// Asks for the terminal this pane is only watching — the band's button, and the header's.
   ///
