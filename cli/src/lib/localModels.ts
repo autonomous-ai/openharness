@@ -18,6 +18,9 @@ const cleanName = (v: string): string => basename(v).replace(/\.gguf$/i, '').rep
 // Grid advertises a GGUF filename as a lowercase model name without its extension.
 const modelKey = (v: string): string => v.toLowerCase().replace(/\.gguf$/, '')
 const validArg = (v: string): boolean => !!v && !v.startsWith('-') && !/[\x00-\x1f]/.test(v)
+/** `grid info` statuses of a grid that is not up. Grid refuses `engines` and `join` on one, and
+ * names `grid start` as the way back. Anything else unknown stays unknown rather than "down". */
+const DOWN = new Set(['stopped', 'asleep'])
 
 export interface LocalModel {
   id: string; name: string; state: 'available' | 'downloaded' | 'running'
@@ -31,7 +34,11 @@ export interface ModelOperation {
   progress?: number; error?: string; updatedAt: string
 }
 export interface LocalModelsSnapshot {
-  models: LocalModel[]; memoryBytes?: number; hardware?: string; error?: string
+  models: LocalModel[]; memoryBytes?: number; hardware?: string
+  /** A sentence to show BESIDE the list — never `error`. On this protocol an `error` field fails
+   * the whole request: the app's RPC layer drops the reply and keeps nothing of it, so a list sent
+   * with a warning in `error` arrived as no list at all and the Local tab read 0. */
+  notice?: string
   observedAt: string; busy: boolean
 }
 interface Candidate {
@@ -272,7 +279,7 @@ export class LocalModels {
   }
 
   async list(grid: string | null, force = false): Promise<LocalModelsSnapshot> {
-    if (!grid) return { models: [], error: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
+    if (!grid) return { models: [], notice: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
     if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return this.cached.value
     if (this.listPending) {
       if (this.listGrid === grid) return this.listPending
@@ -286,7 +293,7 @@ export class LocalModels {
     await Promise.all([this.loadCatalog(force), this.readReceipt(grid)])
     let owned: Owned[] = [], nodes: Record<string, any>[] = [], inventoryError: string | undefined
     try {
-      [owned, nodes] = await Promise.all([this.owned(grid), this.json(['--remote', 'engines', grid, '--json']).then(rows)])
+      [owned, nodes] = await Promise.all([this.owned(grid), this.servingNodes(grid)])
     } catch { inventoryError = 'Running models could not be checked. Try again.' }
     const operation = this.active?.grid === grid ? this.active.operation : this.receipt?.grid === grid ? this.receipt.operation : undefined
     const choices = [...this.candidates, ...(await this.known(grid, owned)).filter(k => !this.candidates.some(c => c.file === k.file))]
@@ -328,10 +335,32 @@ export class LocalModels {
         operation: operation?.modelId === `local:${instance.file}` ? operation : undefined })
     }
     const value: LocalModelsSnapshot = { models, memoryBytes: num(obj(this.device.memory).total_gb) === undefined ? undefined : this.device.memory.total_gb * GiB,
-      hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), error: inventoryError || this.catalogError,
+      hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), notice: inventoryError || this.catalogError,
       observedAt: new Date().toISOString(), busy: !!this.active }
     this.cached = { grid, at: Date.now(), value }
     return value
+  }
+
+  /** What `grid info` says of [grid]: `running`, `stopped`, `asleep`. */
+  private async gridStatus(grid: string): Promise<string> {
+    return str(obj(await this.json(['--remote', 'info', grid, '--json'])).status)
+  }
+
+  /** The nodes serving [grid] — none at all when the grid is down.
+   *
+   * ⚠️ A stopped or asleep grid REFUSES `engines` ("isn't up; run `grid start` first") rather than
+   * answering an empty list, and reading that refusal as "unknown" disabled every Start in the
+   * list: the one state in which a person most needs to start a model was the one in which none
+   * could be. Stopping the last model from this list leaves the grid up, so it was only reached by
+   * a grid taken down by hand or gone to sleep — but then there was no way back from here. A grid
+   * that is down runs nothing, which is an answer, not a gap. Any other refusal still is one. */
+  private async servingNodes(grid: string): Promise<Record<string, any>[]> {
+    const result = await this.run(['--remote', 'engines', grid, '--json'])
+    if (result.ok) {
+      try { return rows(JSON.parse(result.stdout)) } catch { throw new Error('Running models could not be checked. Try again.') }
+    }
+    if (DOWN.has(await this.gridStatus(grid))) return []
+    throw new Error('Running models could not be checked. Try again.')
   }
 
   /** A repeated click or lost RPC acknowledgement joins the same operation.
@@ -412,6 +441,12 @@ export class LocalModels {
           if (!await this.downloaded(candidate)) throw new ModelError('The download is incomplete. Start again to resume.')
         }
         await change('starting')
+        // A grid that is down refuses a join outright ("The model could not start"), and `sync`
+        // above restores its registration, not its process. Bring it up the way its own refusal
+        // says to. A grid already running is left alone: `start` is only for one that is not. An
+        // unreadable status blocks nothing — it is the join's refusal, not this read, that says a
+        // grid cannot take the model, and a Grid too old to answer `info --json` joined fine before.
+        if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
         const override = this.processEnv.LLAMA_SERVER
         const installed = override ? binaryOnPath(override, this.processEnv)
           : binaryOnPath(join(this.home, 'bin', 'llama-server'), this.processEnv) || binaryOnPath('llama-server', this.processEnv)

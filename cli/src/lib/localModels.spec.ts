@@ -18,16 +18,24 @@ let calls: string[][], serving: boolean, catalogCards: ReturnType<typeof card>[]
 let request: Mock<(url: string | URL, init?: RequestInit) => Promise<Response>>
 let run: Mock<(args: string[], output?: (s: string) => void) => Promise<GridFleetResult>>
 let downloadFails: boolean, catalogFails: boolean
+/** What `grid info` says of the grid. Down (`stopped`/`asleep`) refuses `engines` and `join`, as
+ *  the real grid does, until `grid start` brings it back. */
+let gridState: 'running' | 'stopped' | 'asleep'
+const refused = (message: string) => ({ ok: false, code: 1, stdout: '', stderr: message, error: 'Grid command failed.' })
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'local-models-'))
   home = join(root, 'grid'); stateDir = join(root, 'receipts'); records = join(home, 'run', 'engines', 'grid-home')
   await mkdir(records, { recursive: true }); await mkdir(join(home, 'models'))
   await writeFile(join(home, 'credentials.toml'), 'session_token = "test-only-token"\napi_url = "https://catalog.example.test"\n')
-  calls = []; serving = false; catalogCards = [card()]; downloadFails = false; catalogFails = false
+  calls = []; serving = false; catalogCards = [card()]; downloadFails = false; catalogFails = false; gridState = 'running'
   run = vi.fn(async (args: string[], output?: (s: string) => void) => {
     calls.push(args)
     if (args[0] === 'device-info') return ok({ device_class: 'apple-silicon', backend: 'metal', usable_bytes: 54 * 1024 ** 3, memory: { total_gb: 64 } })
     if (args.includes('ls')) return ok([{ grid: 'home', id: 'grid-home' }])
+    if (args.includes('info') && args.includes('--json')) return ok({ grid: 'home', status: gridState })
+    if (args[1] === 'start') { gridState = 'running'; return ok() }
+    const down = gridState !== 'running'
+    if (down && (args.includes('engines') || args.includes('join'))) return refused("Grid home isn't up; run `grid start home` first.")
     if (args.includes('engines')) return ok(serving ? [{ node_id: 'local-node', online: true, models: ['Small-Q4.gguf'], throughput_tok_s: 17.6,
       vram_used_mb: 99999, answered: { window_seconds: 3600, requests: 4, by_model: [{ model: 'Small-Q4.gguf', requests: 4 }] } }] : [])
     if (args[0] === 'pull') {
@@ -83,7 +91,7 @@ describe('local model discovery and lifecycle', () => {
     request.mockResolvedValue(response({ models: [card()], runnable_total: 100, pagination: { page: 1, total_pages: 7 } }))
     // Fresh Response objects (bodies are single-consumption).
     request.mockImplementation(async () => response({ models: [card()], runnable_total: 100, pagination: { page: 1, total_pages: 7 } }))
-    expect((await service.list('home')).error).toContain('incomplete')
+    expect((await service.list('home')).notice).toContain('incomplete')
   })
 
   it('downloads, loads and verifies without another user step', async () => {
@@ -178,7 +186,7 @@ describe('local model discovery and lifecycle', () => {
     const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
     const snapshot = await fresh.list('home')
     expect(snapshot.models[0]).toMatchObject({ state: 'running', canStop: true })
-    expect(snapshot.error).toContain('unavailable')
+    expect(snapshot.notice).toContain('unavailable')
     expect(JSON.stringify(snapshot)).not.toContain('private raw')
   })
 
@@ -318,7 +326,7 @@ describe('local model discovery and lifecycle', () => {
     expect(calls).toHaveLength(before)
     await service.list('home', true)
     expect(calls.filter(args => args[0] === 'device-info')).toHaveLength(2)
-    expect(await service.list(null)).toMatchObject({ models: [], busy: false, error: expect.stringContaining('Sign in') })
+    expect(await service.list(null)).toMatchObject({ models: [], busy: false, notice: expect.stringContaining('Sign in') })
     expect((await service.act(null, 'x', 'start')).error).toBeTruthy()
     expect((await service.act('home', {}, 'start')).error).toBeTruthy()
   })
@@ -329,19 +337,19 @@ describe('local model discovery and lifecycle', () => {
     ['malformed token', 'session_token = "invalid\\q"'],
   ])('reports sign-in for %s without sending credentials', async (_name, credentials) => {
     await writeFile(join(home, 'credentials.toml'), credentials)
-    expect((await service.list('home')).error).toContain('Sign in')
+    expect((await service.list('home')).notice).toContain('Sign in')
     expect(request).not.toHaveBeenCalled()
   })
 
   it.each(['http://catalog.example.test', 'file:///tmp/catalog'])('refuses insecure catalog address %s', async base => {
     await writeFile(join(home, 'credentials.toml'), `session_token = 'private'\napi_url = '${base}'`)
-    expect((await service.list('home')).error).toContain('address')
+    expect((await service.list('home')).notice).toContain('address')
     expect(request).not.toHaveBeenCalled()
   })
 
   it.each(['http://localhost:1234', 'http://127.0.0.1:1234', 'http://[::1]:1234'])('permits an explicitly configured local catalog at %s', async base => {
     await writeFile(join(home, 'credentials.toml'), `session_token = 'test-only-token'\napi_url = '${base}'`)
-    expect((await service.list('home')).error).toBeUndefined()
+    expect((await service.list('home')).notice).toBeUndefined()
     expect(String(request.mock.calls[0][0])).toBe(`${base}/v1/grid/catalog`)
     expect(request.mock.calls[0][1]).toMatchObject({ redirect: 'error' })
   })
@@ -362,7 +370,7 @@ describe('local model discovery and lifecycle', () => {
     })
     const snapshot = await service.list('home')
     expect(snapshot.models).toEqual([])
-    expect(snapshot.error).toBeTruthy()
+    expect(snapshot.notice).toBeTruthy()
     expect(JSON.stringify(snapshot)).not.toContain('private detail')
     expect(request.mock.calls.length).toBeLessThanOrEqual(100)
   })
@@ -383,8 +391,68 @@ describe('local model discovery and lifecycle', () => {
     run.mockImplementation(async (args, output) => args.includes('engines')
       ? { ...ok(), ok: scenario !== 'failed command', stdout: 'not json' } : original(args, output))
     const snapshot = await service.list('home', true)
-    expect(snapshot.error).toContain('Running models could not be checked')
+    expect(snapshot.notice).toContain('Running models could not be checked')
     expect(snapshot.models.every(m => !m.canStart && !m.canStop)).toBe(true)
+  })
+
+  // ── a grid that is down ──────────────────────────────────────────────────────────────────────
+  //
+  // ⚠️ REGRESSION. Grid refuses `engines` on a grid that is not up, and that refusal was read as
+  // "running models unknown": every Start in the list went dark, so the one state in which a person
+  // most needs to start a model was the one in which none could be. And a Start that did get through
+  // failed at `join`, which a down grid refuses too.
+
+  it.each(['stopped', 'asleep'] as const)('a %s grid runs nothing: every model can start, and nothing is wrong', async state => {
+    gridState = state
+    const snapshot = await service.list('home')
+    expect(snapshot.models).toMatchObject([{ name: 'Small', state: 'available', canStart: true, canStop: false }])
+    expect(snapshot.notice).toBeUndefined()
+    // Never `error`: on this protocol that field fails the request and the app keeps no list.
+    expect(snapshot).not.toHaveProperty('error')
+  })
+
+  it('a refusal from a grid that IS running is still a gap, not an empty list', async () => {
+    run.mockImplementation(async args => args.includes('engines') ? refused('private detail')
+      : args.includes('info') ? ok({ status: 'running' }) : ok([{ grid: 'home', id: 'grid-home' }]))
+    await service.list('home', true)
+    const snapshot = await service.list('home', true)
+    expect(snapshot.notice).toContain('Running models could not be checked')
+    expect(JSON.stringify(snapshot)).not.toContain('private detail')
+  })
+
+  it.each(['stopped', 'asleep'] as const)('Start brings a %s grid up before joining it', async state => {
+    gridState = state
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const started = calls.findIndex(args => args[0] === '--remote' && args[1] === 'start')
+    const joined = calls.findIndex(args => args.includes('join'))
+    expect(calls[started]).toEqual(['--remote', 'start', 'home'])
+    expect(started).toBeGreaterThanOrEqual(0)
+    expect(started).toBeLessThan(joined)
+    expect((await service.list('home', true)).models[0]).toMatchObject({ state: 'running', operation: { phase: 'done' } })
+  })
+
+  it('Start leaves a running grid alone', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(calls.some(args => args[0] === '--remote' && args[1] === 'start')).toBe(false)
+    expect((await service.list('home', true)).models[0].state).toBe('running')
+  })
+
+  it('an unreadable grid status blocks nothing: the start goes on to the join', async () => {
+    // A Grid too old to answer `info --json` joined fine before this read existed.
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('info') && args.includes('--json') ? refused('usage') : original(args, output))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(calls.some(args => args[1] === 'start')).toBe(false)
+    expect((await service.list('home', true)).models[0]).toMatchObject({ state: 'running', operation: { phase: 'done' } })
+  })
+
+  it('a grid that will not come up fails the Start in words, before any join', async () => {
+    gridState = 'stopped'
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args[1] === 'start' ? refused('private detail') : original(args, output))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(calls.some(args => args.includes('join'))).toBe(false)
+    expect((await service.list('home')).models[0].operation).toMatchObject({ phase: 'failed', error: 'Your grid could not start. Try again.' })
   })
 
   it.each(['missing grid', 'invalid grid id', 'missing record directory', 'corrupt record'])('ignores %s without exposing a Stop action', async scenario => {
