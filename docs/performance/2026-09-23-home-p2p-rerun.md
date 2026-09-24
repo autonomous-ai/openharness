@@ -2,9 +2,8 @@
 
 **Direct P2P did not establish in any of six follow-up trials.** Combined with the
 [original comparison](2026-09-23-transport-routes.md), this is **0/9 attempts** on
-the Home iMac across three series. The README now includes all three series in its
-availability count. There are no verified Home P2P echoes from which to calculate
-a median or tail latency.
+the Home iMac across three series. There are no verified Home P2P echoes from
+which to calculate a median or tail latency.
 
 Two series of three trials ran serially on September 23, 2026, from **22:40:36 to
 22:42:41 UTC** and **22:56:28 to 22:58:33 UTC**. Each created a disposable
@@ -46,7 +45,7 @@ redraw, plus 30 control requests per successful trial. The route check stopped
 all six trials before those measurement phases, leaving **zero measured echoes
 and zero measured control requests** in these follow-ups. Relay startup responses are
 not included as P2P observations. The earlier 5,200 echoes and 390 control
-measurements remain the latency data in the README.
+measurements remain the latency data in the linked transport report.
 
 ## Method and environment
 
