@@ -3158,6 +3158,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                             onOpen: _focusSearch,
                             terminal: true,
                             bios: true,
+                            showResourceHints: search.allowsCommands,
                             prompt: search.prompt,
                             onEmptyBackspace: search.scopePrefix.isEmpty
                                 ? null

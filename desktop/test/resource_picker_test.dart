@@ -110,9 +110,12 @@ void main() {
         final mac = defaultTargetPlatform == TargetPlatform.macOS;
         await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
         expect(field, findsOneWidget);
+        final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
+        expect(hints, findsOneWidget);
         expect(search(tester).isCommandMode, isFalse);
         await tester.enterText(field, ':qwen');
         await tester.pump();
+        expect(hints, findsNothing);
         expect(search(tester).isModelMode, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
         expect(field, findsNothing);
@@ -124,6 +127,7 @@ void main() {
           shift: true,
         );
         expect(search(tester).isCommandMode, isTrue);
+        expect(hints, findsNothing);
         await key(tester, LogicalKeyboardKey.escape);
         await key(tester, LogicalKeyboardKey.keyO, cmd: mac, ctrl: !mac);
         expect(field, findsNothing);
@@ -138,6 +142,75 @@ void main() {
       TargetPlatform.linux,
     }),
   );
+
+  testWidgets('type hints keep the input and results fixed while typing', (
+    tester,
+  ) async {
+    final app = await fixture();
+    final originalFont = terminalFontStore.value;
+    final originalPalette = grid.AppTheme.palette.value;
+    final originalTheme = terminalThemeStore.value;
+    addTearDown(() {
+      terminalFontStore.value = originalFont;
+      grid.AppTheme.palette.value = originalPalette;
+      terminalThemeStore.value = originalTheme;
+    });
+    await mount(tester, app);
+    await chord(tester, LogicalKeyboardKey.keyP);
+    final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
+    final input = tester.widget<TextField>(field);
+    final inputPosition = tester.getTopLeft(field);
+    final createPosition = tester.getTopLeft(find.text('New Harness'));
+    const fullHint =
+        '> harnesses   @ machines   # projects   : models   * store';
+    expect(tester.widget<Text>(hints).data, fullHint);
+    expect(tester.getTopLeft(hints).dx, closeTo(inputPosition.dx, .01));
+    expect(
+      tester.getTopLeft(hints).dy - inputPosition.dy,
+      closeTo(terminalCellSizeOf(tester.element(field)).height, 1),
+      reason: 'The hint sits one terminal row below the input.',
+    );
+    await capture(tester, 'empty-type-hints');
+
+    await tester.enterText(field, 'search');
+    await tester.pump();
+    expect(hints, findsNothing);
+    expect(tester.getTopLeft(field), inputPosition);
+    expect(tester.getTopLeft(find.text('New Harness')), createPosition);
+    expect(tester.widget<TextField>(field).controller, same(input.controller));
+    expect(input.focusNode!.hasFocus, isTrue);
+    for (final prefix in ['@', '#', ':', '*']) {
+      await tester.enterText(field, prefix);
+      await tester.pump();
+      expect(hints, findsNothing);
+      await key(tester, LogicalKeyboardKey.backspace);
+      expect(hints, findsOneWidget);
+    }
+
+    grid.AppTheme.palette.value = HarnessPalette.slate;
+    terminalThemeStore.value = TerminalThemeChoice.tango;
+    terminalFontStore.value = const TerminalStyle(
+      fontSize: 18,
+      fontFamily: 'Menlo',
+    );
+    tester.view.physicalSize = const Size(480, 600);
+    await tester.pumpAndSettle();
+    final compact = tester.widget<Text>(hints);
+    expect(compact.data, '>   @   #   :   *');
+    expect(compact.semanticsLabel, fullHint);
+    expect(compact.style!.fontSize, 18);
+    expect(
+      compact.style!.color,
+      terminalThemeFor(
+        grid.AppTheme.palette.value,
+        terminalThemeStore.value,
+      ).foreground.withValues(alpha: .54),
+    );
+    expect(tester.takeException(), isNull);
+    await capture(tester, 'narrow-type-hints');
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   for (final withKeymap in [false, true]) {
     testWidgets(
