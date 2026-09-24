@@ -845,4 +845,37 @@ describe('TerminalStreamManager', () => {
     expect(binarySent.length).toBe(afterLeadingEdge + 1)
     expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
   })
+
+  it('coalesces a loopback burst on a 2ms window while the relay keeps 8ms', async () => {
+    await manager.stop()
+    manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+
+    const burst = async (connId: string, requestId: string): Promise<number> => {
+      await manager.handleFrame(connId, 'terminal_open', {
+        requestId, protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+      })
+      await vi.advanceTimersByTimeAsync(20)   // a quiet gap, so 'lead' takes the leading edge
+      sink!.onData(Buffer.from('lead'))
+      const afterLeadingEdge = binarySent.length
+      sink!.onData(Buffer.from('one'))
+      sink!.onData(Buffer.from('two'))
+      sink!.onData(Buffer.from('three'))
+      expect(binarySent.length).toBe(afterLeadingEdge)
+      return afterLeadingEdge
+    }
+
+    // The desktop on this computer: the burst goes out after 2ms, as one frame.
+    let afterLeadingEdge = await burst('local:desktop', 'open-local-burst')
+    await vi.advanceTimersByTimeAsync(2)
+    expect(binarySent.length).toBe(afterLeadingEdge + 1)
+    expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
+
+    // Anything else still waits the full 8ms window.
+    afterLeadingEdge = await burst('web-1', 'open-web-burst')
+    await vi.advanceTimersByTimeAsync(2)
+    expect(binarySent.length).toBe(afterLeadingEdge)
+    await vi.advanceTimersByTimeAsync(6)
+    expect(binarySent.length).toBe(afterLeadingEdge + 1)
+    expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
+  })
 })
