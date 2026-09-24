@@ -41,7 +41,7 @@ void main() {
           harnessCommandById.containsKey('navigation.quick_open'),
           isFalse,
         );
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         expect(jumpField, findsOneWidget);
         expect(app.swarms, [original]);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -65,7 +65,7 @@ void main() {
         expect(find.byType(AlertDialog), findsNothing);
         final field = find.byKey(const ValueKey('swarm-search-input'));
         expect(field, findsNothing);
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
@@ -93,7 +93,7 @@ void main() {
     final frames = <TerminalBinaryFrame>[];
     final pane = app.adoptSessionForTest(terminal('a0', frames));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     for (final query in ['> ', '> Agent 0', '>', '> new']) {
       await tester.enterText(field, query);
@@ -123,6 +123,7 @@ void main() {
       isTrue,
     );
     expect(harnessCommandById['agent.new']!.label, 'New Harness');
+    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
     await tester.enterText(field, '> new');
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('command:swarm.new')));
@@ -132,7 +133,7 @@ void main() {
     expect(app.swarms, hasLength(2));
     expect(app.allPanes, contains(pane));
     expect(jumpField, findsNothing);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     expect(jumpField, findsOneWidget);
     final search = tester
         .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

@@ -123,7 +123,7 @@ void main() {
       final only = Platform.environment['HARNESS_PRIMARY_OPERATION'];
       for (final (name, shortcut) in [
         ('cmd_n', LogicalKeyboardKey.keyN),
-        ('cmd_o', LogicalKeyboardKey.keyO),
+        ('cmd_p', LogicalKeyboardKey.keyP),
         ('cmd_t', LogicalKeyboardKey.keyT),
         ('switch_tab', LogicalKeyboardKey.bracketRight),
       ]) {
@@ -159,7 +159,7 @@ void main() {
           if (sample > 0) times.add(watch.elapsedMicroseconds);
           if (name == 'cmd_n') {
             expect(find.byType(NewHarnessForm), findsOneWidget);
-          } else if (name == 'cmd_o') {
+          } else if (name == 'cmd_p') {
             expect(
               find.byKey(const ValueKey('swarm-search-input')),
               findsOneWidget,
@@ -177,7 +177,7 @@ void main() {
             expect(find.byType(TerminalPanel), findsNWidgets(4));
           }
           expect(tester.takeException(), isNull);
-          if (name == 'cmd_n' || name == 'cmd_o') {
+          if (name == 'cmd_n' || name == 'cmd_p') {
             await key(tester, LogicalKeyboardKey.escape);
           } else if (name == 'cmd_t') {
             await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);

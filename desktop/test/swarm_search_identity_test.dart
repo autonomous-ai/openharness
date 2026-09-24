@@ -386,7 +386,7 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(
         tester.widget<TextField>(input).decoration!.hintText,

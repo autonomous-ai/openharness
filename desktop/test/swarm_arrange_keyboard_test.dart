@@ -214,7 +214,7 @@ void main() {
     tester.view.physicalSize = const Size(2000, 1200);
     await tester.pump();
     Future<void> command(String query) async {
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> $query',

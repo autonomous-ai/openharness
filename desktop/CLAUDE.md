@@ -193,7 +193,7 @@ from `node_status` pushes — distinct from our own socket status, pending offli
 ### Command dock
 
 For dialog presentation, follow the [terminal dialog design system](design/terminal-dialogs.md):
-fixed cells, plain text, one-line selection. Cmd-N and Cmd-O are the reference implementations.
+fixed cells, plain text, one-line selection. Cmd-N and Cmd-P are the reference implementations.
 
 `SwarmSearchController` owns search and selection; `SwarmSearchResults` keeps a bounded cache of
 visible/recent row controls. Query-dependent match text listens separately, so typing does not
@@ -534,9 +534,9 @@ its headless debug timings do not establish native display or network latency.
   `shortcuts/shortcuts_browser.dart` shares searchable, grouped rows between the ⌘/ dialog and
   Settings ▸ Keyboard shortcuts. It reads resolved bindings through `keyboardLessons()`, so remaps
   appear immediately; clicking a row or pressing Enter opens keyboard practice without dispatching
-  that action. Labels and keycaps use the selected terminal font and size. ⌘P opens commands with
-  the query `>`; ⌘O opens harnesses. `shortcuts/key_cap.dart` uses the app type scale elsewhere.
-  Every shortcut is ⌘-based — Ctrl belongs to the shell/tmux, ⌥ is a
+  that action. Labels and keycaps use the selected terminal font and size. ⇧⌘P opens commands with
+  the query `>`; ⌘P opens the unified picker. On Linux these use Ctrl+Shift+P and Ctrl+P. `shortcuts/key_cap.dart` uses the app type scale elsewhere.
+  Other workspace shortcuts are ⌘-based — Ctrl otherwise belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the
   engine's prompt breaks the line instead of submitting and kills the word behind the cursor

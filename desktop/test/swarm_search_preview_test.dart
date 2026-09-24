@@ -100,7 +100,7 @@ void main() {
     await seedPreviews(app);
     app.adoptSessionForTest(terminal('a69', []));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await chord(tester, LogicalKeyboardKey.keyP);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Workspace sync');
     await tester.pump();
@@ -174,7 +174,7 @@ void main() {
           if (inline) {
             await tester.tap(field);
           } else {
-            await chord(tester, LogicalKeyboardKey.keyO);
+            await chord(tester, LogicalKeyboardKey.keyP);
           }
           await tester.enterText(field, 'Checkout retries');
           await tester.pump();
@@ -286,7 +286,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         }
         await tester.enterText(field, 'Checkout retries');
         await tester.pump();
@@ -383,7 +383,7 @@ void main() {
       );
       app.adoptSessionForTest(terminal('a69', []));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -422,7 +422,7 @@ void main() {
       await mount(tester, app);
       tester.view.physicalSize = size;
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -430,10 +430,17 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       expect(tester.takeException(), isNull);
       final preview = find.byKey(const ValueKey('swarm-search-preview'));
+      expect(preview, findsOneWidget);
       if (size.width < 848) {
-        expect(preview, findsNothing);
+        expect(
+          tester.getRect(preview).top,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+                .bottom,
+          ),
+        );
       } else {
-        expect(preview, findsOneWidget);
         expect(
           tester.getRect(preview).left,
           greaterThan(

@@ -27,7 +27,7 @@ for (key, command) in [
   ("cmd+up", "pane.focus_above"), ("cmd+right", "pane.focus_right"),
   ("cmd+s", "app.store"), ("cmd+shift+l", "pane.layout"),
   ("cmd+b", "task.route"), ("cmd+t", "swarm.new"),
-  ("cmd+o", "agent.open"), ("cmd+p", "navigation.commands"),
+  ("cmd+p", "agent.open"), ("cmd+shift+p", "navigation.commands"),
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
   ("cmd+n", "agent.new"),
   ("cmd+m", "machines.list"),
@@ -42,7 +42,7 @@ try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
   "The pane picker chord is not mistaken for an orchestrator command")
 try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+b")) == nil,
   "The viewer bridge does not change single-agent routing")
-try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
+try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+shift+p")) == nil,
   "The viewer bridge does not take the command palette chord")
 for context in HarnessNativeKeymap.contexts {
   try checkKeymap(defaults.match([stroke("cmd+m")], context: context).binding?.command == "machines.list",
@@ -52,8 +52,8 @@ for context in HarnessNativeKeymap.contexts {
     "Command-I opens Models with the matching native action and hint from \(context)")
   try checkKeymap(defaults.match([stroke("cmd+u")], context: context).binding == nil,
     "The former Machines shortcut is unbound")
-  try checkKeymap(defaults.match([stroke("cmd+shift+p")], context: context).binding == nil,
-    "The former commands shortcut is unbound")
+  try checkKeymap(defaults.match([stroke("cmd+o")], context: context).binding == nil,
+    "The former picker shortcut is unbound")
   try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding?.command == "agent.clone",
     "Shift-Command-N clones the harness in \(context)")
   for number in 1...9 {
@@ -117,9 +117,9 @@ try checkKeymap(!send("x", 4, owner: otherField).handled && dispatcher.pending.i
 _ = send("cmd+k")
 try checkKeymap(!send("enter", 6, composing: true).handled && dispatcher.pending.isEmpty,
   "IME composition keeps input and cancels the prefix")
-try checkKeymap(send("cmd+o", executable: false).handled && send("cmd+o", executable: false).command == nil,
+try checkKeymap(send("cmd+p", executable: false).handled && send("cmd+p", executable: false).command == nil,
   "An unavailable mapped action cannot fall through as input")
-try checkKeymap(send("cmd+o", repeated: true).command == nil, "Search does not repeat")
+try checkKeymap(send("cmd+p", repeated: true).command == nil, "Search does not repeat")
 try checkKeymap(send("ctrl+j", repeated: true).command == "picker.previous", "Result movement repeats")
 try checkKeymap(send("pagedown", repeated: true).command == "picker.preview_page_down",
   "Holding a preview paging key continues scrolling")

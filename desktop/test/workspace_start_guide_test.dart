@@ -295,7 +295,7 @@ void main() {
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
     expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(search, findsNothing);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.pump();
     expect(search, findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
@@ -326,7 +326,7 @@ void main() {
     ];
     await _mount(tester, app);
     expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
     expect(find.text('Existing work'), findsOneWidget);
@@ -335,7 +335,7 @@ void main() {
     app.notifyListeners();
     await tester.pump();
     expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
     final input = tester.widget<TextField>(
       find.byKey(const ValueKey('swarm-search-input')),
     );
@@ -432,7 +432,7 @@ void main() {
         expect(find.byType(WorkspaceWelcome).hitTestable(), findsOneWidget);
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,
@@ -599,7 +599,7 @@ void main() {
 
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(search, findsNothing);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await tester.enterText(search, 'nothing matches');
     await tester.pumpAndSettle();
     expectCentered();

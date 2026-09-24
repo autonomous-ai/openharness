@@ -130,12 +130,12 @@ Future<void> runFlutterDispatchBenchmark(
       (w) => w is NewHarnessForm,
     ),
     (
-      'cmd_o',
-      (LogicalKeyboardKey.keyO, PhysicalKeyboardKey.keyO),
+      'cmd_p',
+      (LogicalKeyboardKey.keyP, PhysicalKeyboardKey.keyP),
       (w) => w is SwarmSearchInput && w.search != null,
     ),
     (
-      'cmd_p',
+      'cmd_shift_p',
       (LogicalKeyboardKey.keyP, PhysicalKeyboardKey.keyP),
       (w) => w is SwarmSearchInput && w.search?.isCommandMode == true,
     ),
@@ -156,11 +156,11 @@ Future<void> runFlutterDispatchBenchmark(
     ),
   ];
   for (final (operation, key, matches) in operations) {
-    if (primaryOnly && operation != 'cmd_n' && operation != 'cmd_o') continue;
+    if (primaryOnly && operation != 'cmd_n' && operation != 'cmd_p') continue;
     for (var sample = -5; sample < sampleCount; sample++) {
       final previousFrame = await prepareInput(sample);
       final began = DateTime.now().microsecondsSinceEpoch;
-      _key(key);
+      _key(key, shift: operation == 'cmd_shift_p');
       final dispatched = DateTime.now().microsecondsSinceEpoch;
       final firstFrame = await _frame();
       final element = _find(matches);

@@ -112,7 +112,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -278,7 +278,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // ellipsis (owner, 2026-09-22). The Dart keymap decides every chord below — applyMenuKeys
     // rewrites each equivalent here from it. New Terminal (⇧⌘T) stays in the keymap, off the menu.
     add(file, "New Harness", "n", "newAgent")
-    add(file, "Open Harness", "o", "addAgent")
+    add(file, "Open Harness", "p", "addAgent")
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     // ⌘⇧E: the pane's harness starts again where it is (Dart: `agent.restart`).
@@ -303,7 +303,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Native menu hints mirror Flutter; the shared picker owns all editing.
     if let edit = main.item(withTitle: "Edit")?.submenu {
       edit.addItem(.separator())
-      add(edit, "Search Commands…", "p", "commands")
+      add(edit, "Search Commands…", "p", "commands", [.command, .shift])
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())
@@ -890,6 +890,27 @@ private class SwarmIconButton: NSButton {
   }
 }
 
+/// Terminal symbols with a shared text baseline and a visible hover/focus cue.
+private final class SwarmStatusSymbolButton: SwarmIconButton {
+  var foreground = NSColor(white: 0.85, alpha: 1) { didSet { needsDisplay = true } }
+  var selection = NSColor(white: 0.35, alpha: 1) { didSet { needsDisplay = true } }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let active = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+    if active {
+      selection.withAlphaComponent(0.5).setFill()
+      bounds.fill()
+    }
+    let line = NSAttributedString(string: title, attributes: [
+      .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+      .foregroundColor: foreground.withAlphaComponent(!isEnabled ? 0.28 : active ? 1 : 0.75),
+    ])
+    let size = line.size()
+    line.draw(in: NSRect(x: (bounds.width - size.width) / 2,
+      y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
+  }
+}
+
 private final class SwarmStripScrollView: NSScrollView {
   override func scrollWheel(with event: NSEvent) {
     let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
@@ -1031,6 +1052,10 @@ private final class SwarmTabStrip: NSView {
   fileprivate let newButton = SwarmIconButton()
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let pullRequestButton = SwarmContextButton()
+  fileprivate let harnessesButton = SwarmStatusSymbolButton()
+  fileprivate let machinesButton = SwarmStatusSymbolButton()
+  fileprivate let modelsButton = SwarmStatusSymbolButton()
+  fileprivate let storeButton = SwarmStatusSymbolButton()
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   private var terminalForeground = NSColor(white: 0.85, alpha: 1)
   private var terminalSelection = NSColor(white: 0.35, alpha: 1)
@@ -1081,7 +1106,25 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.setAccessibilityLabel("Open pull request on GitHub")
     pullRequestButton.isHidden = true
     addSubview(pullRequestButton)
-    setAccessibilityChildren([scroll, newButton, contextButton, pullRequestButton])
+    for (control, name, symbol, action) in [
+      (harnessesButton, "Harnesses", ">", #selector(openHarnessControls)),
+      (machinesButton, "Machines", "@", #selector(openMachineControls)),
+      (modelsButton, "Models", ":", #selector(openModelControls)),
+      (storeButton, "Harness Store", "*", #selector(openStore)),
+    ] {
+      control.title = symbol
+      control.imagePosition = .noImage
+      control.isBordered = false
+      control.font = barFont
+      control.target = self
+      control.action = action
+      control.setAccessibilityLabel(name)
+      control.toolTip = name
+      control.isEnabled = false
+      addSubview(control)
+    }
+    setAccessibilityChildren([scroll, newButton, contextButton, pullRequestButton,
+      harnessesButton, machinesButton, modelsButton, storeButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1110,6 +1153,12 @@ private final class SwarmTabStrip: NSView {
     }
     newButton.font = barFont
     newButton.contentTintColor = terminalForeground
+    for control in [harnessesButton, machinesButton, modelsButton, storeButton] {
+      control.font = barFont
+      control.foreground = terminalForeground
+      control.selection = terminalSelection
+      control.isEnabled = actionsEnabled
+    }
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
@@ -1175,8 +1224,17 @@ private final class SwarmTabStrip: NSView {
     let previousDocumentSize = document.frame.size
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
+    let toolColumns = max(ceil(28 / cell), min(4, floor((bounds.width - cell * 9) / (cell * 4))))
+    let toolWidth = cell * toolColumns
+    let toolHeight = max(28, ceil(barFont.pointSize * 1.2))
+    let toolsX = bounds.width - trailing - toolWidth * 4
+    for (index, control) in [harnessesButton, machinesButton, modelsButton, storeButton].enumerated() {
+      control.frame = NSRect(x: toolsX + CGFloat(index) * toolWidth,
+        y: (bounds.height - toolHeight) / 2, width: toolWidth, height: toolHeight)
+    }
+    let statusRight = toolsX - cell * 2
     // Compact windows keep a scrolling tab list; context never overlaps it.
-    let available = max(0, bounds.width - trailing - cell * 5)
+    let available = max(0, bounds.width - toolWidth * 4 - cell * 9)
     let widths = tabs.map { min($0.preferredWidth, available * 0.45) }
     let total = widths.reduce(0, +)
     let occupied = min(total, available * 0.45)
@@ -1191,14 +1249,14 @@ private final class SwarmTabStrip: NSView {
     }
     newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - 28) / 2,
       width: cell * 3, height: 28)
-    let statusWidth = max(0, bounds.width - trailing - newButton.frame.maxX - cell * 2)
+    let statusWidth = max(0, statusRight - newButton.frame.maxX - cell * 2)
     let prWidth = pullRequestButton.isHidden ? 0 : min(pullRequestButton.preferredWidth, statusWidth * 0.45)
     let joined = contextButton.isSegmented && pullRequestButton.isSegmented && prWidth > 0
     let prGap = prWidth > 0 && !joined ? cell : 0
-    pullRequestButton.frame = NSRect(x: bounds.width - trailing - prWidth, y: 0,
+    pullRequestButton.frame = NSRect(x: statusRight - prWidth, y: 0,
       width: prWidth, height: bounds.height)
     let contextWidth = min(contextButton.preferredWidth, max(0, statusWidth - prWidth - prGap))
-    contextButton.frame = NSRect(x: bounds.width - trailing - prWidth - prGap - contextWidth, y: 0,
+    contextButton.frame = NSRect(x: statusRight - prWidth - prGap - contextWidth, y: 0,
       width: contextWidth, height: bounds.height)
     contextButton.nextBackground = joined && pullRequestButton.drawsSegments
       ? pullRequestButton.firstBackground : nil
@@ -1243,6 +1301,18 @@ private final class SwarmTabStrip: NSView {
   }
   @objc private func newSwarm() {
     if actionsEnabled && newButton.isEnabled { emit?("new", nil) }
+  }
+  @objc private func openMachineControls() {
+    if actionsEnabled && machinesButton.isEnabled { emit?("machineControls", nil) }
+  }
+  @objc private func openHarnessControls() {
+    if actionsEnabled && harnessesButton.isEnabled { emit?("harnessControls", nil) }
+  }
+  @objc private func openModelControls() {
+    if actionsEnabled && modelsButton.isEnabled { emit?("modelControls", nil) }
+  }
+  @objc private func openStore() {
+    if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }
   }
   private func draggedTab(_ sender: NSDraggingInfo) -> SwarmTabButton? {
     guard actionsEnabled, sender.draggingSourceOperationMask.contains(.move),

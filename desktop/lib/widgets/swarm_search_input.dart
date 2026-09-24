@@ -33,6 +33,7 @@ class SwarmSearchInput extends StatelessWidget {
     this.prompt,
     this.terminal = false,
     this.bios = false,
+    this.onEmptyBackspace,
   });
 
   final Key inputKey;
@@ -61,9 +62,10 @@ class SwarmSearchInput extends StatelessWidget {
   final String? prompt;
 
   /// Plain monospace input in a TerminalBox, without a decorative search glyph.
-  /// Mode prefixes belong to the editable buffer.
+  /// The active resource prefix can be rendered separately as [prompt].
   final bool terminal;
   final bool bios;
+  final VoidCallback? onEmptyBackspace;
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +74,16 @@ class SwarmSearchInput extends StatelessWidget {
       // Command mode changes with the editor value. Result highlights do not,
       // so arrow navigation must not rebuild the text field.
       listenable: controller,
-      builder: (context, _) => _buildInput(context),
+      builder: (context, _) => Actions(
+        actions: {
+          if (onEmptyBackspace != null)
+            DeleteCharacterIntent: _ScopeBackspaceAction(
+              controller,
+              onEmptyBackspace!,
+            ),
+        },
+        child: _buildInput(context),
+      ),
     );
   }
 
@@ -252,5 +263,25 @@ class SwarmSearchInput extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// EditableText handles Backspace before an ancestor shortcut can see it.
+/// Override its editing action only for an empty, non-composing query.
+class _ScopeBackspaceAction extends Action<DeleteCharacterIntent> {
+  _ScopeBackspaceAction(this.controller, this.clearScope);
+  final TextEditingController controller;
+  final VoidCallback clearScope;
+
+  @override
+  Object? invoke(DeleteCharacterIntent intent) {
+    final value = controller.value;
+    if (!intent.forward &&
+        value.text.isEmpty &&
+        (!value.composing.isValid || value.composing.isCollapsed)) {
+      clearScope();
+      return null;
+    }
+    return callingAction?.invoke(intent);
   }
 }

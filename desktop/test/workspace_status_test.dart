@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -9,6 +11,8 @@ import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_status.dart';
+import 'package:harness/terminal/terminal_text.dart';
+import 'package:xterm/xterm.dart' show TerminalStyle;
 import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/widgets/status_line.dart';
@@ -563,9 +567,23 @@ void main() {
       );
       final secondTab = find.byKey(ValueKey(app.activeSwarmId));
       expect(tester.getSize(secondTab).width, lessThan(150));
-      expect(find.byKey(const ValueKey('swarm-models-button')), findsNothing);
-      expect(find.byKey(const ValueKey('swarm-machines-button')), findsNothing);
-      expect(find.byKey(const ValueKey('swarm-store-button')), findsNothing);
+      final harnesses = find.byKey(const ValueKey('swarm-harnesses-button'));
+      final machines = find.byKey(const ValueKey('swarm-machines-button'));
+      final models = find.byKey(const ValueKey('swarm-models-button'));
+      final store = find.byKey(const ValueKey('swarm-store-button'));
+      expect(harnesses, findsOneWidget);
+      expect(machines, findsOneWidget);
+      expect(models, findsOneWidget);
+      expect(store, findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-help-button')), findsNothing);
+      final tools = [harnesses, machines, models, store];
+      final symbols = ['>', '@', ':', '*'];
+      for (var i = 0; i < tools.length; i++) {
+        expect(
+          find.descendant(of: tools[i], matching: find.text(symbols[i])),
+          findsOneWidget,
+        );
+      }
       expect(
         find.descendant(
           of: find.byType(TerminalPanel),
@@ -576,11 +594,76 @@ void main() {
       await tester.tap(find.text('1:code'));
       await tester.pump(const Duration(milliseconds: 350));
       expect(app.activeSwarm, same(first));
-      for (final width in [520.0, 1280.0]) {
-        tester.view.physicalSize = Size(width, 800);
-        await tester.pump(const Duration(milliseconds: 100));
-        expect(tester.takeException(), isNull);
+      final originalFont = terminalFontStore.value;
+      addTearDown(() => terminalFontStore.value = originalFont);
+      for (final size in [originalFont.fontSize, 18.0]) {
+        terminalFontStore.value = TerminalStyle(
+          fontSize: size,
+          fontFamily: originalFont.fontFamily,
+          fontFamilyFallback: originalFont.fontFamilyFallback,
+        );
+        for (final width in [400.0, 480.0, 520.0, 880.0, 1280.0]) {
+          tester.view.physicalSize = Size(width, 800);
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(tester.takeException(), isNull);
+          final rects = tools.map(tester.getRect).toList();
+          expect(tester.getRect(context).right, lessThan(rects.first.left));
+          expect(rects.last.right, lessThan(width));
+          final paragraphs = tools
+              .map(
+                (tool) => tester.renderObject<RenderParagraph>(
+                  find.descendant(of: tool, matching: find.byType(RichText)),
+                ),
+              )
+              .toList();
+          final baselines = paragraphs
+              .map(
+                (paragraph) => paragraph
+                    .localToGlobal(
+                      Offset(
+                        0,
+                        paragraph.getDryBaseline(
+                          paragraph.constraints,
+                          TextBaseline.alphabetic,
+                        )!,
+                      ),
+                    )
+                    .dy,
+              )
+              .toList();
+          for (var i = 0; i < rects.length; i++) {
+            expect(rects[i].width, closeTo(rects.first.width, .01));
+            expect(rects[i].height, closeTo(rects.first.height, .01));
+            expect(rects[i].width, greaterThanOrEqualTo(28));
+            expect(rects[i].center.dy, rects.first.center.dy);
+            expect(baselines[i], closeTo(baselines.first, .01));
+            if (i > 0) {
+              expect(rects[i].left, closeTo(rects[i - 1].right, .01));
+              expect(
+                rects[i].center.dx - rects[i - 1].center.dx,
+                closeTo(rects.first.width, .01),
+              );
+            }
+          }
+        }
       }
+      final symbol = find.descendant(of: machines, matching: find.text('@'));
+      Color? color() => DefaultTextStyle.of(tester.element(symbol)).style.color;
+      final resting = color();
+      final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await pointer.addPointer(location: Offset.zero);
+      await pointer.moveTo(tester.getCenter(machines));
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Machines'), findsOneWidget);
+      expect(color(), isNot(resting));
+      await pointer.removePointer();
+      await tester.pumpAndSettle();
+      final focus = Focus.of(tester.element(symbol));
+      focus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(focus.hasFocus, isTrue);
+      expect(color(), isNot(resting));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
     },

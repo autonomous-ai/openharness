@@ -73,7 +73,7 @@ void main() {
         ...app.machineStates['m']!.agents.skip(1),
       ];
       await configured.mount(tester, app, map);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
       expect(
         find.descendant(of: row, matching: find.byType(EngineMark)),
@@ -129,13 +129,22 @@ void main() {
         tester.view.physicalSize = size;
         await tester.pump();
         final paneBounds = tester.getRect(find.byKey(pane.cellKey));
-        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         final panel = find.byKey(const ValueKey('swarm-search-results'));
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final count = find.byKey(const ValueKey('swarm-search-count'));
         final bounds = tester.getRect(panel);
         expect(tester.widget<TextField>(input).cursorWidth, greaterThan(2));
-        expect(find.text('>'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('swarm-search-prompt')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('swarm-search-prompt')))
+              .data,
+          '>',
+        );
         expect(find.text('Harness:'), findsNothing);
         expect(find.text('[ New Harness ]'), findsNothing);
         expect(find.text('Select Item'), findsNothing);

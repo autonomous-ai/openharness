@@ -123,6 +123,10 @@ private extension SwarmTabStrip {
       "Numbered tabs use 13 pt SF Mono regular")
     try checkTitlebar(tabs[0].drawnFont == tabs[1].drawnFont && contextButton.font == tabs[0].labelFont,
       "Active tabs, inactive tabs, and pane context share one font")
+    for control in [harnessesButton, machinesButton, modelsButton, storeButton] {
+      try checkTitlebar(control.font == contextButton.font && control.frame.midY == contextButton.frame.midY,
+        "Status symbols share the terminal font and centered text baseline")
+    }
     try checkTitlebar(tabs[0].frame.width < tabs[1].frame.width,
       "Each tab occupies its own text width and fixed cell gutters")
     try checkTitlebar(tabs[0].menu?.font == menuFont, "Native context menus retain the system menu font")
@@ -216,7 +220,31 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < contextButton.frame.minX, "Tabs are left of the right-aligned focused context")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
       "Short numbered labels use text-sized widths")
-    try checkTitlebar(subviews.count == 4 && pullRequestButton.isHidden, "The PR control stays hidden until a PR is available")
+    try checkTitlebar(subviews.count == 8 && pullRequestButton.isHidden,
+      "Four management symbols join the status controls; help stays hidden")
+    let controls = [harnessesButton, machinesButton, modelsButton, storeButton]
+    for (control, symbol) in zip(controls, [">", "@", ":", "*"]) {
+      try checkTitlebar(control.image == nil && control.title == symbol && !control.isBordered,
+        "Management controls are plain terminal text without a resting button well")
+      try checkTitlebar(control.frame.size == harnessesButton.frame.size && control.frame.width >= 28,
+        "All symbols have equally sized, generous click targets")
+      try checkTitlebar(control.toolTip == control.accessibilityLabel() && control.toolTip?.isEmpty == false,
+        "Every symbol explains its action through a tooltip and accessible name")
+      let resting = control.renderedPixels()
+      let event = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+        timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+      control.mouseEntered(with: event)
+      try checkTitlebar(control.renderedPixels() != resting, "Hover visibly marks a clickable symbol")
+      control.mouseExited(with: event)
+      try checkTitlebar(control.renderedPixels() == resting, "Leaving the symbol restores its plain appearance")
+      control.highlight(true)
+      try checkTitlebar(control.renderedPixels() != resting, "Pressing a symbol gives visual feedback")
+      control.highlight(false)
+    }
+    for (left, right) in zip(controls, controls.dropFirst()) {
+      try checkTitlebar(right.frame.midX - left.frame.midX == left.frame.width,
+        "Symbols are equally spaced without hidden gaps")
+    }
     try checkTitlebar(contextButton.accessibilityValue() as? String == "OpenAI  M2:~/code/harness  (main)",
       "The full focused context is accessible")
     for (index, tab) in tabs.enumerated() {
@@ -243,6 +271,11 @@ private extension SwarmTabStrip {
     try checkActiveVisible()
     try checkTitlebar(newButton.frame.maxX < contextButton.frame.minX &&
       contextButton.frame.maxX <= bounds.width, "Narrow windows have no overlapping controls")
+    try checkTitlebar(contextButton.frame.maxX < harnessesButton.frame.minX &&
+      harnessesButton.frame.maxX <= machinesButton.frame.minX &&
+      machinesButton.frame.maxX <= modelsButton.frame.minX &&
+      modelsButton.frame.maxX <= storeButton.frame.minX && storeButton.frame.maxX <= bounds.width,
+      "Management symbols remain ordered at the right edge in narrow windows")
     let original = tabs[0]
     let reversed = Array(rows.reversed())
     update(state(reversed, active: "swarm-0"))
@@ -258,14 +291,24 @@ private extension SwarmTabStrip {
     events.removeAll()
     contextButton.performClick(nil)
     newButton.performClick(nil)
+    harnessesButton.performClick(nil)
+    machinesButton.performClick(nil)
+    modelsButton.performClick(nil)
+    storeButton.performClick(nil)
     original.clickBothActions()
-    try checkTitlebar(events == ["new", "select", "close"], "Visible controls dispatch their actions once")
+    try checkTitlebar(events == ["new", "harnessControls", "machineControls", "modelControls", "store", "select", "close"], "Visible controls dispatch their actions once")
     events.removeAll()
     update(state(rows, active: "swarm-0", enabled: false))
-    try checkTitlebar(!contextButton.isEnabled && !newButton.isEnabled, "Modal state disables status-bar actions")
+    try checkTitlebar(!contextButton.isEnabled && !newButton.isEnabled &&
+      !harnessesButton.isEnabled && !machinesButton.isEnabled && !modelsButton.isEnabled && !storeButton.isEnabled,
+      "Modal state disables status-bar actions")
     try original.checkEnabled(false)
     contextButton.performClick(nil)
     newButton.performClick(nil)
+    harnessesButton.performClick(nil)
+    machinesButton.performClick(nil)
+    modelsButton.performClick(nil)
+    storeButton.performClick(nil)
     original.clickBothActions()
     try checkTitlebar(events.isEmpty, "Disabled controls cannot act behind a modal")
     update(["tabs": rows, "activeId": "swarm-0", "enabled": true])
@@ -324,6 +367,17 @@ private extension SwarmTabStrip {
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "new",
       "New swarm returns keyboard ownership to the workspace")
+    for (control, method) in zip([harnessesButton, machinesButton, modelsButton, storeButton],
+      ["harnessControls", "machineControls", "modelControls", "store"]) {
+      let resting = control.renderedPixels()
+      try checkTitlebar(window.makeFirstResponder(control), "A status symbol accepts keyboard focus")
+      try checkTitlebar(control.hasKeyboardFocus && control.renderedPixels() != resting,
+        "Keyboard focus visibly highlights each status symbol")
+      control.performClick(nil)
+      messenger.finishNextReply()
+      try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == method,
+        "Each status action gives keyboard ownership to its Flutter destination")
+    }
     let current = tabs[0].accessibilityChildren()!.first as! NSButton
     window.makeFirstResponder(current)
     current.performClick(nil)
@@ -470,8 +524,8 @@ private extension SwarmTitlebar {
       "The main-menu dispatcher retains the actual Edit submenu and its targets")
     try checkTitlebar(newSwarm.keyEquivalent == "t" && newSwarm.toolTip == nil,
       "Native shortcuts display in the menu without duplicate hover hints")
-    try checkTitlebar(addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "The exported keymap keeps Open Harness on Command-O")
+    try checkTitlebar(addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
+      "The exported keymap keeps Open Harness on Command-P")
     for (action, key) in [("splitRight", "r"), ("splitDown", "d")] {
       let split = agent.items.first(where: { $0.representedObject as? String == action })!
       try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
@@ -523,9 +577,9 @@ private extension SwarmTitlebar {
     try checkTitlebar(strip.newButton.accessibilityLabel() == "New Tab", "The plus announces New Tab")
     try checkTitlebar(main.defersToInput(event("n", 45, .command)) && main.defersToInput(event("t", 17, .command)),
       "Command-N and Command-T reach creation and New Tab")
-    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches commands")
-    try checkTitlebar(!main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P is unbound")
-    try checkTitlebar(main.defersToInput(event("o", 31, .command)), "Command-O reaches Open Harness")
+    try checkTitlebar(main.defersToInput(event("p", 35, .command)), "Command-P reaches Open Harness")
+    try checkTitlebar(main.defersToInput(event("p", 35, [.command, .shift])), "Command-Shift-P reaches commands")
+    try checkTitlebar(!main.defersToInput(event("o", 31, .command)), "Command-O is no longer claimed")
     try checkTitlebar(main.defersToInput(event("i", 34, .command)) &&
       !main.performKeyEquivalent(with: event("i", 34, .command)),
       "Command-I reaches Flutter exactly once")
@@ -554,7 +608,7 @@ private extension SwarmTitlebar {
     }
     actionsEnabled = true
     // Orchestrator has no default chord now. Exercise an explicit user binding;
-    // Cmd-P belongs to New Pane and is covered by the exported default keymap.
+    // Cmd-P belongs to Open Harness and is covered by the exported default keymap.
     let viewerMap = HarnessNativeKeymap(["version": 1, "contexts": [
       "workspace": [["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false]],
       "terminal": [], "picker": [], "project": [],
@@ -659,8 +713,8 @@ private extension SwarmTitlebar {
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
-    try checkTitlebar(addHarness.title == "Open Harness" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
-      "Open Harness advertises Command-O")
+    try checkTitlebar(addHarness.title == "Open Harness" && addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
+      "Open Harness advertises Command-P")
     try checkTitlebar(!agent.items.contains { $0.representedObject as? String == "newTerminal" },
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
@@ -715,7 +769,7 @@ private extension SwarmTitlebar {
     try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command, .shift], "Close Tab defaults to Command-Shift-W")
     try checkTitlebar(closePaneShortcut.keyEquivalent == "w" && closePaneShortcut.keyEquivalentModifierMask == [.command], "Close Pane defaults to Command-W")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
-    try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command], "Command search keeps its native menu owner")
+    try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command, .shift], "Command search keeps its native menu owner")
     try checkTitlebar(edit.submenu!.items.allSatisfy { $0.representedObject as? String != "jump" }, "Edit has no Navigate action")
     try checkTitlebar(agent.items.contains { $0.title == "New Tab" && $0.keyEquivalent == "t" && $0.representedObject as? String == "new" }, "New Tab opens the chooser with Command-T")
     let reopen = historyMenu.items.first(where: { $0.representedObject as? String == "reopen" })!

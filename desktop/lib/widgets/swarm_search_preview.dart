@@ -45,7 +45,7 @@ List<_PreviewAgent> _agents(AppNotifier app, SwarmDestination row) {
   ];
 }
 
-/// One content surface shared by Cmd-O and the start page. Arrow keys only swap
+/// One content surface shared by Cmd-P and the start page. Arrow keys only swap
 /// cached records. A short dwell warms cold records without delaying selection.
 class SwarmSearchPreview extends StatefulWidget {
   const SwarmSearchPreview({

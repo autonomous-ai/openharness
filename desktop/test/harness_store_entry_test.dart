@@ -82,7 +82,7 @@ void main() {
       'browse harnesses',
       'extensions',
     ]) {
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> $query',

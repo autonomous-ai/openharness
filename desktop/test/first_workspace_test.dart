@@ -529,7 +529,7 @@ void main() {
             find.byKey(const ValueKey('swarm-new-pane-button')),
             findsNothing,
           );
-          expect(find.byTooltip('Harnesses'), findsNothing);
+          expect(find.byTooltip('Harnesses'), findsOneWidget);
           expect(
             find.byKey(const ValueKey('swarm-new-harness-button')),
             findsNothing,

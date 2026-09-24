@@ -37,7 +37,7 @@ void main() {
         );
         await mount(tester, app, map, native: native);
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         final controller = tester.widget<TextField>(field).controller!;
         final focus = tester.widget<TextField>(field).focusNode!;
         final selected = find.byWidgetPredicate(
@@ -68,7 +68,7 @@ void main() {
         );
         await key(tester, LogicalKeyboardKey.escape);
         expect(field, findsNothing);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
         expect(

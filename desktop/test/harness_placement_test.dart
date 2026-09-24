@@ -366,7 +366,7 @@ void main() {
         final original = app.activeSwarm;
         await mount(tester, app);
         await chord(tester, LogicalKeyboardKey.keyT);
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await chord(tester, LogicalKeyboardKey.keyP);
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         final input = find.byKey(const ValueKey('new-harness-query'));
@@ -474,7 +474,13 @@ void main() {
       expect(search.isCommandMode, query.startsWith('>'));
       expect(search.isHelpMode, isFalse);
       expect(search.createTask, isNull);
-      expect(search.rows.any((row) => row.isCreate), isFalse);
+      expect(search.rows.any((row) => row.isCreate), !query.startsWith('>'));
+      if (!query.startsWith('>')) {
+        expect(
+          search.rows.first.title,
+          query.startsWith('#') ? 'New Project' : 'New Machine',
+        );
+      }
     }
     search.setQuery('');
     expect(search.selected!.isCreate, isTrue);
@@ -710,7 +716,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, 'fix the login regression');
       await tester.pump();
@@ -742,7 +748,7 @@ void main() {
         await tester.pump();
         expect(box.task, task);
         for (final key in [
-          LogicalKeyboardKey.keyO,
+          LogicalKeyboardKey.keyP,
           LogicalKeyboardKey.keyT,
           LogicalKeyboardKey.period,
         ]) {
@@ -807,7 +813,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       tester
@@ -827,7 +833,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessForm), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final box = tester
@@ -845,7 +851,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessForm), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await chord(tester, LogicalKeyboardKey.keyP);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -888,10 +894,10 @@ void main() {
         await mount(tester, app);
         final key = placement == HarnessPlacement.newTab
             ? LogicalKeyboardKey.keyT
-            : LogicalKeyboardKey.keyO;
+            : LogicalKeyboardKey.keyP;
         await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         }
         await tester.pump();
         expect(app.swarms, contains(original));
@@ -923,7 +929,7 @@ void main() {
         expect(app.swarms, [original]);
         await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyP);
         }
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -943,7 +949,7 @@ void main() {
         expect(app.swarms, contains(original));
         // The creation box was opened from a search editor that is now gone.
         // Returning focus to that detached editor would disable shortcuts.
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,

@@ -39,20 +39,20 @@ void main() {
 
     for (final (name, shortcut) in [
       ('cmd_n', LogicalKeyboardKey.keyN),
-      ('cmd_o', LogicalKeyboardKey.keyO),
       ('cmd_p', LogicalKeyboardKey.keyP),
+      ('cmd_shift_p', LogicalKeyboardKey.keyP),
       ('cmd_comma', LogicalKeyboardKey.comma),
       ('cmd_slash', LogicalKeyboardKey.slash),
     ]) {
       final times = <int>[];
       for (var i = -5; i < 40; i++) {
         final watch = Stopwatch()..start();
-        await key(tester, shortcut, cmd: true);
+        await key(tester, shortcut, cmd: true, shift: name == 'cmd_shift_p');
         final elapsed = watch.elapsedMicroseconds;
         if (i >= 0) times.add(elapsed);
         if (name == 'cmd_n') {
           expect(find.byType(NewHarnessForm), findsOneWidget);
-        } else if (name == 'cmd_o' || name == 'cmd_p') {
+        } else if (name == 'cmd_p' || name == 'cmd_shift_p') {
           expect(
             find.byKey(const ValueKey('swarm-search-input')),
             findsOneWidget,

@@ -169,7 +169,7 @@ void main() {
     await acceptSetupOrSearch(tester);
   }
 
-  for (final shortcut in [LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyO]) {
+  for (final shortcut in [LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP]) {
     testWidgets(
       '${shortcut.keyLabel} starts a pane with no extra launch controls',
       (tester) async {
@@ -276,7 +276,7 @@ void main() {
     'product entry from a pane does not inherit workspace projects or search tasks',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Review the API',
@@ -413,12 +413,12 @@ void main() {
     },
   );
 
-  testWidgets('repeating Cmd-O keeps the highlighted existing harness', (
+  testWidgets('repeating Cmd-P keeps the highlighted existing harness', (
     tester,
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(search, 'login');
     final picker = tester
@@ -432,7 +432,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.arrowUp);
     }
     expect(picker.selected?.agentId, 'a1');
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     final updated = tester
         .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
         .search!;
@@ -446,10 +446,10 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('Cmd-O repeats without losing the search task', (tester) async {
+  testWidgets('Cmd-P repeats without losing the search task', (tester) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyO;
+    final shortcut = LogicalKeyboardKey.keyP;
 
     await key(tester, shortcut, cmd: true);
     final search = find.byKey(const ValueKey('swarm-search-input'));
@@ -461,7 +461,7 @@ void main() {
       baseOffset: 6,
       extentOffset: 18,
     );
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     final updated = tester.widget<SwarmSearchInput>(
       find.byType(SwarmSearchInput),
     );
@@ -491,14 +491,14 @@ void main() {
   });
 
   testWidgets(
-    'Cmd-O keeps drafts separate when the focused source pane changes',
+    'Cmd-P keeps drafts separate when the focused source pane changes',
     (tester) async {
       await mount(tester, store: false);
       final first = app.focusedPane!;
       final other = app.adoptSessionForTest(terminal('a2', []));
       app.focusPane(first.id);
       await tester.pump();
-      final shortcut = LogicalKeyboardKey.keyO;
+      final shortcut = LogicalKeyboardKey.keyP;
       await key(tester, shortcut, cmd: true);
       await acceptSetupOrSearch(tester);
       await nameProject(tester, 'keyboard-review');
@@ -526,12 +526,12 @@ void main() {
     },
   );
 
-  testWidgets('Cmd-O inherits its source and resumes edits via Open Harness', (
+  testWidgets('Cmd-P inherits its source and resumes edits via Open Harness', (
     tester,
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyO;
+    final shortcut = LogicalKeyboardKey.keyP;
     await key(tester, shortcut, cmd: true);
     await acceptSetupOrSearch(tester);
     var draft = box(tester);
@@ -545,7 +545,7 @@ void main() {
     await dismiss(tester);
     expect(app.swarms, [origin]);
     expect(app.activeSwarm, same(origin));
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await acceptSetupOrSearch(tester);
     draft = box(tester);
     expect(draft.task, 'Check keyboard focus');
@@ -572,7 +572,7 @@ void main() {
     'switching the picker keeps its project scope and Escape goes back',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, '# openharness');
       await acceptSetupOrSearch(tester);
@@ -583,7 +583,7 @@ void main() {
       expect(before.canGoBack, isTrue);
       final selected = before.selected?.id;
       final results = before.rows.map((row) => row.id).toList();
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final picker = tester
           .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
           .search!;
