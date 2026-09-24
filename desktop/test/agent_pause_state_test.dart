@@ -68,6 +68,66 @@ void main() {
   });
 
   test(
+    'a resume that never reached the daemon can retry the same receipt',
+    () async {
+      app.stateOf('m')!.agents = [
+        Agent.fromJson((inventory()['agents'] as List).single),
+      ];
+      final first = app.resumeAgent('m', 'a0');
+      final creationId = connection.requests.single['creationId'] as String;
+      connection.restartReplies.single.completeError(
+        const WsRequestTimeout('agent_resume'),
+      );
+      expect((await first).error, contains('Still waiting'));
+
+      final retry = app.resumeAgent('m', 'a0');
+      connection.checkReplies.single.complete({
+        'creationId': creationId,
+        'state': 'missing',
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(connection.types, ['agent_resume', 'agent_resume']);
+      expect(
+        connection.requests.last,
+        connection.requests.first,
+        reason: 'replay the same durable intent so a delayed original cannot launch twice',
+      );
+      connection.restartReplies.last.complete(
+        restartReceipt(creationId, sessionId: source.sessionId),
+      );
+      expect((await retry).error, isNull);
+      expect(app.stateOf('m')!.agents.single.sessionId, source.sessionId);
+    },
+  );
+
+  for (final state in ['pending', 'unconfirmed', 'wrong receipt']) {
+    test(
+      'an uncertain resume ($state) does not issue another launch',
+      () async {
+        app.stateOf('m')!.agents = [
+          Agent.fromJson((inventory()['agents'] as List).single),
+        ];
+        final first = app.resumeAgent('m', 'a0');
+        final creationId = connection.requests.single['creationId'];
+        connection.restartReplies.single.completeError(
+          const WsRequestTimeout('agent_resume'),
+        );
+        await first;
+        final retry = app.resumeAgent('m', 'a0');
+        connection.checkReplies.single.complete({
+          'creationId': state == 'wrong receipt'
+              ? 'another-intent'
+              : creationId,
+          'state': state == 'wrong receipt' ? 'missing' : state,
+        });
+        expect((await retry).error, isNotNull);
+        expect(connection.types, ['agent_resume']);
+      },
+    );
+  }
+
+  test(
     'a confirmed pause remains in inventory when its refresh fails',
     () async {
       connection.inventory = Completer<Map<String, dynamic>>();

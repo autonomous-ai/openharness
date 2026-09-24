@@ -16,10 +16,16 @@ import '../state/app_state.dart';
 /// among them: it holds a storefront, not harnesses, and a terminal dropped
 /// there would have nowhere to draw.
 Future<void> showMovePanePalette(BuildContext context, AppNotifier notifier) {
-  if (notifier.focusedPaneId == null) return Future<void>.value();
+  final paneId = notifier.focusedPaneId;
+  if (paneId == null) return Future<void>.value();
+  final sourceId = notifier.activeSwarmId;
   return showAppDialog<void>(
     context: context,
-    builder: (context) => _MovePanePalette(notifier: notifier),
+    builder: (context) => _MovePanePalette(
+      notifier: notifier,
+      sourceId: sourceId,
+      paneId: paneId,
+    ),
   );
 }
 
@@ -33,9 +39,9 @@ class _Destination {
   final String detail;
 }
 
-List<_Destination> _destinationsFor(AppNotifier notifier) => [
+List<_Destination> _destinationsFor(AppNotifier notifier, String sourceId) => [
   for (final swarm in notifier.swarms)
-    if (swarm.id != notifier.activeSwarmId && !swarm.isStore)
+    if (swarm.id != sourceId && !swarm.isStore)
       _Destination(
         id: swarm.id,
         label: swarm.name,
@@ -51,9 +57,15 @@ List<_Destination> _destinationsFor(AppNotifier notifier) => [
 ];
 
 class _MovePanePalette extends StatefulWidget {
-  const _MovePanePalette({required this.notifier});
+  const _MovePanePalette({
+    required this.notifier,
+    required this.sourceId,
+    required this.paneId,
+  });
 
   final AppNotifier notifier;
+  final String sourceId;
+  final int paneId;
 
   @override
   State<_MovePanePalette> createState() => _MovePanePaletteState();
@@ -82,27 +94,29 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
 
   void _take(_Destination destination) {
     final notifier = widget.notifier;
-    final paneId = notifier.focusedPaneId;
+    final paneId = widget.paneId;
+    final sourceId = widget.sourceId;
     Navigator.of(context).pop();
-    if (paneId == null) return;
+    if (!notifier.swarms.any(
+      (swarm) =>
+          swarm.id == sourceId && swarm.panes.any((pane) => pane.id == paneId),
+    )) {
+      return;
+    }
     var targetId = destination.id;
     if (targetId == null) {
-      // The tab is made from here, then stepped back out of, because the move
-      // reads the pane from the tab in front: `newSwarm` selects what it makes.
-      final source = notifier.activeSwarmId;
       notifier.newSwarm(newTabPage: true);
       targetId = notifier.activeSwarmId;
-      if (targetId == source) return;
-      notifier.selectSwarm(source);
+      if (targetId == sourceId) return;
     }
-    notifier.movePaneToSwarm(paneId, targetId);
+    notifier.movePaneToSwarm(paneId, targetId, sourceSwarmId: sourceId);
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
-    final destinations = _destinationsFor(widget.notifier);
+    final destinations = _destinationsFor(widget.notifier, widget.sourceId);
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.escape) {
       Navigator.of(context).pop();
@@ -149,7 +163,7 @@ class _MovePanePaletteState extends State<_MovePanePalette> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final destinations = _destinationsFor(widget.notifier);
+    final destinations = _destinationsFor(widget.notifier, widget.sourceId);
     final cursor = _cursor.clamp(0, destinations.length - 1);
     return Focus(
       focusNode: _keys,

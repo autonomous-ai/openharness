@@ -1474,6 +1474,14 @@ class AppNotifier extends ChangeNotifier {
     _paneFocusByUser = !_navigatingFromDevice;
   }
 
+  /// Native focus also changes during reparenting and dialog dismissal. The
+  /// model already records a click/shortcut before asking the renderer to
+  /// focus, so that echo must not turn a layout change into a terminal claim.
+  void focusPaneFromRenderer(int paneId) {
+    if (focusedPaneId == paneId) return;
+    _fromDevice(() => focusPane(paneId));
+  }
+
   /// An explicit relayout reveals live output even in tiles whose rectangle
   /// does not change. This is view intent, so it is never persisted.
   int _paneLayoutRequest = 0;
@@ -7725,7 +7733,7 @@ class AppNotifier extends ChangeNotifier {
         retryable: false,
       );
     }
-    final checking = attempt.awaitingConfirmation;
+    var checking = attempt.awaitingConfirmation;
     if (!checking) {
       attempt._id = _newCreationId();
       attempt._startedRevision = machine._agentRevision;
@@ -7747,6 +7755,22 @@ class AppNotifier extends ChangeNotifier {
             : 'agent_restart',
         payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
       );
+      if (checking &&
+          resuming &&
+          result['creationId'] == attempt._id &&
+          result['state'] == 'missing' &&
+          result['error'] == null &&
+          _restartCurrent(attempt)) {
+        // The original resume may never have reached the daemon. Checking a
+        // missing receipt forever cannot recover it. Replay the SAME intent:
+        // the daemon reserves it before launching, so a delayed original or
+        // another retry cannot allocate a second terminal.
+        checking = false;
+        result = await _conn(machineId).request(
+          'agent_resume',
+          payload: {'creationId': attempt._id, 'agentId': agentId},
+        );
+      }
     } catch (_) {
       return unknown;
     }
@@ -9379,11 +9403,23 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// A destination already showing this agent takes the move as a plain close
   /// here — one membership per tab, the rule [assignAgentToPane] keeps.
-  bool movePaneToSwarm(int paneId, String swarmId, {bool follow = true}) {
-    final source = activeSwarm;
-    final pane = source.panes.where((p) => p.id == paneId).firstOrNull;
+  bool movePaneToSwarm(
+    int paneId,
+    String swarmId, {
+    bool follow = true,
+    String? sourceSwarmId,
+  }) {
+    final source = sourceSwarmId == null
+        ? activeSwarm
+        : swarms.where((swarm) => swarm.id == sourceSwarmId).firstOrNull;
+    final pane = source?.panes.where((p) => p.id == paneId).firstOrNull;
     final target = swarms.where((swarm) => swarm.id == swarmId).firstOrNull;
-    if (pane == null || target == null || target.id == source.id) return false;
+    if (source == null ||
+        pane == null ||
+        target == null ||
+        target.id == source.id) {
+      return false;
+    }
     final twin = pane.agentId == null
         ? null
         : target.panes
@@ -9462,7 +9498,9 @@ class AppNotifier extends ChangeNotifier {
     if (follow) {
       _activeSwarmId = target.id;
       railFocused = false;
-      _noteNavigation();
+      // Placement changes preserve terminal ownership. In particular, showing
+      // the destination must not reclaim every terminal another window holds.
+      _paneFocusByUser = false;
       _paneFocusRequest++;
     }
     selectedMachineId = focusedPane?.machineId;
@@ -9821,6 +9859,16 @@ class AppNotifier extends ChangeNotifier {
     final believedById = {for (final t in believed) t.id: t};
     final before = _deskProjection();
     final released = <TerminalPane>[];
+    final previousFocus = focusedPane;
+    final previousTab = activeSwarmId;
+    // Keep the objects from the whole document until the move is complete.
+    // Iterating source before destination used to remove the only reference,
+    // create a replacement tile, and close its still-live terminal below.
+    final existingPanes = {
+      for (final pane in allPanes)
+        if (pane.agentId != null)
+          '${pane.machineId}\u0000${pane.agentId}': pane,
+    };
 
     // Tabs the desk no longer has.
     final kept = <Swarm>[];
@@ -9870,18 +9918,14 @@ class AppNotifier extends ChangeNotifier {
         if (swarm.panes.any((p) => keyOf(p) == ref.key)) continue;
         // One TerminalPane per (machine, agent) across tabs — the same rule the
         // restore keeps — so a second tab showing an agent reuses its stream.
-        final pane =
-            allPanes
-                .where(
-                  (p) =>
-                      p.machineId == ref.machineId && p.agentId == ref.agentId,
-                )
-                .firstOrNull ??
-            TerminalPane(
-              id: _nextPaneId++,
-              machineId: ref.machineId,
-              agentId: ref.agentId,
-            );
+        final pane = existingPanes.putIfAbsent(
+          ref.key,
+          () => TerminalPane(
+            id: _nextPaneId++,
+            machineId: ref.machineId,
+            agentId: ref.agentId,
+          ),
+        );
         // After the agent pane the desk lists before it, whatever else (a
         // viewer, an empty tile) sits between; at the end when it is first.
         final after = i == 0
@@ -9980,8 +10024,12 @@ class AppNotifier extends ChangeNotifier {
     if (!swarms.any((s) => s.id == _activeSwarmId)) {
       _activeSwarmId = swarms.first.id;
       selectedMachineId = focusedPane?.machineId;
-      // Another Mac closed the tab this one was on. The tab that comes forward
-      // instead is nobody's arrival here — see [paneFocusByUser].
+    }
+    if (activeSwarmId != previousTab ||
+        !identical(focusedPane, previousFocus)) {
+      // A peer moving the focused pane also focuses its neighbour. That is
+      // remote navigation, just like a peer closing this window's active tab.
+      // Treating it as a gesture here can start a terminal takeover loop.
       _paneFocusByUser = false;
     }
 
