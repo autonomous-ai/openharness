@@ -50,13 +50,13 @@ class PhoneSearchTrailing extends StatelessWidget {
 String? phoneSearchBadge(PhoneDestination row, {required bool openable}) {
   final machine = row.machine;
   return switch (row.kind) {
-    // Saved work, not a dead row: the tap resumes it and opens it. Said
-    // plainly because the wait that follows is a second or two of nothing.
-    // Stopped work with no conversation to reopen says so in the desktop's
-    // words, rather than the `No terminal` of a live agent that lost its pane.
+    // Saved work, not a dead row: the tap resumes it and opens it. Said in
+    // the desktop's words (`HarnessSession.status`) — Paused, or Resume
+    // unavailable when its machine cannot bring it back — rather than the
+    // `No terminal` of a live agent that lost its pane.
     PhoneDestinationKind.agent => switch (row.entry?.agent) {
       final agent? when agent.isStopped =>
-        openable ? 'Stopped' : 'Resume unavailable',
+        openable ? 'Paused' : 'Resume unavailable',
       _ => openable ? null : 'No terminal',
     },
     PhoneDestinationKind.machine => switch (machine == null

@@ -279,7 +279,7 @@ Future<void> showAgentActions(
   Agent agent,
 ) => showPhoneSheet(
   context,
-  title: agent.name,
+  title: agent.displayName,
   actions: [
     PhoneSheetAction(
       icon: LucideIcons.trash2300,

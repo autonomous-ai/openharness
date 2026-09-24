@@ -40,7 +40,7 @@ Future<void> confirmDeleteAgent(
     title: 'Stop $agentName?',
     detail: [
       ?machine?.machine.displayName,
-      ?agent?.project?.folder,
+      ?agent?.project?.label,
     ].where((part) => part.isNotEmpty).join(' · '),
     // ⚠️ **The desktop's own sentence, word for word**, because it is the same
     // `agent_delete` on the wire (`AppNotifier.deleteAgent`, and desktop's

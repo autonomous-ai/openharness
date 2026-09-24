@@ -187,6 +187,11 @@ class Agent {
   /// What the harness has produced — see [AgentOutputStats].
   final AgentOutputStats? outputStats;
 
+  /// How much of this harness a resume brings back, as its daemon says per engine: `shell`,
+  /// `conversation` or `fresh` (`cli/src/lib/resumeCapability.ts`). Null from a daemon older than
+  /// the field.
+  final String? resumeMode;
+
   const Agent({
     required this.id,
     this.sessionId,
@@ -212,6 +217,7 @@ class Agent {
     this.tokensUsed,
     this.tokensUpdatedAt,
     this.outputStats,
+    this.resumeMode,
   });
 
   factory Agent.fromJson(Map<String, dynamic> j) {
@@ -277,6 +283,7 @@ class Agent {
           ? _safeTime(usage['updatedAt'])
           : null,
       outputStats: AgentOutputStats.fromJson(j['outputStats']),
+      resumeMode: _safeResumeMode(j['resumeMode']),
     );
   }
 
@@ -305,6 +312,7 @@ class Agent {
     tokensUsed: tokensUsed,
     tokensUpdatedAt: tokensUpdatedAt,
     outputStats: outputStats,
+    resumeMode: resumeMode,
   );
 
   /// Saved work the daemon is no longer running, as the desktop's [Agent] reads
@@ -316,10 +324,6 @@ class Agent {
   /// stopped work silently missing, which is exactly what this app did.
   bool get isStopped => status == 'stopped';
 
-  /// Whether a resume has a conversation to reopen — the desktop's rule, and the daemon's
-  /// (`resumeStoppedAgent.ts`): exact resume exists for Claude Code and Codex only, and only once the
-  /// engine has saved a session. An agent stopped before its first prompt never got one, and the
-  /// machine answers RESUME_UNAVAILABLE for it however many times it is asked.
   /// Whether a row has anything to put on its stats line — see [AgentOutputStats].
   bool get hasMonitorStats =>
       tokensUsed != null || (outputStats != null && !outputStats!.isEmpty);
@@ -335,9 +339,32 @@ class Agent {
     return own != null && own.isNotEmpty ? own : kUntitledPane;
   }
 
+  /// Whether the saved conversation itself can be reopened — the desktop's rule for a daemon that
+  /// predates [resumeMode]: exact resume for Claude Code and Codex, once the engine saved a session.
   bool get canResumeConversation =>
       (engine == 'claude' || engine == 'codex') &&
       sessionId?.isNotEmpty == true;
+
+  /// Whether stopped work can be brought back at all — the desktop's `canPauseAndResume`.
+  ///
+  /// ⚠️ **The daemon decides, per engine ([resumeMode]).** Every engine resumes on a current one —
+  /// some as a new conversation ([resumesFreshConversation]) — so reading [canResumeConversation]
+  /// alone greyed out work the machine would bring back, as "Resume unavailable". The fallback is
+  /// for a daemon too old to say: the old rule, so it is never offered a resume it refuses.
+  bool get canPauseAndResume =>
+      resumeMode != null || engine == 'terminal' || canResumeConversation;
+
+  /// Whether a resume opens a NEW conversation rather than the paused one: the engine has no resume
+  /// argv (`fresh`), or nothing recorded a conversation to reopen. A different session id after
+  /// such a resume is the machine doing as it was told.
+  bool get resumesFreshConversation =>
+      resumeMode == 'fresh' ||
+      (resumeMode == 'conversation' && (sessionId?.isEmpty ?? true));
+
+  static String? _safeResumeMode(Object? raw) =>
+      raw is String && const {'shell', 'conversation', 'fresh'}.contains(raw)
+      ? raw
+      : null;
 
   static String? _safeEngine(Object? raw) {
     if (raw is! String || raw.isEmpty || raw.length > 64) return null;
@@ -496,6 +523,9 @@ class RouteCandidate {
 
 String _str(Object? value) => value is String ? value : '';
 
+/// How a checkout on no branch reports itself, `Detached 65281563` (`cli/src/lib/agentProject.ts`).
+const kDetachedBranchPrefix = 'Detached ';
+
 /// Context reported by the owning daemon. Missing on older daemons.
 class AgentProject {
   const AgentProject({
@@ -504,6 +534,7 @@ class AgentProject {
     this.root,
     this.remote,
     this.branch,
+    this.branchPending = false,
   });
   final String name;
   final String cwd;
@@ -511,18 +542,29 @@ class AgentProject {
   final String? remote;
   final String? branch;
 
+  /// [branch] is still the name Harness made up at Start; it is shown once the session's name
+  /// replaces it.
+  final bool branchPending;
+
   String identity(String machineId) =>
       remote != null ? 'repo:$remote' : 'folder:$machineId:${root ?? cwd}';
 
-  /// The folder a person names this agent by: the last segment of [cwd], falling back to [name]
-  /// when the path has no segment to take (a root, or a bare drive).
+  /// The folder as the person chose it — the desktop's `AgentProject.label`: inside a Git checkout,
+  /// a subfolder shows as itself and the checkout's root as its repository ([name]), even when the
+  /// checkout is a temporary worktree. Outside Git it is [name], the folder itself.
   ///
-  /// The tail rather than the whole path, because every row that shows it is width-starved — a
-  /// phone card, a pane header — and `/Users/…/WorkPlace/Grid/autonomous-harness` spends all of
-  /// that width on the prefix that is identical for every agent somebody owns.
-  String get folder {
-    final parts = cwd.split(RegExp(r'[/\\]')).where((part) => part.isNotEmpty);
-    return parts.isEmpty ? name : parts.last;
+  /// ⚠️ **Not the tail of [cwd].** A worktree's folder is `worktree-35…`, a name Harness made up;
+  /// the repository it belongs to is what the desktop shows, and what somebody recognises.
+  String get label {
+    final checkout = root;
+    if (checkout == null) return name;
+    String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
+    if (trimmed(checkout) == trimmed(cwd)) return name;
+    return cwd
+            .split(RegExp(r'[/\\]'))
+            .where((part) => part.isNotEmpty)
+            .lastOrNull ??
+        name;
   }
 
   /// The branch, or null when the daemon reported none or reported it blank.
@@ -531,6 +573,22 @@ class AgentProject {
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
 
+  /// On a commit rather than a branch: an agent reading or testing one.
+  bool get detached => branch?.startsWith(kDetachedBranchPrefix) == true;
+
+  /// The branch worth showing beside [label] — the desktop's `shownBranch`: none while Harness's
+  /// made-up name waits for the session's, and none on no branch at all. [branchLabel] stays the
+  /// searchable one.
+  String? get shownBranch => branchPending || detached ? null : branchLabel;
+
+  /// The branch as a tooltip says it, whatever [shownBranch] leaves out.
+  String? get branchDetail => switch (branchLabel) {
+    null => null,
+    final branch when detached =>
+      'No branch: on commit ${branch.substring(kDetachedBranchPrefix.length)}',
+    final branch => 'Branch: $branch',
+  };
+
   @override
   bool operator ==(Object other) =>
       other is AgentProject &&
@@ -538,9 +596,11 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
-      branch == other.branch;
+      branch == other.branch &&
+      branchPending == other.branchPending;
   @override
-  int get hashCode => Object.hash(name, cwd, root, remote, branch);
+  int get hashCode =>
+      Object.hash(name, cwd, root, remote, branch, branchPending);
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -563,6 +623,7 @@ class AgentProject {
       root: field('root'),
       remote: field('remote'),
       branch: field('branch', 256),
+      branchPending: raw['branchPending'] == true,
     );
   }
 }

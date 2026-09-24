@@ -79,6 +79,13 @@ class PhoneDesk {
   /// the desk existed: no strip, and a swipe over every agent on the account.
   bool get enabled => _state.enabled;
 
+  /// Whether no first read is in the air — the tabs are as known as they are
+  /// going to be for now, whatever it said. What a launch waits on before it
+  /// picks an agent from a tab (`AgentHome._target`).
+  ///
+  /// True before [ensure] too: nothing has been asked for, so nothing is coming.
+  bool get settled => _joining == null;
+
   /// The tab the phone is in, or null for the agents no tab holds (and for a
   /// phone whose desk is empty). Device-local by decision — see the class note.
   String? get activeTabId => _activeTabId;
@@ -112,7 +119,12 @@ class PhoneDesk {
     try {
       await run;
     } finally {
-      if (identical(_joining, run)) _joining = null;
+      if (identical(_joining, run)) {
+        _joining = null;
+        // A read that brought no desk notified nobody, and a launch is waiting on it — see
+        // [settled]. One that did has already, through [_apply].
+        if (!_state.enabled && !_disposed) onChanged();
+      }
     }
   }
 

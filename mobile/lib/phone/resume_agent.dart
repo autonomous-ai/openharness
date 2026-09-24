@@ -75,6 +75,9 @@ Future<String?> resumeAgentForOpen(
 
 /// Whether [stopped] is back with a terminal — the SAME conversation, the desktop's test: a
 /// different session id is the daemon having started something else, not the work that was tapped.
+///
+/// Unless none was asked for ([Agent.resumesFreshConversation]): an engine with no resume argv, or
+/// work paused with nothing recorded, comes back under a new id because it did as it was told.
 bool _resumedTerminal(AppNotifier notifier, AgentEntry entry, Agent stopped) {
   final current = notifier
       .stateOf(entry.machineId)
@@ -85,5 +88,7 @@ bool _resumedTerminal(AppNotifier notifier, AgentEntry entry, Agent stopped) {
       current.terminalAvailable &&
       !current.isStopped &&
       current.launchState != 'failed' &&
-      current.sessionId == stopped.sessionId;
+      (stopped.resumesFreshConversation ||
+          current.resumesFreshConversation ||
+          current.sessionId == stopped.sessionId);
 }

@@ -332,7 +332,12 @@ class _GlintPainter extends CustomPainter {
 ///
 /// On the second line each name takes only the width it needs, and only the
 /// overflow is shared out — see [_PlaceLine]. The folder is the one kept whole
-/// where the two cannot both fit — see [projectPathLabel].
+/// where the two cannot both fit.
+///
+/// ⚠️ **The desktop's pane header, word for word.** The name is
+/// [Agent.displayName], the folder [AgentProject.label] — the repository, not a
+/// worktree's made-up folder — and the branch [AgentProject.shownBranch], so a
+/// harness reads the same in both.
 class _Identity extends StatelessWidget {
   const _Identity({required this.agent});
 
@@ -343,14 +348,14 @@ class _Identity extends StatelessWidget {
     AppTheme.watch(context);
     final agent = this.agent;
     final project = agent?.project;
-    final branch = project?.branchLabel;
+    final branch = project?.shownBranch;
     final hasPlace = project != null || branch != null;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          agent?.name ?? 'Harness',
+          agent?.displayName ?? 'Harness',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
@@ -363,7 +368,7 @@ class _Identity extends StatelessWidget {
         if (hasPlace) ...[
           const SizedBox(height: 2),
           _PlaceLine(
-            folder: project == null ? null : projectPathLabel(project.cwd),
+            folder: project?.label,
             branch: branch,
             style: _placeStyle,
           ),
@@ -626,28 +631,4 @@ String projectPathTrail(String cwd) {
       ? below
       : ['…', ...below.sublist(below.length - kept)];
   return '$lead/${tail.join('/')}';
-}
-
-/// A folder as the header names it: its own name and nothing above it —
-/// `autonomous-harness`.
-///
-/// Home itself is written `~` the way a shell prompt writes it, and the root
-/// `/`: those have no name of their own to show.
-///
-/// ⚠️ The parents are the part every agent somebody owns has in common — the
-/// folder's own name is what tells two of them apart, so it is all that is kept.
-String projectPathLabel(String cwd) {
-  final path = cwd.replaceAll('\\', '/');
-  final parts = path.split('/').where((part) => part.isNotEmpty).toList();
-  if (parts.isEmpty) return path.isEmpty ? '~' : '/';
-
-  // Home: `/Users/<name>` on a Mac, `/home/<name>` on Linux, `/root`, `~`.
-  final isHome =
-      (path.startsWith('/') &&
-          parts.length == 2 &&
-          (parts[0] == 'Users' || parts[0] == 'home')) ||
-      (path.startsWith('/') && parts.length == 1 && parts[0] == 'root') ||
-      (path.startsWith('~') && parts.length == 1);
-  if (isHome) return '~';
-  return parts.last;
 }

@@ -4,12 +4,6 @@ import 'package:harness_mobile/state/desk_sync.dart';
 
 import 'agent_index.dart';
 
-/// The name of the group holding the agents no tab does.
-///
-/// Short because it is drawn as a chip beside real tab names, and a chip is the
-/// one place on this screen with no room for a sentence.
-const String kUntabbedGroupName = 'Other';
-
 /// What the strip falls back to when the account has no tabs at all: one group
 /// over everything, which is the phone exactly as it was before the desk.
 const String kEveryAgentGroupName = 'All harnesses';
@@ -30,8 +24,8 @@ class DeskGroup {
     required this.entries,
   });
 
-  /// The desk's id for the tab, or null for [kUntabbedGroupName] and for the
-  /// single group a phone with no tabs shows.
+  /// The desk's id for the tab, or null for the single group a phone with no
+  /// tabs shows, and for [untabbedGroup].
   final String? id;
 
   final String name;
@@ -49,14 +43,13 @@ class DeskGroup {
 
 /// The desk's tabs, filled with the agents from [visible] they hold.
 ///
-/// [visible] is the phone's own list — [visibleAgents] — so the leftovers keep
-/// the order the app would have shown them in. Agents with no terminal are left
-/// out throughout: a group that counts agents nothing can open would offer a tab
-/// that opens on "Attaching…" for ever.
+/// Agents with no terminal are left out throughout: a group that counts agents
+/// nothing can open would offer a tab that opens on "Attaching…" for ever.
 ///
-/// The leftover group comes last, and only when there is something in it. Nobody
-/// puts every agent on a tab, and with a swipe now staying inside one group the
-/// agents outside them all would otherwise be reachable only through search.
+/// ⚠️ **Tabs and nothing else — there is no "Other" group for the agents no tab
+/// holds.** The phone is built around the desk's tabs, as every window is (owner,
+/// 2026-09-24): an agent outside them all is reached through search, and opens
+/// on its own ([untabbedGroup]) rather than as a chip beside the real tabs.
 ///
 /// Never empty: a phone with no tabs, and even one with no agents, still gets
 /// the single group every caller below is allowed to assume.
@@ -76,27 +69,37 @@ List<DeskGroup> deskGroups(AppNotifier notifier, List<AgentEntry> visible) {
       DeskPaneRef(machineId: entry.machineId, agentId: entry.agent.id).key:
           entry,
   };
-  final claimed = <String>{};
-  final groups = <DeskGroup>[];
-  for (final tab in tabs) {
-    final held = <AgentEntry>[];
-    for (final pane in tab.panes) {
-      final entry = byKey[pane.key];
-      if (entry == null) continue;
-      claimed.add(pane.key);
-      held.add(entry);
-    }
-    groups.add(DeskGroup(id: tab.id, name: tab.name, entries: held));
-  }
-  final rest = [
-    for (final entry in byKey.entries)
-      if (!claimed.contains(entry.key)) entry.value,
+  return [
+    for (final tab in tabs)
+      DeskGroup(
+        id: tab.id,
+        name: tab.name,
+        entries: [for (final pane in tab.panes) ?byKey[pane.key]],
+      ),
   ];
-  if (rest.isNotEmpty) {
-    groups.add(DeskGroup(id: null, name: kUntabbedGroupName, entries: rest));
-  }
-  return groups;
 }
+
+/// Whether [agent] is on none of the desk's tabs — one opened from search or a
+/// notification, which know nothing of tabs. False on a phone with no tabs,
+/// where the single group holds everything.
+///
+/// Read from the desk's panes, not from [deskGroups]: an agent of a tab whose
+/// terminal is still being verified is missing from its group for those
+/// seconds, and is not untabbed for it.
+bool isUntabbed(AppNotifier notifier, AgentRef agent) {
+  final tabs = notifier.deskTabs;
+  if (tabs.isEmpty) return false;
+  final key = DeskPaneRef(
+    machineId: agent.machineId,
+    agentId: agent.agentId,
+  ).key;
+  return !tabs.any((tab) => tab.panes.any((pane) => pane.key == key));
+}
+
+/// What a swipe walks for an agent no tab holds: that agent alone. Not drawn
+/// on the strip — it is no tab — so the strip lights nothing while it is shown.
+DeskGroup untabbedGroup(AgentEntry entry) =>
+    DeskGroup(id: null, name: entry.agent.displayName, entries: [entry]);
 
 /// The group the phone is in.
 ///

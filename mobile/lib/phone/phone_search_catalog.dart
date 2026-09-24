@@ -121,8 +121,8 @@ PhoneDestination _agent(
       // The FOLDER, not the project's reported name — the desktop's picker
       // shows `Desktop` and `autonomous-harness`, which is the tail of the path
       // somebody actually recognises, and a phone has no width for the rest.
-      project: project?.folder,
-      branch: project?.branchLabel,
+      project: project?.label,
+      branch: project?.shownBranch,
       leading: offline ? 'Offline' : null,
     ),
     machineId: entry.machineId,
@@ -139,6 +139,7 @@ PhoneDestination _agent(
       if (renamed) agent.name,
       label,
       entry.machineName,
+      project?.label,
       project?.name,
       project?.branchLabel,
       project?.cwd,
@@ -259,9 +260,9 @@ List<PhoneDestination> _projects(
 }) {
   final prefix = [
     type,
-    project?.name,
+    project?.label,
   ].whereType<String>().where((part) => part.isNotEmpty).join(' · ');
-  final branch = project?.branchLabel;
+  final branch = project?.shownBranch;
   return (
     text: [
       prefix,

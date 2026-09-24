@@ -39,31 +39,20 @@ void main() {
 
     final groups = groupsOf(built);
 
-    expect(
-      [for (final group in groups) group.name],
-      ['Desktop', 'Docker', kUntabbedGroupName],
-    );
+    expect([for (final group in groups) group.name], ['Desktop', 'Docker']);
     expect(agentsOf(groups[0]), ['b', 'a']);
     expect(agentsOf(groups[1]), ['c']);
   });
 
-  test('the agents no tab holds are a group of their own, last', () async {
+  test('the agents no tab holds are in no group — there is no Other', () async {
     final built = await appWith(['a'], ['b']);
 
-    final groups = groupsOf(built);
-
-    expect(groups.last.name, kUntabbedGroupName);
-    expect(groups.last.id, isNull);
-    expect(agentsOf(groups.last), ['c', 'd']);
-  });
-
-  test('nothing left over means no group for it', () async {
-    final built = await appWith(['a', 'b'], ['c', 'd']);
-
-    expect(
-      [for (final group in groupsOf(built)) group.name],
-      ['Desktop', 'Docker'],
-    );
+    expect([for (final group in groupsOf(built)) group.name], [
+      'Desktop',
+      'Docker',
+    ]);
+    expect(isUntabbed(built, (machineId: 'm', agentId: 'c')), isTrue);
+    expect(isUntabbed(built, (machineId: 'm', agentId: 'a')), isFalse);
   });
 
   test('an account with no tabs gets one group over every agent', () async {
@@ -84,8 +73,7 @@ void main() {
 
     expect(groups[0].isEmpty, isTrue);
     expect(agentsOf(groups[1]), ['c']);
-    // And the unreachable agent is nobody's leftover either.
-    expect(agentsOf(groups.last), ['a', 'b', 'd']);
+    expect(groups, hasLength(2));
   });
 
   test(

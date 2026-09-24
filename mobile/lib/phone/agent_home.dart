@@ -207,11 +207,16 @@ class _AgentHomeState extends State<AgentHome> {
   }
 
   Future<void> _readLast() async {
-    final last = await StartupTrace.time(
-      'home.readLastAgent',
-      widget.notifier.lastOpenedAgent.read,
-    );
+    final record = widget.notifier.lastOpenedAgent;
+    final lastTab = record.readTab();
+    final last = await StartupTrace.time('home.readLastAgent', record.read);
+    final tabId = await lastTab;
     if (!mounted) return;
+    // The tab the phone was in last run, for [_firstOfLastTab] — unless one was already chosen on
+    // this run while the record was being read.
+    if (tabId != null && widget.notifier.activeDeskTabId == null) {
+      widget.notifier.noteDeskTab(tabId);
+    }
     // The deadline has done its job either way once this lands, and a timer left running would fire
     // into a screen that is no longer waiting.
     _loadingDeadline?.cancel();
@@ -222,16 +227,14 @@ class _AgentHomeState extends State<AgentHome> {
       // somebody off a terminal they are already looking at, seconds after it opened.
       if (last != null && _neighboursFor == null) _showing = last;
     });
-    if (last != null) {
-      _restoreDeadline = Timer(_restoreTimeout, () {
-        if (!mounted) return;
-        setState(() => _restoreGaveUp = true);
-      });
-    }
+    _restoreDeadline = Timer(_restoreTimeout, () {
+      if (!mounted) return;
+      setState(() => _restoreGaveUp = true);
+    });
   }
 
-  /// How long the remembered agent's machine gets to come up before the screen settles for the
-  /// first agent it can reach — see [_target].
+  /// How long the remembered agent's machine — and the desk's tabs — get to come up before the
+  /// screen settles for the first agent it can reach — see [_target].
   ///
   /// 30s: a relayed machine that drops its first dial and redials was measured taking well past 15s
   /// to hand over its agent list.
@@ -316,12 +319,16 @@ class _AgentHomeState extends State<AgentHome> {
   /// machine that has already answered names the wrong thing to be patient with.
   bool _waitingForTerminal = false;
 
+  /// Whether the screen is holding out for the desk's tabs before it falls back — see [_target].
+  bool _waitingForDesk = false;
+
   /// What to tell somebody while the screen holds out for the agent it means to reopen.
   String? _restoreMessage() {
     if (_waitingForTerminal) return 'Reopening your harness…';
     // Every other machine may be up and loaded while the one holding the remembered agent is still
     // dialling — without this the wait would draw as "No agents yet".
     if (_waitingForRestore) return 'Connecting to your machine…';
+    if (_waitingForDesk) return 'Opening your tabs…';
     return null;
   }
 
@@ -330,12 +337,14 @@ class _AgentHomeState extends State<AgentHome> {
   /// In order:
   ///  - a machine just unlocked has the first claim, once it has an agent to offer;
   ///  - otherwise the pager already up keeps the screen, wherever its own swipes have taken it;
-  ///  - failing that the agent this screen last held, then the first openable one — a home screen
-  ///    with no list behind it cannot afford to show nothing while agents exist;
+  ///  - failing that the agent this screen last held, then the first agent of the tab the phone
+  ///    was last in ([_firstOfLastTab]), then the most recently active one — a home screen with no
+  ///    list behind it cannot afford to show nothing while agents exist;
   ///  - nothing openable at all → null, and the empty state says so.
   AgentEntry? _target(List<AgentEntry> entries) {
     _waitingForRestore = false;
     _waitingForTerminal = false;
+    _waitingForDesk = false;
     // Picked by hand elsewhere — see [AgentHome.openAgent]. Until it is in the list, the screen keeps
     // what it has rather than blanking.
     final requested = _requestedAgent;
@@ -398,7 +407,32 @@ class _AgentHomeState extends State<AgentHome> {
         }
       }
     }
-    return _mostRecentOpenable(entries);
+    // ⚠️ **The tabs are waited for before settling on anything.** They are read over the network
+    // (`PhoneDesk`), and a fallback taken before they land picks from the whole account — then holds
+    // the screen, because a pager up is not moved. Bounded by the launch's own deadline.
+    if (!widget.notifier.deskSettled && !_restoreGaveUp) {
+      _waitingForDesk = true;
+      return null;
+    }
+    return _firstOfLastTab(entries) ?? _mostRecentOpenable(entries);
+  }
+
+  /// The first agent of the tab the phone was last in — or, when that tab has nothing to open, of
+  /// the first tab that does. Null on a phone with no tabs.
+  ///
+  /// ⚠️ **What a launch falls back on when the agent it left cannot be opened (owner, 2026-09-24).**
+  /// The phone is built around tabs, so the agent somebody expects is the one heading the tab they
+  /// were working in — not the most recently active harness anywhere on the account, which is a
+  /// stranger to that tab as often as not. [AppNotifier.activeDeskTabId] names it: this phone's own
+  /// choice, carried over from the last run by [_readLast].
+  AgentEntry? _firstOfLastTab(List<AgentEntry> entries) {
+    final notifier = widget.notifier;
+    if (notifier.deskTabs.isEmpty) return null;
+    final tabs = deskGroups(notifier, entries).where((tab) => !tab.isEmpty);
+    final last = notifier.activeDeskTabId;
+    final tab =
+        tabs.where((tab) => tab.id == last).firstOrNull ?? tabs.firstOrNull;
+    return tab?.entries.first;
   }
 
   /// The agent to fall back on: the one whose conversation moved last, of those that can be opened.
@@ -622,7 +656,7 @@ class _AgentHomeState extends State<AgentHome> {
       // The agent ON SCREEN while the pager is staying up — it may have been swiped to from the one
       // the pager opened on — and the tab the phone is in is that agent's. The agent held onto may be
       // in a different tab than the one the target named: a tab closed on another computer moves
-      // what is on screen into another group, or into "Other".
+      // what is on screen into another tab, or out of them all.
       final showing = _showing;
       final onScreen = _neighboursFor == chosen && showing != null
           ? _entryFor(entries, showing)
@@ -630,7 +664,11 @@ class _AgentHomeState extends State<AgentHome> {
       final here = onScreen == null
           ? chosen
           : (machineId: onScreen.machineId, agentId: onScreen.agent.id);
-      final group = activeDeskGroup(widget.notifier, groups, here);
+      // An agent no tab holds — opened from search — is swiped alone: there is no "Other" group to
+      // walk any more (see [deskGroups]), and its neighbours are no tab's.
+      final group = isUntabbed(widget.notifier, here)
+          ? untabbedGroup(onScreen ?? target)
+          : activeDeskGroup(widget.notifier, groups, here);
       // ⚠️ **The swipe list is a snapshot, so it is retaken when the SET of agents changes.** It is
       // taken as the pager opens, and on launch that is as soon as one machine answers — a second
       // machine's agents arriving a moment later never reached it, and a pager built around one

@@ -31,7 +31,7 @@ void main() {
     await _pump(
       tester,
       project: const AgentProject(
-        name: 'Harness',
+        name: 'autonomous-harness',
         cwd: '/Users/dev/WorkPlace/Grid/autonomous-harness',
         branch: 'main',
       ),
@@ -47,22 +47,38 @@ void main() {
     );
   });
 
-  testWidgets('the folder is the tail of the path, not the project name', (
+  testWidgets('a subfolder of a checkout is named by itself', (tester) async {
+    await _pump(
+      tester,
+      project: const AgentProject(
+        name: 'apps',
+        cwd: '/srv/apps/backend',
+        root: '/srv/apps',
+      ),
+    );
+    expect(_rendered(tester), contains('backend'));
+    expect(_rendered(tester), isNot(contains('/srv/apps')));
+  });
+
+  testWidgets('a worktree is named by its repository, as on the desktop', (
     tester,
   ) async {
     await _pump(
       tester,
-      project: const AgentProject(name: 'Harness', cwd: '/srv/apps/backend'),
+      project: const AgentProject(
+        name: 'autonomous-harness',
+        cwd: '/srv/.harness/worktrees/worktree-35ab',
+        root: '/srv/.harness/worktrees/worktree-35ab',
+      ),
     );
-    expect(_rendered(tester), contains('backend'));
-    expect(_rendered(tester), isNot(contains('Harness')));
-    expect(_rendered(tester), isNot(contains('/srv/apps')));
+    expect(_rendered(tester), contains('autonomous-harness'));
+    expect(_rendered(tester), isNot(contains('worktree-35ab')));
   });
 
   testWidgets('a blank branch draws no separator of its own', (tester) async {
     await _pump(
       tester,
-      project: const AgentProject(name: 'x', cwd: '/srv/api', branch: '   '),
+      project: const AgentProject(name: 'api', cwd: '/srv/api', branch: '   '),
     );
     expect(_rendered(tester), 'api  ·  MacBookPro2021.local');
   });

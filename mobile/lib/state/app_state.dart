@@ -558,15 +558,30 @@ class AppNotifier extends ChangeNotifier {
   /// before the desk existed.
   List<DeskTab> get deskTabs => _desk.tabs;
 
-  /// The tab the phone is in, or null for the agents no tab holds.
+  /// The tab the phone is in, or null for an agent no tab holds.
   String? get activeDeskTabId => _desk.activeTabId;
+
+  /// Whether the desk's first read has come back — see [PhoneDesk.settled].
+  bool get deskSettled => _desk.settled;
 
   /// A tab picked by hand, in the tabs panel — set as the agent chosen there
   /// is opened, so the swipe walks that tab from then on.
-  void selectDeskTab(String? tabId) => _desk.select(tabId);
+  void selectDeskTab(String? tabId) {
+    _desk.select(tabId);
+    _rememberDeskTab(tabId);
+  }
 
   /// The tab the screen has worked out it is showing — see [PhoneDesk.note].
-  void noteDeskTab(String? tabId) => _desk.note(tabId);
+  void noteDeskTab(String? tabId) {
+    _desk.note(tabId);
+    _rememberDeskTab(tabId);
+  }
+
+  /// Kept for the next launch to fall back on — see [LastOpenedAgent.rememberTab]. Only a real
+  /// tab: an agent opened from search, in none, leaves the last tab standing.
+  void _rememberDeskTab(String? tabId) {
+    if (tabId != null) lastOpenedAgent.rememberTab(tabId);
+  }
 
   /// Whether the desk can be WRITTEN to — what the two `+`s on the tabs panel
   /// are drawn on. False before the first read answers, and on a backend with
@@ -5149,10 +5164,10 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     // Refused here rather than round-tripped: the machine can only say RESUME_UNAVAILABLE.
-    if (!agent.canResumeConversation) {
+    if (!agent.canPauseAndResume) {
       return Future.value(
         const RestartAgentResult(
-          error: 'This harness has no saved conversation to resume.',
+          error: 'This harness has no supported saved conversation to resume.',
         ),
       );
     }
@@ -5229,9 +5244,13 @@ class AppNotifier extends ChangeNotifier {
       return unconfirmed;
     }
     // The desktop's bar for "resumed": the same conversation, started — not a fresh session the
-    // daemon fell back to, and not one still starting or already failed.
-    if (result['resumed'] == false ||
-        resumed.sessionId != stopped.sessionId ||
+    // daemon fell back to, and not one still starting or already failed. A NEW conversation is only
+    // a surprise where an old one was promised: one that was always going to open fresh
+    // ([Agent.resumesFreshConversation]) is honoured, as the desktop honours it.
+    final fresh =
+        stopped.resumesFreshConversation || resumed.resumesFreshConversation;
+    if ((result['resumed'] == false && !fresh) ||
+        (resumed.sessionId != stopped.sessionId && !fresh) ||
         resumed.launchState != 'ready') {
       return unconfirmed;
     }

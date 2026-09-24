@@ -14,14 +14,20 @@ typedef AgentRef = ({String machineId, String agentId});
 /// such list any more — the terminal is the phone's home screen — so the only question this answers
 /// is *which* agent it opens on, and "none" is not one of the answers. A record naming an agent that
 /// has since been deleted simply matches nothing, and the home screen falls through to the first
-/// agent it can reach.
+/// agent of the tab the phone was last in ([readTab]).
 class LastOpenedAgent {
   LastOpenedAgent(this._storage);
 
   final LocalKeyValueStore? _storage;
   static const _key = 'phone_last_agent_v1';
 
+  /// The desk tab the phone was in — kept beside the agent because it is what a relaunch falls back
+  /// on when that agent cannot be opened (`AgentHome._firstOfLastTab`). Its own key: the two are
+  /// written at different moments, and neither should cost the other a rewrite.
+  static const _tabKey = 'phone_last_tab_v1';
+
   AgentRef? _value;
+  String? _tab;
   Future<void> _writes = Future.value();
   Future<AgentRef?>? _read;
 
@@ -68,6 +74,22 @@ class LastOpenedAgent {
     } catch (_) {
       return null;
     }
+  }
+
+  /// The tab the previous run was last in, or null. Anything unreadable reads as nothing.
+  Future<String?> readTab() async {
+    try {
+      final raw = await _storage?.read(_tabKey);
+      return raw == null || raw.isEmpty ? null : raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void rememberTab(String tabId) {
+    if (_tab == tabId) return;
+    _tab = tabId;
+    _write((storage) => storage.write(_tabKey, tabId));
   }
 
   void remember(AgentRef agent) {

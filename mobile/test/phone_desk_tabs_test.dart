@@ -1,8 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
-import 'package:harness_mobile/phone/desk_groups.dart';
 import 'package:harness_mobile/phone/desk_tab_strip.dart';
 import 'package:harness_mobile/phone/agent_tile.dart';
 import 'package:harness_mobile/phone/terminal_header.dart';
@@ -12,6 +13,7 @@ import 'package:harness_mobile/state/desk_sync.dart';
 
 import 'agent_pager_fixture.dart';
 import 'desk_fixture.dart';
+import 'voice_fakes.dart';
 
 /// The home screen inside its tab: a swipe walks the tab the phone is in, and
 /// the mark beside `⋯` opens the panel that reaches the others.
@@ -27,12 +29,14 @@ void main() {
   Future<AppNotifier> pumpHome(
     WidgetTester tester, {
     required List<DeskTab> tabs,
+    MemoryKeyValueStore? storage,
   }) async {
     final app = await deskApp(
       PagerConn(),
       // Nothing here is about the terminals themselves — see [deskApp].
       opensTerminals: false,
       tabs: tabs,
+      storage: storage,
     );
     addTearDown(app.dispose);
     final request = ValueNotifier<({String machineId, String agentId})?>(null);
@@ -129,10 +133,10 @@ void main() {
 
     expect(strip(tester).selectedId, 't1');
     expect(agentsShown(tester), ['a', 'b']);
+    // Tabs and nothing else: the agents no tab holds are not a chip of their own.
     expect(strip(tester).groups.map((group) => group.name), [
       'Desktop',
       'Docker',
-      kUntabbedGroupName,
     ]);
   });
 
@@ -178,24 +182,61 @@ void main() {
     expect(swipesOver(tester), ['c', 'd']);
   });
 
-  testWidgets('the agents no tab holds are a tab of their own', (tester) async {
-    await pumpHome(
+  group('with nothing of last time to reopen, a launch opens a tab', () {
+    testWidgets('the one the phone was last in, on its first agent', (
       tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a']),
-        deskTab('t2', 'Docker', ['b']),
-      ],
-    );
+    ) async {
+      await pumpHome(
+        tester,
+        storage: MemoryKeyValueStore()..values['phone_last_tab_v1'] = 't2',
+        tabs: [
+          deskTab('t1', 'Desktop', ['a']),
+          deskTab('t2', 'Docker', ['d', 'c']),
+        ],
+      );
 
-    await openPanel(tester);
-    await showTab(tester, kUntabbedGroupName);
+      expect(pager(tester).agentId, 'd');
+      expect(swipesOver(tester), ['d', 'c']);
+      // A fixture with storage persists what it loads; its write timers run out before teardown.
+      await tester.pump(const Duration(seconds: 11));
+    });
 
-    expect(agentsShown(tester), ['c', 'd']);
+    testWidgets('and so does one whose last agent is gone', (tester) async {
+      await pumpHome(
+        tester,
+        storage: MemoryKeyValueStore()
+          ..values['phone_last_agent_v1'] = jsonEncode({
+            'machineId': 'm',
+            'agentId': 'deleted',
+          })
+          ..values['phone_last_tab_v1'] = 't2',
+        tabs: [
+          deskTab('t1', 'Desktop', ['a', 'b']),
+          deskTab('t2', 'Docker', ['c', 'd']),
+        ],
+      );
 
-    await openRow(tester, 'c');
+      expect(pager(tester).agentId, 'c');
+      // A fixture with storage persists what it loads; its write timers run out before teardown.
+      await tester.pump(const Duration(seconds: 11));
+    });
 
-    expect(pager(tester).agentId, 'c');
-    expect(swipesOver(tester), ['c', 'd']);
+    testWidgets('or, with none remembered, the first tab with an agent', (
+      tester,
+    ) async {
+      await pumpHome(
+        tester,
+        tabs: [
+          deskTab('t1', 'Empty', ['gone']),
+          deskTab('t2', 'Docker', ['c', 'd']),
+        ],
+      );
+
+      // Never `a` or `b`, which no tab holds — the most recent harness on the account is no
+      // longer what a launch lands on while tabs exist.
+      expect(pager(tester).agentId, 'c');
+      expect(swipesOver(tester), ['c', 'd']);
+    });
   });
 
   testWidgets('the panel stays put whatever the tab holds', (tester) async {
