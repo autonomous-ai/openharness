@@ -15,6 +15,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var canReopen = false
   private var canFind = false
   private var canClosePane = false
+  private var paneActions: [String: Bool] = [:]
   private let historyMenu = NSMenu(title: "History")
   private var historyMenuNeedsRebuild = false
   private var historyMenuIsOpen = false
@@ -49,6 +50,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.canReopen = state["canReopen"] as? Bool == true
         self.canFind = state["canFind"] as? Bool == true
         self.canClosePane = state["canClosePane"] as? Bool == true
+        self.paneActions = state["paneActions"] as? [String: Bool] ?? [:]
         self.canGoBack = state["canGoBack"] as? Bool == true
         self.canGoForward = state["canGoForward"] as? Bool == true
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
@@ -110,7 +112,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["focusedModel", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["focusedModel", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -254,6 +256,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let symbols = [
         "new": "plus.square", "newAgent": "plus", "addAgent": "arrow.up.right.square", "newTerminal": "terminal",
         "cloneAgent": "plus.square.on.square", "restartAgent": "arrow.clockwise",
+        "shareAgent": "square.and.arrow.up",
         "renameActive": "pencil", "closeActive": "xmark",
         "splitRight": "rectangle.split.2x1", "splitDown": "rectangle.split.1x2",
         "zoomPane": "viewfinder", "movePaneToTab": "arrow.right.square", "closePane": "xmark",
@@ -280,6 +283,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     // ⌘⇧E: the pane's harness starts again where it is (Dart: `agent.restart`).
     add(file, "Restart Harness", "e", "restartAgent", [.command, .shift])
+    add(file, "Share Harness", "", "shareAgent")
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
     add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
@@ -308,6 +312,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       add(view, "Machines", "m", "machineList")
       add(view, "Models", "i", "models")
       add(view, "Machine Monitor", "", "manageMachines")
+      view.addItem(.separator())
+      add(view, "Toggle Viewer", "", "toggleViewer")
+      add(view, "Toggle Message Composer", "", "toggleComposer")
     }
     installTerminalFindMenu(main)
   }
@@ -451,6 +458,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       return machine.agents.contains(where: { $0.id == target["agentId"] && $0.canOpen })
     }
     let action = menuItem.representedObject as? String ?? ""
+    if ["restartAgent", "shareAgent", "toggleViewer", "toggleComposer"].contains(action) {
+      return actionsEnabled && paneActions[action] == true
+    }
     if menuItem.action == #selector(machineAction(_:)) {
       return actionsEnabled && machines.contains(where: { $0.id == action })
     }

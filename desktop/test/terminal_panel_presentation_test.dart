@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/terminal/terminal_session.dart';
@@ -9,10 +8,12 @@ import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:xterm/xterm.dart';
 
+import 'support/real_fonts.dart';
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  setUpAll(loadRealFonts);
   testWidgets(
     'retained header uses current callbacks, names, projects and status',
     (tester) async {
@@ -21,9 +22,7 @@ void main() {
       final revision = ValueNotifier(0);
       final closed = <int>[];
       final deleted = <int>[];
-      final restarted = <int>[];
       final zoomed = <int>[];
-      final composed = <int>[];
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1100, 700);
       addTearDown(tester.view.reset);
@@ -38,10 +37,8 @@ void main() {
               compactHeader: true,
               onClose: () => closed.add(version),
               onDelete: () => deleted.add(version),
-              onRestart: () => restarted.add(version),
               onToggleZoom: () => zoomed.add(version),
               zoomed: version >= 2,
-              onToggleComposer: () => composed.add(version),
             ),
           ),
         ),
@@ -49,24 +46,16 @@ void main() {
       await tester.pump();
       revision.value = 1;
       await tester.pump();
-      // Every pane action is one ⋮ menu away.
-      for (final label in [
-        'Show message composer',
-        'Zoom Pane',
-        'Restart Harness',
-        'Stop Harness',
-        'Close Pane',
-      ]) {
-        await tester.tap(find.byTooltip('Pane actions'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text(label));
+      for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+        await tester.tap(find.byTooltip(label));
         await tester.pumpAndSettle();
       }
       expect(closed, [1]);
       expect(deleted, [1]);
-      expect(restarted, [1]);
       expect(zoomed, [1]);
-      expect(composed, [1]);
+      expect(find.byTooltip('Pane actions'), findsNothing);
+      expect(find.byTooltip('Restart Harness'), findsNothing);
+      expect(find.byTooltip('Share harness'), findsNothing);
       session.agentName = 'Renamed terminal';
       app.machineStates['m']!.agents = [
         const Agent(
@@ -175,7 +164,7 @@ void main() {
       );
       revision.value = 2;
       await tester.pump();
-      expect(find.byTooltip('Pane actions'), findsOneWidget);
+      expect(find.byTooltip('Restore Pane'), findsOneWidget);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
@@ -207,7 +196,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} compact header keeps actions in the menu without repeating context or moving its title',
+      '${local ? 'local' : 'remote'} compact header keeps three ASCII controls without repeating context or moving its title',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -253,26 +242,35 @@ void main() {
         expect(find.text('harness'), findsNothing);
         expect(find.text('main'), findsNothing);
         expect(find.text('Test host'), findsNothing);
-        // Context belongs to the main app bar; pane actions stay in one menu.
         expect(
           find.descendant(of: controls, matching: find.byType(IconButton)),
-          findsOneWidget,
+          findsNothing,
         );
-        expect(find.byTooltip('Pane actions').hitTestable(), findsOneWidget);
-        await tester.tap(find.byTooltip('Pane actions'));
-        await tester.pumpAndSettle();
-        expect(find.text('Stop Harness'), findsOneWidget);
-        expect(find.text('Share harness'), findsOneWidget);
-        // Neither the title nor the retained terminal moves when the menu opens.
+        expect(
+          tester
+              .widgetList<TextButton>(
+                find.descendant(
+                  of: controls,
+                  matching: find.byType(TextButton),
+                ),
+              )
+              .length,
+          3,
+        );
+        for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+          expect(find.byTooltip(label).hitTestable(), findsOneWidget);
+        }
+        expect(find.byTooltip('Share harness'), findsNothing);
         expect(find.text('main'), findsNothing);
         expect(tester.getRect(title), titleBounds);
         expect(
           tester.widget<TerminalView>(find.byType(TerminalView)),
           same(terminalWidget),
         );
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await tester.pumpAndSettle();
-        expect(find.text('Stop Harness'), findsNothing);
+        final titleStyle = tester.widget<Text>(title).style!;
+        expect(titleStyle.fontFamily, terminalFontStore.value.fontFamily);
+        expect(titleStyle.fontSize, terminalFontStore.size);
+        expect(titleStyle.fontWeight, FontWeight.normal);
         await tester.pumpWidget(const SizedBox());
         session.dispose();
         app.dispose();
@@ -300,7 +298,6 @@ void main() {
         ),
       ];
       var zooms = 0;
-      var forks = 0;
       final revision = ValueNotifier(0);
       tester.view.devicePixelRatio = 1;
       tester.platformDispatcher.textScaleFactorTestValue = 1.7;
@@ -318,8 +315,6 @@ void main() {
                 focused: false,
                 compactHeader: true,
                 onToggleZoom: () => zooms++,
-                onFork: () => forks++,
-                onRestart: () {},
                 onClose: () {},
                 onDelete: () {},
                 onToggleComposer: () {},
@@ -332,34 +327,16 @@ void main() {
         expect(tester.getSize(title).width, greaterThan(64));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
-        final menu = find.widgetWithIcon(IconButton, Icons.more_vert);
-        await tester.tap(menu);
-        await tester.pumpAndSettle();
-        expect(find.text('Zoom Pane'), findsOneWidget);
-        expect(find.text('Show viewer'), findsOneWidget);
-        expect(find.text('Fork Harness'), findsOneWidget);
-        expect(find.text('Stop Harness'), findsOneWidget);
+        final zoom = find.byTooltip('Zoom Pane');
+        expect(zoom.hitTestable(), findsOneWidget);
+        expect(find.byTooltip('Fork Harness'), findsNothing);
+        expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
         expect(tester.getRect(title), titleBefore);
-        await tester.tap(find.text('Zoom Pane'));
+        Focus.of(tester.element(find.text('[]'))).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.space);
         await tester.pumpAndSettle();
         expect(zooms, [240.0, 280.0, 420.0].indexOf(width) + 1);
-        expect(find.text('Zoom Pane'), findsNothing);
-        await tester.tap(menu);
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Fork Harness'));
-        await tester.pumpAndSettle();
-        expect(forks, zooms);
-        // Escape and a click elsewhere both close it without choosing anything.
-        await tester.tap(menu);
-        await tester.pumpAndSettle();
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await tester.pumpAndSettle();
-        expect(find.text('Zoom Pane'), findsNothing);
-        await tester.tap(menu);
-        await tester.pumpAndSettle();
-        dismissTransientMenus();
-        await tester.pumpAndSettle();
-        expect(find.text('Zoom Pane'), findsNothing);
         expect(tester.takeException(), isNull);
         for (final status in [
           TerminalSessionStatus.opening,

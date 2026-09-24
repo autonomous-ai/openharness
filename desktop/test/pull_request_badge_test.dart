@@ -18,7 +18,7 @@ void main() {
       body: PullRequestBadge(identity: id, read: read, open: open),
     ),
   );
-  testWidgets('PR and branch hide together while hovering reveals controls', (
+  testWidgets('PR and branch stay visible beside the quiet pane controls', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -26,20 +26,18 @@ void main() {
         home: Scaffold(
           body: SizedBox(
             width: 500,
-            child: PaneHeaderHover(
-              child: PaneHeaderActions(
-                zoomed: false,
-                onZoom: () {},
-                details: const Text('branch-name'),
-                trailing: PullRequestBadge(
-                  identity: 'branch',
-                  read: () async => {
-                    'status': 'found',
-                    'number': 12,
-                    'state': 'Open',
-                    'url': 'https://github.com/acme/repo/pull/12',
-                  },
-                ),
+            child: PaneHeaderActions(
+              zoomed: false,
+              onZoom: () {},
+              details: const Text('branch-name'),
+              trailing: PullRequestBadge(
+                identity: 'branch',
+                read: () async => {
+                  'status': 'found',
+                  'number': 12,
+                  'state': 'Open',
+                  'url': 'https://github.com/acme/repo/pull/12',
+                },
               ),
             ),
           ),
@@ -51,22 +49,9 @@ void main() {
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(find.text('PR #12 · Open')));
     await tester.pumpAndSettle();
-    final details = find.byKey(const ValueKey('pane-header-details'));
-    expect(tester.widget<AnimatedOpacity>(details).opacity, 0);
-    expect(
-      find.descendant(of: details, matching: find.text('branch-name')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: details, matching: find.text('PR #12 · Open')),
-      findsOneWidget,
-    );
-    expect(find.text('PR #12 · Open').hitTestable(), findsNothing);
-    expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
-    await mouse.moveTo(const Offset(700, 500));
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
+    expect(find.text('branch-name').hitTestable(), findsOneWidget);
     expect(find.text('PR #12 · Open').hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
     await mouse.removePointer();
     await tester.pumpWidget(const SizedBox());
   });

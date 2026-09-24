@@ -12,7 +12,7 @@ import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
-import 'pane_header_actions.dart';
+import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
 
 /// A domain harness's viewer, in a tile beside its agent's terminal.
@@ -214,80 +214,80 @@ class _WebPanePanelState extends State<WebPanePanel> {
     );
   }
 
-  Widget _header(BuildContext context) {
+  Widget _header(BuildContext context) =>
+      MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader));
+
+  Widget _buildHeader(BuildContext context) {
+    TerminalFontScope.watch(context);
     final compact = widget.compactHeader;
-    return PaneHeaderHover(
-      child: SizedBox(
-        height: compact ? 38 : 46,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            children: [
-              EngineMark(
-                engine: widget.ownerEngine,
-                displayName: widget.ownerDisplayName,
-                size: 17,
-              ),
-              const SizedBox(width: 10),
-              // The name, and one status after it — ready, or what stands in
-              // the way, or where the work is — in the place a "Viewer" label
-              // would only repeat what the pane shows. A status, not a history.
-              Expanded(
-                child: Tooltip(
-                  message: [widget.ownerName, ?widget.pane.url].join('\n'),
-                  waitDuration: const Duration(milliseconds: 700),
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          widget.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: grid.AppType.monoLabel(
-                            color: AppColors.text,
-                            fontWeight: FontWeight.w600,
-                          ),
+    return SizedBox(
+      height: compact ? 38 : 46,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Row(
+          children: [
+            EngineMark(
+              engine: widget.ownerEngine,
+              displayName: widget.ownerDisplayName,
+              size: 17,
+            ),
+            const SizedBox(width: 10),
+            // The name, and one status after it — ready, or what stands in
+            // the way, or where the work is — in the place a "Viewer" label
+            // would only repeat what the pane shows. A status, not a history.
+            Expanded(
+              child: Tooltip(
+                message: [widget.ownerName, ?widget.pane.url].join('\n'),
+                waitDuration: const Duration(milliseconds: 700),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.title,
+                        key: const ValueKey('viewer-pane-title'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: terminalContentStyle(color: AppColors.text),
+                      ),
+                    ),
+                    if (widget.verdict case final verdict?) ...[
+                      Text(
+                        '  ·  ',
+                        style: grid.AppType.monoLabel(
+                          color: AppColors.mutedStrong,
                         ),
                       ),
-                      if (widget.verdict case final verdict?) ...[
-                        Text(
-                          '  ·  ',
-                          style: grid.AppType.monoLabel(
-                            color: AppColors.mutedStrong,
-                          ),
+                      Flexible(
+                        child: VerdictStatus(
+                          verdict: verdict,
+                          working: widget.working,
                         ),
-                        Flexible(
-                          child: VerdictStatus(
-                            verdict: verdict,
-                            working: widget.working,
-                          ),
-                        ),
-                      ],
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              // coverage:ignore-start
-              // Only a real webview's navigation sets _loading; none under test.
-              if (_loading)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6),
-                  child: SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 1.5),
-                  ),
+            ),
+            const SizedBox(width: 8),
+            // coverage:ignore-start
+            // Only a real webview's navigation sets _loading; none under test.
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
                 ),
-              // coverage:ignore-end
-              _ViewerActions(
-                zoomed: widget.zoomed,
-                onReload: _controller == null ? null : _reload,
-                onZoom: widget.onToggleZoom,
-                onClose: widget.onClose,
               ),
-            ],
-          ),
+            // coverage:ignore-end
+            _ViewerActions(
+              zoomed: widget.zoomed,
+              onReload: _controller == null ? null : _reload,
+              onZoom: widget.onToggleZoom,
+              onClose: widget.onClose,
+            ),
+          ],
         ),
       ),
     );
@@ -334,9 +334,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
   }
 }
 
-/// Reload, zoom, close — the terminal header's controls, minus the one that
-/// ends an agent, because a viewer has no agent to end. Same 28px buttons,
-/// same hover reveal ([PaneHeaderHover]), so the two headers read as one kind.
+/// Viewer navigation never stops the harness that owns it.
 class _ViewerActions extends StatelessWidget {
   const _ViewerActions({
     required this.zoomed,

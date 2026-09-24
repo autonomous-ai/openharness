@@ -12,6 +12,7 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
 import 'package:harness/widgets/swarm_search_preview.dart';
 import 'package:harness/widgets/search_result_text.dart';
@@ -62,7 +63,7 @@ void main() {
     grid.AppType.captionSize,
   };
 
-  /// General UI keeps its fixed scale; the status bar follows the terminal.
+  /// General UI keeps its fixed scale; workspace chrome follows the terminal.
   /// Return general UI sizes for comparisons across a terminal zoom.
   Map<String, double> checkText(WidgetTester tester, {int atLeast = 4}) {
     final sizes = <String, double>{};
@@ -125,7 +126,13 @@ void main() {
         const TextStyle(),
         terminal: find
             .descendant(
-              of: find.byKey(const ValueKey('workspace-status-bar')),
+              of: find.byWidgetPredicate(
+                (widget) =>
+                    widget.key == const ValueKey('workspace-status-bar') ||
+                    widget.key == const ValueKey('terminal-pane-title') ||
+                    widget.key == const ValueKey('viewer-pane-title') ||
+                    widget is PaneHeaderActions,
+              ),
               matching: find.byWidget(element.widget),
             )
             .evaluate()
@@ -370,35 +377,42 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('the native tabs are told nothing about the terminal font', (
-    tester,
-  ) async {
-    final updates = <Map<dynamic, dynamic>>[];
-    const channel = MethodChannel('harness/swarm_tabs');
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-      call,
-    ) async {
-      if (call.method == 'update') updates.add(call.arguments as Map);
-      return true;
-    });
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        channel,
-        null,
-      ),
-    );
-    final app = createApp();
-    final map = MemoryKeymap();
-    addTearDown(app.dispose);
-    addTearDown(map.dispose);
-    app.adoptSessionForTest(terminal('a0', []));
-    await mount(tester, app, map, native: true);
-    selectFont(22, TerminalFontChoice.monaco);
-    await tester.pumpAndSettle();
-    // They are named in the system face, so the payload carries no font at all.
-    expect(updates.last.containsKey('fontFamily'), isFalse);
-    expect(updates.last.containsKey('fontSize'), isFalse);
-    expect(updates.last.containsKey('fontFallbacks'), isFalse);
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'native tabs receive the same live font and size as the terminal',
+    (tester) async {
+      final updates = <Map<dynamic, dynamic>>[];
+      const channel = MethodChannel('harness/swarm_tabs');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final app = createApp();
+      final map = MemoryKeymap();
+      addTearDown(app.dispose);
+      addTearDown(map.dispose);
+      app.adoptSessionForTest(terminal('a0', []));
+      await mount(tester, app, map, native: true);
+      selectFont(22, TerminalFontChoice.monaco);
+      await tester.pumpAndSettle();
+      expect(updates.last['terminalStyle'], containsPair('family', 'Monaco'));
+      expect(updates.last['terminalStyle'], containsPair('size', 22.0));
+      selectFont(14, TerminalFontChoice.sfMono);
+      await tester.pumpAndSettle();
+      expect(
+        updates.last['terminalStyle'],
+        containsPair('family', terminalFontStore.value.fontFamily),
+      );
+      expect(updates.last['terminalStyle'], containsPair('size', 14.0));
+      expect(updates.last.containsKey('fontFallbacks'), isFalse);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

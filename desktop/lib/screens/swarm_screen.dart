@@ -21,6 +21,7 @@ import '../models/models_panel.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../sharing/share_harness_dialog.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
 import '../shortcuts/app_shortcuts.dart';
@@ -870,6 +871,12 @@ class _SwarmScreenState extends State<SwarmScreen>
       'canReopen': app.canReopenLastClosed,
       'canFind': _canFindTerminal,
       'canClosePane': app.focusedPane != null,
+      'paneActions': {
+        'restartAgent': _canExecuteCommand('agent.restart'),
+        'shareAgent': _canExecuteCommand('agent.share'),
+        'toggleViewer': _canExecuteCommand('pane.toggle_viewer'),
+        'toggleComposer': _canExecuteCommand('pane.toggle_composer'),
+      },
       'canGoBack': _navigation.canGoBack(app),
       'canGoForward': _navigation.canGoForward(app),
       'closedHistory': [
@@ -1102,6 +1109,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       'newTerminal' => 'terminal.new',
       'cloneAgent' => 'agent.clone',
       'restartAgent' => 'agent.restart',
+      'shareAgent' => 'agent.share',
+      'toggleViewer' => 'pane.toggle_viewer',
+      'toggleComposer' => 'pane.toggle_composer',
       _ => null,
     };
     if (nativeCommand != null || call.method == 'searchCommand') {
@@ -1217,6 +1227,14 @@ class _SwarmScreenState extends State<SwarmScreen>
         unawaited(_cloneAgent());
       case 'restartAgent':
         unawaited(_restartAgent());
+      case 'shareAgent':
+        if (_canExecuteCommand('agent.share')) unawaited(_shareAgent());
+      case 'toggleViewer':
+        if (_canExecuteCommand('pane.toggle_viewer')) _toggleFocusedViewer();
+      case 'toggleComposer':
+        if (_canExecuteCommand('pane.toggle_composer')) {
+          app.toggleComposer(app.focusedPaneId!);
+        }
       case 'runLocalModel':
         _toggleModels(initialTab: ModelsTab.local);
       case 'splitRight':
@@ -1333,6 +1351,9 @@ class _SwarmScreenState extends State<SwarmScreen>
           'newTerminal',
           'cloneAgent',
           'restartAgent',
+          'shareAgent',
+          'toggleViewer',
+          'toggleComposer',
           'runLocalModel',
           'manageMachines',
           'machineList',
@@ -1472,6 +1493,30 @@ class _SwarmScreenState extends State<SwarmScreen>
       keymap: _keymap,
     );
   });
+  Future<void> _shareAgent() => _dialog(() async {
+    final focused = WorkspacePaneContext.focused(app);
+    final agent = focused?.agent;
+    if (focused == null ||
+        agent == null ||
+        app.stateOf(focused.pane.machineId)?.machine.isShared != false) {
+      return;
+    }
+    await showShareHarnessDialog(
+      context,
+      app,
+      focused.pane.machineId,
+      agent.id,
+      agent.displayName,
+    );
+  });
+
+  void _toggleFocusedViewer() {
+    final focused = WorkspacePaneContext.focused(app);
+    if (focused?.agentId case final id?) {
+      unawaited(app.toggleViewerPane(focused!.pane.machineId, id));
+    }
+  }
+
   Future<void> _customize() => _dialog(() => showHarnessCustomizePane(context));
 
   Future<void> _settings([SettingsSection? section]) => _dialog(
@@ -3209,6 +3254,11 @@ class _SwarmScreenState extends State<SwarmScreen>
     'agent.rename': () => _editAgent(),
     'agent.stop': () => _editAgent(stop: true),
     'agent.fork': _forkAgent,
+    'agent.share': _shareAgent,
+    'pane.toggle_viewer': _toggleFocusedViewer,
+    'pane.toggle_composer': () {
+      if (app.focusedPaneId case final id?) app.toggleComposer(id);
+    },
     // `agent.restart` and `agent.clone` come from `_actionHandlers` above:
     // both carry a ShortcutAction, so the loop already binds them.
     'machine.link': _openMachines,
@@ -3236,6 +3286,25 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
     if (id == 'keyboard.open_config') return _keymap.store != null;
     if (id == 'keyboard.pause_guide') return _learning.active;
+    if (id == 'agent.share' || id == 'pane.toggle_viewer') {
+      final focused = WorkspacePaneContext.focused(app);
+      final agent = focused?.agent;
+      return focused != null &&
+          agent != null &&
+          app.stateOf(focused.pane.machineId)?.machine.isShared == false &&
+          (id == 'agent.share' ||
+              agent.viewerUrl != null ||
+              agent.viewerError != null);
+    }
+    if (id == 'pane.toggle_composer') {
+      final pane = app.focusedPane;
+      final machine = pane == null ? null : app.stateOf(pane.machineId);
+      return pane?.session != null &&
+          machine != null &&
+          !machine.isLocalMachine &&
+          !machine.machine.isShared &&
+          !isTerminalEngine(pane!.session!.engineId);
+    }
     if (id == 'keyboard.quick_start' ||
         id == 'keyboard.practice' ||
         id == 'app.onboarding_review') {

@@ -3,7 +3,6 @@
 // once the person closes it, and taken down with the agent.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
@@ -328,21 +327,16 @@ void main() {
     expect(find.text('http://127.0.0.1:4179/'), findsOneWidget);
     // Its own close control, and no way to end an agent from it.
     expect(find.byTooltip('Close viewer'), findsOneWidget);
-    // This split is narrow: the terminal keeps its actions in the menu.
-    final actions = tester.widget<IconButton>(
-      find.widgetWithIcon(IconButton, Icons.more_horiz),
+    // The ASCII stop control belongs only to the harness. Viewer visibility
+    // is also available through View and command search.
+    expect(find.byTooltip('Stop Harness'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(WebPanePanel),
+        matching: find.byTooltip('Stop Harness'),
+      ),
+      findsNothing,
     );
-    actions.focusNode!.requestFocus();
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(find.text('Stop Harness'), findsOneWidget);
-    expect(find.text('Hide viewer'), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    // The verdict is the viewer's to show — chip and strip in its header,
-    // nothing on the terminal's — and the terminal's header carries the
-    // control that hides and shows the viewer.
     expect(find.byKey(const ValueKey('pane-status')), findsNothing);
     await _synced(
       app,

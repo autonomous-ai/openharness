@@ -30,6 +30,24 @@ There is no close button or reserved close-button space. Cmd-W closes the active
 tab; preserve remapped shortcuts, native menu access, and middle-click closing.
 Preserve reorder, rename, keyboard focus, and terminal sessions.
 
+Tab labels, status text, and pane titles use the selected terminal font, point
+size, and regular weight. Pane titles must not use the smaller `monoLabel` UI
+style. As in the terminal renderer, do not apply a second UI text-scale factor
+to pane titles.
+
+## Pane controls
+
+Keep three muted ASCII controls at the right of a harness pane: `-` closes only
+that view, `[]` toggles zoom, and `x` stops the harness after confirmation. Each
+control occupies two character columns. Use the terminal font and palette,
+plain text, and a subtle hover/focus fill. Retain descriptive tooltips and
+keyboard/accessibility labels; never rely on the symbols alone.
+
+Restart Harness and Share Harness belong in File. Fork remains available in
+command search. Viewer and message-composer toggles belong in View and command
+search. These actions apply to the focused pane; sharing and viewer visibility
+follow a dependent viewer's owner.
+
 ## Focused context on the right
 
 Show provider or selected model, `machine:project`, then `(branch)` when known.

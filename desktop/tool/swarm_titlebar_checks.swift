@@ -665,7 +665,25 @@ private extension SwarmTitlebar {
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
     try checkTitlebar(agent.items.contains { $0.title == "Clone Harness" && $0.representedObject as? String == "cloneAgent" }, "Clone Harness preserves its action")
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "addAgent", "cloneAgent", "restartAgent", "separator", "new", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "separator", "new", "renameActive", "closeActive", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
+    for (action, title, menu) in [
+      ("restartAgent", "Restart Harness", agent),
+      ("shareAgent", "Share Harness", agent),
+      ("toggleViewer", "Toggle Viewer", main.item(withTitle: "View")!.submenu!),
+      ("toggleComposer", "Toggle Message Composer", main.item(withTitle: "View")!.submenu!),
+    ] {
+      let item = menu.items.first { $0.representedObject as? String == action }!
+      try checkTitlebar(item.title == title, "\(title) has the right destination")
+      actionsEnabled = true
+      paneActions[action] = false
+      try checkTitlebar(!validateMenuItem(item), "\(title) is unavailable without an eligible focused pane")
+      paneActions[action] = true
+      try checkTitlebar(validateMenuItem(item), "\(title) is enabled for the focused pane")
+      menuAction(item)
+      try checkTitlebar(messenger.calls.last?.method == action, "\(title) dispatches to Flutter")
+      actionsEnabled = false
+      try checkTitlebar(!validateMenuItem(item), "\(title) respects modal state")
+    }
     try checkTitlebar(agent.items.first?.title == "New Harness" && agent.items.first?.keyEquivalent == "n" && agent.items.first?.keyEquivalentModifierMask == [.command],
       "New Harness leads File on Command-N")
     for (action, title, key) in [("splitRight", "Split Right", "r"), ("splitDown", "Split Down", "d")] {
