@@ -214,6 +214,17 @@ void main() {
   });
 
   group('the retry face, held to talk', () {
+    // Push-to-talk whatever the app is built with — see `voiceMicMode`.
+    setUp(() {
+      voice.dispose();
+      voice = VoiceInputController(
+        transcriber: backend.call,
+        recorder: recorder,
+        language: language,
+        holdsToTalk: true,
+      );
+    });
+
     Future<void> failOneSend() async {
       backend.replies.add('deploy');
       await voice.startListening();
@@ -270,6 +281,28 @@ void main() {
       expect(delivered, isFalse);
       expect(voice.notice, isNull, reason: 'a brushed button is not reported');
     });
+  });
+
+  test('tapping to talk, a take shorter than a brush is still sent', () async {
+    voice.dispose();
+    voice = VoiceInputController(
+      transcriber: backend.call,
+      recorder: recorder,
+      language: language,
+      holdsToTalk: false,
+    );
+    backend.replies.add('yes');
+    recorder.captured = (
+      wav: Uint8List.fromList([1, 2, 3, 4]),
+      length: const Duration(milliseconds: 120),
+      peak: 4000,
+    );
+
+    await voice.startListening();
+    await voice.stopListening();
+
+    expect(voice.transcript, 'yes', reason: 'two deliberate taps, not a brush');
+    expect(backend.calls, hasLength(1));
   });
 
   test('clearing mid-transcription drops the words when they arrive', () async {

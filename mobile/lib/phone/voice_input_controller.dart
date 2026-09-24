@@ -46,8 +46,15 @@ class VoiceInputController extends ChangeNotifier {
     required this.transcriber,
     VoiceRecorder? recorder,
     ValueListenable<String>? language,
+    bool? holdsToTalk,
   }) : _recorder = recorder ?? MicVoiceRecorder(),
-       _language = language ?? voiceLanguageStore;
+       _language = language ?? voiceLanguageStore,
+       _holdsToTalk = holdsToTalk ?? micHoldsToTalk;
+
+  /// Whether the mic is push-to-talk — the app's [voiceMicMode] unless a test
+  /// pins one: that mode is a compile-time constant, and a test of either shape
+  /// has to hold whichever one the app happens to be built with.
+  final bool _holdsToTalk;
 
   /// Below this, a take is silence rather than quiet speech: digital zero, or
   /// the hiss of an input nobody is speaking into. Speech peaks in the
@@ -74,8 +81,8 @@ class VoiceInputController extends ChangeNotifier {
   /// answer that IS the message ("yes", "stop", "ok") runs well under a third of
   /// a second, and this dropped it in silence: nothing sent, nothing said about
   /// it, a mic that read as broken.
-  static Duration get minTake =>
-      micHoldsToTalk ? const Duration(milliseconds: 350) : Duration.zero;
+  Duration get minTake =>
+      _holdsToTalk ? const Duration(milliseconds: 350) : Duration.zero;
 
   /// How long a notice stays on the row before it clears itself.
   ///

@@ -84,9 +84,9 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     agentId: widget.agentId,
   );
 
-  /// Every agent this pager attached and has not closed yet — the one on screen, the ones attached
-  /// ahead of a swipe ([_prefetchAround]), and the ones just left, until [_pruner]'s beat has
-  /// passed.
+  /// Every agent this pager attached and has not closed yet: the one on screen and the one a swipe
+  /// either side ([_prefetchAround]). Nothing is kept for having been visited — an agent that falls
+  /// out of that ring is on here only until [_pruner]'s beat after the swipe closes it.
   ///
   /// ⚠️ **Without this the pager leaks terminals.** The phone's old rule was one pane, enforced by
   /// closing every other one on the way in; a pager attaches its own pages, so nothing else would
@@ -101,8 +101,10 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// nobody has asked for yet, and the daemon keeps one controller per agent. So a page attached
   /// ahead of time asks only for a terminal that is FREE (`AppNotifier.warmAgentPane`) — one the
   /// desktop, or anyone else, is driving stays theirs, and that page simply attaches when it is
-  /// landed on, as every page did before. What the phone already holds is left as it is. What
-  /// bounds the rest is [_keepSet]: a few agents around the one on screen, never a lap of the list.
+  /// landed on, as every page did before. What the phone already holds is left as it is. Every
+  /// one it does take is still a claim, so the pager makes as few as an instant swipe needs: the
+  /// agent ONE swipe either side, and nothing it has left behind. [_keepSet] is that set, at most
+  /// [_maxOpen].
   final Set<AgentRef> _attached = {};
 
   /// Closes every agent outside [_keepSet], a beat after each swipe. Null for a passthrough page,
@@ -111,14 +113,16 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
 
   /// How many pages either side of the one on screen are mounted ahead of time — and attached
   /// ahead of time too, see [_prefetchAround]. Read by [build] for the pager's cache extent.
-  static const _reach = 2;
+  ///
+  /// ⚠️ **One, and the agents just left are not kept either.** A swipe goes one page, so one page
+  /// either side is all an instant arrival needs — going BACK is a swipe too, and lands on a page
+  /// that is one away again. A second ring, and a list of recents on top, held up to eight streams
+  /// open for pages two swipes out.
+  static const _reach = 1;
 
-  /// How many of the agents just swiped away from stay open, so going back is instant.
-  static const _keepRecent = 2;
-
-  /// The most streams this pager holds open at once, whatever [_reach] and [_keepRecent] add up
-  /// to: each is a scrollback and a heartbeat on the phone, and a claim on the far machine.
-  static const _maxOpen = 8;
+  /// The most streams this pager holds open at once: the page on screen and one either side. Each
+  /// is a scrollback and a heartbeat on the phone, and a claim on the far machine.
+  static const _maxOpen = 1 + 2 * _reach;
 
   /// How long after landing on a page its neighbours are attached. A fling through several pages
   /// re-arms this on each one, so only the page it stops on attaches anything.
@@ -132,10 +136,6 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// that page is the one somebody is looking at: measured, a first keyframe takes 2.5–3s to land,
   /// and neighbours opening at 1.5s would compete with it for the connection for the rest of that.
   static const _currentRenderWait = Duration(seconds: 4);
-
-  /// The agents most recently swiped AWAY from, newest first, at most [_keepRecent]. Never holds
-  /// [_current]: an agent on screen is kept for being on screen.
-  final List<AgentRef> _recent = [];
 
   Timer? _prefetchTimer;
 
@@ -320,7 +320,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
         // pushed without that gesture now (see `phoneRoute`'s `swipeToGoBack`), so going back is the
         // header's back band, or Android's back button.
         physics: const PageScrollPhysics(),
-        // ⚠️ **[_reach] pages either side are built and laid out AHEAD of the swipe.** Three things
+        // ⚠️ **[_reach] page either side is built and laid out AHEAD of the swipe.** Three things
         // follow, and each was a cost paid on the swipe itself before: the page is not built in the
         // first frame of the drag; its [TerminalPanel] measures the viewport while it is still off
         // screen, so its `terminal_open` goes out at the right size with no 2s wait and no second
@@ -335,7 +335,7 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
         onPageChanged: _onPageChanged,
         itemBuilder: (context, i) {
           final entry = neighbours.entries[i % neighbours.entries.length];
-          // ⚠️ Tickers off for every page but the one on screen. Four pages are mounted beside it
+          // ⚠️ Tickers off for every page but the one on screen. Pages are mounted beside it
           // now (see `scrollCacheExtent` above), and each has things that tick — the cursor blink,
           // the skeleton's sweep and pulse — which would otherwise run at frame rate for screens
           // nobody can see. [TerminalPanel] reads this for its blink; the skeleton reads it to draw
@@ -384,12 +384,10 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     // Before the setState, so a host that rebuilds this pager in response already names the agent
     // swiped to — told afterwards, it would rebuild still pointing at the previous one.
     widget.onAgentChanged?.call(arrived);
-    final leaving = _current;
     setState(() {
       _page = index;
       _current = arrived;
     });
-    _rememberRecent(leaving, arrived);
     // The agents outside this page's keep-set go back to whoever else wants them, once the swipe
     // has settled — see [AgentPanePruner].
     _pruner?.keep(_keepSet());
@@ -402,35 +400,22 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     _armPrefetch();
   }
 
-  /// Records the agent just swiped away from as the newest of [_recent], and takes the one arrived
-  /// at off it — that one is [_current] now, and is kept for being current.
-  void _rememberRecent(AgentRef leaving, AgentRef arrived) {
-    _recent.remove(arrived);
-    if (leaving != arrived) {
-      _recent
-        ..remove(leaving)
-        ..insert(0, leaving);
-    }
-    if (_recent.length > _keepRecent) {
-      _recent.removeRange(_keepRecent, _recent.length);
-    }
-  }
-
   /// The agents worth holding open for the page on screen: the page itself, then the ones within
-  /// [_reach] swipes of it nearest first, then the ones just left. That order is the priority, and
-  /// [_maxOpen] cuts from the end of it.
+  /// [_reach] swipes of it nearest first. That order is the priority, and [_maxOpen] cuts from the
+  /// end of it. The agent just left is in it only by being one swipe away — which, straight after
+  /// a swipe, it always is.
   Set<AgentRef> _keepSet() {
     final ordered = <AgentRef>{_current};
     for (final ring in _rings()) {
       ordered.addAll(ring);
     }
-    ordered.addAll(_recent);
     return ordered.take(_maxOpen).toSet();
   }
 
-  /// The agents on the pages within [_reach] of [_page], one ring per distance: `[N−1, N+1]`, then
-  /// `[N−2, N+2]`. An agent under several of those pages — a short list, wrapped — is named once,
-  /// in the nearest ring, and [_current] not at all; a ring can therefore be short, or empty.
+  /// The agents on the pages within [_reach] of [_page], one ring per distance — `[N−1, N+1]` at
+  /// today's reach of one. An agent under several of those pages — a short list, wrapped — is
+  /// named once, in the nearest ring, and [_current] not at all; a ring can therefore be short, or
+  /// empty.
   List<List<AgentRef>> _rings() {
     final neighbours = widget.neighbours;
     if (neighbours == null || neighbours.isEmpty) return const [];
@@ -469,10 +454,10 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
   /// looking. This is the other half — asking the machine for the stream.
   ///
   /// ⚠️ **In rings, and each ring only once the one before it has rendered.** The page on screen
-  /// first, then N±1, then N±2: a stream is a keyframe of up to 500 lines and then whatever the
-  /// agent prints, and four opening at once would compete with the one being read for the same
-  /// connection. [_renderWait] bounds each wait, so a page that never renders does not hold the
-  /// rest back for good.
+  /// first, then N±1 (and further rings, were [_reach] raised): a stream is a keyframe of up to 500
+  /// lines and then whatever the agent prints, and several opening at once would compete with the
+  /// one being read for the same connection. [_renderWait] bounds each wait, so a page that never
+  /// renders does not hold the rest back for good.
   ///
   /// [run] is the page change this was armed for. Another since makes it stale, and it stops
   /// between agents rather than opening streams around a page the pager has already left.
@@ -537,9 +522,23 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     }
   }
 
-  /// How many agents the phone has streams for right now — every pane on the phone is a pager's.
-  int _openPanes() =>
-      widget.notifier.panes.where((pane) => pane.agentId != null).length;
+  /// How many agents the phone has streams for that are STAYING — every pane on the phone is a
+  /// pager's.
+  ///
+  /// ⚠️ **Not counting the ones this pager's pending prune is about to close.** The prefetch fires
+  /// [_prefetchDebounce] after landing, before [AgentPanePruner.delay] has closed what the swipe
+  /// left two pages behind. Counted, that agent filled the last place under [_maxOpen], the ring's
+  /// far side was never attached, and nothing re-armed it: after every swipe the next page in the
+  /// direction of travel came up "Attaching…".
+  int _openPanes() {
+    final keeping = _keepSet();
+    return widget.notifier.panes.where((pane) {
+      final agentId = pane.agentId;
+      if (agentId == null) return false;
+      final agent = (machineId: pane.machineId, agentId: agentId);
+      return keeping.contains(agent) || !_attached.contains(agent);
+    }).length;
+  }
 }
 
 /// Whether a pager currently mounted is holding [agent] open — on screen, a swipe away, or just

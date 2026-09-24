@@ -27,8 +27,8 @@ void releaseAgentPanes(
   }
 }
 
-/// Keeps the phone down to a HANDFUL of open agents — the one on screen, the ones a swipe away, and
-/// the ones just left — by closing the rest a beat after each swipe.
+/// Keeps the phone down to a HANDFUL of open agents — the one on screen and the ones a swipe away —
+/// by closing the rest a beat after each swipe.
 ///
 /// ⚠️ **Why the rest must not stay open.** The daemon keeps a single controller per agent, so an
 /// open stream is a CLAIM on that agent's terminal, and every stream is a 10,000-line scrollback
