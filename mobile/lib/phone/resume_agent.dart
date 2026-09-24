@@ -73,8 +73,8 @@ Future<String?> resumeAgentForOpen(
   return 'Resumed, but its terminal has not come back yet. Try again in a moment.';
 }
 
-/// Whether [stopped] is back with a terminal — the SAME conversation, the desktop's test: a
-/// different session id is the daemon having started something else, not the work that was tapped.
+/// Whether [stopped] is back with a terminal, as the conversation its resume promised — see
+/// [Agent.resumedAsPromised].
 bool _resumedTerminal(AppNotifier notifier, AgentEntry entry, Agent stopped) {
   final current = notifier
       .stateOf(entry.machineId)
@@ -85,5 +85,5 @@ bool _resumedTerminal(AppNotifier notifier, AgentEntry entry, Agent stopped) {
       current.terminalAvailable &&
       !current.isStopped &&
       current.launchState != 'failed' &&
-      current.sessionId == stopped.sessionId;
+      stopped.resumedAsPromised(current);
 }

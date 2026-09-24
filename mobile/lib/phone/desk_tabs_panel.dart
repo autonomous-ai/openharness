@@ -115,18 +115,15 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
       groups.first;
 
   /// Whether [group] can take another agent: a real tab on a desk this phone
-  /// may write to. The leftover group is not a tab — there is nothing to add
-  /// an agent TO — and neither is the single group a phone with no desk shows.
+  /// may write to. The single group a phone with no desk shows is not a tab —
+  /// there is nothing to add an agent TO.
   bool _canAddTo(DeskGroup group) =>
       group.id != null && widget.notifier.deskWritable;
 
-  /// Whether [group] is the leftover one — the agents no tab holds.
+  /// Whether [group] is the single one a phone with no desk shows.
   ///
-  /// It takes a row of its own rather than [_canAddTo]'s. There is nothing to
-  /// add an agent TO: a harness already somewhere would have to be taken out of
-  /// its tab to land here, which is not what a `+` at the foot of a list reads
-  /// as. What it CAN do is start one that belongs to no tab, which is exactly
-  /// what this group is.
+  /// It takes a row of its own rather than [_canAddTo]'s: there is no tab to
+  /// add an agent TO, but a new harness can still be started from it.
   bool _canStartUntabbed(DeskGroup group) =>
       group.id == null && _hostMachineId != null;
 
@@ -234,14 +231,12 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
     );
   }
 
-  /// The row at the foot of the leftover group: a harness that belongs to no
-  /// tab, the way every harness did before the desk existed.
+  /// The row at the foot of the single group a phone with no desk shows: a
+  /// harness that belongs to no tab, the way every harness did before the desk
+  /// existed.
   ///
-  /// ⚠️ **The phone is taken OUT of its tab first, and that is the whole of
-  /// what makes the new harness untabbed.** An agent made here joins whatever
-  /// tab the phone is in ([PhoneDesk.adopt]); without this it would land in the
-  /// tab the person was reading a moment ago, and the group they asked from
-  /// would still be empty.
+  /// The phone is taken out of any tab first: an agent made here joins
+  /// whatever tab the phone is in ([PhoneDesk.adopt]).
   void _startUntabbed() {
     final host = _hostMachineId;
     if (host == null) return;
@@ -502,13 +497,11 @@ class _AddAgentRow extends StatelessWidget {
   }
 }
 
-/// The row at the foot of the leftover group: start a harness that no tab owns.
+/// The row at the foot of the no-desk group: start a harness that no tab owns.
 ///
 /// ⚠️ **"New harness", not "Add harness" — a different verb for a different
-/// act.** The row above it in a real tab PUTS something that exists into that
-/// tab; this one makes something that did not exist, and there is nothing for
-/// it to be put into. Sharing the words would have made the leftover group look
-/// like a tab you can file work under, which is the one thing it is not.
+/// act.** The row in a real tab PUTS something that exists into that tab; this
+/// one makes something that did not exist, and there is no tab to put it in.
 class _NewHarnessRow extends StatelessWidget {
   const _NewHarnessRow({
     required this.first,

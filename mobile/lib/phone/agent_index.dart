@@ -32,10 +32,11 @@ class AgentEntry {
   /// Whether a tap can land on this agent — it has a terminal, or it is saved
   /// work a resume can bring back ([AppNotifier.resumeAgent]).
   ///
-  /// ⚠️ **Stopped is not enough: there has to be a conversation to bring back**
-  /// ([Agent.canResumeConversation]), the desktop's `canOpen`. Stopped work
-  /// with none was offered as a tap that could only ever end in "no supported
-  /// saved conversation to resume".
+  /// ⚠️ **Stopped is not enough: its machine has to be able to bring it back**
+  /// ([Agent.canPauseAndResume]), the desktop's `canOpen`. Stopped work it
+  /// cannot was offered as a tap that could only ever end in "no supported
+  /// saved conversation to resume" — and work it can, greyed out, was the
+  /// phone reading an older, stricter rule than the machine.
   ///
   /// ⚠️ **Not `terminalAvailable` alone.** A stopped agent has no terminal and
   /// never will until something restarts it, so the bare flag sorted every one
@@ -43,7 +44,7 @@ class AgentEntry {
   /// before the app asked for them at all, was invisible. It is visible now.
   bool get isOpenable =>
       agent.terminalAvailable ||
-      (agent.isStopped && agent.canResumeConversation);
+      (agent.isStopped && agent.canPauseAndResume);
 
   /// When its conversation last moved: the machine's own [Agent.updatedAt], or
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is

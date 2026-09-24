@@ -34,6 +34,7 @@ Agent _agent(
   // Stopped work that a resume can reopen has a saved conversation; `resumable: false` is the
   // agent stopped before its engine ever saved one.
   bool resumable = true,
+  String? resumeMode,
   String? gridModel,
   String? dshName,
 }) => Agent(
@@ -41,6 +42,7 @@ Agent _agent(
   name: 'work · $id',
   title: title,
   sessionId: resumable ? 'session-$id' : null,
+  resumeMode: resumeMode,
   status: stopped ? 'stopped' : 'active',
   engine: 'codex',
   gridModel: gridModel,
@@ -549,7 +551,9 @@ void main() {
     // be any more.
     expect(find.text('Codex · work · box'), findsNothing);
     expect(find.text('Codex'), findsNWidgets(3));
-    expect(find.text('node'), findsOneWidget);
+    // The project as the desktop names it ([AgentProject.label]): with no checkout root reported,
+    // the daemon's own name for it, whatever the folder is called.
+    expect(find.text('work'), findsNWidgets(3));
     expect(find.text('box'), findsNWidgets(3));
     // ⚠️ Agents only in a plain query — the desktop lists no machine or project
     // row either until `@` or `#` asks for one. A `Machine · …` line here would
@@ -806,7 +810,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Stopped'));
+      await tester.tap(find.text('Paused'));
       await tester.pump();
 
       // Taps wait for the resume, but the live agent still HAS its terminal — `No terminal` over it
@@ -832,12 +836,40 @@ void main() {
       );
       await tester.pump();
 
-      // The desktop's word for it. `Stopped` promised a resume the machine can only refuse.
+      // The desktop's word for it. `Paused` would promise a resume the machine can only refuse.
       expect(find.text('Resume unavailable'), findsOneWidget);
-      expect(find.text('Stopped'), findsNothing);
+      expect(find.text('Paused'), findsNothing);
       final blank = _agentRows(app)
           .firstWhere((row) => row.entry!.agent.id == 'blank');
       expect(blank.entry!.isOpenable, isFalse);
+      await tester.pump(const Duration(milliseconds: 100));
+    });
+
+    testWidgets('its machine saying it resumes wins over the old rule', (
+      tester,
+    ) async {
+      final app = _app([
+        _machine('box', [
+          _agent(
+            'blank',
+            minutesAgo: 1,
+            stopped: true,
+            resumable: false,
+            resumeMode: 'conversation',
+          ),
+        ]),
+      ]);
+      addTearDown(app.dispose);
+      await tester.pumpWidget(
+        MaterialApp(home: PhoneSearchPage(notifier: app)),
+      );
+      await tester.pump();
+
+      // The desktop's `canPauseAndResume`: a current daemon resumes every engine, some as a new
+      // conversation, so the row is Paused work a tap brings back.
+      expect(find.text('Paused'), findsOneWidget);
+      expect(find.text('Resume unavailable'), findsNothing);
+      expect(_agentRows(app).single.entry!.isOpenable, isTrue);
       await tester.pump(const Duration(milliseconds: 100));
     });
 
@@ -856,7 +888,7 @@ void main() {
 
       // `Stopped` says a tap will bring it back; `No terminal` said a tap would
       // do nothing. The two must not be confused for each other.
-      expect(find.text('Stopped'), findsOneWidget);
+      expect(find.text('Paused'), findsOneWidget);
       expect(find.text('No terminal'), findsNothing);
     });
   });
@@ -1160,6 +1192,10 @@ void main() {
       addTearDown(app.dispose);
       await tester.pumpWidget(MaterialApp(home: field(app)));
       await tester.pump();
+      // The terminal's sheet opens on its tabs, and a tap on the field is what
+      // brings the keyboard there — so the field is tapped on both.
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
       return tester.testTextInput.setClientArgs!;
     }
 
@@ -1190,7 +1226,10 @@ void main() {
     }
   });
 
-  testWidgets('terminal search: the same one bar, its chevron closes it', (
+  // ⚠️ **The sheet's own bar, not the page's.** No chevron in it: Cancel ends
+  // the SEARCH and leaves the sheet up on its tabs, and Back steps out of the
+  // search first and closes the sheet only after — never leaves the agent.
+  testWidgets('terminal search: Cancel ends the search, Back then the sheet', (
     tester,
   ) async {
     final app = _app([
@@ -1210,11 +1249,37 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(PhoneSearchField), findsOneWidget);
+    expect(find.byType(SheetSearchField), findsOneWidget);
+    expect(find.byType(PhoneSearchField), findsNothing);
     expect(find.text('Cancel'), findsNothing);
 
-    await tester.tap(find.bySemanticsLabel('Back'));
+    // A tap on the field starts a search; Cancel slides in over 250ms.
+    Future<void> search() async {
+      await tester.tap(find.byType(TextField));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Cancel'), findsOneWidget);
+    }
+
+    Future<void> back() async {
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    await search();
+    await tester.tap(find.text('Cancel'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Cancel'), findsNothing);
+    expect(closed, 0);
+
+    await search();
+    await back();
+    expect(find.text('Cancel'), findsNothing);
+    expect(closed, 0);
+
+    await back();
     expect(closed, 1);
   });
 

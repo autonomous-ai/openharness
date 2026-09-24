@@ -119,8 +119,8 @@ class SheetAgentMeta extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final project = entry.project;
-    final folder = project?.folder;
-    final branch = project?.branchLabel;
+    final folder = project?.label;
+    final branch = project?.shownBranch;
     final agent = entry.agent;
     return Column(
       mainAxisSize: MainAxisSize.min,

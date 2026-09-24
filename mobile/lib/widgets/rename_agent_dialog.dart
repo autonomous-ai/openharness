@@ -433,7 +433,7 @@ class _RenameAgentDialogState extends State<_RenameAgentDialog> {
     agent: agent,
     detail: [
       ?machine?.machine.displayName,
-      ?agent?.project?.folder,
+      ?agent?.project?.label,
     ].where((part) => part.isNotEmpty).join(' · '),
   );
 }

@@ -123,6 +123,45 @@ void main() {
     expect(conn.requests, isEmpty);
   });
 
+  group('an engine its machine resumes as a new conversation', () {
+    AppNotifier freshApp(_ResumeConn conn) {
+      final app = pagerApp(conn);
+      final machine = app.stateOf('m')!;
+      machine.agents = [
+        for (final agent in machine.agents)
+          agent.id == 'b'
+              ? Agent.fromJson(
+                  {...agentJson(stopped: true), 'resumeMode': 'conversation'}
+                    ..remove('sessionId'),
+                )
+              : agent,
+      ];
+      return app;
+    }
+
+    test('is asked, not refused here', () async {
+      final conn = _ResumeConn()..answer = (_, payload) => created(payload);
+      final app = freshApp(conn);
+      addTearDown(app.dispose);
+
+      expect((await app.resumeAgent('m', 'b')).error, isNull);
+      expect(conn.requests.single.$1, 'agent_resume');
+    });
+
+    test('comes back under a new session id, and that is success', () async {
+      final conn = _ResumeConn()
+        ..answer = (_, payload) => {
+          ...created(payload),
+          'resumed': false,
+          'agent': {...agentJson(stopped: false), 'sessionId': 'another'},
+        };
+      final app = freshApp(conn);
+      addTearDown(app.dispose);
+
+      expect((await app.resumeAgent('m', 'b')).error, isNull);
+    });
+  });
+
   test('a stop pushed by the machine keeps the agent, stopped', () async {
     final app = stoppedApp(_ResumeConn());
     addTearDown(app.dispose);

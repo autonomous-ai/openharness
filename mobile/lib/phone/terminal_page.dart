@@ -551,7 +551,7 @@ class _TerminalPageState extends State<TerminalPage>
       session: session,
       status: session?.status,
       rendered: session?.hasRenderedFrame ?? false,
-      agentName: agent?.name,
+      agentName: agent?.displayName,
       agentEngine: agent?.engine,
       agentProject: agent?.project,
       agentPresent: agent != null,
@@ -1129,7 +1129,7 @@ class _TerminalPageState extends State<TerminalPage>
         !machine.agentsFromCache &&
         machine.agentLoadStatus == AgentLoadStatus.loaded;
     // Captured while the agent is still listed, for the sentence above.
-    if (agent != null) _cachedAgentName = agent.name;
+    if (agent != null) _cachedAgentName = agent.displayName;
     // A dead stream already on its way back: its machine is redialling, or this page has just
     // asked for it. The header draws that as the wait it is — spinner on the mark, sweep along the
     // rule — rather than as Disconnected beside a button. See [phoneSessionSummary].
@@ -1629,7 +1629,7 @@ class _TerminalPageState extends State<TerminalPage>
     // Set here, where no build is running, so the sheet opens on the dot the header shows now
     // rather than on whatever the last frame handed over. See [_actionsStatus].
     _actionsStatus.value = status;
-    final agentName = agent.name;
+    final agentName = agent.displayName;
     showPhoneSheet(
       context,
       title: '$agentName · $machineName',

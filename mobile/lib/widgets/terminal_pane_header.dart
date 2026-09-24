@@ -134,13 +134,13 @@ class TerminalPaneHeader extends StatelessWidget {
         .firstOrNull;
     final project = agent == null ? null : machine?.projectOf(agent);
     final machineName = machine?.machine.displayName ?? session.machineId;
-    final folder = project?.folder;
-    final branch = project?.branchLabel;
+    final folder = project?.label;
+    final branch = project?.shownBranch;
     final identityDetail = [
       session.agentName,
       machineName,
       if (project != null) project.cwd,
-      if (branch != null) 'Branch: $branch',
+      ?project?.branchDetail,
       if (profile != null) 'Codex profile: $profile',
       'Double-click to rename',
     ].join('\n');
@@ -278,7 +278,7 @@ class TerminalPaneHeader extends StatelessWidget {
                     details: Tooltip(
                       message: [
                         if (project != null) project.cwd,
-                        if (branch != null) 'Branch: $branch',
+                        ?project?.branchDetail,
                         machineName,
                       ].join('\n'),
                       child: Row(

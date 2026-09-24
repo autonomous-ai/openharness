@@ -1,20 +1,22 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/desk_groups.dart';
 import 'package:harness_mobile/phone/desk_tab_strip.dart';
-import 'package:harness_mobile/phone/agent_tile.dart';
-import 'package:harness_mobile/phone/terminal_header.dart';
+import 'package:harness_mobile/phone/desk_tabs_panel.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
 
 import 'agent_pager_fixture.dart';
 import 'desk_fixture.dart';
+import 'voice_fakes.dart';
 
 /// The home screen inside its tab: a swipe walks the tab the phone is in, and
-/// the mark beside `⋯` opens the panel that reaches the others.
+/// the floating Search button opens the panel that reaches the others.
 ///
 /// ⚠️ **The pager's `neighbours` is the assertion throughout, because it IS the
 /// swipe.** [AgentSwipeHost] pages through exactly that list and nothing else,
@@ -27,12 +29,14 @@ void main() {
   Future<AppNotifier> pumpHome(
     WidgetTester tester, {
     required List<DeskTab> tabs,
+    MemoryKeyValueStore? storage,
   }) async {
     final app = await deskApp(
       PagerConn(),
       // Nothing here is about the terminals themselves — see [deskApp].
       opensTerminals: false,
       tabs: tabs,
+      storage: storage,
     );
     addTearDown(app.dispose);
     final request = ValueNotifier<({String machineId, String agentId})?>(null);
@@ -54,7 +58,8 @@ void main() {
   AgentSwipeHost pager(WidgetTester tester) =>
       tester.widget<AgentSwipeHost>(find.byType(AgentSwipeHost));
 
-  /// Open the tabs panel from the mark in the header — see [showDeskTabsPopup].
+  /// Open the tabs panel from the floating Search button — the one door to it
+  /// since the header's grid mark went (see [TerminalSearchOverlay]).
   ///
   /// ⚠️ **Timed pumps, never `pumpAndSettle`.** These pages have no terminal
   /// behind them (see [deskApp]), so each one draws the "Attaching…" skeleton —
@@ -62,7 +67,7 @@ void main() {
   /// never comes. The waits below are the panel's own open and dismiss
   /// animations.
   Future<void> openPanel(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('Tabs'));
+    await tester.tap(find.byKey(const ValueKey('terminal-search')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
   }
@@ -76,7 +81,7 @@ void main() {
 
   /// An agent's row in the open panel.
   Finder row(String agent) => find.byWidgetPredicate(
-    (widget) => widget is AgentTile && widget.agent.id == agent,
+    (widget) => widget is DeskAgentRow && widget.entry.agent.id == agent,
   );
 
   /// Tap an agent's row, which opens it and takes the panel away.
@@ -91,8 +96,10 @@ void main() {
 
   /// The agents the panel is offering, in the order it lists them.
   List<String> agentsShown(WidgetTester tester) => [
-    for (final tile in tester.widgetList<AgentTile>(find.byType(AgentTile)))
-      tile.agent.id,
+    for (final row in tester.widgetList<DeskAgentRow>(
+      find.byType(DeskAgentRow),
+    ))
+      row.entry.agent.id,
   ];
 
   List<String> swipesOver(WidgetTester tester) => [
@@ -129,10 +136,10 @@ void main() {
 
     expect(strip(tester).selectedId, 't1');
     expect(agentsShown(tester), ['a', 'b']);
+    // Tabs and nothing else: the agents no tab holds are not a chip of their own.
     expect(strip(tester).groups.map((group) => group.name), [
       'Desktop',
       'Docker',
-      kUntabbedGroupName,
     ]);
   });
 
@@ -178,24 +185,61 @@ void main() {
     expect(swipesOver(tester), ['c', 'd']);
   });
 
-  testWidgets('the agents no tab holds are a tab of their own', (tester) async {
-    await pumpHome(
+  group('with nothing of last time to reopen, a launch opens a tab', () {
+    testWidgets('the one the phone was last in, on its first agent', (
       tester,
-      tabs: [
-        deskTab('t1', 'Desktop', ['a']),
-        deskTab('t2', 'Docker', ['b']),
-      ],
-    );
+    ) async {
+      await pumpHome(
+        tester,
+        storage: MemoryKeyValueStore()..values['phone_last_tab_v1'] = 't2',
+        tabs: [
+          deskTab('t1', 'Desktop', ['a']),
+          deskTab('t2', 'Docker', ['d', 'c']),
+        ],
+      );
 
-    await openPanel(tester);
-    await showTab(tester, kUntabbedGroupName);
+      expect(pager(tester).agentId, 'd');
+      expect(swipesOver(tester), ['d', 'c']);
+      // A fixture with storage persists what it loads; its write timers run out before teardown.
+      await tester.pump(const Duration(seconds: 11));
+    });
 
-    expect(agentsShown(tester), ['c', 'd']);
+    testWidgets('and so does one whose last agent is gone', (tester) async {
+      await pumpHome(
+        tester,
+        storage: MemoryKeyValueStore()
+          ..values['phone_last_agent_v1'] = jsonEncode({
+            'machineId': 'm',
+            'agentId': 'deleted',
+          })
+          ..values['phone_last_tab_v1'] = 't2',
+        tabs: [
+          deskTab('t1', 'Desktop', ['a', 'b']),
+          deskTab('t2', 'Docker', ['c', 'd']),
+        ],
+      );
 
-    await openRow(tester, 'c');
+      expect(pager(tester).agentId, 'c');
+      // A fixture with storage persists what it loads; its write timers run out before teardown.
+      await tester.pump(const Duration(seconds: 11));
+    });
 
-    expect(pager(tester).agentId, 'c');
-    expect(swipesOver(tester), ['c', 'd']);
+    testWidgets('or, with none remembered, the first tab with an agent', (
+      tester,
+    ) async {
+      await pumpHome(
+        tester,
+        tabs: [
+          deskTab('t1', 'Empty', ['gone']),
+          deskTab('t2', 'Docker', ['c', 'd']),
+        ],
+      );
+
+      // Never `a` or `b`, which no tab holds — the most recent harness on the account is no
+      // longer what a launch lands on while tabs exist.
+      expect(pager(tester).agentId, 'c');
+      expect(swipesOver(tester), ['c', 'd']);
+    });
   });
 
   testWidgets('the panel stays put whatever the tab holds', (tester) async {
@@ -218,7 +262,7 @@ void main() {
     expect(tester.getTopLeft(find.byType(DeskTabStrip)).dy, names);
   });
 
-  testWidgets('the agent on screen keeps its row, and wears the rim', (
+  testWidgets('the agent on screen keeps its row, and wears the check', (
     tester,
   ) async {
     await pumpHome(
@@ -232,11 +276,11 @@ void main() {
     await openPanel(tester);
 
     expect(
-      tester.widget<AgentTile>(row('a')).border,
-      isNotNull,
+      tester.widget<DeskAgentRow>(row('a')).onScreen,
+      isTrue,
       reason: 'the agent on screen',
     );
-    expect(tester.widget<AgentTile>(row('b')).border, isNull);
+    expect(tester.widget<DeskAgentRow>(row('b')).onScreen, isFalse);
   });
 
   testWidgets('a tab this phone cannot reach is listed, and says why', (
@@ -258,17 +302,23 @@ void main() {
     expect(find.textContaining('asleep'), findsOneWidget);
   });
 
-  testWidgets('an account with no tabs is offered none', (tester) async {
-    // Nothing on the desk: the panel would hold one tab over every agent on
-    // the account, which is what a swipe already walks. So no mark at all, and
-    // the header is the row it has always been.
+  testWidgets('an account with no tabs is offered one group over them all', (
+    tester,
+  ) async {
+    // Nothing on the desk: the panel holds one group over every agent on the
+    // account, which is what a swipe already walks.
     await pumpHome(tester, tabs: []);
-
-    expect(find.byTooltip('Tabs'), findsNothing);
     expect(swipesOver(tester), ['a', 'b', 'c', 'd']);
+
+    await openPanel(tester);
+
+    expect(strip(tester).groups.map((group) => group.name), [
+      kEveryAgentGroupName,
+    ]);
+    expect(agentsShown(tester), ['a', 'b', 'c', 'd']);
   });
 
-  testWidgets('the tabs mark sits in the header, not over the terminal', (
+  testWidgets('the tabs are a sheet over the terminal, not a row above it', (
     tester,
   ) async {
     await pumpHome(
@@ -279,15 +329,13 @@ void main() {
       ],
     );
 
-    // One mark, inside the header's own row — nothing is stacked under it, so
-    // the terminal keeps every line it had before the desk existed.
-    final mark = find.byTooltip('Tabs');
-    expect(mark, findsOneWidget);
-    expect(
-      tester.getCenter(mark).dy,
-      lessThan(TerminalHeader.height),
-      reason: 'the mark rides the header row',
-    );
+    // Nothing is stacked under the header until the Search button is tapped,
+    // so the terminal keeps every line it had before the desk existed.
+    expect(find.byType(DeskTabStrip), findsNothing);
+
+    await openPanel(tester);
+
+    expect(find.byType(DeskTabStrip), findsOneWidget);
   });
 
   testWidgets('a tab changed on another computer moves the swipe with it', (

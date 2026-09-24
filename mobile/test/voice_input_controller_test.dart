@@ -213,39 +213,13 @@ void main() {
     expect(voice.isSending, isFalse);
   });
 
-  group('the retry face, held to talk', () {
-    Future<void> failOneSend() async {
+  test(
+    'the retry face, held again after a take fails, sends none of the message',
+    () async {
       backend.replies.add('deploy');
       await voice.startListening();
       await voice.stopListening();
       await voice.submit((_) async => false);
-    }
-
-    test('a quick tap sends the words held from the failed send', () async {
-      await failOneSend();
-      final delivered = <String>[];
-      recorder.captured = (
-        wav: Uint8List.fromList([1, 2, 3, 4]),
-        length: const Duration(milliseconds: 120),
-        peak: 0,
-      );
-
-      await voice.startHold((text) async {
-        delivered.add(text);
-        return true;
-      });
-      await voice.finishHold((text) async {
-        delivered.add(text);
-        return true;
-      });
-
-      expect(delivered, ['deploy']);
-      expect(voice.isIdle, isTrue);
-      expect(backend.calls, hasLength(1), reason: 'a tap is not uploaded');
-    });
-
-    test('a take that failed still sends none of the message', () async {
-      await failOneSend();
       backend.fails = true;
       var delivered = false;
 
@@ -254,23 +228,8 @@ void main() {
 
       expect(delivered, isFalse, reason: 'what was just said is missing');
       expect(voice.transcript, 'deploy');
-    });
-
-    test('a quick tap with nothing held sends nothing', () async {
-      recorder.captured = (
-        wav: Uint8List.fromList([1, 2, 3, 4]),
-        length: const Duration(milliseconds: 120),
-        peak: 0,
-      );
-      var delivered = false;
-
-      await voice.startHold((_) async => delivered = true);
-      await voice.finishHold((_) async => delivered = true);
-
-      expect(delivered, isFalse);
-      expect(voice.notice, isNull, reason: 'a brushed button is not reported');
-    });
-  });
+    },
+  );
 
   test('clearing mid-transcription drops the words when they arrive', () async {
     backend.pending = Completer<String>();

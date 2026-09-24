@@ -37,9 +37,9 @@ class AgentContextLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final branch = project?.branchLabel;
+    final branch = project?.shownBranch;
     final place = <InlineSpan>[
-      if (project != null) TextSpan(text: project!.folder),
+      if (project != null) TextSpan(text: project!.label),
       if (project != null && branch != null) _separator,
       if (branch != null) ...[_branchMark, TextSpan(text: branch)],
     ];

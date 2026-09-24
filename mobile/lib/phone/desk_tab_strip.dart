@@ -45,12 +45,11 @@ class DeskTabStrip extends StatefulWidget {
     this.onRename,
   });
 
-  /// Every tab, in the desk's own order, with the leftover group last — see
-  /// [deskGroups]. Never empty.
+  /// Every tab, in the desk's own order — see [deskGroups]. Never empty.
   final List<DeskGroup> groups;
 
-  /// [DeskGroup.id] of the tab whose agents are listed below. Null is a real
-  /// value: it is the leftover group, and it is filled in like any other.
+  /// [DeskGroup.id] of the tab whose agents are listed below. Null is the
+  /// single group of a phone with no desk.
   final String? selectedId;
 
   final void Function(DeskGroup group) onPick;
@@ -61,8 +60,7 @@ class DeskTabStrip extends StatefulWidget {
   final VoidCallback? onAddTab;
 
   /// A name double-tapped. Called only for the groups that are real tabs on a
-  /// desk this phone may write to — the leftover group has no name of its own
-  /// to change.
+  /// desk this phone may write to.
   final void Function(DeskGroup group)? onRename;
 
   /// The row's height: a 32pt pill with 6pt either side of it, which a tap
@@ -182,7 +180,7 @@ class _DeskTabStripState extends State<DeskTabStrip> {
                   // feel immediate. On the tab already open the tap does
                   // nothing anyway, so the wait costs nothing.
                   //
-                  // Null too for the leftover group and on a desk with no
+                  // Null too for the no-desk group and on a desk with no
                   // writes — see [DeskTabStrip.onRename].
                   onRename: onRename == null || group.id == null || !selected
                       ? null
