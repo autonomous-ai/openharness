@@ -54,6 +54,7 @@ else if (args[0] === 'pull') { mkdirSync(join(home, 'models'), { recursive: true
 else if (args[0] === 'engine') { mkdirSync(join(home, 'bin'), { recursive: true }); writeFileSync(join(home, 'bin', 'llama-server'), '#!/bin/sh\\nexit 0\\n', { mode: 0o700 }); }
 else if (args.includes('join')) { if (!existsSync(registered)) process.exit(1); mkdirSync(recordDir, { recursive: true }); writeFileSync(record, JSON.stringify({ node_id: 'fixture-node', engines: [{ models: ['tiny.gguf'] }] })); writeFileSync(join(recordDir, 'remote.heartbeat'), ''); }
 else if (args.includes('leave')) { rmSync(record); rmSync(registered); }
+else if (args.includes('info') && args.includes('--json')) result({ grid: 'home', status: 'running' });
 else if (args.includes('info')) console.log("export OPENAI_BASE_URL='${base}/v1'\\nexport OPENAI_API_KEY='inference-fixture'");
 else process.exitCode = 2;
 `, { mode: 0o700 })

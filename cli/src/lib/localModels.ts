@@ -443,9 +443,10 @@ export class LocalModels {
         await change('starting')
         // A grid that is down refuses a join outright ("The model could not start"), and `sync`
         // above restores its registration, not its process. Bring it up the way its own refusal
-        // says to. A grid already running is left alone: `start` is only for one that is not.
-        const status = await this.gridStatus(grid).catch(() => { throw new ModelError('Your grid could not be checked. Try again.') })
-        if (DOWN.has(status)) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
+        // says to. A grid already running is left alone: `start` is only for one that is not. An
+        // unreadable status blocks nothing — it is the join's refusal, not this read, that says a
+        // grid cannot take the model, and a Grid too old to answer `info --json` joined fine before.
+        if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
         const override = this.processEnv.LLAMA_SERVER
         const installed = override ? binaryOnPath(override, this.processEnv)
           : binaryOnPath(join(this.home, 'bin', 'llama-server'), this.processEnv) || binaryOnPath('llama-server', this.processEnv)

@@ -437,6 +437,15 @@ describe('local model discovery and lifecycle', () => {
     expect((await service.list('home', true)).models[0].state).toBe('running')
   })
 
+  it('an unreadable grid status blocks nothing: the start goes on to the join', async () => {
+    // A Grid too old to answer `info --json` joined fine before this read existed.
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('info') && args.includes('--json') ? refused('usage') : original(args, output))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(calls.some(args => args[1] === 'start')).toBe(false)
+    expect((await service.list('home', true)).models[0]).toMatchObject({ state: 'running', operation: { phase: 'done' } })
+  })
+
   it('a grid that will not come up fails the Start in words, before any join', async () => {
     gridState = 'stopped'
     const original = run.getMockImplementation()!
