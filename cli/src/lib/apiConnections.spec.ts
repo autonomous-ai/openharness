@@ -27,7 +27,7 @@ describe('saved API connections', () => {
     expect(store.list()).toEqual([])
     const result = apiConnectionsRequest(store, { action: 'list' })
     expect(result).toEqual({ connections: [], presets: API_PRESETS })
-    expect(API_PRESETS.map(row => row.provider)).toEqual(['openrouter', 'fal', 'openai', 'anthropic', 'replicate'])
+    expect(API_PRESETS.map(row => row.provider)).toEqual(['openrouter', 'requesty', 'fal', 'openai', 'anthropic', 'replicate'])
     expect(encryptDownFrame('api_connections')).toBe(true)
     expect(encryptRpcResult('api_connections_result')).toBe(true)
   })
