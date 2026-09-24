@@ -180,6 +180,15 @@ band offering it. Where the machine's CLI is too old to understand that key
 and offers "Open here". This is what stops two screens trading one terminal
 while somebody is typing in it.
 
+Opening the app is itself a gesture, so the tiles a launch restores may claim
+their terminals on their FIRST attach — the window comes back the way it was
+left, typing where it was typing, even if another screen picked one of them up
+meanwhile. That claim is spent on the attach it pays for and dropped from every
+tile a few minutes after launch, so a machine that only comes back in the
+afternoon is met by the ordinary rule rather than by a gesture made at
+breakfast. Tiles that arrive later — over the desk, from a push — never carry
+it.
+
 ## Creation
 
 Cmd-N opens a compact launch menu with inherited arguments:

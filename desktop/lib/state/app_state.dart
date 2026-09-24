@@ -606,6 +606,12 @@ class AppNotifier extends ChangeNotifier {
   // Update checks do not depend on the daemon or SSO. A signed-out user should
   // still be able to replace a broken desktop build from the login screen.
   Timer? _updateCheckTimer;
+
+  /// Ends the window in which a restored tile may still claim its terminal —
+  /// see [TerminalPane.claimOnFirstAttach]. Without it a machine that only
+  /// came back in the afternoon would be met by a claim made at breakfast.
+  Timer? _launchClaimTimer;
+  static const launchClaimWindow = Duration(minutes: 5);
   late final DesktopUpdater _updater = desktopUpdater ?? DesktopUpdater();
   Future<ManualUpdateCheck>? _manualUpdateCheckInFlight;
   DesktopUpdateCheck? lastUpdateCheck;
@@ -2776,7 +2782,8 @@ class AppNotifier extends ChangeNotifier {
     // Every exit below clears the message: a boot superseded by a sign-out/sign-in mid-way (the
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
-    await _restorePaneLayout();
+    await _restorePaneLayout(claimOnAttach: true);
+    _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
@@ -9982,7 +9989,20 @@ class AppNotifier extends ChangeNotifier {
   /// The tiles cannot wait for the machines: machines answer in an order this
   /// side does not decide, a restored grid commonly spans two of them, and one
   /// being slow or offline must not hold the others blank.
-  Future<void> _restorePaneLayout() async {
+  void _armLaunchClaimExpiry() {
+    _launchClaimTimer?.cancel();
+    _launchClaimTimer = Timer(launchClaimWindow, () {
+      for (final pane in allPanes) {
+        pane.claimOnFirstAttach = false;
+      }
+    });
+  }
+
+  /// [claimOnAttach]: this restore is the app opening, so the tiles it brings
+  /// back may take their terminals on their first attach — see
+  /// [TerminalPane.claimOnFirstAttach]. False for a restore that is merely
+  /// bookkeeping (a machine re-keyed under the window), which nobody asked for.
+  Future<void> _restorePaneLayout({bool claimOnAttach = false}) async {
     final store = _paneLayout;
     if (store == null) return;
     final initialSwarm = activeSwarm;
@@ -10063,6 +10083,7 @@ class AppNotifier extends ChangeNotifier {
                     agentId: entry.agentId,
                   )
                   ..composerVisible = entry.composerVisible
+                  ..claimOnFirstAttach = claimOnAttach
                   ..pinnedSlot = entry.pinnedSlot,
           );
           if (!swarm.panes.contains(pane)) {
@@ -10186,14 +10207,6 @@ class AppNotifier extends ChangeNotifier {
     bool retryExisting = true,
     required AttachIntent intent,
   }) {
-    // Nobody asked on this window, and this machine's CLI cannot open a
-    // terminal without taking it from whoever has it: leave the tiles as
-    // intent (`pane_grid.dart` offers to open them) rather than pulling the
-    // keyboard out from under somebody on another screen.
-    if (intent == AttachIntent.automatic &&
-        !machine.terminalNoTakeoverAvailable) {
-      return;
-    }
     final machineId = machine.machine.machineId;
     for (final pane in allPanes.toList()) {
       if (!panes.contains(pane) && pane.session == null) continue;
@@ -10202,12 +10215,29 @@ class AppNotifier extends ChangeNotifier {
       // or discard its output while the machine is unavailable.
       if (!retryExisting && pane.session != null) continue;
       if (!_paneNeedsAttach(pane)) continue;
+      // A tile the app restored when it opened carries the gesture that opened
+      // it, once. Everything else attaching here is [AttachIntent.automatic]
+      // however this sweep was reached.
+      final paneIntent = pane.claimOnFirstAttach
+          ? AttachIntent.person
+          : intent;
+      // Nobody asked for this one, and this machine's CLI cannot open a
+      // terminal without taking it from whoever has it: leave the tile as
+      // intent (`pane_grid.dart` offers to open it) rather than pulling the
+      // keyboard out from under somebody on another screen.
+      if (paneIntent == AttachIntent.automatic &&
+          !machine.terminalNoTakeoverAvailable) {
+        continue;
+      }
+      // Spent here, not when the open is answered: the claim belongs to this
+      // one attach, and a retry of it is already the ordinary rule.
+      pane.claimOnFirstAttach = false;
       // Covers a tile that never attached AND one holding a stream the machine
       // lost. Only the first used to be covered, and the second is why a
       // reconnect left every tile but one frozen on "restoring terminal…":
       // recovery ran off pendingOfflineAgentId, which is a single slot, so it
       // could only ever promise restoration to one of them.
-      unawaited(_reattachPane(pane, intent: intent));
+      unawaited(_reattachPane(pane, intent: paneIntent));
     }
   }
 
@@ -10733,7 +10763,8 @@ class AppNotifier extends ChangeNotifier {
   /// socket to arrive on — what they exercise is the bookkeeping either side of
   /// that, which is exactly what a live socket makes hard to reach.
   @visibleForTesting
-  Future<void> restorePaneLayoutForTest() => _restorePaneLayout();
+  Future<void> restorePaneLayoutForTest({bool claimOnAttach = false}) =>
+      _restorePaneLayout(claimOnAttach: claimOnAttach);
 
   @visibleForTesting
   Future<void> handleMachineEventForTest(
@@ -10796,6 +10827,7 @@ class AppNotifier extends ChangeNotifier {
     _monitorHarnesses.clear();
     _daemonSupervisionTimer?.cancel();
     _updateCheckTimer?.cancel();
+    _launchClaimTimer?.cancel();
     _environmentRecheckTimer?.cancel();
     _stopAllOfflineRetries();
     _stopAllLinkRetries();

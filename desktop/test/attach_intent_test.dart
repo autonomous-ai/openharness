@@ -20,7 +20,11 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/ws/ws_conn.dart';
 
-import 'swarm_state_test.dart' show createApp;
+import 'package:harness/state/pane_layout_store.dart';
+import 'package:harness/state/swarm.dart';
+import 'package:harness/state/terminal_pane.dart';
+
+import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 DeskTab _tab(String id, List<String> agents) => DeskTab(
   id: id,
@@ -117,6 +121,10 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     app.dispose();
     projects.dispose();
+    // The open watchdog and any debounced layout write are armed by the work
+    // above; let them fall due on a torn-down tree rather than at teardown,
+    // where a pending timer fails the test for a reason nothing here is about.
+    await tester.pump(const Duration(seconds: 20));
   }
 
   /// The other Mac opens [agents] in the shared tab; this window learns by
@@ -297,6 +305,140 @@ void main() {
       reason: 'and asked for the terminals themselves',
     );
     await finish(tester);
+  });
+
+  group('opening the app is itself the gesture', () {
+    /// A layout with two tiles, saved as a previous run would leave it.
+    Future<MemoryStore> savedLayout() async {
+      final storage = MemoryStore();
+      final store = PaneLayoutStore(storage: storage);
+      final saved = Swarm(id: 'swarm-1', name: 'Work', nameIsCustom: true)
+        ..panes.addAll([
+          TerminalPane(id: 1, machineId: 'm', agentId: 'a0'),
+          TerminalPane(id: 2, machineId: 'm', agentId: 'a1'),
+        ]);
+      await store.saveSwarms([saved], 'swarm-1');
+      return storage;
+    }
+
+    /// The app, opened on that layout, with its machine ready to answer.
+    Future<AppNotifier> opened({
+      required MemoryStore storage,
+      bool noTakeover = true,
+    }) async {
+      final started = createApp(store: storage, connectionForTest: (_) => conn)
+        ..api = api;
+      started.stateOf('m')!
+        ..nodeOnline = true
+        ..terminalCapabilityAvailable = true
+        ..terminalNoTakeoverAvailable = noTakeover
+        ..agents = [
+          const Agent(id: 'a0', name: 'A0', terminalAvailable: true),
+          const Agent(id: 'a1', name: 'A1', terminalAvailable: true),
+        ];
+      await started.restorePaneLayoutForTest(claimOnAttach: true);
+      return started;
+    }
+
+    /// The machine answering — the sweep that actually attaches a restored
+    /// tile, and the same one a reconnect runs later.
+    Future<void> machineAnswers(WidgetTester tester) async {
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'A0',
+            'terminal': {'available': true},
+          },
+        },
+      });
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+
+    testWidgets('every tile it restores takes its terminal back', (
+      tester,
+    ) async {
+      final storage = await savedLayout();
+      app.dispose();
+      app = await opened(storage: storage);
+      await mount(tester);
+      conn.opens.clear();
+
+      await machineAnswers(tester);
+
+      expect(conn.opens, hasLength(2), reason: 'both tiles opened');
+      expect(
+        conn.opens.any((o) => o.containsKey('takeover')),
+        isFalse,
+        reason: 'and both asked for the terminal itself',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('an older daemon is no obstacle to the app opening', (
+      tester,
+    ) async {
+      final storage = await savedLayout();
+      app.dispose();
+      app = await opened(storage: storage, noTakeover: false);
+      await mount(tester);
+      conn.opens.clear();
+
+      await machineAnswers(tester);
+
+      expect(
+        conn.opens,
+        hasLength(2),
+        reason: 'a person opened the app; the polite path is not needed',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('the claim is spent once, not carried into a reconnect', (
+      tester,
+    ) async {
+      final storage = await savedLayout();
+      app.dispose();
+      app = await opened(storage: storage);
+      await mount(tester);
+      await machineAnswers(tester);
+      expect(
+        app.panes.any((p) => p.claimOnFirstAttach),
+        isFalse,
+        reason: 'spent on the attach it paid for',
+      );
+      // The daemon answers each claim: from here the session holds the lease,
+      // and its own later opens rest on holding it rather than on the launch.
+      for (final pane in app.panes) {
+        final session = pane.session;
+        if (session == null) continue;
+        await session.handleFrame('terminal_ready', {
+          'requestId': conn.opens.lastWhere(
+            (o) => o['agentId'] == pane.agentId,
+          )['requestId'],
+          'protocolVersion': 3,
+          'streamId': 'stream-${pane.agentId}',
+          'agentId': pane.agentId,
+        });
+      }
+      conn.opens.clear();
+
+      // The machine drops and comes back: nobody opened anything this time.
+      for (final pane in app.panes) {
+        pane.session?.transportLost('Harness reconnected');
+      }
+      await tester.pump();
+      await machineAnswers(tester);
+
+      expect(conn.opens, isNotEmpty, reason: 'it did reattach');
+      expect(
+        conn.opens.every((o) => o['takeover'] == false),
+        isTrue,
+        reason: 'reconnecting is not the same arrival: ${conn.opens}',
+      );
+      await finish(tester);
+    });
   });
 
   test('a polite open that loses says so, and does not ask again', () async {
