@@ -257,7 +257,7 @@ void main() {
           .map((text) => text.data),
       ['-', '[]', 'x'],
     );
-    expect(find.byTooltip('Stop Harness').first.hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Stop Harness').first.hitTestable(), findsNothing);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: const Offset(1, 1));
     Future<void> hover() async {
@@ -266,6 +266,7 @@ void main() {
     }
 
     await hover();
+    expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
     await tester.tap(find.byTooltip('Zoom Pane').first);
     await tester.pump();
     expect(app.zoomedPaneId, pane.id);

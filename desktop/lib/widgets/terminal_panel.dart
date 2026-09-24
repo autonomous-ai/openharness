@@ -1966,7 +1966,7 @@ class _TerminalHeader extends StatelessWidget {
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
-    final strip = SizedBox(
+    final header = SizedBox(
       height: compact ? 38 : 46,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
@@ -2249,6 +2249,7 @@ class _TerminalHeader extends StatelessWidget {
         ),
       ),
     );
+    final strip = PaneHeaderHover(child: header);
     final handle = paneDrag;
     if (handle == null) return strip;
 

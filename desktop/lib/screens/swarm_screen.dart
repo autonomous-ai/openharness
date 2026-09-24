@@ -2214,10 +2214,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
   }
 
-  Future<void> _splitAgent(PaneResizeAxis axis, {int? paneId}) async {
-    final split = app.preparePaneSplit(axis, paneId: paneId);
+  Future<void> _splitAgent(PaneResizeAxis axis) async {
+    final split = app.preparePaneSplit(axis);
     if (split == null) return;
-    if (paneId != null) app.focusPane(split.paneId);
     _openSearch(adding: true, split: split);
   }
 
@@ -3755,8 +3754,6 @@ class _SwarmScreenState extends State<SwarmScreen>
                                         child: PaneGrid(
                                           notifier: app,
                                           swarmMode: true,
-                                          onSplit: (paneId, axis) =>
-                                              _splitAgent(axis, paneId: paneId),
                                           empty:
                                               app.panes.isEmpty &&
                                                   !app.activeSwarm.isStore &&

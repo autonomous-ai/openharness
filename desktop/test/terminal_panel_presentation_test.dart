@@ -1,3 +1,5 @@
+import 'dart:ui' show PointerDeviceKind;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,6 +48,11 @@ void main() {
       await tester.pump();
       revision.value = 1;
       await tester.pump();
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1, 100));
+      await mouse.moveTo(tester.getCenter(find.byType(PaneHeaderActions)));
+      await tester.pump();
+      addTearDown(mouse.removePointer);
       for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
         await tester.tap(find.byTooltip(label));
         await tester.pumpAndSettle();
@@ -196,7 +203,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} compact header keeps three ASCII controls without repeating context or moving its title',
+      '${local ? 'local' : 'remote'} compact controls reveal on header hover without moving the title or terminal',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -258,7 +265,26 @@ void main() {
           3,
         );
         for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+          expect(find.byTooltip(label).hitTestable(), findsNothing);
+        }
+        final controlsBounds = tester.getRect(controls);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: const Offset(1, 100));
+        await mouse.moveTo(tester.getCenter(title));
+        await tester.pump();
+        for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
           expect(find.byTooltip(label).hitTestable(), findsOneWidget);
+        }
+        expect(tester.getRect(title), titleBounds);
+        expect(tester.getRect(controls), controlsBounds);
+        await mouse.moveTo(tester.getCenter(find.byTooltip('Zoom Pane')));
+        await mouse.down(tester.getCenter(find.byTooltip('Zoom Pane')));
+        await mouse.up();
+        await tester.pump();
+        await mouse.moveTo(tester.getCenter(find.byType(TerminalView)));
+        await tester.pump();
+        for (final label in ['Close Pane', 'Zoom Pane', 'Stop Harness']) {
+          expect(find.byTooltip(label).hitTestable(), findsNothing);
         }
         expect(find.byTooltip('Share harness'), findsNothing);
         expect(find.text('main'), findsNothing);
@@ -271,6 +297,7 @@ void main() {
         expect(titleStyle.fontFamily, terminalFontStore.value.fontFamily);
         expect(titleStyle.fontSize, terminalFontStore.size);
         expect(titleStyle.fontWeight, FontWeight.normal);
+        await mouse.removePointer();
         await tester.pumpWidget(const SizedBox());
         session.dispose();
         app.dispose();
@@ -328,12 +355,12 @@ void main() {
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
         final zoom = find.byTooltip('Zoom Pane');
+        Focus.of(tester.element(find.text('[]'))).requestFocus();
+        await tester.pumpAndSettle();
         expect(zoom.hitTestable(), findsOneWidget);
         expect(find.byTooltip('Fork Harness'), findsNothing);
         expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
         expect(tester.getRect(title), titleBefore);
-        Focus.of(tester.element(find.text('[]'))).requestFocus();
-        await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.space);
         await tester.pumpAndSettle();
         expect(zooms, [240.0, 280.0, 420.0].indexOf(width) + 1);
