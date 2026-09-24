@@ -185,7 +185,7 @@ void main() {
   testWidgets('right hands the keys to the choices without taking a value', (
     tester,
   ) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(box.field, NewHarnessField.agent);
     final engine = box.engine;
@@ -202,7 +202,7 @@ void main() {
   });
 
   testWidgets('left gives the keys back to the rows', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(harnessChoicesActive(tester), isTrue);
@@ -216,11 +216,12 @@ void main() {
       reason: 'The choices stay on screen, they just stop holding the keys.',
     );
     await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.machine, reason: 'Rows move again.');
+    // Model sits between Agent and Machine on this form.
+    expect(box.field, NewHarnessField.model, reason: 'Rows move again.');
   });
 
   testWidgets('left edits the search text before it leaves it', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     await type(tester, 'cod');
     expect(harnessChoicesActive(tester), isTrue);
@@ -230,7 +231,7 @@ void main() {
   });
 
   testWidgets('left on the rows changes nothing', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     final engine = box.engine;
     await press(tester, LogicalKeyboardKey.arrowLeft);

@@ -675,7 +675,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// is one, a choice with a description is two, the gap between entries is
   /// one. Per-container padding is what let the two columns drift apart;
   /// a grid cannot drift.
-  double get _line => (terminalFontStore.size * 1.6).roundToDouble();
+  /// Measured through the text scaler, because that is what the glyphs are
+  /// drawn at. Sized from the font alone, the rows came out half the height
+  /// of their own text at accessibility sizes and overflowed.
+  double _line = 20;
+  double _lineFor(BuildContext context) =>
+      (MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.6)
+          .roundToDouble();
 
   /// Geometry follows the same size, so the columns keep their proportions.
   double _scale = 1;
@@ -689,6 +695,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _scale = scale;
       _revealRow();
     }
+    _line = _lineFor(context);
     return KeymapRegion(
       contextKind: KeymapContext.picker,
       composing: _isComposing,
@@ -1194,38 +1201,43 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         behavior: HitTestBehavior.opaque,
         excludeFromSemantics: true,
         onTap: blocked == null && !box.locked ? () => _activateRow(row) : null,
-        child: Container(
-          key: _itemKeys[row],
-          color: highlighted
-              ? (_picking ? _idleFill : _activeFill)
-              : Colors.transparent,
-          padding: EdgeInsets.symmetric(horizontal: 16 * _scale),
-          height: _line,
-          alignment: Alignment.centerLeft,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final label = Text(_label(row), style: _ink(kBoxFaint));
-              final content = Text(
-                value,
-                style: _ink(ink),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              );
-              if (constraints.maxWidth < 360 * _scale) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [label, const SizedBox(height: 4), content],
-                );
-              }
-              return Row(
-                children: [
-                  SizedBox(width: 120 * _scale, child: label),
-                  const SizedBox(width: 16),
-                  Expanded(child: content),
-                ],
-              );
-            },
-          ),
+        // The width decision sits OUTSIDE the box it sizes. A narrow column
+        // stacks the label above its value, which needs two rows of the
+        // grid; measuring that inside a box already pinned to one is how the
+        // row overflowed at large text sizes.
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 360 * _scale;
+            final label = Text(_label(row), style: _ink(kBoxFaint));
+            final content = Text(
+              value,
+              style: _ink(ink),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            );
+            return Container(
+              key: _itemKeys[row],
+              color: highlighted
+                  ? (_picking ? _idleFill : _activeFill)
+                  : Colors.transparent,
+              padding: EdgeInsets.symmetric(horizontal: 16 * _scale),
+              height: _line * (stacked ? 2 : 1),
+              alignment: Alignment.centerLeft,
+              child: stacked
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [label, content],
+                    )
+                  : Row(
+                      children: [
+                        SizedBox(width: 120 * _scale, child: label),
+                        SizedBox(width: 16 * _scale),
+                        Expanded(child: content),
+                      ],
+                    ),
+            );
+          },
         ),
       ),
     );
