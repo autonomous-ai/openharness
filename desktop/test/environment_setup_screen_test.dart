@@ -84,8 +84,8 @@ Future<void> _mount(
       ),
       home: ListenableBuilder(
         listenable: app,
-        builder: (_, _) => app.status == AppStatus.unauthenticated
-            ? const Scaffold(body: Text('Sign-in reached'))
+        builder: (_, _) => app.status == AppStatus.authenticated
+            ? const Scaffold(body: Text('Desk reached'))
             : EnvironmentSetupScreen(notifier: app),
       ),
     ),
@@ -93,8 +93,27 @@ Future<void> _mount(
   await tester.pump();
 }
 
+/// A window that never reaches for a real daemon: once setup is done a
+/// signed-out desktop window goes on to the desk as a guest, which is past the
+/// daemon gate, and a unit test must not shell out for one.
+class SetupApp extends AppNotifier {
+  SetupApp({
+    required super.config,
+    required super.authSession,
+    super.configStore,
+    super.cliLogin,
+    super.environmentProvisioner,
+  });
+
+  @override
+  Future<void> ensureCliDaemonReady() async {}
+
+  @override
+  Future<bool> refreshMachines() async => true;
+}
+
 AppNotifier _app(SetupProvisioner provisioner) =>
-    AppNotifier(
+    SetupApp(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
@@ -353,7 +372,7 @@ void main() {
     });
   }
 
-  testWidgets('Enter installs and retries once before reaching sign-in', (
+  testWidgets('Enter installs and retries once before reaching the desk', (
     tester,
   ) async {
     final provisioner = SetupProvisioner();
@@ -393,7 +412,10 @@ void main() {
     );
     await tester.pump();
     await tester.pump();
-    expect(find.text('Sign-in reached'), findsOneWidget);
+    // A signed-out desktop window goes on to the desk as a guest once setup
+    // is done; the sign-in is a sheet it raises later, not a wall here.
+    expect(find.text('Desk reached'), findsOneWidget);
+    expect(app.isGuest, isTrue);
     expect(provisioner.attempts.map((attempt) => attempt.install), [
       true,
       true,
