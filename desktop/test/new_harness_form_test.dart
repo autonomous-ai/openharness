@@ -7,6 +7,7 @@ import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/mixed_agents.dart';
+import 'support/launch_menu.dart' show harnessChoicesActive;
 import 'swarm_state_test.dart' show createApp;
 
 /// The setup form is driven by six keys and nothing else, so every one of
@@ -53,6 +54,7 @@ void main() {
   Future<NewHarnessController> mount(
     WidgetTester tester, {
     bool created = false,
+    String? engine,
   }) async {
     final app = createApp(connectionForTest: (_) => _Git());
     seedMixedAgents(app);
@@ -62,6 +64,7 @@ void main() {
     final box = NewHarnessController(
       app,
       machineId: 'm',
+      engine: engine,
       folder: '/work/harness-app-landing-page',
     );
     addTearDown(app.dispose);
@@ -94,31 +97,23 @@ void main() {
   }
 
   Future<void> type(WidgetTester tester, String text) async {
-    for (final character in text.split('')) {
-      if (character == ' ') {
-        await tester.sendKeyEvent(LogicalKeyboardKey.space);
-      } else {
-        await tester.sendKeyEvent(
-          LogicalKeyboardKey(character.codeUnitAt(0)),
-          character: character,
-        );
-      }
-      await tester.pumpAndSettle();
-    }
+    final input = find.byKey(const ValueKey('new-harness-query'));
+    final previous = tester.widget<TextField>(input).controller!.text;
+    await tester.enterText(input, previous + text);
+    await tester.pumpAndSettle();
   }
 
-  testWidgets('every row is present, and an unavailable one stays', (
+  testWidgets('shared setup fields stay available for every agent', (
     tester,
   ) async {
     await mount(tester);
     for (final label in [
-      'Project:',
-      'Agent:',
-      'Machine:',
-      'Branch:',
-      'Worktree:',
-      'Approvals:',
-      'Profile:',
+      'Project',
+      'Agent',
+      'Machine',
+      'Branch',
+      'Worktree',
+      'Approvals',
     ]) {
       expect(find.text(label), findsOneWidget, reason: '$label must not go');
     }
@@ -232,9 +227,9 @@ void main() {
       reason: 'Hiding the list on one match made a hit look like a miss.',
     );
     expect(
-      find.text('Use This Value'),
-      findsOneWidget,
-      reason: 'The legend must name what Return does on this surface.',
+      harnessChoicesActive(tester),
+      isTrue,
+      reason: 'Typing hands the keyboard to the filtered choices.',
     );
   });
 
@@ -382,7 +377,7 @@ void main() {
     }
     await press(tester, LogicalKeyboardKey.enter);
     expect(box.field, NewHarnessField.projectName);
-    expect(find.text('New Project:'), findsOneWidget);
+    expect(find.text('New Project'), findsOneWidget);
     // And Escape backs out of the door to the list it came from.
     await press(tester, LogicalKeyboardKey.escape);
     expect(box.field, NewHarnessField.projectMenu);
@@ -393,14 +388,14 @@ void main() {
     await type(tester, 'harness');
     expect(find.text('Open Folder'), findsOneWidget);
     expect(find.text('New Project'), findsOneWidget);
-    expect(find.text('Clone GitHub Repository'), findsOneWidget);
+    expect(find.text('Clone Repository'), findsOneWidget);
   });
 
   testWidgets('the choices are always listed, and Return makes them live', (
     tester,
   ) async {
     final box = await mount(tester);
-    expect(find.text('[ New Harness ]'), findsOneWidget);
+    expect(find.text('New Harness'), findsOneWidget);
     expect(
       find.text('Open Folder'),
       findsOneWidget,
@@ -425,16 +420,26 @@ void main() {
     expect(box.field, NewHarnessField.agent);
   });
 
-  testWidgets('the bright bar marks which column has the keys', (
+  testWidgets('the selection bar marks which column has the keys', (
     tester,
   ) async {
-    const bright = Color(0xFFE5E9F0);
+    final bright = Colors.white.withValues(alpha: .12);
     int barsOn() => tester
         .widgetList<Container>(find.byType(Container))
         .where((box) => box.color == bright)
         .length;
 
     await mount(tester);
+    final choices = find.byKey(const ValueKey('new-harness-choices'));
+    expect(
+      tester
+          .widgetList<Container>(
+            find.descendant(of: choices, matching: find.byType(Container)),
+          )
+          .where((box) => box.color != null && box.color != Colors.transparent),
+      isEmpty,
+      reason: 'The right column must not highlight a saved value while the left has focus.',
+    );
     expect(
       barsOn(),
       1,
@@ -446,19 +451,16 @@ void main() {
       1,
       reason: 'Live, the bar moves to the list — it never lights both.',
     );
-    expect(find.text('Back to Items'), findsOneWidget);
+    expect(harnessChoicesActive(tester), isTrue);
     await press(tester, LogicalKeyboardKey.escape);
-    expect(find.text('Pick from List'), findsOneWidget);
+    expect(harnessChoicesActive(tester), isFalse);
   });
 
   testWidgets('the list dims while the items hold the keys', (tester) async {
     final box = await mount(tester);
-    // A row that is NOT the current value: the selected one wears inverse
-    // ink, which is a different question from whether the column is live.
+    // An unselected option stays quieter than the active choice.
     final other = box.options
-        .firstWhere(
-          (row) => !row.synthetic && !identical(row, box.selected),
-        )
+        .firstWhere((row) => !row.synthetic && !identical(row, box.selected))
         .title;
     Color? inkOf(String text) =>
         tester.widget<Text>(find.text(text)).style?.color;
@@ -471,7 +473,7 @@ void main() {
     await press(tester, LogicalKeyboardKey.enter);
     expect(
       inkOf(other),
-      Colors.white,
+      Colors.white70,
       reason: 'Handing the arrows over brings the column up.',
     );
     await press(tester, LogicalKeyboardKey.escape);
@@ -490,12 +492,20 @@ void main() {
     expect(find.text('Codex'), findsWidgets);
   });
 
-  testWidgets('a value row offers Pick from List, not Start Harness', (
+  testWidgets('creation stays a distinct action while editing values', (
     tester,
   ) async {
     await mount(tester);
-    expect(find.text('Pick from List'), findsOneWidget);
-    expect(find.text('Start Harness'), findsNothing);
+    expect(find.text('New Harness'), findsOneWidget);
+    expect(
+      tester
+          .widget<Semantics>(
+            find.byKey(const ValueKey('new-harness-field-start')),
+          )
+          .properties
+          .selected,
+      isFalse,
+    );
   });
 
   testWidgets('a visible prompt names the search, and shows what is typed', (
@@ -508,16 +518,19 @@ void main() {
       reason: '"Type to search" in a key guide is a sentence nobody reads.',
     );
     // The caret belongs to the arrows: absent until they are handed over.
-    expect(find.text('█'), findsNothing);
+    EditableText input() =>
+        tester.widget<EditableText>(find.byType(EditableText));
+    expect(input().showCursor, isFalse);
     await press(tester, LogicalKeyboardKey.enter);
-    expect(find.text('█'), findsOneWidget);
+    expect(input().showCursor, isTrue);
+    expect(input().focusNode.hasFocus, isTrue);
 
     await type(tester, 'harn');
     expect(find.text('harn'), findsOneWidget);
-    expect(find.textContaining('Search project'), findsNothing);
+    expect(input().controller.text, 'harn');
     await press(tester, LogicalKeyboardKey.escape);
     await press(tester, LogicalKeyboardKey.escape);
-    expect(find.text('█'), findsNothing);
+    expect(input().showCursor, isFalse);
     // Worktree is a boolean: no list, so no prompt either.
     await press(tester, LogicalKeyboardKey.escape);
     for (var i = 0; i < 4; i++) {
@@ -526,15 +539,16 @@ void main() {
     expect(find.textContaining('Search '), findsNothing);
   });
 
-  testWidgets('the legend stays put when the list opens', (tester) async {
+  testWidgets('the field stays put when its choices open', (tester) async {
     await mount(tester);
-    final before = tester.getTopLeft(find.text('Esc')).dy;
+    final field = find.byKey(const ValueKey('new-harness-field-project'));
+    final before = tester.getRect(field);
     await type(tester, 'harness');
     expect(find.text('harness-monitor'), findsWidgets);
     expect(
-      tester.getTopLeft(find.text('Esc')).dy,
+      tester.getRect(field),
       before,
-      reason: 'The key guide must not ride up when the matches appear.',
+      reason: 'Filtering changes choices without moving the field.',
     );
   });
 
@@ -628,7 +642,7 @@ void main() {
     );
     await press(tester, LogicalKeyboardKey.enter);
     expect(box.field, NewHarnessField.projectRepository);
-    expect(find.text('Repository:'), findsOneWidget);
+    expect(find.text('Repository'), findsOneWidget);
   });
 
   testWidgets('a new branch name can be created from the Branch row', (
@@ -655,35 +669,71 @@ void main() {
 
   testWidgets('the worktree row reads as a question', (tester) async {
     final box = await mount(tester);
-    expect(find.text('Worktree:'), findsOneWidget);
-    expect(find.text('[Yes]'), findsOneWidget);
+    expect(find.text('Worktree'), findsOneWidget);
+    expect(find.text('Yes'), findsOneWidget);
     for (var i = 0; i < 4; i++) {
       await press(tester, LogicalKeyboardKey.arrowDown);
     }
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(box.worktree, isFalse);
-    expect(find.text('[No]'), findsOneWidget);
+    expect(find.text('No'), findsOneWidget);
   });
 
-  testWidgets('Codex gets a Profile row, other agents are told why not', (
+  testWidgets('Profile follows the chosen agent and hidden rows are skipped', (
     tester,
   ) async {
-    await mount(tester);
-    expect(find.text('Profile:'), findsOneWidget);
+    final box = await mount(tester, engine: 'codex');
+    expect(find.text('Profile'), findsOneWidget);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await type(tester, 'claude');
+    expect(box.engine, 'codex');
+    expect(find.text('Profile'), findsOneWidget);
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.engine, 'claude');
+    expect(find.text('Profile'), findsNothing);
+
+    for (var i = 0; i < 4; i++) {
+      await press(tester, LogicalKeyboardKey.arrowDown);
+    }
+    expect(box.field, NewHarnessField.mode);
+    await press(tester, LogicalKeyboardKey.tab);
     expect(
-      find.text('Codex only'),
-      findsOneWidget,
-      reason: 'The row stays and says why, rather than vanishing.',
+      tester
+          .widget<Semantics>(
+            find.byKey(const ValueKey('new-harness-field-start')),
+          )
+          .properties
+          .selected,
+      isTrue,
     );
+    await press(tester, LogicalKeyboardKey.arrowUp);
+    expect(
+      tester
+          .widget<Semantics>(
+            find.byKey(const ValueKey('new-harness-field-approvals')),
+          )
+          .properties
+          .selected,
+      isTrue,
+    );
+
+    for (var i = 0; i < 4; i++) {
+      await press(tester, LogicalKeyboardKey.arrowUp);
+    }
+    await type(tester, 'codex');
+    expect(find.text('Profile'), findsNothing);
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.engine, 'codex');
+    expect(find.text('Profile'), findsOneWidget);
   });
 
-  testWidgets('the legend says what Return does on the surface it is on', (
+  testWidgets('typing moves keyboard focus from fields to choices', (
     tester,
   ) async {
     await mount(tester);
-    expect(find.textContaining('Pick from List'), findsOneWidget);
+    expect(harnessChoicesActive(tester), isFalse);
     await type(tester, 'harness');
-    expect(find.textContaining('Use This Value'), findsOneWidget);
-    expect(find.textContaining('Start Harness'), findsNothing);
+    expect(harnessChoicesActive(tester), isTrue);
+    expect(find.text('Select Item'), findsNothing);
   });
 }

@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import '../terminal/terminal_text.dart';
+
 import '../shared/widgets/labeled_field.dart';
 
 import 'package:flutter/material.dart';
@@ -19,12 +21,30 @@ Future<String?> showRemoteFolderPicker(
   required AppNotifier notifier,
   required String machineId,
   String? initialPath,
+  bool terminal = false,
 }) => showAppDialog<String>(
   context: context,
-  builder: (context) => _RemoteFolderPickerDialog(
-    notifier: notifier,
-    machineId: machineId,
-    initialPath: initialPath,
+  builder: (context) => ListenableBuilder(
+    listenable: terminalFontStore,
+    builder: (context, _) {
+      final theme = Theme.of(context);
+      return Theme(
+        data: terminal
+            ? theme.copyWith(
+                textTheme: theme.textTheme.apply(
+                  fontSizeFactor:
+                      terminalFontStore.size / grid.AppType.monoSize,
+                ),
+              )
+            : theme,
+        child: _RemoteFolderPickerDialog(
+          notifier: notifier,
+          machineId: machineId,
+          initialPath: initialPath,
+          terminal: terminal,
+        ),
+      );
+    },
   ),
 );
 
@@ -33,11 +53,13 @@ class _RemoteFolderPickerDialog extends StatefulWidget {
     required this.notifier,
     required this.machineId,
     this.initialPath,
+    this.terminal = false,
   });
 
   final AppNotifier notifier;
   final String machineId;
   final String? initialPath;
+  final bool terminal;
 
   @override
   State<_RemoteFolderPickerDialog> createState() =>
@@ -255,7 +277,16 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final scale = MediaQuery.textScalerOf(context);
-    _rowHeight = math.max(36, scale.scale(grid.AppType.bodySize) * 1.35 + 16);
+    _rowHeight = math.max(
+      36,
+      scale.scale(
+                widget.terminal
+                    ? terminalFontStore.size
+                    : grid.AppType.bodySize,
+              ) *
+              1.35 +
+          16,
+    );
     final listHeight =
         (MediaQuery.sizeOf(context).height - 320 - scale.scale(50)).clamp(
           120.0,
@@ -323,7 +354,10 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
-                const FieldLabel('Folder path'),
+                if (widget.terminal)
+                  Text('Folder path', style: terminalTextStyle())
+                else
+                  const FieldLabel('Folder path'),
                 Focus(
                   onKeyEvent: (node, event) {
                     if (event is KeyDownEvent &&
@@ -347,9 +381,9 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                     focusNode: _locationFocus,
                     autofocus: true,
                     // A path: typed and pasted, so set to be copied exactly.
-                    style: grid.AppType.mono(
-                      color: grid.AppPalette.textPrimary,
-                    ),
+                    style: widget.terminal
+                        ? terminalTextStyle(color: grid.AppPalette.textPrimary)
+                        : grid.AppType.mono(color: grid.AppPalette.textPrimary),
                     decoration: InputDecoration(
                       hintText: 'Enter a full folder path…',
                       suffixIcon: IconButton(

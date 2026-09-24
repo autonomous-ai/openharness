@@ -12,7 +12,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -158,7 +158,7 @@ void main() {
           // The rebuild instrumentation is reported separately from timings.
           if (sample > 0) times.add(watch.elapsedMicroseconds);
           if (name == 'cmd_n') {
-            expect(find.byType(NewHarnessBox), findsOneWidget);
+            expect(find.byType(NewHarnessForm), findsOneWidget);
           } else if (name == 'cmd_o') {
             expect(
               find.byKey(const ValueKey('swarm-search-input')),

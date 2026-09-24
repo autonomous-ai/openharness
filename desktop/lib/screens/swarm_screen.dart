@@ -57,7 +57,6 @@ import '../widgets/restart_agent_action.dart';
 import '../widgets/machines_manager.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
-import '../widgets/new_harness_box.dart';
 import '../widgets/new_harness_form.dart';
 import '../widgets/open_harness_intent.dart';
 import '../widgets/pane_grid.dart';
@@ -926,15 +925,17 @@ class _SwarmScreenState extends State<SwarmScreen>
       'restartAgent' => 'agent.restart',
       _ => null,
     };
-    if (nativeCommand != null) {
+    if (nativeCommand != null || call.method == 'searchCommand') {
       final focus = FocusManager.instance.primaryFocus?.context;
       final region = focus == null ? null : KeymapRegion.of(focus);
+      // Native menu actions must leave an input-method candidate intact even
+      // when the focused picker delegates that command to the workspace.
+      if (region?.composing?.call() == true) return;
       final action = region?.actions?[nativeCommand];
       if (action != null) {
         // Match keyboard dispatch: the focused picker owns its commands and
         // closes its own results before opening creation. Bypassing it stacks
         // another search or leaves the start-page dropdown under the dialog.
-        if (region?.composing?.call() == true) return;
         action();
         if (call.method != 'keymapCommand') {
           await WidgetsBinding.instance.endOfFrame;
@@ -1608,24 +1609,7 @@ class _SwarmScreenState extends State<SwarmScreen>
         _closeNewHarness();
         app.cancelSwarmDraft(target);
       },
-      onBrowse: () => unawaited(_browseForNewHarness(box)),
-    );
-    // The dock this replaces, kept mounted-but-unused until the form is
-    // signed off; deleting it takes 21 test files with it.
-    // ignore: unused_local_variable
-    final legacy = NewHarnessBox(
-      docked: true,
-      controller: box,
-      onClose: () {
-        final target = box.swarmId ?? app.activeSwarmId;
-        _closeNewHarness();
-        app.cancelSwarmDraft(target);
-      },
-      onCreated: () {
-        _closeNewHarness(restoreFocus: false, keepDraft: false);
-        unawaited(_focusCreatedPane());
-      },
-      onBrowse: () => unawaited(_browseForNewHarness(box)),
+      onBrowse: () => _browseForNewHarness(box),
       onStore: _openStore,
       onLinkProfile: () => unawaited(_linkProfileForNewHarness(box)),
       onNeedsForm: () {
@@ -1656,6 +1640,7 @@ class _SwarmScreenState extends State<SwarmScreen>
           listenable: box,
           builder: (context, child) => LayoutBuilder(
             builder: (context, constraints) {
+              final setupScale = terminalTextScaleOf(context).clamp(1.0, 1.25);
               return Stack(
                 children: [
                   Positioned.fill(
@@ -1680,29 +1665,22 @@ class _SwarmScreenState extends State<SwarmScreen>
                       ),
                     ),
                   ),
-                  // A BIOS popup is a compact centred box, sized to what it
-                  // asks: it holds the eye with a heavy double rule, not by
-                  // taking the screen.
                   Positioned.fill(
                     top: _native ? 0 : _tabBarHeight,
                     child: Align(
                       alignment: const Alignment(0, -0.12),
-                      // Fixed, not fitted: the box held one size whatever it
-                      // was showing, and a frame that grew and shrank as the
-                      // help pane became a list made the screen restless.
-                      // clipBehavior: the shadow is cast OUTSIDE the box, so
-                      // a scrolling viewport that clips to its child erases
-                      // it — which is why it looked as though no shadow was
-                      // being drawn at all.
-                      child: SingleChildScrollView(
-                        clipBehavior: Clip.none,
-                        child: SizedBox(
-                          // The popup is measured in the terminal's own font,
-                          // so it grows with ⌘+ instead of shrinking beside it.
-                          width: 820 * terminalTextScaleOf(context),
-                          height: 450 * terminalTextScaleOf(context),
-                          child: content,
+                      // Sized for the setup fields rather than the session
+                      // catalog, with some extra room for larger terminal text.
+                      child: SizedBox(
+                        width: math.min(
+                          960 * setupScale,
+                          constraints.maxWidth - 48,
                         ),
+                        height: math.min(
+                          480 * setupScale,
+                          constraints.maxHeight - 88,
+                        ),
+                        child: content,
                       ),
                     ),
                   ),
@@ -1751,6 +1729,7 @@ class _SwarmScreenState extends State<SwarmScreen>
             notifier: app,
             machineId: machineId,
             initialPath: box.project.folder,
+            terminal: true,
           );
     if (mounted && identical(_newHarness, box) && box.machineId == machineId) {
       if (path != null) box.setFolder(path);
@@ -2232,6 +2211,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       modes: _searchModes,
       adding: adding,
       offersCreate: adding,
+      activityFirst: split == null && !query.startsWith('>'),
       // The input leads now, so the results read downward from it. Left
       // bottom-up, the list reversed itself and New Harness — first in the
       // rows — landed visually last.
@@ -2388,95 +2368,140 @@ class _SwarmScreenState extends State<SwarmScreen>
       ).background,
       surfaceTintColor: Colors.transparent,
       child: DefaultTextStyle.merge(
-        style: terminalTextStyle(color: Colors.white, height: 1.35),
+        style: terminalContentStyle(color: Colors.white),
         child: FocusTraversalGroup(
           policy: OrderedTraversalPolicy(),
           // Fills its frame, as fzf does: the list takes every row the box
           // has rather than hugging its contents and leaving the rest dark.
-          child: Column(
-            children: [
-              if (search.title != search.placement?.title)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 9, 14, 2),
-                  child: Row(
+          child: search.setupLayout
+              ? SwarmSearchResults(
+                  search: search,
+                  onChoose: _chooseSearch,
+                  onRefocus: _focusSearch,
+                  terminal: true,
+                  bios: true,
+                  header: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(search.title, style: _boxCaption),
-                      if (search.placement == HarnessPlacement.currentTab ||
-                          search.split != null)
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Text(
-                              '· ${search.targetName}',
-                              key: const ValueKey('swarm-search-target'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: _boxCaption,
-                            ),
+                      if (search.canGoBack || search.isGroupMode)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+                          child: Text(
+                            search.title,
+                            style: terminalContentStyle(color: kBoxFaint),
                           ),
-                        )
-                      else
-                        const Spacer(),
-                      SwarmSearchCount(search: search, terminal: true),
+                        ),
+                      Semantics(
+                        label: search.hint,
+                        child: ReadlineKeys(
+                          controller: _searchText,
+                          onChanged: search.setQuery,
+                          child: SwarmSearchInput(
+                            inputKey: const ValueKey('swarm-search-input'),
+                            controller: _searchText,
+                            focusNode: _searchFocus,
+                            search: search,
+                            onClose: _dismissSearch,
+                            onChanged: search.setQuery,
+                            onOpen: _focusSearch,
+                            height: 44 * terminalTextScaleOf(context),
+                            terminal: true,
+                            bios: true,
+                            prompt: '>',
+                            hintText: search.hint,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
-                ),
-              ordered(
-                1,
-                Semantics(
-                  label: search.hint,
-                  child: ReadlineKeys(
-                    controller: _searchText,
-                    onChanged: search.setQuery,
-                    child: SwarmSearchInput(
-                      inputKey: const ValueKey('swarm-search-input'),
-                      controller: _searchText,
-                      focusNode: _searchFocus,
-                      search: search,
-                      onClose: _dismissSearch,
-                      onChanged: search.setQuery,
-                      onOpen: _focusSearch,
-                      height: 38,
+                )
+              : Column(
+                  children: [
+                    if (search.title != search.placement?.title)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 9, 14, 2),
+                        child: Row(
+                          children: [
+                            Text(search.title, style: _boxCaption),
+                            if (search.placement ==
+                                    HarnessPlacement.currentTab ||
+                                search.split != null)
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                  child: Text(
+                                    '· ${search.targetName}',
+                                    key: const ValueKey('swarm-search-target'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: _boxCaption,
+                                  ),
+                                ),
+                              )
+                            else
+                              const Spacer(),
+                            SwarmSearchCount(search: search, terminal: true),
+                          ],
+                        ),
+                      ),
+                    ordered(
+                      1,
+                      Semantics(
+                        label: search.hint,
+                        child: ReadlineKeys(
+                          controller: _searchText,
+                          onChanged: search.setQuery,
+                          child: SwarmSearchInput(
+                            inputKey: const ValueKey('swarm-search-input'),
+                            controller: _searchText,
+                            focusNode: _searchFocus,
+                            search: search,
+                            onClose: _dismissSearch,
+                            onChanged: search.setQuery,
+                            onOpen: _focusSearch,
+                            height: 38,
 
-                      terminal: true,
-                      hintText: search.hint,
+                            terminal: true,
+                            hintText: search.hint,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    Expanded(
+                      child: ordered(
+                        2,
+                        SwarmSearchResults(
+                          search: search,
+                          onChoose: _chooseSearch,
+                          onRefocus: _focusSearch,
+                          fitRows: true,
+                          terminal: true,
+                        ),
+                      ),
+                    ),
+                    ordered(
+                      3,
+                      SwarmSearchHints(
+                        search: search,
+                        onSubmit: () {
+                          final choice = search.submit();
+                          if (choice != null) unawaited(_chooseSearch(choice));
+                        },
+                        onAddHere: () {
+                          final choice = search.addHere();
+                          if (choice != null) unawaited(_chooseSearch(choice));
+                        },
+                        onClose: _dismissSearch,
+                        onQuery: (text) {
+                          search.setQuery(text);
+                          _focusSearch();
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              Expanded(
-                child: ordered(
-                  2,
-                  SwarmSearchResults(
-                    search: search,
-                    onChoose: _chooseSearch,
-                    onRefocus: _focusSearch,
-                    fitRows: true,
-                    terminal: true,
-                  ),
-                ),
-              ),
-              ordered(
-                3,
-                SwarmSearchHints(
-                  search: search,
-                  onSubmit: () {
-                    final choice = search.submit();
-                    if (choice != null) unawaited(_chooseSearch(choice));
-                  },
-                  onAddHere: () {
-                    final choice = search.addHere();
-                    if (choice != null) unawaited(_chooseSearch(choice));
-                  },
-                  onClose: _dismissSearch,
-                  onQuery: (text) {
-                    search.setQuery(text);
-                    _focusSearch();
-                  },
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );

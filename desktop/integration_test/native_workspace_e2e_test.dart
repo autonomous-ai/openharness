@@ -47,7 +47,7 @@ import 'package:harness/widgets/workspace_welcome.dart';
 import 'package:harness/shortcuts/keyboard_practice.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/environment_setup_screen.dart';
 import 'package:harness/widgets/link_machine_screen.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
@@ -914,19 +914,19 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pump(const Duration(milliseconds: 200));
       final box = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       expect(box.engine, 'codex');
       expect(box.projectLabel, startsWith('~/harnesses/codex-'));
       final proposedFolder = box.projectFolderRequest!.folderName;
       expect(connection.creates, isEmpty);
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.enter);
+      await startHarness(tester);
       await tester.pump(const Duration(milliseconds: 200));
       expect(connection.creates, hasLength(1));
       expect(
@@ -934,7 +934,7 @@ void main() {
         '/fixture/harnesses/$proposedFolder',
       );
       expect(connection.creates.single['engine'], 'codex');
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       await key(tester, LogicalKeyboardKey.keyS, cmd: true);
       await tester.pump(const Duration(milliseconds: 100));
       expect(app.activeSwarm.isStore, isTrue);
@@ -1345,18 +1345,18 @@ void main() {
       expect(find.text('Check retargeted keyboard input'), findsWidgets);
       expect(find.text('New Pane'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
-      expect(find.byType(NewHarnessBox), findsOneWidget);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(
         tester
-            .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+            .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller
             .task,
         'Check retargeted keyboard input',
       );
-      await key(tester, LogicalKeyboardKey.enter);
+      await startHarness(tester);
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump();
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       expect(app.activeSwarm, same(destination));
       expect(
         app.activeSwarm,
@@ -1434,8 +1434,9 @@ void main() {
           ),
         );
         await tester.pump(const Duration(milliseconds: 200));
-        NewHarnessController prompt() =>
-            tester.widget<NewHarnessBox>(find.byType(NewHarnessBox)).controller;
+        NewHarnessController prompt() => tester
+            .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+            .controller;
         Future<void> open(String id, {String? task}) async {
           await openStoreAgent(
             tester.element(find.byType(StoreTab)),
@@ -1476,14 +1477,14 @@ void main() {
         final folder = prompt().projectFolderRequest!.folderName;
         expect(app.activeSwarm, same(store));
         expect(connection.creates, isEmpty);
-        await key(tester, LogicalKeyboardKey.enter);
+        await startHarness(tester);
         await tester.pump(const Duration(milliseconds: 200));
         await tester.pump();
         expect(connection.creates, hasLength(1));
         expect(connection.creates.single['dsh'], product);
         expect(connection.creates.single['prompt'], task);
         expect(connection.creates.single['cwd'], '/fixture/harnesses/$folder');
-        expect(find.byType(NewHarnessBox), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
         expect(app.activeSwarm.isStore, isFalse);
         final session = app.focusedPane!.session!;
         final view = tester.widget<TerminalView>(
@@ -1532,84 +1533,73 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 200));
 
-      final line = find.byKey(const ValueKey('new-harness-input'));
       NewHarnessController prompt() =>
-          tester.widget<NewHarnessBox>(find.byType(NewHarnessBox)).controller;
+          tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
+      const task = 'Refine terminal workspace; keep running sessions attached';
       await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        task,
+      );
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 80));
       expect(prompt().engine, 'codex');
       expect(prompt().machineId, 'm');
       expect(prompt().project.folder, '/work/openharness');
+      expect(prompt().task, task);
       expect(app.swarms, [source]);
       expect(app.activeSwarm, same(source));
-      expect(prompt().field, NewHarnessField.launch);
-      await key(tester, LogicalKeyboardKey.arrowDown);
-      await key(tester, LogicalKeyboardKey.arrowDown);
+      expect(prompt().field, NewHarnessField.projectMenu);
+
+      await openLaunchRow(tester, 'machine');
       await key(tester, LogicalKeyboardKey.enter);
-      expect(prompt().field, NewHarnessField.machine);
-      await key(tester, LogicalKeyboardKey.enter);
-      expect(prompt().field, NewHarnessField.launch);
+      expect(prompt().machineId, 'm');
       await openLaunchRow(tester, 'project');
-      await tester.enterText(line, 'openharness');
+      await typeHarnessQuery(tester, 'openharness');
       await key(tester, LogicalKeyboardKey.enter);
       expect(prompt().project.folder, '/work/openharness');
-      expect(prompt().field, NewHarnessField.launch);
-      await openLegacyTaskEditor(tester);
-      await tester.enterText(line, 'Refine terminal workspace');
-      await key(tester, LogicalKeyboardKey.enter, alt: true);
-      expect(
-        tester.widget<TextField>(line).controller!.text,
-        'Refine terminal workspace\n',
-      );
-      const task = 'Refine terminal workspace\nKeep running sessions attached';
-      await tester.enterText(line, task);
+
+      await openLaunchRow(tester, 'profile');
+      expect(prompt().field, NewHarnessField.profile);
       await key(tester, LogicalKeyboardKey.escape);
       await openLaunchRow(tester, 'agent');
-      await tester.enterText(line, 'claude');
+      await typeHarnessQuery(tester, 'claude');
+      expect(prompt().engine, 'codex');
+      expect(
+        find.byKey(const ValueKey('new-harness-field-profile')),
+        findsOneWidget,
+      );
       await key(tester, LogicalKeyboardKey.enter);
       expect(prompt().engine, 'claude');
       expect(prompt().task, task);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-profile')),
+        findsNothing,
+      );
+
       await openLaunchRow(tester, 'project');
-      expect(prompt().field, NewHarnessField.projectMenu);
-      await key(tester, LogicalKeyboardKey.arrowDown);
-      await key(tester, LogicalKeyboardKey.arrowDown);
+      await typeHarnessQuery(tester, 'does-not-match-any-existing-project');
+      for (
+        var step = 0;
+        prompt().selected?.id != NewHarnessController.existingProjectId &&
+            step < 8;
+        step++
+      ) {
+        await key(tester, LogicalKeyboardKey.arrowDown);
+      }
+      expect(prompt().selected?.id, NewHarnessController.existingProjectId);
       await key(tester, LogicalKeyboardKey.enter);
       expect(prompt().field, NewHarnessField.project);
       expect(prompt().options.single.id, NewHarnessController.browseId);
       await key(tester, LogicalKeyboardKey.escape);
+      expect(prompt().field, NewHarnessField.projectMenu);
+
+      await openLaunchRow(tester, 'approvals');
+      await typeHarnessQuery(tester, 'Plan first');
       await key(tester, LogicalKeyboardKey.enter);
-      expect(prompt().field, NewHarnessField.launch);
-      await openLaunchRow(tester, 'agent');
-      for (
-        var step = 0;
-        prompt().selected?.id != 'codex' && step < 30;
-        step++
-      ) {
-        await key(tester, LogicalKeyboardKey.arrowUp);
-      }
-      expect(prompt().selected?.id, 'codex');
-      expect(prompt().engine, 'claude');
-      await openAgentSetting(tester, 'codex', NewHarnessController.profileId);
-      expect(prompt().field, NewHarnessField.profile);
-      await key(tester, LogicalKeyboardKey.escape);
-      await key(tester, LogicalKeyboardKey.escape);
-      expect(prompt().engine, 'claude');
-      await openLaunchRow(tester, 'agent');
-      await openAgentSetting(
-        tester,
-        prompt().selected!.engine!,
-        NewHarnessController.permissionsId,
-      );
-      expect(prompt().field, NewHarnessField.mode);
-      await tester.enterText(line, 'Plan first');
-      await key(tester, LogicalKeyboardKey.enter);
-      expect(prompt().field, NewHarnessField.agent);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
       expect(prompt().mode, 'plan');
       await key(tester, LogicalKeyboardKey.escape);
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       expect(app.swarms, [source]);
       expect(
         input,
@@ -1629,9 +1619,9 @@ void main() {
       expect(prompt().mode, 'plan');
       expect(prompt().task, task);
       expect(prompt().project.folder, '/work/openharness');
-      await key(tester, LogicalKeyboardKey.enter);
+      await startHarness(tester);
       await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       expect(app.activeSwarm, same(source));
       expect(source.panes.length, 2);
       expect(source.panes.first, same(original));

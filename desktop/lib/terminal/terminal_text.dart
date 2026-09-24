@@ -26,6 +26,11 @@ TextStyle terminalTextStyle({
   fontFeatures: fontFeatures,
 );
 
+/// The renderer's exact font and line metrics, without inherited UI tracking.
+TextStyle terminalContentStyle({Color? color}) => terminalFontStore.value
+    .toTextStyle(color: color)
+    .copyWith(letterSpacing: 0, wordSpacing: 0);
+
 /// Keeps retained widgets and open overlays on the same live typography.
 class TerminalFontScope extends InheritedNotifier<TerminalFontStore> {
   TerminalFontScope({super.key, required super.child})

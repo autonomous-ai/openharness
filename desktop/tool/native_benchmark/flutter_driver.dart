@@ -10,8 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
@@ -128,7 +127,7 @@ Future<void> runFlutterDispatchBenchmark(
     (
       'cmd_n',
       (LogicalKeyboardKey.keyN, PhysicalKeyboardKey.keyN),
-      (w) => w is NewHarnessBox,
+      (w) => w is NewHarnessForm,
     ),
     (
       'cmd_o',
@@ -188,26 +187,23 @@ Future<void> runFlutterDispatchBenchmark(
         'firstFrame': firstFrame,
         'readyFrame': readyFrame,
       });
-      // With no inherited project, Cmd-N starts on the project question.
-      // Escape first returns to its launch summary, then closes the box.
-      if (element.widget case NewHarnessBox(:final controller)) {
-        for (
-          var step = 0;
-          step < 8 && controller.field != NewHarnessField.launch;
-          step++
-        ) {
+      // Escape clears a filter or prompt before closing. Stop dispatching
+      // as soon as the form disappears so no key reaches the terminal.
+      if (element.widget is NewHarnessForm) {
+        for (var step = 0; step < 4 && _find(matches) != null; step++) {
           _key(_escape, command: false);
           await _frame();
         }
+      } else {
+        _key(_escape, command: false);
       }
-      _key(_escape, command: false);
       for (var frame = 0; frame < 120 && _find(matches) != null; frame++) {
         await _frame();
       }
       if (_find(matches) != null) {
         throw StateError(
           '$operation did not dismiss; focus ${FocusManager.instance.primaryFocus}; '
-          'creation field ${(_find((w) => w is NewHarnessBox)?.widget as NewHarnessBox?)?.controller.field}',
+          'creation field ${(_find((w) => w is NewHarnessForm)?.widget as NewHarnessForm?)?.controller.field}',
         );
       }
     }

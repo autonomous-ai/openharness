@@ -8,8 +8,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
@@ -134,21 +133,16 @@ Future<void> runCoreBenchmark(
   }
 
   Future<void> dismissNew() async {
-    final element = benchmarkFind((w) => w is NewHarnessBox);
-    if (element == null) return;
-    final controller = (element.widget as NewHarnessBox).controller;
     for (
       var step = 0;
-      step < 8 && controller.field != NewHarnessField.launch;
+      step < 4 && benchmarkFind((w) => w is NewHarnessForm) != null;
       step++
     ) {
       benchmarkKey(_escape, command: false);
       await benchmarkFrame();
     }
-    benchmarkKey(_escape, command: false);
-    await benchmarkFrame();
     _check(
-      benchmarkFind((w) => w is NewHarnessBox) == null,
+      benchmarkFind((w) => w is NewHarnessForm) == null,
       'New harness did not close',
     );
   }
@@ -228,10 +222,14 @@ Future<void> runCoreBenchmark(
                 ));
                 await benchmarkFrame();
                 _check(
-                  benchmarkFind((w) => w is NewHarnessBox) != null,
+                  benchmarkFind((w) => w is NewHarnessForm) != null,
                   'Cmd+N did not open',
                 );
-                _editingValue(); // The visible surface must also own editable focus.
+                _check(
+                  FocusManager.instance.primaryFocus?.debugLabel ==
+                      'new-harness-form',
+                  'Cmd+N did not take keyboard focus',
+                );
               case 'cmd_o':
                 benchmarkKey((
                   LogicalKeyboardKey.keyO,

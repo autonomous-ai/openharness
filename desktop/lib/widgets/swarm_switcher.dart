@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'swarm_search_field.dart';
 
 import 'package:flutter/material.dart';
@@ -17,6 +19,8 @@ import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
+import '../state/harness_sessions.dart' show harnessActivityAge;
+import '../shared/theme/prompt_style.dart';
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
 import 'swarm_icon.dart';
@@ -195,10 +199,12 @@ class SwarmSearchKeys extends StatelessWidget {
             'picker.cancel': dismiss,
             // Tab is a picker command now (New Harness completes paths with
             // it); a matched key is consumed, so here it still walks the focus.
-            'picker.complete': () =>
-                FocusManager.instance.primaryFocus?.nextFocus(),
-            'picker.complete_back': () =>
-                FocusManager.instance.primaryFocus?.previousFocus(),
+            'picker.complete': () => search?.setupLayout == true
+                ? move(1)
+                : FocusManager.instance.primaryFocus?.nextFocus(),
+            'picker.complete_back': () => search?.setupLayout == true
+                ? move(-1)
+                : FocusManager.instance.primaryFocus?.previousFocus(),
             if (search != null)
               for (var row = 1; row <= 9; row++)
                 'picker.pick_$row': () => run(() {
@@ -361,6 +367,8 @@ class SwarmSearchResults extends StatefulWidget {
     this.sideBySideMinWidth = 800,
     this.fitRows = false,
     this.terminal = false,
+    this.bios = false,
+    this.header,
   });
   final SwarmSearchController search;
   final ValueChanged<SwarmSearchSelection> onChoose;
@@ -371,6 +379,8 @@ class SwarmSearchResults extends StatefulWidget {
   /// taken their actual heights, including larger text and warning messages.
   final bool fitRows;
   final bool terminal;
+  final bool bios;
+  final Widget? header;
   @override
   State<SwarmSearchResults> createState() => _SwarmSearchResultsState();
 }
@@ -384,6 +394,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   final _announcer = BoxAnnouncer();
   String? _announced;
   final _scroll = ScrollController();
+  Timer? _activityClock;
   final _resultsKey = GlobalKey();
   double _rowHeight = 56;
   bool _revealScheduled = false;
@@ -423,6 +434,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   @override
   void initState() {
     super.initState();
+    if (widget.bios) {
+      _activityClock = Timer.periodic(const Duration(minutes: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    }
     search.addListener(_changed);
     terminalFontStore.addListener(_fontChanged);
     _lastPage = search.resultPage.value;
@@ -521,6 +537,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
 
   @override
   void dispose() {
+    _activityClock?.cancel();
     search.removeListener(_changed);
     terminalFontStore.removeListener(_fontChanged);
     search.resultPage.removeListener(_pageResults);
@@ -564,6 +581,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           terminal: widget.terminal,
           stacked: stacked,
         );
+        if (widget.bios) {
+          // Two terminal lines, a 4 px title/context gap, and 12 px above
+          // and below each session keep adjacent entries distinct.
+          _rowHeight =
+              scale.scale(terminalFontStore.size) *
+                  terminalFontStore.value.height *
+                  2 +
+              28;
+        }
         final height = widget.fitRows
             ? _fittedHeight(
                 constraints,
@@ -588,6 +614,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final highlighted = index == search.cursor;
           final canSubmit = search.canSubmit(row);
           final alreadyHere = search.alreadyHere(row);
+          final activityAge = widget.bios && row.lastActivityAt != null
+              ? harnessActivityAge(row.lastActivityAt, DateTime.now())
+              : null;
           final presentation = (
             row,
             highlighted,
@@ -601,6 +630,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             acceptKey,
             widget.terminal,
             stacked,
+            activityAge,
           );
           final previous = _rowWidgets.remove(row.id);
           if (previous?.presentation == presentation) {
@@ -629,12 +659,28 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             dense: true,
             visualDensity: VisualDensity.compact,
             minVerticalPadding: 0,
-            horizontalTitleGap: 10,
+            horizontalTitleGap: widget.bios ? 12 : 10,
             minLeadingWidth: 20,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+            contentPadding: EdgeInsets.symmetric(
+              horizontal: widget.bios ? 16 : 10,
+            ),
             // The dock uses its full-row highlight for
             // selection; prefixes only appear in the input.
-            leading: widget.terminal
+            leading: widget.bios
+                ? row.isCreate
+                      ? Icon(
+                          LucideIcons.plus300,
+                          size: terminalFontStore.size * 1.25,
+                          color: grid.AppPalette.swarmAccent,
+                        )
+                      : row.agentId != null
+                      ? EngineMark(
+                          engine: row.engine,
+                          size: terminalFontStore.size * 1.25,
+                          enabled: canSubmit,
+                        )
+                      : null
+                : widget.terminal
                 ? null
                 : Row(
                     mainAxisSize: MainAxisSize.min,
@@ -679,8 +725,13 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               row: row,
               terminal: widget.terminal,
               stacked: stacked,
+              bios: widget.bios,
+              highlighted: highlighted,
+              activityAge: activityAge,
             ),
-            trailing: widget.terminal
+            trailing: widget.bios
+                ? null
+                : widget.terminal
                 ? (highlighted
                       ? Text(
                           acceptKey ?? '',
@@ -737,12 +788,30 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                   _focusResult(row.id);
                 }
               },
-              child: BoxRowHighlight(
-                terminal: widget.terminal,
-                highlighted: highlighted,
-                accent: grid.AppPalette.swarmAccent,
-                child: tile,
-              ),
+              child: widget.bios
+                  ? Material(
+                      color: highlighted
+                          ? Colors.white.withValues(alpha: .12)
+                          : Colors.transparent,
+                      child: row.isCreate
+                          ? DecoratedBox(
+                              decoration: BoxDecoration(
+                                border: Border(
+                                  bottom: BorderSide(
+                                    color: Colors.white.withValues(alpha: .12),
+                                  ),
+                                ),
+                              ),
+                              child: tile,
+                            )
+                          : tile,
+                    )
+                  : BoxRowHighlight(
+                      terminal: widget.terminal,
+                      highlighted: highlighted,
+                      accent: grid.AppPalette.swarmAccent,
+                      child: tile,
+                    ),
             ),
           );
           if (_rowWidgets.length > 48) {
@@ -760,6 +829,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           label: 'Search results',
           child: Column(
             children: [
+              ?widget.header,
               Expanded(
                 child: search.rows.isEmpty
                     ? Center(
@@ -794,8 +864,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                             policy: OrderedTraversalPolicy(),
                             child: ListView.builder(
                               key: const ValueKey('swarm-search-result-list'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
+                              padding: EdgeInsets.symmetric(
+                                horizontal: widget.bios ? 12 : 8,
                               ),
                               controller: _scroll,
                               // The dock only shows a few rows. Building the
@@ -851,7 +921,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             ],
           ),
         );
-        final preview = search.hasPreview
+        final preview = search.hasPreview && (!widget.bios || sideBySide)
             ? SwarmSearchPreview(
                 key: const ValueKey('swarm-search-preview'),
                 search: search,
@@ -862,7 +932,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         // Side by side, the two columns keep their share whether or not
         // there is anything to preview: a list that widened every time the
         // preview went away made the rows move under the reader's eye.
-        final content = sideBySide
+        final content = sideBySide && (widget.bios || preview != null)
             ? Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -958,12 +1028,18 @@ class _SearchRowContent extends StatefulWidget {
     required this.row,
     required this.terminal,
     required this.stacked,
+    this.bios = false,
+    this.highlighted = false,
+    this.activityAge,
   });
 
   final SwarmSearchController search;
   final SwarmDestination row;
   final bool terminal;
   final bool stacked;
+  final bool bios;
+  final bool highlighted;
+  final String? activityAge;
 
   @override
   State<_SearchRowContent> createState() => _SearchRowContentState();
@@ -1008,6 +1084,72 @@ class _SearchRowContentState extends State<_SearchRowContent> {
     grid.AppTheme.watch(context);
     final row = widget.row;
     final matches = searchResultMatches(row, swarmQueryTerms(_query.$1));
+    if (widget.bios) {
+      final style = terminalContentStyle(
+        color: row.isCreate
+            ? grid.AppPalette.swarmAccent
+            : widget.highlighted
+            ? Colors.white
+            : Colors.white70,
+      );
+      final data = row.promptContext;
+      return Semantics(
+        label: row.isCreate
+            ? 'New Harness'
+            : '${row.title}\n${row.terminalDetail ?? row.detail}'
+                  '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
+        excludeSemantics: true,
+        child: row.isCreate
+            ? Text('New Harness', style: style)
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SearchResultText(
+                          row.title,
+                          matches: matches.where((match) => match.title),
+                          style: style,
+                        ),
+                      ),
+                      if (widget.activityAge case final age?) ...[
+                        const SizedBox(width: 12),
+                        Tooltip(
+                          message:
+                              'Last active ${row.lastActivityAt!.toLocal()}',
+                          child: Text(
+                            age,
+                            style: terminalContentStyle(color: Colors.white38),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if (data != null || row.detail.isNotEmpty)
+                    const SizedBox(height: 4),
+                  if (data != null)
+                    PromptContextView(
+                      contextData: PromptContext(
+                        machine: data.machine,
+                        project: data.project,
+                        branch: data.branch,
+                        leading: data.leading,
+                      ),
+                      textStyle: terminalContentStyle(color: kBoxFaint),
+                      matches: matches.where((match) => !match.title),
+                    )
+                  else if (row.detail.isNotEmpty)
+                    SearchResultText(
+                      row.detail,
+                      matches: matches.where((match) => !match.title),
+                      style: style.copyWith(color: kBoxFaint),
+                    ),
+                ],
+              ),
+      );
+    }
     final title = SearchResultText(
       row.title,
       matches: matches.where((match) => match.title),

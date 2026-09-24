@@ -2,39 +2,27 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../core/test_run.dart';
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/keymap.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import 'box_chrome.dart';
+import 'engine_identity.dart';
 
 /// Every answer a new harness needs, on one screen, changed where it stands.
 ///
-/// A BIOS setup utility rather than a palette: ↑↓ walk the items, ← and →
-/// change the highlighted one's value in place, and Return starts. Nothing
-/// opens, nothing is nested, and no chord is held — the complaint that
-/// retired the dock was that each answer was a trip into a sub-list and back.
+/// Shares Open Harness's terminal typography and quiet selection treatment.
+/// ↑↓ walk the fields; ←→ change their values. Return opens the focused
+/// field's choices, and only the explicit New Harness action starts an agent.
+/// Typing filters the choices without changing the current value.
 ///
-/// What separates a BIOS screen from an ncurses dialog is that the screen
-/// *is* the chrome: rules run edge to edge, the help pane and the key legend
-/// are always there rather than summoned, values sit bracketed at a fixed
-/// column, and nothing is a button. A centred rounded box with a shadow is
-/// `dialog`, which is the thing this deliberately is not.
-///
-/// ← and → change values here, which is Award's model rather than Phoenix's.
-/// Phoenix spends them on switching between Main/Advanced/Boot tabs and pays
-/// for values with -/+; with one screen there are no tabs to switch to, so
-/// the arrows go where they are useful. Phoenix's -/+ are deliberately NOT
-/// bound: folder and branch names are full of hyphens, and a screen that
-/// swallows one to nudge a value is broken for the thing people type most.
-/// PgUp/PgDn keep the convention for hands that learned it.
-///
-/// A row is never removed for being unavailable. A folder that is not a git
-/// repository still has a Branch row, greyed, saying so; a row that vanishes
-/// moves every row below it and answers nothing.
+/// Unavailable Git fields explain why they cannot be changed. Profile only
+/// appears for agents that use it.
 class NewHarnessForm extends StatefulWidget {
   const NewHarnessForm({
     super.key,
@@ -42,12 +30,16 @@ class NewHarnessForm extends StatefulWidget {
     required this.onClose,
     required this.onCreated,
     this.onBrowse,
+    this.onStore,
+    this.onLinkProfile,
+    this.onNeedsForm,
   });
 
   final NewHarnessController controller;
   final VoidCallback onClose;
   final VoidCallback onCreated;
-  final VoidCallback? onBrowse;
+  final FutureOr<void> Function()? onBrowse;
+  final VoidCallback? onStore, onLinkProfile, onNeedsForm;
 
   @override
   State<NewHarnessForm> createState() => _NewHarnessFormState();
@@ -69,18 +61,19 @@ enum _Row {
 class _NewHarnessFormState extends State<NewHarnessForm> {
   NewHarnessController get box => widget.controller;
   final _focus = FocusNode(debugLabel: 'new-harness-form');
+  final _inputFocus = FocusNode(debugLabel: 'new-harness-query');
+  final _queryText = TextEditingController();
   _Row _row = _Row.project;
+  final _itemKeys = {for (final row in _Row.values) row: GlobalKey()};
+  final _choiceKey = GlobalKey();
 
-  /// The caret's blink. A `Timer.periodic` is a `pumpAndSettle` that never
-  /// settles, so it never runs under test, and Reduce Motion holds the caret
-  /// on rather than hiding it — a caret that vanished would read as focus
-  /// lost, which is the opposite of what it is for.
-  Timer? _blink;
-  bool _caretOn = true;
+  List<_Row> get _rows => [
+    for (final row in _Row.values)
+      if (row != _Row.profile || box.usesProfile) row,
+  ];
 
-  /// Whether this row's choices are on screen. Return opens them, as a BIOS
-  /// opens its value popup; without it the doors — Open Folder, Clone, New
-  /// Project — could only be found by searching for something else first.
+  /// Whether the focused field's choices own the keyboard. Wide windows also
+  /// preview them while the fields are active.
   bool _listOpen = false;
 
   @override
@@ -89,34 +82,63 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     box.addListener(_onBox);
     // The pane colours can change under an open dialog; it wears them too.
     terminalThemeStore.addListener(_onBox);
-    _syncField();
-    _focus.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (box.checking) _row = _Row.start;
+      _syncField();
+      _focus.requestFocus();
+    });
   }
 
   @override
   void dispose() {
     box.removeListener(_onBox);
     terminalThemeStore.removeListener(_onBox);
-    _blink?.cancel();
+    _inputFocus.dispose();
+    _queryText.dispose();
     _focus.dispose();
     super.dispose();
   }
 
+  NewHarnessField? _observedField;
   void _onBox() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (_queryText.text != box.query) {
+      _queryText.value = TextEditingValue(
+        text: box.query,
+        selection: TextSelection.collapsed(offset: box.query.length),
+      );
+    }
+    if (_observedField != box.field) {
+      _observedField = box.field;
+      final next = switch (box.field) {
+        NewHarnessField.agent => _Row.agent,
+        NewHarnessField.machine => _Row.machine,
+        NewHarnessField.branch => _Row.branch,
+        NewHarnessField.mode => _Row.approvals,
+        NewHarnessField.profile => _Row.profile,
+        NewHarnessField.projectMenu ||
+        NewHarnessField.project ||
+        NewHarnessField.projectName ||
+        NewHarnessField.projectRepository => _Row.project,
+        NewHarnessField.launch => _Row.start,
+        _ => _row,
+      };
+      if (next != _row) {
+        _row = next;
+        _listOpen = false;
+        _takeWheel();
+      }
+    }
+    setState(() {});
+    _revealRow();
   }
 
-  void _syncBlink({required bool still}) {
-    final wanted = _picking && !kUnderTest && !still;
-    if (wanted && _blink == null) {
-      _blink = Timer.periodic(const Duration(milliseconds: 530), (_) {
-        if (mounted) setState(() => _caretOn = !_caretOn);
-      });
-    } else if (!wanted && _blink != null) {
-      _blink!.cancel();
-      _blink = null;
-      _caretOn = true;
-    }
+  void _focusEditor() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      (_picking ? _inputFocus : _focus).requestFocus();
+    });
   }
 
   /// The field a row edits, or null where the row is its own answer.
@@ -143,12 +165,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   /// Why a row cannot be changed, in the words the row will wear.
   String? _blocked(_Row row) => switch (row) {
+    _Row.branch || _Row.worktree when box.checkingGit => '',
     _Row.branch when box.gitError != null => box.gitError,
     _Row.branch when !box.isGitProject => 'Not a Git repository',
     _Row.worktree when box.gitError != null => box.gitError,
     _Row.worktree when !box.canUseWorktree => 'Not a Git repository',
     _Row.approvals when !box.hasModes => 'Not used by this agent',
-    _Row.profile when !box.hasProfile => 'Codex only',
     _ => null,
   };
 
@@ -177,9 +199,6 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _Row.agent => box.agentLabel,
     _Row.machine => box.machineLabel,
     _Row.branch => box.branchRowLabel,
-    // BIOS has no checkbox: a boolean is a bracketed enum, Yes/No where the
-    // row reads as a question and Enabled/Disabled where it reads as a
-    // feature. This one is a question.
     _Row.worktree => box.worktree ? 'Yes' : 'No',
     _Row.approvals => box.modeLabel,
     _Row.profile => box.profileLabel ?? 'Default',
@@ -199,14 +218,37 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _moveRow(int delta) {
-    if (box.locked) return;
-    final rows = _Row.values;
+    if (box.busy || box.linkingProfile) return;
+    final rows = _rows;
     setState(() {
       _row = rows[(rows.indexOf(_row) + delta) % rows.length];
       _listOpen = false;
     });
     if (box.query.isNotEmpty) box.setQuery('');
     _syncField();
+    _revealRow();
+  }
+
+  void _revealRow() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final context = _picking
+          ? _choiceKey.currentContext
+          : _itemKeys[_row]?.currentContext;
+      if (context == null) return;
+      final target = context.findRenderObject();
+      final viewport = Scrollable.maybeOf(context)?.context.findRenderObject();
+      if (target is! RenderBox ||
+          viewport is! RenderBox ||
+          !target.hasSize ||
+          !viewport.hasSize) {
+        return;
+      }
+      final top = target.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      if (top < 0 || top + target.size.height > viewport.size.height) {
+        Scrollable.ensureVisible(context, alignment: top < 0 ? 0 : 1);
+      }
+    });
   }
 
   /// ← and → on a row that is its own answer flip it; everywhere else they
@@ -239,14 +281,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     box.applyOption(_wheel[_at]);
   }
 
-  /// A field with more than one answer left shows them, as a BIOS opens a
-  /// bordered list over the item pane rather than making you step blind
-  /// through eighty-five projects one arrow at a time. One match needs no
-  /// list — the row already says it — so precise typing still starts in two
-  /// keys.
-  /// A prompt opened from a door has its own list — the folder chooser, a
-  /// path's completions — and it must be on screen before anything is typed,
-  /// or the way out of the door is unreachable.
+  /// Folder paths, project names and repository URLs keep their prompt active
+  /// even before anything is typed.
   static const _prompts = {
     NewHarnessField.project,
     NewHarnessField.projectName,
@@ -255,24 +291,62 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   bool get _picking =>
       (_listOpen || box.query.isNotEmpty || _prompts.contains(box.field)) &&
-      box.options.isNotEmpty &&
       _fieldOf(_row) != null &&
       _blocked(_row) == null;
 
-  /// Typing narrows the highlighted item and takes the best match, so the
-  /// value on screen is always the one Return would start with.
+  bool _isComposing() =>
+      _queryText.value.composing.isValid &&
+      !_queryText.value.composing.isCollapsed;
+
+  /// Typing filters the focused field's choices; Return commits the selection.
   void _onTyped(String value) {
-    if (_fieldOf(_row) == null || _blocked(_row) != null) return;
+    if (box.locked || _fieldOf(_row) == null || _blocked(_row) != null) return;
     box.setQuery(value);
+    _focusEditor();
   }
 
-  /// Walk the matches without leaving the row, taking each as it is reached
-  /// so the value above the list always reads as the answer.
+  void _insertText(String text) {
+    if (box.locked || _fieldOf(_row) == null || _blocked(_row) != null) return;
+    final value = _queryText.value;
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    final next = value.text.replaceRange(selection.start, selection.end, text);
+    _queryText.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: selection.start + text.length),
+    );
+    _onTyped(next);
+  }
+
+  Future<void> _pasteQuery() async {
+    if (box.locked || _fieldOf(_row) == null || _blocked(_row) != null) return;
+    final row = _row;
+    final field = box.field;
+    final query = box.query;
+    final selection = _queryText.selection;
+    bool stillEditing() =>
+        mounted &&
+        !box.locked &&
+        _row == row &&
+        box.field == field &&
+        box.query == query &&
+        _queryText.selection == selection;
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      if (!stillEditing() || data?.text?.isNotEmpty != true) return;
+      _insertText(data!.text!.replaceAll(RegExp(r'[\r\n]+'), ' '));
+      _revealRow();
+    } on PlatformException {
+      if (stillEditing()) box.warn('Could not paste. Try again.');
+    }
+  }
+
+  /// Walk the choices without changing the field's saved value.
   void _stepMatch(int delta) {
     // Move the highlight and nothing else. Taking each row as it is passed
     // applies a project, which reselects its machine, which refreshes the
     // list with a reset cursor — the highlight snapped home on every press.
-    // A BIOS popup commits on Return too, never while you are scrolling.
     // The doors ARE drawn, so the arrows land on them: a row you can see and
     // cannot reach is worse than one that is not there.
     setState(() => box.move(delta));
@@ -287,18 +361,58 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     NewHarnessController.repositoryId,
     NewHarnessController.existingProjectId,
     NewHarnessController.changeMachineId,
+    NewHarnessController.linkProfileId,
+    NewHarnessController.refreshProfilesId,
+    NewHarnessController.storeId,
   };
   bool _isDoor(NewHarnessOption option) => _doors.contains(option.id);
 
   /// Clone, Open Folder and New Project are doors rather than values: they
   /// open a prompt or the system chooser instead of answering the row.
   void _openDoor(NewHarnessOption option) {
+    if (box.locked || !option.enabled) return;
     box.setQuery('');
+    if (option.id == NewHarnessController.storeId) {
+      widget.onStore?.call();
+      return;
+    }
+    if (option.id == NewHarnessController.linkProfileId) {
+      widget.onLinkProfile?.call();
+      return;
+    }
+    if (option.id == NewHarnessController.refreshProfilesId) {
+      unawaited(box.refreshProfiles());
+      return;
+    }
+    if (option.id == NewHarnessController.changeMachineId) {
+      _selectRow(_Row.machine);
+      setState(() => _listOpen = true);
+      return;
+    }
     if (option.id == NewHarnessController.browseId) {
-      widget.onBrowse?.call();
+      unawaited(_browse());
       return;
     }
     setState(() => box.accept(option));
+  }
+
+  Future<void> _browse() async {
+    final machineId = box.machineId;
+    try {
+      await widget.onBrowse?.call();
+    } on Exception {
+      if (mounted &&
+          box.machineId == machineId &&
+          box.field == NewHarnessField.project) {
+        box.warn('Could not browse folders. Try again.');
+      }
+    }
+    if (!mounted) return;
+    if (box.field == NewHarnessField.launch) _selectRow(_Row.project);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusEditor();
+    });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   Future<void> _start() async {
@@ -312,9 +426,37 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     }
   }
 
+  void _acceptChoice(NewHarnessOption option) {
+    if (box.locked) return;
+    if (!option.enabled) {
+      box.accept(option);
+      return;
+    }
+    if (_isDoor(option)) {
+      _openDoor(option);
+    } else {
+      final prompt = _prompts.contains(box.field);
+      box.applyOption(option);
+      box.setQuery('');
+      if (prompt) box.focusField(NewHarnessField.projectMenu);
+      setState(() => _listOpen = false);
+    }
+    _focusEditor();
+    _revealRow();
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
+    }
+    // Candidate navigation and confirmation belong to the input method. Keep
+    // these keys out of both the picker and ancestor focus-traversal shortcuts.
+    if (_isComposing()) return KeyEventResult.skipRemainingHandlers;
+    if (event.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed)) {
+      if (event is KeyDownEvent) unawaited(_pasteQuery());
+      return KeyEventResult.handled;
     }
     switch (event.logicalKey) {
       case LogicalKeyboardKey.tab:
@@ -333,24 +475,27 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         _picking ? _stepMatch(-1) : _moveRow(-1);
       case LogicalKeyboardKey.arrowRight:
       case LogicalKeyboardKey.pageDown:
-        _stepValue(1);
+        if (_picking && event.logicalKey == LogicalKeyboardKey.arrowRight) {
+          return KeyEventResult.ignored;
+        }
+        if (!_picking) _stepValue(1);
       case LogicalKeyboardKey.arrowLeft:
       case LogicalKeyboardKey.pageUp:
-        _stepValue(-1);
+        if (_picking && event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+          return KeyEventResult.ignored;
+        }
+        if (!_picking) _stepValue(-1);
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
-        // One verb per surface: on the list Return takes the row and closes
-        // it, on the screen Return starts. The legend says which, always.
+        // Return chooses a value in the list; only the start row launches.
         if (_picking) {
           final option = box.selected;
-          if (option != null && _isDoor(option)) {
-            _openDoor(option);
-          } else if (option != null) {
-            // Everything else is an answer, synthetic or not: "Create branch
-            // x" is a branch, it is just not one the arrows cycle onto.
-            box.applyOption(option);
-            box.setQuery('');
-            setState(() => _listOpen = false);
+          if (option != null) {
+            _acceptChoice(option);
+          } else if (_prompts.contains(box.field)) {
+            box.accept();
+          } else {
+            box.warn('No values match this search.');
           }
         } else if (box.field == NewHarnessField.projectName ||
             box.field == NewHarnessField.projectRepository) {
@@ -374,21 +519,34 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         // text before it closes anything, as vim's wildmenu does.
         if (box.query.isNotEmpty) {
           _onTyped('');
+        } else if (_prompts.contains(box.field)) {
+          setState(() {
+            _listOpen = false;
+            box.focusField(NewHarnessField.projectMenu);
+          });
         } else if (_listOpen) {
           setState(() => _listOpen = false);
-        } else if (box.field == NewHarnessField.projectName ||
-            box.field == NewHarnessField.projectRepository ||
-            box.field == NewHarnessField.project) {
-          // Back out of a door to the list it was opened from.
-          setState(() => box.focusField(NewHarnessField.projectMenu));
         } else {
-          widget.onClose();
+          if (box.requestDismiss()) widget.onClose();
         }
       case LogicalKeyboardKey.backspace:
+        if (_inputFocus.hasFocus) return KeyEventResult.ignored;
         final query = box.query;
         if (query.isEmpty) return KeyEventResult.ignored;
-        _onTyped(query.substring(0, query.length - 1));
+        final selection = _queryText.selection;
+        if (!selection.isValid) return KeyEventResult.ignored;
+        if (selection.isCollapsed && selection.start > 0) {
+          final before = query.substring(0, selection.start);
+          _queryText.selection = TextSelection(
+            baseOffset: before.characters.skipLast(1).toString().length,
+            extentOffset: selection.end,
+          );
+        }
+        _insertText('');
       default:
+        // A real text client owns native paste, selection, and composition.
+        // Only the first printable key on an idle field needs forwarding.
+        if (_inputFocus.hasFocus) return KeyEventResult.ignored;
         // Typing narrows the highlighted item. There is no separate input to
         // move to — the item is the input, which is what keeps this one
         // screen. `-` and `+` are values, so they never reach here.
@@ -400,43 +558,29 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             HardwareKeyboard.instance.isControlPressed) {
           return KeyEventResult.ignored;
         }
-        _onTyped('${box.query}$typed');
+        _insertText(typed);
     }
+    _focusEditor();
+    _revealRow();
     return KeyEventResult.handled;
   }
 
-  Color get _rule => Colors.white.withValues(alpha: .22);
+  Color get _rule => Colors.white.withValues(alpha: .16);
 
-  /// A BIOS popup does not dim what is behind it. It separates itself with a
-  /// fill that differs from the screen, one bright border, and a hard black
-  /// shadow thrown a character cell down and right — solid, never blurred.
-  /// The popup wears the TERMINAL's background, not the workspace's: the
-  /// workspace grey is the wallpaper the panes sit on, and it is lighter.
-  /// This is part of the same screen, not a visitor from another palette —
-  /// what separates it is the dimmed screen behind and the shadow it throws.
   Color get _popupFill => terminalThemeFor(
     grid.AppTheme.palette.value,
     terminalThemeStore.value,
   ).background;
 
-  /// Two strengths of highlight, because two columns are marked at once and
-  /// only one of them has the keys. Full inverse video is where the arrows
-  /// are; the dim bar is "this is the current value" on the side that is
-  /// merely showing. A mode you have to remember is a mode you get wrong.
-  static const _activeFill = Color(0xFFE5E9F0);
-
-  /// The key guide is reference, not content: it should be legible when
-  /// looked for and quiet when not. Dimmer than the faint used for detail.
-  Color get _legendInk => Colors.white.withValues(alpha: .38);
-
-  Color get _idleFill => Colors.white.withValues(alpha: .16);
-  Color get _selectionInk => _popupFill;
+  // Only the column that owns the keys carries Open Harness's full highlight.
+  Color get _activeFill => Colors.white.withValues(alpha: .12);
+  Color get _idleFill => Colors.white.withValues(alpha: .04);
 
   /// One face, one size, everywhere on this screen — and it is the
   /// TERMINAL's size, the one ⌘+ and ⌘− set, not the UI's fixed 13pt. A box
   /// that stays small beside a zoomed terminal reads as another application.
   TextStyle _ink([Color? color]) =>
-      terminalTextStyle(color: color, height: 1.35);
+      terminalContentStyle(color: color ?? Colors.white);
 
   /// Geometry follows the same size, so the columns keep their proportions.
   double _scale = 1;
@@ -445,128 +589,197 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     TerminalFontScope.watch(context);
-    _scale = terminalTextScaleOf(context);
-    _syncBlink(still: MediaQuery.disableAnimationsOf(context));
-    return Focus(
-      focusNode: _focus,
-      onKeyEvent: _onKey,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.topCenter,
-        children: [
-          Material(
-            // No shadow and no border: the dark screen behind is what sets
-            // this apart, and an edge drawn round a panel that is already
-            // the only lit thing is a line doing no work. Text with no
-            // Material ancestor is drawn by Flutter with yellow double
-            // underlines, which is a debug marker, not a style.
-            elevation: 0,
-            color: _popupFill,
-            surfaceTintColor: Colors.transparent,
-            child: DefaultTextStyle.merge(
-              style: _ink(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const SizedBox(height: 16),
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(flex: 56, child: _items()),
-                        VerticalDivider(width: 1, thickness: 1, color: _rule),
-                        Expanded(flex: 44, child: _sidePane()),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+    final scale = terminalTextScaleOf(context);
+    if (_scale != scale) {
+      _scale = scale;
+      _revealRow();
+    }
+    return KeymapRegion(
+      contextKind: KeymapContext.picker,
+      composing: _isComposing,
+      actions: {
+        'picker.more_options': () {
+          if (!box.locked && !box.checkingGit) widget.onNeedsForm?.call();
+        },
+      },
+      child: Focus(
+        key: const ValueKey('new-harness-form'),
+        focusNode: _focus,
+        onKeyEvent: _onKey,
+        child: Material(
+          elevation: 0,
+          color: _popupFill,
+          surfaceTintColor: Colors.transparent,
+          child: DefaultTextStyle.merge(
+            style: _ink(),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final wide = constraints.maxWidth >= 800 * _scale.clamp(1, 1.5);
+                if (!wide) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: _picking ? _sidePane(compact: true) : _items(),
+                      ),
+                      if (!_picking &&
+                          (box.error != null || box.status != null))
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: _status(),
+                        ),
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(flex: 55, child: _items()),
+                    VerticalDivider(width: 1, thickness: 1, color: _rule),
+                    Expanded(flex: 45, child: _sidePane()),
+                  ],
+                );
+              },
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _items() => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Column(
-      mainAxisAlignment: MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final row in _Row.values)
-          if (row == _Row.start) _buildButton() else _buildRow(row),
-        // The key guide sits at the foot of its own column, indented to the
-        // same column the items start on so the left edge reads as one line.
-        const Spacer(),
-        _legend(),
-      ],
-    ),
-  );
-
-  /// The only thing on the screen that starts an agent. A BIOS puts Yes and
-  /// No in the middle of its popup, bracketed and filled when chosen; this
-  /// exists so that one stray Return on a value row cannot launch anything.
-  Widget _buildButton() {
-    final on = _row == _Row.start && !_picking;
-    return Padding(
-      padding: EdgeInsets.only(top: 14 * _scale, left: 16 * _scale),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          color: on ? _activeFill : Colors.transparent,
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Text(
-            '[ New Harness ]',
-            style: _ink(on ? _selectionInk : Colors.white),
           ),
         ),
       ),
     );
   }
 
-  /// The right column, which a BIOS spends on its key legend and, while a
-  /// value is being chosen, on the choices. There is no help pane: the rows
-  /// say what they are, and a paragraph explaining them was furniture.
-  /// The right column is the focused row's choices, always — not something
-  /// summoned by typing. Walking the items changes what is listed here, so
-  /// the screen answers "what else could this be?" before it is asked.
-  Widget _sidePane() => Padding(
-    padding: EdgeInsets.fromLTRB(16 * _scale, 6, 14 * _scale, 10),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [if (_hasChoices) _matchPane()],
+  Widget _items() => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+    child: SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final row in _rows)
+            if (row == _Row.start) _buildButton() else _buildRow(row),
+        ],
+      ),
+    ),
+  );
+
+  /// The only action that starts an agent, distinct from the editable fields.
+  Widget _buildButton() {
+    final on = _row == _Row.start && !_picking;
+    return Semantics(
+      key: const ValueKey('new-harness-field-start'),
+      button: true,
+      selected: on,
+      enabled: !box.busy && !box.linkingProfile,
+      onTap: !box.busy && !box.linkingProfile ? _start : null,
+      child: Padding(
+        key: _itemKeys[_Row.start],
+        padding: const EdgeInsets.only(top: 24),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
+          onTap: !box.busy && !box.linkingProfile ? _start : null,
+          child: Container(
+            color: on ? _activeFill : Colors.transparent,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Icon(
+                  box.checking ? LucideIcons.refreshCw300 : LucideIcons.plus300,
+                  size: terminalFontStore.size * 1.25,
+                  color: grid.AppPalette.swarmAccent,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    box.checking ? 'Check status' : 'New Harness',
+                    style: _ink(grid.AppPalette.swarmAccent),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Wide windows preview choices beside the fields. Narrow windows give the
+  /// active list the full width, with Escape returning to the same field.
+  Widget _sidePane({bool compact = false}) => Semantics(
+    key: const ValueKey('new-harness-choices'),
+    container: true,
+    focused: _picking,
+    label: '${_label(_row)} choices',
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (compact)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: InkWell(
+                canRequestFocus: false,
+                onTap: () {
+                  if (_prompts.contains(box.field)) {
+                    box.focusField(NewHarnessField.projectMenu);
+                  }
+                  box.setQuery('');
+                  setState(() => _listOpen = false);
+                  _focus.requestFocus();
+                  _revealRow();
+                },
+                child: Row(
+                  children: [
+                    Icon(
+                      LucideIcons.chevronLeft300,
+                      size: terminalFontStore.size,
+                      color: kBoxFaint,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(_label(_row), style: _ink(kBoxFaint)),
+                  ],
+                ),
+              ),
+            ),
+          if (_hasChoices) ...[
+            _searchBar(),
+            const SizedBox(height: 24),
+            Flexible(child: SingleChildScrollView(child: _matchPane())),
+          ],
+          if (box.error != null || box.status != null) ...[
+            const SizedBox(height: 24),
+            _status(),
+          ],
+        ],
+      ),
+    ),
+  );
+
+  Widget _status() => Semantics(
+    liveRegion: true,
+    child: Text(
+      box.error ?? box.status!,
+      key: const ValueKey('new-harness-status'),
+      style: _ink(box.error != null ? Colors.orangeAccent : kBoxFaint),
     ),
   );
 
   /// Whether this row has anything to list. Worktree is a boolean and the
   /// button is an action, so their columns stay empty rather than inventing
   /// something to fill them.
-  bool get _hasChoices =>
-      _fieldOf(_row) != null &&
-      _blocked(_row) == null &&
-      box.options.isNotEmpty;
+  bool get _hasChoices => _fieldOf(_row) != null && _blocked(_row) == null;
 
   /// The choices, in the order the controller already ranks them: the three
   /// doors first — New Project, Open Folder, Clone — then the recents and
   /// matches under a gap. The highlight opens on the first real project, the
   /// fourth row, so the doors are visible without being in the way.
   Widget _matchPane() {
-    const cap = 9;
-    final rows = box.options;
-    final at = rows.indexWhere((row) => identical(row, box.selected));
-    final from = ((at < 0 ? 0 : at) - cap ~/ 2)
-        .clamp(0, (rows.length - cap).clamp(0, rows.length))
-        .toInt();
-    final shown = rows.skip(from).take(cap).toList();
+    final shown = box.options;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _searchBar(),
-        SizedBox(height: 4 * _scale),
-        Divider(height: 1, thickness: 1, color: _rule),
-        SizedBox(height: 6 * _scale),
+        if (shown.isEmpty && !_prompts.contains(box.field))
+          Text('No matches', style: _ink(kBoxFaint)),
         for (var i = 0; i < shown.length; i++) ...[
           _matchRow(shown[i]),
           // One gap where the doors end and the projects begin.
@@ -590,130 +803,244 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       : 'Search ${_label(_row).toLowerCase()}';
 
   Widget _searchBar() {
-    final typed = box.query;
-    return Row(
-      children: [
-        Text('> ', style: _ink(_picking ? Colors.white : kBoxFaint)),
-        if (typed.isNotEmpty)
-          Flexible(
-            child: Text(
-              typed,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: _ink(Colors.white),
-            ),
-          ),
-        // The caret belongs to the arrows: it appears when they are handed
-        // here and blinks while they stay. Its cell is held open whether or
-        // not it is lit, so the hint beside it does not jump each blink.
-        if (_picking)
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
           SizedBox(
-            width: grid.AppType.monoSize * 0.62 * _scale,
-            child: _caretOn ? Text('█', style: _ink(Colors.white)) : null,
-          ),
-        if (typed.isEmpty)
-          Flexible(
+            width: terminalFontStore.size * 1.25,
             child: Text(
-              _picking ? ' $_promptHint' : _promptHint,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: _ink(kBoxFaint),
+              '>',
+              key: const ValueKey('new-harness-prompt'),
+              textAlign: TextAlign.center,
+              style: _ink(_picking ? Colors.white : kBoxFaint),
             ),
           ),
-      ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Actions(
+              actions: {
+                PasteTextIntent: CallbackAction<PasteTextIntent>(
+                  onInvoke: (_) {
+                    unawaited(_pasteQuery());
+                    return null;
+                  },
+                ),
+              },
+              child: TextField(
+                key: const ValueKey('new-harness-query'),
+                controller: _queryText,
+                focusNode: _inputFocus,
+                readOnly: box.locked,
+                showCursor: _picking,
+                style: _ink(Colors.white),
+                cursorColor: Colors.white70,
+                cursorWidth: terminalFontStore.size * .62,
+                cursorRadius: Radius.zero,
+                cursorOpacityAnimates: false,
+                autocorrect: false,
+                enableSuggestions: false,
+                onChanged: _onTyped,
+                onTap: () {
+                  setState(() => _listOpen = true);
+                  _revealRow();
+                },
+                onTapOutside: (_) {},
+                decoration: InputDecoration(
+                  hintText: '${_picking ? ' ' : ''}$_promptHint',
+                  hintStyle: _ink(kBoxFaint),
+                  hintMaxLines: 1,
+                  isDense: true,
+                  isCollapsed: true,
+                  constraints: const BoxConstraints(),
+                  contentPadding: EdgeInsets.zero,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _matchRow(NewHarnessOption option) {
     final on = identical(option, box.selected);
-    return Container(
-      color: on ? (_picking ? _activeFill : _idleFill) : Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-      child: Text(
-        option.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: _ink(
-          on && _picking
-              ? _selectionInk
-              // The whole column dims while the items hold the keys, and
-              // comes up when they are handed over. A reader should be able
-              // to see where typing goes without reading the legend.
-              : !_picking || option.synthetic
-              ? kBoxFaint
-              : Colors.white,
+    final local =
+        box.field == NewHarnessField.machine &&
+        box.app.stateOf(option.id)?.isLocalMachine == true;
+    final actionIcon = switch (option.id) {
+      NewHarnessController.repositoryId => LucideIcons.gitBranch300,
+      NewHarnessController.existingProjectId ||
+      NewHarnessController.browseId => LucideIcons.folder300,
+      NewHarnessController.newProjectId => LucideIcons.plus300,
+      _ => null,
+    };
+    final showDetail =
+        (_row == _Row.agent || _row == _Row.profile) &&
+        option.detail.isNotEmpty &&
+        !_isDoor(option);
+    final title = Text(
+      option.title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: _ink(
+        !_picking || !option.enabled
+            ? kBoxFaint
+            : option.synthetic
+            ? grid.AppPalette.swarmAccent
+            : on
+            ? Colors.white
+            : Colors.white70,
+      ),
+    );
+    return Semantics(
+      key: ValueKey('new-harness-option-${option.id}'),
+      selected: on,
+      enabled: option.enabled && !box.locked,
+      button: _isDoor(option),
+      child: InkWell(
+        canRequestFocus: false,
+        onTap: !box.locked ? () => _acceptChoice(option) : null,
+        child: Container(
+          key: on ? _choiceKey : null,
+          color: on && _picking ? _activeFill : Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (actionIcon != null) ...[
+                Icon(
+                  actionIcon,
+                  size: terminalFontStore.size * 1.25,
+                  color: _picking ? grid.AppPalette.swarmAccent : kBoxFaint,
+                ),
+                const SizedBox(width: 12),
+              ] else if (option.engine != null) ...[
+                EngineMark(
+                  engine: option.engine,
+                  size: terminalFontStore.size * 1.25,
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (local)
+                      Row(
+                        children: [
+                          Expanded(child: title),
+                          const SizedBox(width: 12),
+                          Text(
+                            'This machine',
+                            style: _ink(
+                              kBoxFaint,
+                            ).copyWith(fontSize: terminalFontStore.size * .85),
+                          ),
+                        ],
+                      )
+                    else
+                      title,
+                    if (showDetail) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        option.detail,
+                        style: _ink(kBoxFaint),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  /// Down the right edge, key then verb, as Aptio lists them. It does not
-  /// move and it is never summoned, which is most of why a BIOS is learnable.
-  Widget _legend() {
-    final keys = _picking
-        ? const [
-            ('↑↓', 'Select Value'),
-            ('↵', 'Use This Value'),
-            ('⌫', 'Delete'),
-            ('Esc', 'Back to Items'),
-          ]
-        : _row == _Row.start
-        ? const [('↑↓', 'Select Item'), ('↵', 'Start Harness'), ('Esc', 'Exit')]
-        : [
-            const ('↑↓', 'Select Item'),
-            const ('←→', 'Change Values'),
-            const ('↵', 'Pick from List'),
-            const ('Esc', 'Exit'),
-          ];
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16 * _scale, 0, 14 * _scale, 10 * _scale),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final (key, verb) in keys)
-            Row(
-              children: [
-                SizedBox(
-                  width: 44 * _scale,
-                  child: Text(key, style: _ink(_legendInk)),
-                ),
-                Text(verb, style: _ink(_legendInk)),
-              ],
-            ),
-        ],
-      ),
-    );
+  void _selectRow(_Row row) {
+    if (box.locked) return;
+    setState(() {
+      _row = row;
+      _listOpen = false;
+    });
+    box.setQuery('');
+    _syncField();
+    _focus.requestFocus();
+    _focusEditor();
+    _revealRow();
+  }
+
+  void _activateRow(_Row row) {
+    _selectRow(row);
+    if (row == _Row.worktree) {
+      box.toggleWorktree();
+    } else {
+      setState(() => _listOpen = true);
+    }
+    _focusEditor();
+    _revealRow();
   }
 
   Widget _buildRow(_Row row) {
     final highlighted = row == _row;
     final blocked = _blocked(row);
     final value = blocked ?? _value(row);
-    final ink = highlighted && !_picking
-        ? _selectionInk
-        : blocked != null
+    final ink = blocked != null || _picking
         ? kBoxFaint
-        : Colors.white;
-    return Container(
-      color: highlighted
-          ? (_picking ? _idleFill : _activeFill)
-          : Colors.transparent,
-      padding: EdgeInsets.fromLTRB(16 * _scale, 2, 14 * _scale, 2),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 104 * _scale,
-            child: Text('${_label(row)}:', style: _ink(ink)),
+        : highlighted
+        ? Colors.white
+        : Colors.white70;
+    return Semantics(
+      key: ValueKey('new-harness-field-${row.name}'),
+      label: '${_label(row)}, $value',
+      selected: highlighted,
+      enabled: blocked == null && !box.locked,
+      onTap: blocked == null && !box.locked ? () => _activateRow(row) : null,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        excludeFromSemantics: true,
+        onTap: blocked == null && !box.locked ? () => _activateRow(row) : null,
+        child: Container(
+          key: _itemKeys[row],
+          color: highlighted
+              ? (_picking ? _idleFill : _activeFill)
+              : Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final label = Text(_label(row), style: _ink(kBoxFaint));
+              final content = Text(
+                value,
+                style: _ink(ink),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              );
+              if (constraints.maxWidth < 360 * _scale) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [label, const SizedBox(height: 4), content],
+                );
+              }
+              return Row(
+                children: [
+                  SizedBox(width: 120 * _scale, child: label),
+                  const SizedBox(width: 16),
+                  Expanded(child: content),
+                ],
+              );
+            },
           ),
-          Expanded(
-            child: Text(
-              blocked != null ? value : '[$value]',
-              style: _ink(ink),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

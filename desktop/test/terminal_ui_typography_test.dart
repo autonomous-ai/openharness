@@ -11,9 +11,10 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
 import 'package:harness/widgets/swarm_search_preview.dart';
+import 'package:harness/widgets/search_result_text.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:xterm/xterm.dart';
@@ -94,11 +95,20 @@ void main() {
     // The welcome page stands where a terminal will and is set like one, so
     // it follows the terminal's size instead; see [checkWelcome].
     final welcome = find.byType(WorkspaceWelcome);
+    final setup = find.byWidgetPredicate(
+      (widget) =>
+          widget is NewHarnessForm ||
+          widget.key == const ValueKey('swarm-search-results'),
+    );
     for (final element in find.byType(RichText).evaluate()) {
       if (find
-          .descendant(of: welcome, matching: find.byWidget(element.widget))
-          .evaluate()
-          .isNotEmpty) {
+              .descendant(of: welcome, matching: find.byWidget(element.widget))
+              .evaluate()
+              .isNotEmpty ||
+          find
+              .descendant(of: setup, matching: find.byWidget(element.widget))
+              .evaluate()
+              .isNotEmpty) {
         continue;
       }
       check((element.widget as RichText).text, const TextStyle());
@@ -220,7 +230,7 @@ void main() {
   });
 
   testWidgets(
-    'tabs, panes, welcome, Cmd-N, Cmd-O and Cmd-P keep the scale while the terminal zooms',
+    'tabs keep the UI scale while welcome and setup screens follow terminal zoom',
     (tester) async {
       final app = createApp();
       final map = MemoryKeymap();
@@ -245,11 +255,13 @@ void main() {
       selectFont(18, TerminalFontChoice.monaco);
       await tester.pumpAndSettle();
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-      expect(find.byType(NewHarnessBox), findsOneWidget);
-      final box = checkText(tester);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
+      final box = checkText(tester, atLeast: 1);
+      expect(tester.widget<Text>(find.text('New Harness')).style!.fontSize, 18);
       selectFont(22);
       await tester.pumpAndSettle();
-      expectSameSizes(box, checkText(tester));
+      expectSameSizes(box, checkText(tester, atLeast: 1));
+      expect(tester.widget<Text>(find.text('New Harness')).style!.fontSize, 22);
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
         LogicalKeyboardKey.keyO,
@@ -258,10 +270,10 @@ void main() {
         await key(tester, shortcut, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent');
-        await key(tester, LogicalKeyboardKey.arrowUp);
+        await key(tester, LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
         expect(find.byType(SwarmSearchPreview), findsOneWidget);
-        final search = checkText(tester);
+        final search = checkText(tester, atLeast: 1);
         selectFont(
           shortcut == LogicalKeyboardKey.keyO ? 9 : 18,
           TerminalFontChoice.monaco,
@@ -269,7 +281,19 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.widget<TextField>(input).controller!.text, 'Agent');
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
-        expectSameSizes(search, checkText(tester));
+        expectSameSizes(search, checkText(tester, atLeast: 1));
+        expect(
+          tester.widget<TextField>(input).style!.fontSize,
+          terminalFontStore.size,
+        );
+        for (final text in tester.widgetList<SearchResultText>(
+          find.byType(SearchResultText),
+        )) {
+          expect(text.style.fontFamily, terminalFontStore.value.fontFamily);
+          expect(text.style.fontSize, terminalFontStore.size);
+          expect(text.style.height, terminalFontStore.value.height);
+          expect(text.style.letterSpacing, 0);
+        }
         await key(tester, LogicalKeyboardKey.escape);
       }
       await tester.pumpWidget(const SizedBox());

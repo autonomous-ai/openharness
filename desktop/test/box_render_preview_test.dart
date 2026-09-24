@@ -18,7 +18,7 @@ import 'package:harness/auth/peer_link_client.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -223,7 +223,7 @@ void main() {
 
       final line = find.byKey(const ValueKey('new-harness-input'));
       final contextPicker = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       contextPicker.setFolder('/work/payments');
       await app.projectHistory.select('m', '/work/payments');
@@ -264,7 +264,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       await openLaunchRow(tester, 'agent');
       final previewAgent = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       for (
         var step = 0;
@@ -369,7 +369,7 @@ void main() {
       await shot('12-pi-task-availability');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      expect(find.byKey(const ValueKey('new-harness-box')), findsNothing);
+      expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);
 
       await chord(tester, LogicalKeyboardKey.keyP);
       await shot('13-command-open');
@@ -409,7 +409,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final largeBox = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       largeBox.setFolder('/work/payments');
       await shot('15-create-large-text');
@@ -430,7 +430,7 @@ void main() {
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
       final create = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       create.focusField(NewHarnessField.projectName);
       create.setQuery('Super terminal');
@@ -464,7 +464,7 @@ void main() {
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byType(NewHarnessBox), findsOneWidget);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
       await shot('21-returned-draft');
       tester.view.physicalSize = const Size(600, 800);
       tester.platformDispatcher.textScaleFactorTestValue = 1.7;

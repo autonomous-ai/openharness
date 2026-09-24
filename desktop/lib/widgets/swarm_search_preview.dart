@@ -182,7 +182,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                     controller: _scroll,
                     padding: EdgeInsets.all(
                       widget.terminal
-                          ? 12
+                          ? 24
                           : widget.compactHeader
                           ? 16
                           : 24,
@@ -198,12 +198,19 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                                 Text(
                                   row.title,
                                   // The list leads the eye; this confirms it.
-                                  style: AppType.monoLabel(
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                  style: widget.terminal
+                                      ? terminalContentStyle()
+                                      : AppType.monoLabel(
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                 ),
                                 const SizedBox(height: 6),
-                                Text(row.detail, style: _muted),
+                                Text(
+                                  row.detail,
+                                  style: widget.terminal
+                                      ? terminalContentStyle(color: kBoxFaint)
+                                      : _muted,
+                                ),
                                 // Nothing exists yet behind the create row, so
                                 // there is no session to be missing text from.
                                 if (agents.isEmpty && !row.isCreate)
@@ -211,7 +218,11 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                                     padding: EdgeInsets.only(top: 24),
                                     child: Text(
                                       'No recent session text available.',
-                                      style: _muted,
+                                      style: widget.terminal
+                                          ? terminalContentStyle(
+                                              color: kBoxFaint,
+                                            )
+                                          : _muted,
                                     ),
                                   ),
                               ],
@@ -239,7 +250,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
                     controller: _scroll,
                     padding: EdgeInsets.all(
                       widget.terminal
-                          ? 12
+                          ? 24
                           : widget.compactHeader
                           ? 16
                           : 24,
@@ -258,7 +269,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   }
 }
 
-TextStyle get _muted => boxMonoStyle(height: 1.5, color: Colors.white54);
+TextStyle get _muted => AppType.monoMeta(height: 1.5, color: Colors.white54);
 TextStyle get _body => AppType.monoLabel(
   fontWeight: FontWeight.w400,
   height: 1.6,
@@ -282,9 +293,9 @@ class _AgentPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    final muted = terminal ? boxMonoStyle(color: kBoxFaint) : _muted;
+    final muted = terminal ? terminalContentStyle(color: kBoxFaint) : _muted;
     final body = terminal
-        ? boxMonoStyle(color: const Color(0xffe1e1e4))
+        ? terminalContentStyle(color: const Color(0xffe1e1e4))
         : _body;
     Widget section(String label, String text, {int? maxLines}) =>
         _Section(label, text, maxLines: maxLines, terminal: terminal);
@@ -333,14 +344,14 @@ class _AgentPreview extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (terminal) ...[
-          Text(agent.displayName, style: boxMonoStyle(weight: FontWeight.w600)),
-          const SizedBox(height: 4),
+          Text(agent.displayName, style: terminalContentStyle()),
+          const SizedBox(height: 8),
           Text.rich(
             TextSpan(
               children: [
                 TextSpan(
                   text: '$state  ',
-                  style: TextStyle(color: color),
+                  style: const TextStyle(color: kBoxFaint),
                 ),
                 TextSpan(
                   text:
@@ -438,7 +449,7 @@ class _AgentPreview extends StatelessWidget {
         ] else ...[
           SizedBox(
             height: terminal
-                ? 8
+                ? 24
                 : dense
                 ? 16
                 : 26,
@@ -471,7 +482,7 @@ class _AgentPreview extends StatelessWidget {
                 ],
               ),
             ),
-            SizedBox(height: terminal ? 14 : 24),
+            const SizedBox(height: 24),
           ],
           if (working) ...[
             if (request != null) section(requestLabel, request),
@@ -504,7 +515,7 @@ class _AgentPreview extends StatelessWidget {
                     ),
                     for (final text in record!.earlierResponses)
                       Padding(
-                        padding: EdgeInsets.only(top: terminal ? 6 : 10),
+                        padding: EdgeInsets.only(top: terminal ? 12 : 10),
                         child: Text(
                           _displayText(text),
                           maxLines: 4,
@@ -528,7 +539,7 @@ class _AgentPreview extends StatelessWidget {
           if (project?.cwd case final cwd?) Text(cwd, style: muted),
           if (project?.branch case final branch?)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: EdgeInsets.only(top: terminal ? 8 : 4),
               child: Row(
                 children: [
                   const Icon(
@@ -543,7 +554,7 @@ class _AgentPreview extends StatelessWidget {
             ),
           if (record?.receivedAt case final at?)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: EdgeInsets.only(top: terminal ? 12 : 8),
               child: Text(
                 '${offline || record?.unavailable == true ? 'Saved text · ' : ''}Received ${TimeOfDay.fromDateTime(at).format(context)}',
                 style: muted,
@@ -564,20 +575,20 @@ class _Section extends StatelessWidget {
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
     return Padding(
-      padding: EdgeInsets.only(bottom: terminal ? 8 : 24),
+      padding: const EdgeInsets.only(bottom: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
             style: terminal
-                ? boxMonoStyle(color: kBoxFaint)
+                ? terminalContentStyle(color: kBoxFaint)
                 : _muted.copyWith(fontWeight: FontWeight.w500),
           ),
-          SizedBox(height: terminal ? 4 : 7),
+          SizedBox(height: terminal ? 8 : 7),
           Text(
             _displayText(text),
-            style: terminal ? boxMonoStyle() : _body,
+            style: terminal ? terminalContentStyle() : _body,
             maxLines: maxLines,
             overflow: maxLines == null ? null : TextOverflow.ellipsis,
           ),

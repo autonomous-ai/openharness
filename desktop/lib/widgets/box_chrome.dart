@@ -55,75 +55,10 @@ class TerminalTabBorder extends ShapeBorder {
   void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
 }
 
-/// A temporary command area attached to the workspace's bottom edge. Its
-/// overlay never changes the dimensions or scroll position of live terminals.
-class CommandDock extends StatelessWidget {
-  const CommandDock({
-    super.key,
-    required this.child,
-    this.topClearance = 0,
-    this.expanded = false,
-  });
-  final Widget child;
-  final double topClearance;
-  final bool expanded;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final available =
-            (constraints.maxHeight - topClearance - 2 * kWorkspaceInset).clamp(
-              0.0,
-              double.infinity,
-            );
-        final scale = grid.appTextScaleOf(context);
-        // A panel in the middle of the workspace, the way a terminal's own
-        // finder sits over what it is searching — not a drawer along an edge.
-        // Wide enough for a path and a branch beside their labels, and no
-        // wider: a line the eye crosses is a line nobody reads.
-        final minimum = constraints.maxWidth < 800 * scale ? 320.0 : 280.0;
-        final maxHeight =
-            (expanded
-                    ? 560.0 * scale
-                    : (available * .5).clamp(minimum * scale, 440.0 * scale))
-                .clamp(0.0, available);
-        final room = (constraints.maxWidth - 2 * kWorkspaceInset).clamp(
-          0.0,
-          double.infinity,
-        );
-        final maxWidth = room.clamp(0.0, 820.0 * scale);
-        return Align(
-          // Above the middle, where the eye already is, as fzf and a command
-          // palette sit.
-          alignment: const Alignment(0, -0.15),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: kWorkspaceInset,
-              vertical: kWorkspaceInset,
-            ),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minWidth: maxWidth.clamp(0.0, 620.0 * scale),
-                maxWidth: maxWidth,
-                maxHeight: maxHeight,
-              ),
-              child: FocusScope(child: child),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Shared typography and frame for prompts that sit over the terminals: the
-/// terminal's face at [grid.AppType.monoSize], which ⌘+ and ⌘− leave alone.
-/// The terminal's own face AND size, not the UI's fixed 13pt: these boxes
-/// sit over the panes, and one that stayed small beside a zoomed terminal
-/// read as a different application.
+/// Fixed UI typography for shared dialogs. Setup screens opt into the
+/// terminal's size explicitly so zoom does not resize unrelated controls.
 TextStyle boxMonoStyle({Color? color, FontWeight? weight, double? height}) =>
-    terminalTextStyle(
+    grid.AppType.mono(
       height: height ?? 1.35,
       color: color ?? Colors.white,
       fontWeight: weight,

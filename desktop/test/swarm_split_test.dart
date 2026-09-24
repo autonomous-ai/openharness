@@ -1,3 +1,5 @@
+import 'support/launch_menu.dart';
+
 import 'dart:async';
 
 import 'package:flutter/gestures.dart';
@@ -9,7 +11,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/terminal/terminal_binary.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:xterm/xterm.dart';
 
@@ -417,7 +419,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final box = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       expect(box.split?.axis, axis);
       expect(box.split?.paneId, pane.id);
@@ -426,7 +428,7 @@ void main() {
       expect(box.project.folder, '/work/checkout');
       expect(app.panes, [pane]);
       expect(connection.calls, isNot(contains('agent_create')));
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await startHarness(tester);
       await tester.pump();
       expect(
         connection.calls.where((call) => call == 'agent_create'),

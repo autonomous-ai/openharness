@@ -20,7 +20,7 @@ import 'package:harness/usage/usage_accounts.dart';
 import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/usage/usage_source.dart';
 import 'package:harness/usage/usage_window.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -406,7 +406,7 @@ void main() {
       final source = app.activeSwarm;
       await openGridDoor(tester, app, machineId: machineId, command: command);
       final box = tester
-          .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       expect(box.engine, harness);
       expect(box.machineId, machineId ?? 'm');
@@ -416,7 +416,7 @@ void main() {
       expect(app.swarms, [source]);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      expect(find.byType(NewHarnessBox), findsNothing);
+      expect(find.byType(NewHarnessForm), findsNothing);
       expect(app.swarms, [source]);
       if (command == 'manageMachines') {
         await key(tester, LogicalKeyboardKey.keyP, cmd: true);
@@ -428,7 +428,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.enter);
         expect(
           tester
-              .widget<NewHarnessBox>(find.byType(NewHarnessBox))
+              .widget<NewHarnessForm>(find.byType(NewHarnessForm))
               .controller
               .engine,
           harness,

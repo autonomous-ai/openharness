@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,7 +9,7 @@ import 'package:harness/core/git_worktree.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/e2ee/envelope.dart';
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -49,6 +48,7 @@ class _Connection extends WsConn {
   final answers = <String, Map<String, dynamic>>{};
   Map<String, dynamic>? failure;
   bool loseReply = false;
+  int gitFailures = 0;
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -58,6 +58,10 @@ class _Connection extends WsConn {
     if (type == 'git_project_info') {
       final path = payload['path'] as String;
       reads.add(path);
+      if (gitFailures > 0) {
+        gitFailures--;
+        throw const WsRequestTimeout('git_project_info');
+      }
       return pending[path]?.future ??
           Future.value(
             answers[path] ?? (path == '/plain' ? {'isGit': false} : _git),
@@ -110,6 +114,80 @@ void main() {
   );
 
   Future<void> settle() => Future<void>.delayed(Duration.zero);
+
+  test(
+    'failed Git discovery blocks launch and the next Start retries it',
+    () async {
+      final connection = _Connection()..gitFailures = 2;
+      final app = createApp(connectionForTest: (_) => connection);
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      expect(box.gitError, isNotNull);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, contains('Could not check Git'));
+      expect(box.busy, isFalse);
+      expect(connection.starts, isEmpty);
+
+      expect(await box.create(), NewHarnessOutcome.created);
+      expect(connection.starts, hasLength(1));
+      expect(connection.starts.single['projectSource'], 'worktree');
+      expect(connection.reads, ['/repo', '/repo', '/repo']);
+    },
+  );
+
+  test('a remote branch cannot launch in the main folder after Worktree is disabled', () async {
+    final connection = _Connection();
+    final app = createApp(connectionForTest: (_) => connection);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/repo',
+    );
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    await settle();
+    box.focusField(NewHarnessField.branch);
+    box.accept(box.options.firstWhere((row) => row.title == 'origin/release'));
+    box.toggleWorktree();
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.error, 'Choose a local branch, or turn Worktree on.');
+    expect(connection.starts, isEmpty);
+    box.toggleWorktree();
+    expect(await box.create(), NewHarnessOutcome.created);
+    expect(
+      connection.starts.single['branchRef'],
+      'refs/remotes/origin/release',
+    );
+    expect(connection.starts.single['branchName'], 'release');
+  });
+
+  test('closing during Git discovery never sends a late create', () async {
+    final connection = _Connection();
+    final pending = connection.pending['/repo'] = Completer();
+    final app = createApp(connectionForTest: (_) => connection);
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/repo',
+    );
+    addTearDown(app.dispose);
+    final creating = box.create();
+    expect(box.busy, isTrue);
+    box.dispose();
+    pending.complete(_git);
+    expect(await creating, NewHarnessOutcome.failed);
+    expect(connection.starts, isEmpty);
+  });
+
   test('Git defaults follow the project, late replies are ignored, and draft choices survive', () async {
     final connection = _Connection();
     final app = createApp(connectionForTest: (_) => connection);
@@ -629,7 +707,7 @@ void main() {
   });
 
   testWidgets(
-    'compact launch, checkbox controls, hover selection, branch search and Cmd-Enter start',
+    'setup branch and worktree choices are used by the explicit launch action',
     (tester) async {
       final connection = _Connection();
       final app = createApp(connectionForTest: (_) => connection);
@@ -642,153 +720,30 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: Center(
-              child: SizedBox(
-                width: 680,
-                height: 440,
-                child: NewHarnessBox(
-                  controller: box,
-                  onClose: () {},
-                  onCreated: () {},
-                  onNeedsForm: () {},
-                ),
+            body: SizedBox(
+              width: 820,
+              height: 450,
+              child: NewHarnessForm(
+                controller: box,
+                onClose: () {},
+                onCreated: () {},
               ),
             ),
           ),
         ),
       );
-      await tester.pump();
-      expect(find.text('New Harness'), findsNothing);
-      expect(find.text('Start Harness'), findsOneWidget);
-      for (final name in ['task', 'placement']) {
-        expect(find.byKey(ValueKey('new-harness-field-$name')), findsNothing);
-      }
-      expect(find.text('[x]'), findsOneWidget);
-      // Worktree sits just above Start.
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-      await tester.sendKeyEvent(LogicalKeyboardKey.space);
-      await tester.pump();
-      expect(box.worktree, false);
-      expect(find.text('[ ]'), findsOneWidget);
-      await tester.tap(
-        find.byKey(const ValueKey('new-harness-field-worktree')),
-      );
-      await tester.pump();
-      expect(find.text('[x]'), findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      expect(box.worktree, false);
-      final branchRow = find.byKey(const ValueKey('new-harness-field-branch'));
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: Offset.zero);
-      await mouse.moveTo(tester.getCenter(branchRow));
-      await mouse.moveBy(const Offset(4, 0));
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      expect(box.field, NewHarnessField.branch);
-      await mouse.removePointer();
-      expect(box.options.where(box.isCurrent).single.title, 'main');
-      expect(
-        box.options.firstWhere((row) => row.title == 'origin/release').enabled,
-        false,
-      );
-      final input = find.byKey(const ValueKey('new-harness-input'));
-      await tester.enterText(input, 'feature');
+      await tester.pumpAndSettle();
+      await openLaunchRow(tester, 'branch');
+      await typeHarnessQuery(tester, 'feature');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(box.branchLabel, 'feature');
       expect(connection.starts, isEmpty);
-      await openLaunchRow(tester, 'worktree');
-      expect(box.worktree, true);
-      await openLaunchRow(tester, 'branch');
-      await tester.enterText(input, 'origin/release');
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
-      await tester.pump();
-      expect(
-        connection.starts.single,
-        containsPair('branchRef', 'refs/remotes/origin/release'),
-      );
+      await startHarness(tester);
+      expect(connection.starts.single['branchRef'], 'refs/heads/feature');
       expect(connection.starts.single['projectSource'], 'worktree');
-      expect(connection.starts.single.containsKey('prompt'), false);
+      expect(connection.starts.single.containsKey('prompt'), isFalse);
       expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      box.dispose();
-      app.dispose();
-      await tester.pump(const Duration(milliseconds: 200));
-    },
-  );
-  testWidgets(
-    'Git errors retry without losing isolation, and advanced options wait for detection',
-    (tester) async {
-      final connection = _Connection();
-      final ready = connection.pending['/repo'] = Completer();
-      final app = createApp(connectionForTest: (_) => connection);
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'codex',
-        folder: '/repo',
-      );
-      var advanced = 0;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: NewHarnessBox(
-              controller: box,
-              onClose: () {},
-              onCreated: () {},
-              onNeedsForm: () => advanced++,
-            ),
-          ),
-        ),
-      );
-      Future<void> options() async {
-        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-        await tester.sendKeyEvent(LogicalKeyboardKey.period);
-        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
-        await tester.pump();
-      }
-
-      await options();
-      expect(advanced, 0);
-      ready.complete({'error': 'GIT_UNAVAILABLE'});
-      await tester.pump();
-      expect(advanced, 0);
-      expect(box.error, contains('Retry Worktree'));
-      final start = find.byKey(const ValueKey('new-harness-field-create'));
-      await tester.tap(start);
-      await tester.pump();
-      expect(box.error, contains('Could not check Git'));
-      expect(connection.starts, isEmpty);
-      connection.pending.remove('/repo');
-      await tester.tap(
-        find.byKey(const ValueKey('new-harness-field-worktree')),
-      );
-      await tester.pump();
-      expect(box.error, isNull);
-      expect(box.worktree, true);
-      expect(find.text('[x]'), findsOneWidget);
-      await options();
-      expect(advanced, 1);
-      await openLaunchRow(tester, 'branch');
-      await tester.enterText(
-        find.byKey(const ValueKey('new-harness-input')),
-        'origin/release',
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      await tester.tap(
-        find.byKey(const ValueKey('new-harness-field-worktree')),
-      );
-      await tester.pump();
-      expect(box.worktree, false);
-      await tester.tap(start);
-      await tester.pump();
-      expect(box.error, contains('Choose a local branch'));
-      expect(connection.starts, isEmpty);
       await tester.pumpWidget(const SizedBox());
       box.dispose();
       app.dispose();
@@ -828,8 +783,7 @@ void main() {
                 alignment: Alignment.bottomCenter,
                 child: SizedBox(
                   width: 720,
-                  child: NewHarnessBox(
-                    docked: true,
+                  child: NewHarnessForm(
                     controller: box,
                     onClose: () {},
                     onCreated: () {},
@@ -842,7 +796,8 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('Start Harness').hitTestable(), findsOneWidget);
+      await openLaunchRow(tester, 'start');
+      expect(find.text('New Harness').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
       if (renderDir != null) {
         await expectLater(
@@ -852,8 +807,9 @@ void main() {
       }
     }
     await openLaunchRow(tester, 'branch');
+    expect(find.textContaining('Search branch'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('new-harness-input')).hitTestable(),
+      find.byKey(const ValueKey('new-harness-query')).hitTestable(),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -867,11 +823,11 @@ void main() {
     await tester.pump();
     expect(
       find.byKey(const ValueKey('new-harness-field-branch')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(
       find.byKey(const ValueKey('new-harness-field-worktree')),
-      findsNothing,
+      findsOneWidget,
     );
     if (renderDir != null) {
       await expectLater(

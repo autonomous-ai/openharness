@@ -10,10 +10,12 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_preset.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/agent_picker.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:xterm/xterm.dart';
 
@@ -60,6 +62,23 @@ Future<void> native(WidgetTester tester, String method, [Object? arguments]) {
 }
 
 Future<void> tabToResult(WidgetTester tester, {String? id}) async {
+  final results = find.byType(SwarmSearchResults);
+  if (results.evaluate().isNotEmpty) {
+    final search = tester.widget<SwarmSearchResults>(results).search;
+    if (search.setupLayout) {
+      for (var i = 0; i < search.rows.length; i++) {
+        if (id == null
+            ? search.selected?.isCreate == false
+            : search.selected?.id == id) {
+          break;
+        }
+        await key(tester, LogicalKeyboardKey.tab);
+      }
+      if (id != null) expect(search.selected?.id, id);
+      return;
+    }
+  }
+
   ListTile? focusedResult() => FocusManager.instance.primaryFocus?.context
       ?.findAncestorWidgetOfExactType<ListTile>();
   bool reached() => id == null
@@ -72,6 +91,86 @@ Future<void> tabToResult(WidgetTester tester, {String? id}) async {
 }
 
 void main() {
+  for (final command in ['newAgent', 'commands']) {
+    testWidgets('native $command preserves composing New Harness input', (
+      tester,
+    ) async {
+      final previousEntry = newHarnessOpensInBox;
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = previousEntry);
+      final map = MemoryKeymap();
+      final app = createApp();
+      addTearDown(map.dispose);
+      addTearDown(app.dispose);
+      await mount(tester, app, map, native: true);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      final form = find.byType(NewHarnessForm);
+      final original = tester.widget<NewHarnessForm>(form).controller;
+      final field = find.byKey(const ValueKey('new-harness-query'));
+      await tester.tap(field);
+      const composing = TextEditingValue(
+        text: 'moon',
+        selection: TextSelection.collapsed(offset: 4),
+        composing: TextRange(start: 0, end: 4),
+      );
+      tester.testTextInput.updateEditingValue(composing);
+      await tester.pump();
+      final opening = native(tester, command);
+      await tester.pump();
+      await opening;
+      expect(form, findsOneWidget);
+      expect(tester.widget<NewHarnessForm>(form).controller, same(original));
+      expect(tester.widget<TextField>(field).controller!.value, composing);
+      expect(original.query, 'moon');
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+      expect(app.panes, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  for (final mode in ['O', 'P']) {
+    for (final command in ['next', 'previous', 'submit', 'add', 'close']) {
+      testWidgets(
+        'native search $command respects an IME candidate in Cmd-$mode',
+        (tester) async {
+          final map = MemoryKeymap();
+          final app = createApp();
+          addTearDown(map.dispose);
+          addTearDown(app.dispose);
+          await mount(tester, app, map, native: true);
+          await key(
+            tester,
+            mode == 'O' ? LogicalKeyboardKey.keyO : LogicalKeyboardKey.keyP,
+            cmd: true,
+          );
+          final field = find.byKey(const ValueKey('swarm-search-input'));
+          final candidate = mode == 'O' ? 'Agent' : '> rename';
+          final composing = TextEditingValue(
+            text: candidate,
+            selection: TextSelection.collapsed(offset: candidate.length),
+            composing: TextRange(
+              start: mode == 'O' ? 0 : 2,
+              end: candidate.length,
+            ),
+          );
+          tester.testTextInput.updateEditingValue(composing);
+          await tester.pump();
+          final search = tester
+              .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+              .search;
+          final selected = search.selected;
+          final opening = native(tester, 'searchCommand', {'command': command});
+          await tester.pump();
+          await opening;
+          expect(field, findsOneWidget);
+          expect(search.selected, same(selected));
+          expect(tester.widget<TextField>(field).controller!.value, composing);
+          expect(app.panes, isEmpty);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
   for (final remapped in [false, true]) {
     testWidgets(
       'the configured Layout key cycles choices and returns to latest output (remapped=$remapped)',
@@ -401,10 +500,7 @@ void main() {
         await key(tester, LogicalKeyboardKey.arrowDown);
         expect(search.cursor, initial);
         await key(tester, LogicalKeyboardKey.keyJ, ctrl: true);
-        expect(
-          search.cursor,
-          inline ? (initial - 1) % search.rows.length : initial + 1,
-        );
+        expect(search.cursor, (initial - 1) % search.rows.length);
         await tester.enterText(input, 'Agent 0');
         await tester.pump();
         expect(
@@ -695,7 +791,7 @@ void main() {
         final next =
             search.rows[inline
                 ? (search.cursor + 1) % search.rows.length
-                : (search.cursor - 1).clamp(0, search.rows.length - 1)];
+                : (search.cursor + 1) % search.rows.length];
         await key(tester, LogicalKeyboardKey.arrowDown);
         expect(search.selected, same(secondRow));
         await key(tester, LogicalKeyboardKey.keyG, ctrl: true);
