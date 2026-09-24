@@ -6,17 +6,17 @@ import 'store_listing.dart';
 /// Original editorial illustrations, kept separate from real project output.
 /// These appear only in featured stories, never in the catalog's icon rows.
 const storeFeaturedArt = <String, String>{
-  'Coding': 'assets/store/editorial-code.png',
-  'Design': 'assets/store/editorial-shape.png',
-  'Engineering': 'assets/store/editorial-circuit.png',
-  'Media': 'assets/store/editorial-media.png',
-  'Music': 'assets/store/editorial-music.png',
-  'Productivity': 'assets/store/editorial-productivity.png',
-  'Science & Data': 'assets/store/editorial-science.png',
-  'Simulation': 'assets/store/editorial-simulation.png',
-  'Games': 'assets/store/editorial-games.png',
-  'Research': 'assets/store/editorial-research.png',
-  'Local AI': 'assets/store/editorial-local-ai.png',
+  'Coding': 'assets/store/editorial-code.jpg',
+  'Design': 'assets/store/editorial-shape.jpg',
+  'Engineering': 'assets/store/editorial-circuit.jpg',
+  'Media': 'assets/store/editorial-media.jpg',
+  'Music': 'assets/store/editorial-music.jpg',
+  'Productivity': 'assets/store/editorial-productivity.jpg',
+  'Science & Data': 'assets/store/editorial-science.jpg',
+  'Simulation': 'assets/store/editorial-simulation.jpg',
+  'Games': 'assets/store/editorial-games.jpg',
+  'Research': 'assets/store/editorial-research.jpg',
+  'Local AI': 'assets/store/editorial-local-ai.jpg',
 };
 
 class StoreFeaturedArt extends StatelessWidget {

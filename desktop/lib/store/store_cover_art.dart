@@ -44,7 +44,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     background: Color(0xffbbcedc),
   ),
   'autonomous/kicad': StoreCoverArt(
-    asset: 'assets/store/covers/kicad.png',
+    asset: 'assets/store/covers/kicad.jpg',
     description: 'A circuit board in KiCad’s 3D viewer',
     credit: 'KiCad contributors',
     source: 'https://www.kicad.org/discover/3dviewer/',
@@ -62,7 +62,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     background: Color(0xff243c52),
   ),
   'autonomous/mujoco': StoreCoverArt(
-    asset: 'assets/store/covers/mujoco.png',
+    asset: 'assets/store/covers/mujoco.jpg',
     description: 'A Unitree G1 robot rendered in MuJoCo Menagerie',
     credit: 'MuJoCo Menagerie · Unitree Robotics',
     source: 'https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1',
@@ -71,7 +71,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     background: Color(0xff253f57),
   ),
   'autonomous/marimo': StoreCoverArt(
-    asset: 'assets/store/covers/marimo.png',
+    asset: 'assets/store/covers/marimo.jpg',
     description: 'An interactive Altair scatter plot in marimo',
     credit: 'marimo contributors',
     source: 'https://github.com/marimo-team/marimo/blob/main/docs/_static/example-thumbs/altair.png',
@@ -88,7 +88,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     description: 'Stillwater identity and packaging in Creative Direction',
   ),
   'autonomous/generative-art': StoreCoverArt(
-    asset: 'assets/store/covers/generative-art.png',
+    asset: 'assets/store/covers/generative-art.jpg',
     description: 'Canopy: a generative artwork made with Harness',
   ),
   'autonomous/voxel-worlds': StoreCoverArt(
@@ -96,7 +96,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     description: 'Amber Vault: a world made with Voxel Worlds',
   ),
   'autonomous/music-studio': StoreCoverArt(
-    asset: 'assets/store/covers/music-studio.png',
+    asset: 'assets/store/covers/music-studio.jpg',
     description: 'Keepsake: a composition in Music Studio',
     imageSize: Size(1600, 1478),
     viewport: Rect.fromLTWH(24, 133, 1552, 1108),
@@ -175,16 +175,19 @@ const storeCoverArt = <String, StoreCoverArt>{
   ),
 
   'autonomous/ableton-ai': StoreCoverArt(
-    asset: 'assets/store/covers/ableton-ai.png',
+    asset: 'assets/store/covers/ableton-ai.jpg',
     description: 'Arrangement, instruments, and modulation in Ableton Live',
     credit: '© Ableton AG',
     source: 'https://www.ableton.com/en/press/',
     license: 'Ableton press image',
-    imageSize: Size(2880, 1772),
-    viewport: Rect.fromLTWH(930, 168, 1901, 1152),
+    // Scaled with the art when it was re-encoded at 1600px wide (2880 → 1600):
+    // the viewport is in PIXELS of this file, so the two move together or the
+    // frame lands somewhere else in the picture.
+    imageSize: Size(1600, 984),
+    viewport: Rect.fromLTWH(517, 93, 1056, 640),
   ),
   'autonomous/bonsai-mcp': StoreCoverArt(
-    asset: 'assets/store/covers/bonsai-mcp.png',
+    asset: 'assets/store/covers/bonsai-mcp.jpg',
     description: 'An IFC building in Bonsai’s official example project',
     credit: 'IfcOpenShell contributors',
     source: 'https://docs.bonsaibim.org/quickstart/explore_model.html',
@@ -193,7 +196,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(322, 169, 505, 379),
   ),
   'autonomous/comfy-mcp': StoreCoverArt(
-    asset: 'assets/store/covers/comfy-mcp.png',
+    asset: 'assets/store/covers/comfy-mcp.jpg',
     description: 'A landscape from ComfyUI’s area-composition example',
     credit: 'ComfyUI examples contributors',
     source:
@@ -203,7 +206,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(0, 538, 1088, 653),
   ),
   'autonomous/dimos': StoreCoverArt(
-    asset: 'assets/store/covers/dimos.png',
+    asset: 'assets/store/covers/dimos.jpg',
     description: 'A spatial map from DimOS navigation',
     credit: 'Dimensional Inc.',
     source: 'https://github.com/dimensionalOS/dimos',
@@ -216,11 +219,14 @@ const storeCoverArt = <String, StoreCoverArt>{
     credit: 'SimSkill contributors',
     source: 'https://github.com/qiliuchn/SimSkill-V1',
     license: 'Apache 2.0',
-    imageSize: Size(4629, 2305),
-    viewport: Rect.fromLTWH(23, 12, 1898, 1579),
+    // Likewise, 4629 → 1600 wide. This one keeps its alpha (a cut-out on the
+    // Store's own ground), so it stays a PNG and only loses the pixels no
+    // screen was drawing.
+    imageSize: Size(1600, 796),
+    viewport: Rect.fromLTWH(8, 4, 656, 546),
   ),
   'autonomous/text-to-cad': StoreCoverArt(
-    asset: 'assets/store/covers/text-to-cad.png',
+    asset: 'assets/store/covers/text-to-cad.jpg',
     description: 'A planetary gear set from text-to-cad’s own preview',
     credit: 'Jake Adair · text-to-cad contributors',
     source: 'https://github.com/earthtojake/text-to-cad',
@@ -229,7 +235,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(96, 217, 960, 296),
   ),
   'autonomous/home-assistant': StoreCoverArt(
-    asset: 'assets/store/covers/home-assistant.png',
+    asset: 'assets/store/covers/home-assistant.jpg',
     description: 'Home Assistant’s public demo dashboard',
     credit: 'Home Assistant contributors',
     source: 'https://demo.home-assistant.io/',
@@ -248,18 +254,18 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(416, 50, 372, 334),
   ),
   'autonomous/autonomous-circuit': StoreCoverArt(
-    asset: 'assets/store/covers/autonomous-circuit.png',
+    asset: 'assets/store/covers/autonomous-circuit.jpg',
     description:
         'A keyboard PCB rendered from Autonomous Circuit’s board model',
   ),
   'autonomous/autonomous-grid': StoreCoverArt(
-    asset: 'assets/store/covers/autonomous-grid.png',
+    asset: 'assets/store/covers/autonomous-grid.jpg',
     description: 'Autonomous Grid’s map of models across machines',
     imageSize: Size(1440, 1100),
     viewport: Rect.fromLTWH(29, 33, 1008, 726),
   ),
   'autonomous/autoresearch-mlx': StoreCoverArt(
-    asset: 'assets/store/covers/autoresearch-mlx.png',
+    asset: 'assets/store/covers/autoresearch-mlx.jpg',
     description:
         'The training curve in Harness’s Autoresearch research notebook',
     imageSize: Size(1280, 1000),
@@ -272,7 +278,7 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(128, 135, 1296, 740),
   ),
   'autonomous/foam-agent': StoreCoverArt(
-    asset: 'assets/store/covers/foam-agent.png',
+    asset: 'assets/store/covers/foam-agent.jpg',
     description: 'The interactive flow view in Harness’s wind tunnel',
     imageSize: Size(1280, 1015),
     viewport: Rect.fromLTWH(74, 228, 883, 381),
@@ -284,20 +290,20 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(29, 75, 1541, 860),
   ),
   'autonomous/juce-agent-toolkit': StoreCoverArt(
-    asset: 'assets/store/covers/juce-agent-toolkit.png',
+    asset: 'assets/store/covers/juce-agent-toolkit.jpg',
     description: 'The waveform and keyboard in Harness’s instrument maker',
     imageSize: Size(1280, 1000),
     viewport: Rect.fromLTWH(72, 225, 883, 400),
   ),
   'autonomous/harness-monitor': StoreCoverArt(
-    asset: 'assets/store/covers/harness-monitor.png',
+    asset: 'assets/store/covers/harness-monitor.jpg',
     description: 'Harness Monitor’s lanes with an illustrative demo fleet',
     imageSize: Size(1080, 720),
     viewport: Rect.fromLTWH(0, 0, 1080, 540),
     background: Color(0xff131312),
   ),
   'autonomous/machine-monitor': StoreCoverArt(
-    asset: 'assets/store/covers/machine-monitor.png',
+    asset: 'assets/store/covers/machine-monitor.jpg',
     description: 'Machine Monitor’s fleet view with an illustrative demo fleet',
     imageSize: Size(1360, 900),
     viewport: Rect.fromLTWH(90, 80, 875, 640),

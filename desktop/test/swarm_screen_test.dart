@@ -218,7 +218,10 @@ void main() {
           reason: 'SwarmHistoryIcons must open $kStoreMarkAsset',
         );
         expect(nativeIconLoaderOpens('assets/engine-icons/codex.png'), isTrue);
-        expect(nativeIconLoaderOpens('assets/harness_device.png'), isFalse);
+        expect(
+          nativeIconLoaderOpens('assets/harness_device_studio.jpg'),
+          isFalse,
+        );
       } else {
         final mark = find.byKey(ValueKey('tab-store:${tab.id}'));
         expect(mark, findsOneWidget);
