@@ -13,7 +13,7 @@
  *
  * Usage: npx tsx src/e2e/runMatrix.ts
  */
-import { writeFileSync, existsSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -30,6 +30,30 @@ const ENGINES: AgentEngine[] = (process.env.E2E_ENGINES ?? 'codex,claude')
   .split(',')
   .map((e) => e.trim() as AgentEngine)
   .filter(Boolean)
+
+/**
+ * Codex's own answer, not the presence of a file.
+ *
+ * `~/.codex/auth.json` existing proved nothing: on a machine whose codex was pointed at a grid, that
+ * file holds `auth_mode: "apikey"` with a grid token, `codex login status` says "Logged in using an
+ * API key - open_5fb***_grid", and every own-account turn comes back 401 from api.openai.com. A
+ * matrix that called that "logged in" sent the run off to fail for a reason it had already been
+ * told. The mode is carried out with the answer so the report can name it.
+ */
+async function codexLogin(): Promise<{ loggedIn: boolean; mode: string | null }> {
+  try {
+    const { stdout } = await execFileP('codex', ['login', 'status'], { timeout: 15_000 })
+    const line = stdout.trim().split('\n')[0] ?? ''
+    if (!/logged in/i.test(line)) return { loggedIn: false, mode: line || null }
+    // An API key here is a key for api.openai.com. A grid token (`…_grid`) is not one, however much
+    // it looks like a login — it is the one case that passes every offline check and still 401s.
+    const apiKey = /api key/i.test(line)
+    const gridKey = apiKey && /_grid\b/i.test(line)
+    return { loggedIn: !gridKey, mode: gridKey ? `grid token in apikey mode (${line})` : apiKey ? 'apikey' : 'chatgpt' }
+  } catch (err) {
+    return { loggedIn: false, mode: `codex login status failed: ${(err as Error).message.split('\n')[0]}` }
+  }
+}
 
 async function claudeLoggedIn(): Promise<boolean> {
   try {
@@ -49,11 +73,15 @@ async function statusOf(engine: AgentEngine): Promise<EngineStatus> {
   const bin = ENGINE_BIN[engine] ?? engine
   const binary = hasBinary(bin)
   let login = false
+  let note: string | null = null
   if (binary) {
     switch (engine) {
-      case 'codex':
-        login = existsSync(join(process.env.HOME ?? '', '.codex', 'auth.json'))
+      case 'codex': {
+        const codex = await codexLogin()
+        login = codex.loggedIn
+        note = codex.mode
         break
+      }
       case 'claude':
         // Not a file check: on macOS Claude Code keeps its login in the Keychain, so the only honest
         // answer is the tool's own (`claude auth status` → { loggedIn }).
@@ -63,7 +91,8 @@ async function statusOf(engine: AgentEngine): Promise<EngineStatus> {
         login = false
     }
   }
-  return { binary, login, grid: true } // grid status filled by caller when it resolves
+  // grid status filled by caller when it resolves
+  return { binary, login, grid: true, ...(note ? { loginNote: note } : {}) }
 }
 
 async function main(): Promise<number> {

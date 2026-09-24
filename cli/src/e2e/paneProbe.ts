@@ -65,6 +65,12 @@ export const STARTUP_DIALOGS: ReadonlyArray<{ id: string; match: RegExp; keys: s
   { id: 'claude-trust', match: /Do you trust the files in this folder/, keys: ['Enter'] },
   // claude: a project .mcp.json must be approved — Enter accepts the highlighted "Use this and all future MCP servers"
   { id: 'claude-mcp-approve', match: /MCP server[s]? (found|configured) in \.mcp\.json|Use this and all future MCP servers|Use this MCP server/, keys: ['Enter'] },
+  // claude, on `--dangerously-skip-permissions` (permission mode `full`): a full-screen Bypass
+  // Permissions warning whose DEFAULT is "No, exit" — Enter alone exits 1 and leaves the pane a
+  // shell. Down first, then Enter, picks "Yes, I accept". This is not a fallback in practice: with
+  // `bypassPermissionsModeAccepted` already written to ~/.claude.json, claude 2.1.281 still drew the
+  // warning, and answering it here is what let the run's first leg happen at all.
+  { id: 'claude-bypass-accept', match: /running in Bypass Permissions mode/, keys: ['Down', 'Enter'] },
   // claude, MID-TURN, on any gateway (measured on grid.autonomous.ai AND a local relay): an "auto mode
   // classifier … your requests go through <host>, which isn't compatible" notice that blocks the turn
   // until a key is pressed. A finding about the relay's Anthropic contract, and a modal to get past.

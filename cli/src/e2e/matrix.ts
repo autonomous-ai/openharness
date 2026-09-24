@@ -32,6 +32,8 @@ export interface EngineStatus {
   binary: boolean
   login: boolean
   grid: boolean
+  /** What the engine itself said about its login — e.g. `apikey`, or a grid token wearing one. */
+  loginNote?: string
 }
 
 export interface MatrixEntry {

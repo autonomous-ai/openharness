@@ -33,7 +33,7 @@ import { promisify } from 'node:util'
 import { GridSwitchDriver, pickGridModel, type GridSwitchTraceStep } from './gridSwitchDriver.js'
 import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
 import { firstStuck, plannedLegs, type LegOutcome, type LogKind } from './smokeChecks.js'
-import { prepareWorkspace, readLog } from './workspace.js'
+import { prepareWorkspace, readLog, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
 import { sessionName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
 import { outDir, runDir } from './artifacts.js'
@@ -103,6 +103,14 @@ const driver = new GridSwitchDriver(url, machine)
 let trace: GridSwitchTraceStep[] = []
 let gridModel: string | null = null
 let agentId: string | null = process.env.HARNESS_AGENT_ID ?? null
+// codex's MCP server is registered globally (`codex mcp add`, see workspace.ts). Tracked so the run
+// removes exactly what it added, and removes it even when the run stops early.
+let registeredCodexMcp = false
+// How the MCP server got registered for this engine, and in which permission mode the agent runs —
+// both in the trace, because an MCP step that never fired is read very differently once you know
+// the server was never registered or the engine was launched in a mode that refuses it.
+let mcpSetup: { config: string | null; note: string } | null = null
+const permissionMode = process.env.E2E_PERMISSION_MODE ?? 'full'
 const created = !agentId
 let error: string | null = null
 // Named before anything runs so the scratch folder and the trace share it; the grid model is
@@ -118,16 +126,26 @@ try {
     // The person's project: a script tool, an MCP server registered for this engine, and their logs.
     const laid = prepareWorkspace(cwd, engine)
     workspace = cwd
-    console.error(`[grid-e2e] workspace ${cwd} · tool ${laid.tool} · mcp ${laid.mcpConfig ?? '(none for this engine)'}`)
+    console.error(`[grid-e2e] workspace ${cwd} · tool ${laid.tool} · mcp ${laid.mcpConfig ?? '(none)'} — ${laid.mcpNote}`)
+    // codex's registration is global (`codex mcp add`), so it is this run's to take back out.
+    if (engine === 'codex' && laid.mcpConfig) registeredCodexMcp = true
+    mcpSetup = { config: laid.mcpConfig, note: laid.mcpNote }
     // The scratch folder is this run's own, so answer the engine's "trust this folder?" the way the
     // daemon does for a workspace it made — otherwise the first check would be typed into that dialog.
     try {
-      if (engine === 'claude') preTrustClaudeProject(cwd)
+      if (engine === 'claude') {
+        preTrustClaudeProject(cwd)
+        // `full` means `--dangerously-skip-permissions`, and an interactive claude meets that with a
+        // warning whose default answer exits the engine. Accept it here, before the pane exists.
+        if (permissionMode === 'full') console.error(`[grid-e2e] bypass-permissions warning: ${preAcceptClaudeBypassMode()}`)
+      }
       if (engine === 'codex') preTrustCodexProject(cwd)
     } catch (err) {
       console.error(`[grid-e2e] pre-trust ${cwd}: ${(err as Error).message}`)
     }
-    const made = await driver.createAgent(engine, cwd, `e2e ${engine} ${version}`)
+    // `full` unless someone deliberately narrows it: see gridSwitchDriver.createAgent for why the
+    // MCP steps depend on it.
+    const made = await driver.createAgent(engine, cwd, `e2e ${engine} ${version}`, permissionMode)
     if (!made.ok) throw new Error(`${made.error}: ${made.detail ?? ''}`)
     agentId = made.agentId
     pane = made.pane ?? (await waitForPane(agentId))
@@ -177,6 +195,10 @@ const report = {
       pane,
       /** The folder the agent worked in: tools/calc.sh, the MCP config, and .e2e/*.log with every tool/MCP call. */
       workspace,
+      /** The mode the engine was launched in. `full` is what lets claude call an MCP tool at all. */
+      permissionMode,
+      /** Where this engine's MCP server was registered, and how — null config means the MCP steps could not pass. */
+      mcp: mcpSetup,
       /** true: this run made the agent. It stays alive through the review (so the reviewer can type into the pane), then is deleted unless E2E_KEEP_AGENT=1. */
       createdByRun: created,
       keptAlive: !created || process.env.E2E_KEEP_AGENT === '1',
@@ -250,6 +272,12 @@ if (created && agentId && process.env.E2E_KEEP_AGENT !== '1') {
   }
 } else if (created && agentId) {
   console.log(`Kept agent ${agentId}${pane ? ` in pane ${pane}` : ''} (E2E_KEEP_AGENT=1)`)
+}
+// Take the global codex entry back out. Not when the agent is being kept: someone who asked to keep
+// the pane wants to type into it, and an agent whose MCP server has been unregistered is not the
+// agent the run left behind.
+if (registeredCodexMcp && process.env.E2E_KEEP_AGENT !== '1') {
+  console.log(removeCodexMcp() ? 'Unregistered the codex MCP server' : 'Could not unregister the codex MCP server — remove it with `codex mcp remove e2e_calc`')
 }
 driver.close()
 return { session, reportPath, runDir: bundle, stuck, error }

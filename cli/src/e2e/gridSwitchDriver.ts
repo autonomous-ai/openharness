@@ -235,8 +235,13 @@ export class GridSwitchDriver {
    * 0. New Harness: create a fresh agent for this run, the way the app's "New agent" does
    * (`agent_create` with an engine and an absolute cwd). The test never borrows someone's pane.
    */
-  async createAgent(engine: string, cwd: string, name: string): Promise<{ ok: true; agentId: string; pane: string | null } | { ok: false; error: string; detail?: string }> {
-    const payload = { engine, cwd, name }
+  async createAgent(engine: string, cwd: string, name: string, permissionMode = 'full'): Promise<{ ok: true; agentId: string; pane: string | null } | { ok: false; error: string; detail?: string }> {
+    // `full`, and not as a convenience: nothing answers a permission prompt in an unattended run,
+    // and on claude the MCP steps are refused outright in any other mode ("permission to use the
+    // `mcp__e2e_calc__add` tool wasn't granted" — measured; see workspace.ts). The daemon validates
+    // the mode per engine (INVALID_PERMISSION_MODE), so a wrong one fails loudly here instead of
+    // quietly launching the engine in some other mode.
+    const payload = { engine, cwd, name, permissionMode }
     const reply = await this.client.request('agent_create', payload)
     this.record('agent_create', payload, reply)
     if (reply.error) return { ok: false, error: reply.error as string, detail: reply.detail as string | undefined }

@@ -4,12 +4,27 @@
  * two logs those write to. The scenario (`smokeChecks.ts`) names them; the probe reads the logs.
  *
  *   <cwd>/tools/calc.sh              the script tool (copied from workspace/calc.sh)
- *   <cwd>/.codex/config.toml         codex: project-level MCP server (loaded once the folder is trusted)
  *   <cwd>/.mcp.json                  claude: project-level MCP server
+ *   ~/.codex/config.toml             codex: registered with `codex mcp add` — see below
  *   <cwd>/.e2e/calc-tool.log         one line per script call
  *   <cwd>/.e2e/calc-mcp.log          one line per MCP tools/call
+ *
+ * The two engines differ, and both shapes here were measured against the installed CLIs rather than
+ * assumed:
+ *
+ *   * claude reads `<cwd>/.mcp.json` — `claude mcp list` in the workspace lists `e2e_calc` and a
+ *     headless run really reaches the server. It reaches it ONLY when the engine was launched with
+ *     `--dangerously-skip-permissions` (permission mode `full`): in any other mode the call comes
+ *     back as "permission to use the `mcp__e2e_calc__add` tool wasn't granted", and neither
+ *     `enableAllProjectMcpServers` nor a pre-written approval changes that. `runGridSwitchTrace`
+ *     creates the agent in `full` for this reason.
+ *   * codex has NO project-level MCP config. A `<cwd>/.codex/config.toml` is never read (from inside
+ *     such a workspace, `codex mcp list` does not list the server), so registration goes through
+ *     codex's own `codex mcp add`, which writes `~/.codex/config.toml` — and `removeCodexMcp` takes
+ *     the entry out again when the run is over.
  */
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, realpathSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { LogKind } from './smokeChecks.js'
@@ -100,8 +115,58 @@ export function logPath(cwd: string, kind: LogKind): string {
   return join(cwd, '.e2e', kind === 'tool' ? 'calc-tool.log' : 'calc-mcp.log')
 }
 
-/** Lay the workspace out for `engine`. Idempotent. Returns what was written, for the trace. */
-export function prepareWorkspace(cwd: string, engine: string): { tool: string; mcpServer: string; mcpConfig: string | null } {
+export interface WorkspaceLayout {
+  tool: string
+  mcpServer: string
+  /** Where this engine's MCP registration ended up, or null when there is none. */
+  mcpConfig: string | null
+  /** How it got there — or, when `mcpConfig` is null, why the MCP steps cannot pass. */
+  mcpNote: string
+}
+
+/**
+ * Register the workspace's MCP server with codex, through codex's own command.
+ *
+ * `remove` first so a stale entry from an interrupted run (pointing at a workspace that no longer
+ * exists) cannot survive as a server codex fails to start. Both calls are best-effort: a codex too
+ * old for `mcp add` must leave a run without MCP rather than without a run, and the caller reports
+ * that in the trace.
+ */
+export function registerCodexMcp(mcpServer: string, mcpLog: string, bin = 'codex'): { ok: true } | { ok: false; detail: string } {
+  const run = (args: string[]): string => execFileSync(bin, args, { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })
+  try { run(['mcp', 'remove', MCP_SERVER_NAME]) } catch { /* not registered — the normal case */ }
+  try {
+    run(['mcp', 'add', MCP_SERVER_NAME, '--', 'node', mcpServer, mcpLog])
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string }
+    return { ok: false, detail: (e.stderr || e.message || String(err)).trim().split('\n')[0] }
+  }
+  // Registered is not the same as visible: ask codex what it sees, so a run never starts believing
+  // in a server the engine will not load.
+  try {
+    if (!run(['mcp', 'list']).includes(MCP_SERVER_NAME)) return { ok: false, detail: `codex mcp add reported success but 'codex mcp list' does not show ${MCP_SERVER_NAME}` }
+  } catch { /* `mcp list` can fail on its own (a broken unrelated server); the add is what matters */ }
+  return { ok: true }
+}
+
+/** Take the entry back out — the run's own cleanup, so the next run starts from a clean config. */
+export function removeCodexMcp(bin = 'codex'): boolean {
+  try {
+    execFileSync(bin, ['mcp', 'remove', MCP_SERVER_NAME], { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Lay the workspace out for `engine`. Idempotent. Returns what was written, for the trace.
+ *
+ * `codexBin` exists so a test can watch the registration without running the real `codex mcp add`:
+ * that command writes the developer's own `~/.codex/config.toml`, and a unit test has no business
+ * leaving an entry there pointing at a temp folder it is about to delete.
+ */
+export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?: string } = {}): WorkspaceLayout {
   mkdirSync(join(cwd, 'tools'), { recursive: true })
   mkdirSync(join(cwd, '.e2e'), { recursive: true })
   const tool = join(cwd, 'tools', 'calc.sh')
@@ -115,22 +180,22 @@ export function prepareWorkspace(cwd: string, engine: string): { tool: string; m
   writeFileSync(mcpServer, CALC_MCP_MJS)
   const mcpLog = logPath(cwd, 'mcp')
   let mcpConfig: string | null = null
+  let mcpNote = `${engine} has no MCP registration here: the MCP steps cannot pass`
   if (engine === 'codex') {
-    mkdirSync(join(cwd, '.codex'), { recursive: true })
-    mcpConfig = join(cwd, '.codex', 'config.toml')
-    writeFileSync(mcpConfig, [
-      `# e2e workspace — the MCP server the scenario asks for by name.`,
-      `[mcp_servers.${MCP_SERVER_NAME}]`,
-      `command = "node"`,
-      `args = [${JSON.stringify(mcpServer)}, ${JSON.stringify(mcpLog)}]`,
-      ``,
-    ].join('\n'))
+    const registered = registerCodexMcp(mcpServer, mcpLog, opts.codexBin ?? 'codex')
+    if (registered.ok) {
+      mcpConfig = join(homedir(), '.codex', 'config.toml')
+      mcpNote = `registered with \`codex mcp add\` (codex does not read a project-level .codex/config.toml)`
+    } else {
+      mcpNote = `codex mcp add failed: ${registered.detail}`
+    }
   } else if (engine === 'claude') {
     mcpConfig = join(cwd, '.mcp.json')
     writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { command: 'node', args: [mcpServer, mcpLog] } } }, null, 2) + '\n')
     preApproveClaudeMcp(cwd, [MCP_SERVER_NAME])
+    mcpNote = 'project .mcp.json — reachable only in permission mode `full`'
   }
-  return { tool, mcpServer, mcpConfig }
+  return { tool, mcpServer, mcpConfig, mcpNote }
 }
 
 /**
@@ -138,6 +203,12 @@ export function prepareWorkspace(cwd: string, engine: string): { tool: string; m
  * is kept in `~/.claude.json` as `projects[<cwd>].enabledMcpjsonServers`. For a workspace this run
  * made, that answer is the run's to give — same posture and same file handling as the daemon's
  * `preTrustClaudeProject` (lib/claudeTrust.ts): only add, never touch a shape we did not expect.
+ *
+ * Measured against claude 2.1.x, this is NOT what carries the MCP steps, and the file says so rather
+ * than leaving the next reader to re-measure: claude rewrites `~/.claude.json` at startup and the
+ * key is gone afterwards (`claude mcp list` still says "Pending approval"). What actually reaches
+ * the server is the `full` permission mode the agent is created in. Kept because it costs one write
+ * and is the right answer if a future claude honours it; never relied on.
  */
 export function preApproveClaudeMcp(cwd: string, names: string[], home = homedir()): 'approved' | 'already' | 'skipped' {
   const file = join(home, '.claude.json')
@@ -164,6 +235,43 @@ export function preApproveClaudeMcp(cwd: string, names: string[], home = homedir
   writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 })
   renameSync(tmp, target)
   return 'approved'
+}
+
+/**
+ * Accept Claude Code's Bypass Permissions warning ahead of time.
+ *
+ * `--dangerously-skip-permissions` does not go straight to the prompt the first time: an
+ * interactive claude draws a full-screen "WARNING: Claude Code running in Bypass Permissions mode"
+ * with **"No, exit" selected**, and on Enter it exits 1 — the pane becomes a shell and every check
+ * of the run is stuck with no engine behind it. (A headless `claude -p` never shows it, which is
+ * why the flag looks harmless until it runs in a pane.) The answer is remembered in `~/.claude.json`
+ * as `bypassPermissionsModeAccepted`, a key read out of claude 2.1.281's own binary rather than
+ * guessed — so the run gives it the same way a person would, once, before the agent starts.
+ *
+ * It is NOT sufficient on its own, and the next reader should not have to find that out in a failed
+ * run: on the pass that proved this, the flag was written (`accepted`) and the warning still came up
+ * — `paneProbe`'s `claude-bypass-accept` answered it, and the leg passed. So the dialog handler is
+ * what carries the run and this write is the belt: cheap, correct, and it may be what keeps the
+ * screen away on a machine that reads the flag earlier.
+ */
+export function preAcceptClaudeBypassMode(home = homedir()): 'accepted' | 'already' | 'skipped' {
+  const file = join(home, '.claude.json')
+  if (!existsSync(file)) return 'skipped'
+  let config: unknown
+  try {
+    config = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return 'skipped'
+  }
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return 'skipped'
+  const conf = config as Record<string, unknown>
+  if (conf.bypassPermissionsModeAccepted === true) return 'already'
+  conf.bypassPermissionsModeAccepted = true
+  const target = realpathSync(file)
+  const tmp = `${target}.e2e-${process.pid}.tmp`
+  writeFileSync(tmp, JSON.stringify(conf, null, 2), { mode: 0o600 })
+  renameSync(tmp, target)
+  return 'accepted'
 }
 
 /** The log's lines right now (empty when it does not exist yet). */

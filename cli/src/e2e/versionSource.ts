@@ -48,9 +48,15 @@ export class NpmVersionSource implements VersionSource {
     const pkg = NPM_PACKAGE[engine]
     if (!pkg) return null
     try {
-      const res = await this.fetchImpl(`https://registry.npmjs.org/${pkg}/latest`, {
-        headers: { Accept: 'application/vnd.npm.install-v1+json' },
-      })
+      // No `Accept: application/vnd.npm.install-v1+json` here, however natural it looks: the
+      // abbreviated-metadata type is offered for the PACKAGE document, and asking for it on the
+      // `/latest` dist-tag endpoint gets a 406 with an empty body. That failure is silent — the
+      // catch below turns it into `latest=null`, which the trigger reads as "nothing new", so the
+      // whole pipeline would sit quiet forever while looking perfectly healthy. Measured:
+      //   curl -o /dev/null -w '%{http_code}' -H 'Accept: application/vnd.npm.install-v1+json' \
+      //     https://registry.npmjs.org/@openai/codex/latest   -> 406
+      //   curl -s https://registry.npmjs.org/@openai/codex/latest | jq .version -> "0.156.1"
+      const res = await this.fetchImpl(`https://registry.npmjs.org/${pkg}/latest`)
       if (!res.ok) return null
       const body = (await res.json()) as { version?: string }
       return body.version ?? null

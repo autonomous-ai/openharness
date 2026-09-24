@@ -7,10 +7,10 @@ import { buildMatrixEntry } from './matrix.js'
 import type { AgentEngine } from '../engines/types.js'
 import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs } from './smokeChecks.js'
 import { pickGridModel } from './gridSwitchDriver.js'
-import { prepareWorkspace, readLog, logPath, CALC_SH, CALC_MCP_MJS } from './workspace.js'
+import { prepareWorkspace, readLog, logPath, preAcceptClaudeBypassMode, CALC_SH, CALC_MCP_MJS } from './workspace.js'
 import { execFileSync } from 'node:child_process'
-import { probeLeg, runCheck, dismissStartupDialogs, type Tmux } from './paneProbe.js'
-import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, type Tmux } from './paneProbe.js'
+import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -59,13 +59,52 @@ describe('version source (mock first, npm later)', () => {
 
   it('npm impl reads the registry via fetch (stubbed)', async () => {
     let called = ''
-    const fetchImpl = (async (url: string) => {
+    let sentInit: RequestInit | undefined
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
       called = url
+      sentInit = init
       return { ok: true, json: async () => ({ version: '9.9.9' }) } as unknown as Response
     }) as typeof fetch
     const src = new NpmVersionSource(fetchImpl)
     expect(await src.latestVersion('codex')).toBe('9.9.9')
     expect(called).toContain('@openai/codex')
+    // No Accept header: `/latest` answers 406 to the abbreviated-metadata type, and the failure is
+    // silent (latest=null reads as "nothing new"), so the request is pinned bare. See versionSource.
+    expect(sentInit).toBeUndefined()
+  })
+
+  // A stub cannot catch a registry that refuses our headers, and that exact bug once kept the whole
+  // pipeline quiet. This talks to npm for real, so it is opt-in: `RUN_REAL_NPM=1 vitest run src/e2e`.
+  it.runIf(process.env.RUN_REAL_NPM === '1')('npm impl really answers for both engines', async () => {
+    const src = new NpmVersionSource()
+    for (const engine of ['codex', 'claude'] as const) {
+      expect(await src.latestVersion(engine)).toMatch(/^\d+\.\d+\.\d+/)
+    }
+  }, 30_000)
+})
+
+describe('claude bypass-permissions warning (what killed a run once)', () => {
+  it('accepts it in a config copy, is idempotent, and leaves an unreadable one alone', () => {
+    const home = mkdtempSync(join(tmpdir(), 'wd-home-'))
+    try {
+      expect(preAcceptClaudeBypassMode(home)).toBe('skipped') // no ~/.claude.json at all
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { '/x': { allowedTools: [] } } }))
+      expect(preAcceptClaudeBypassMode(home)).toBe('accepted')
+      const after = JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8'))
+      expect(after.bypassPermissionsModeAccepted).toBe(true)
+      expect(after.projects['/x']).toEqual({ allowedTools: [] }) // nothing else touched
+      expect(preAcceptClaudeBypassMode(home)).toBe('already')
+      writeFileSync(join(home, '.claude.json'), 'not json')
+      expect(preAcceptClaudeBypassMode(home)).toBe('skipped')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('the probe answers the warning by moving off the default "No, exit"', () => {
+    const dialog = STARTUP_DIALOGS.find((d) => d.id === 'claude-bypass-accept')!
+    expect(dialog.match.test('  WARNING: Claude Code running in Bypass Permissions mode')).toBe(true)
+    expect(dialog.keys).toEqual(['Down', 'Enter'])
   })
 })
 
@@ -283,15 +322,32 @@ describe('workspace (the person\'s project the agent is created in)', () => {
   it('lays out the script tool, the MCP config for the engine, and the logs the steps are proven by', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'wd-ws-'))
     try {
-      const laid = prepareWorkspace(cwd, 'codex')
+      // A stand-in for the codex binary: it records the argv it was called with and answers
+      // `mcp list` the way a codex that accepted the registration would.
+      const codexBin = join(cwd, 'fake-codex')
+      const argvLog = join(cwd, 'fake-codex.log')
+      writeFileSync(codexBin, `#!/bin/sh\necho "$@" >> ${JSON.stringify(argvLog)}\n[ "$2" = list ] && echo "e2e_calc node /x/calc-mcp.mjs"\nexit 0\n`)
+      chmodSync(codexBin, 0o755)
+      const laid = prepareWorkspace(cwd, 'codex', { codexBin })
+      // The registration is codex's own command, with the server and its log as argv — and a stale
+      // entry is removed before the add, so an interrupted run cannot leave one behind.
+      const calls = readFileSync(argvLog, 'utf8').trim().split('\n')
+      expect(calls[0]).toBe('mcp remove e2e_calc')
+      expect(calls[1]).toBe(`mcp add e2e_calc -- node ${laid.mcpServer} ${logPath(cwd, 'mcp')}`)
+      expect(calls[2]).toBe('mcp list')
       expect(existsSync(join(cwd, 'tools', 'calc.sh'))).toBe(true)
       // The strings shipped in the bundle are the files in workspace/, byte for byte.
       expect(CALC_SH).toBe(readFileSync(join(__dirname, 'workspace', 'calc.sh'), 'utf8'))
       expect(CALC_MCP_MJS).toBe(readFileSync(join(__dirname, 'workspace', 'calc-mcp.mjs'), 'utf8'))
       expect(existsSync(join(cwd, 'tools', 'calc-mcp.mjs'))).toBe(true)
-      expect(readFileSync(join(cwd, '.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.e2e_calc]')
-      expect(readFileSync(join(cwd, '.codex', 'config.toml'), 'utf8')).toContain('calc-mcp.mjs')
-      expect(laid.mcpConfig).toBe(join(cwd, '.codex', 'config.toml'))
+      // codex has no project-level MCP config — a `<cwd>/.codex/config.toml` is never read (measured:
+      // `codex mcp list` inside such a workspace does not list the server), so the workspace must not
+      // pretend otherwise. Registration goes through `codex mcp add`, which this test does not run:
+      // it would write the developer's own ~/.codex/config.toml. What is pinned is that the run says
+      // out loud which of the two happened.
+      expect(existsSync(join(cwd, '.codex', 'config.toml'))).toBe(false)
+      expect(laid.mcpConfig === null || laid.mcpConfig.endsWith(join('.codex', 'config.toml'))).toBe(true)
+      expect(laid.mcpNote).toMatch(laid.mcpConfig ? /codex mcp add/ : /codex mcp add failed/)
       // The script answers and leaves its line in the tool log.
       expect(execFileSync('sh', [join(cwd, 'tools', 'calc.sh'), 'add', '40', '2']).toString().trim()).toBe('42')
       expect(readLog(cwd, 'tool').at(-1)).toContain('add 40 2 = 42')
@@ -301,8 +357,12 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       expect(out).toContain('"text":"42"')
       expect(readLog(cwd, 'mcp').at(-1)).toContain('sub 60 18 = 42')
       // claude gets .mcp.json instead.
-      prepareWorkspace(cwd, 'claude')
+      const claude = prepareWorkspace(cwd, 'claude')
       expect(JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf8')).mcpServers.e2e_calc.command).toBe('node')
+      // The note carries the other half of what was measured: claude reads .mcp.json, but only a
+      // `full` agent may call the server's tools.
+      expect(claude.mcpConfig).toBe(join(cwd, '.mcp.json'))
+      expect(claude.mcpNote).toContain('full')
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }
