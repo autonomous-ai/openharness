@@ -26,6 +26,7 @@ import '../terminal/terminal_session.dart';
 import '../theme/app_theme.dart';
 import 'agent_drag.dart';
 import 'harness_join_guide_screen.dart';
+import 'link_machine_screen.dart';
 import 'new_agent_dialog.dart';
 import 'delete_agent_dialog.dart';
 import 'fork_agent_dialog.dart';
@@ -1436,6 +1437,8 @@ class _PaneContent extends StatelessWidget {
           detail: notifier.machineInventoryLoaded
               ? 'This machine isn’t available. Retained output is read only.'
               : 'Waiting for this machine. Retained output is read only.',
+          actionLabel: null,
+          onAction: null,
         );
       } else if (needsLink) {
         notice = (
@@ -1443,6 +1446,14 @@ class _PaneContent extends StatelessWidget {
           icon: Icons.link_off,
           detail:
               '${machine.machine.displayName} needs linking. Retained output is read only.',
+          // A tile still showing its last screen gets the same way out as an
+          // empty one — the band's button asks for the remote password.
+          actionLabel: 'Link…',
+          onAction: () => showLinkMachineScreenDialog(
+            context,
+            notifier,
+            pane.machineId,
+          ).ignore(),
         );
       } else if (offline) {
         notice = (
@@ -1450,6 +1461,8 @@ class _PaneContent extends StatelessWidget {
           icon: Icons.cloud_off,
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
+          actionLabel: null,
+          onAction: null,
         );
       } else if (agent == null || !agent.terminalAvailable) {
         notice = (
@@ -1458,6 +1471,8 @@ class _PaneContent extends StatelessWidget {
           detail:
               agent?.terminalUnavailableReason ??
               'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
+          actionLabel: null,
+          onAction: null,
         );
       } else if (agent.launchState == 'failed') {
         notice = (
@@ -1466,6 +1481,8 @@ class _PaneContent extends StatelessWidget {
           detail:
               agent.launchDetail ??
               'The engine failed to start. Terminal output is preserved.',
+          actionLabel: null,
+          onAction: null,
         );
       } else {
         notice = null;
@@ -1572,8 +1589,19 @@ class _PaneContent extends StatelessWidget {
         title: agentName ?? machine.machine.displayName,
         icon: Icons.link_off,
         message:
-            '${machine.machine.displayName} is not linked to this computer yet.',
+            '${machine.machine.displayName} is not linked to this computer yet. '
+            'Link it with the remote password set on that machine.',
         onClose: single && !swarmMode ? null : close,
+        // The way out, where the dead end was: the same card the Machines
+        // panel's Connect row opens, asking for that machine's remote
+        // password. It closes itself the moment the link lands, and this tile
+        // goes back to attaching.
+        actionLabel: 'Link…',
+        onAction: () => showLinkMachineScreenDialog(
+          context,
+          notifier,
+          pane.machineId,
+        ).ignore(),
       );
     }
     if (offline) {

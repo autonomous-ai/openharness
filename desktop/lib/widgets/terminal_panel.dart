@@ -42,7 +42,17 @@ import 'pane_header_actions.dart';
 /// The pane header's own horizontal inset.
 const double _stripPadding = 14;
 
-typedef TerminalNotice = ({String label, String detail, IconData icon});
+typedef TerminalNotice = ({
+  String label,
+  String detail,
+  IconData icon,
+
+  /// A way out of what the notice describes, shown as the header's button —
+  /// a machine that needs linking offers to ask for its password. Null where
+  /// the state is merely reported and nothing here would fix it.
+  String? actionLabel,
+  VoidCallback? onAction,
+});
 
 class TerminalPanel extends StatefulWidget {
   final AppNotifier notifier;
@@ -1858,17 +1868,23 @@ class _TerminalHeader extends StatelessWidget {
             icon: Icons.sync,
             detail:
                 'Connecting to this terminal. Retained output is read only.',
+            actionLabel: null,
+            onAction: null,
           ),
           TerminalSessionStatus.resyncing => (
             label: 'Restoring',
             icon: Icons.sync,
             detail: 'Restoring this terminal. Retained output is read only.',
+            actionLabel: null,
+            onAction: null,
           ),
           TerminalSessionStatus.takenOver => (
             label: 'Take control',
             icon: Icons.lock_outline,
             detail:
                 'Read only: ${taker ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
+            actionLabel: null,
+            onAction: null,
           ),
           TerminalSessionStatus.error || TerminalSessionStatus.closed => (
             label: 'Reconnect',
@@ -1877,14 +1893,21 @@ class _TerminalHeader extends StatelessWidget {
                 session.errorMessage ??
                 session.errorCode ??
                 'This stream is closed. Retained output is read only.',
+            actionLabel: null,
+            onAction: null,
           ),
         };
+    // A notice that carries its own way out owns the button — a machine that
+    // needs linking asks for its password there. Otherwise the button is the
+    // session's own reconnect, which a notice has always suppressed.
+    final noticeAction = notice?.onAction;
     final canReconnect =
         notice == null &&
         !readOnly &&
         (session.status == TerminalSessionStatus.error ||
             session.status == TerminalSessionStatus.closed ||
             session.status == TerminalSessionStatus.takenOver);
+    final statusAction = noticeAction ?? (canReconnect ? onReconnect : null);
     final machine = notifier.stateOf(session.machineId);
     final agent = machine?.agents
         .where((a) => a.id == session.agentId)
@@ -1990,8 +2013,8 @@ class _TerminalHeader extends StatelessWidget {
                           Tooltip(
                             message: '${status.label}: ${status.detail}',
                             child: IconButton(
-                              tooltip: status.label,
-                              onPressed: canReconnect ? onReconnect : null,
+                              tooltip: status.actionLabel ?? status.label,
+                              onPressed: statusAction,
                               icon: Icon(status.icon, size: 14),
                               style: IconButton.styleFrom(
                                 foregroundColor: color,
@@ -2019,7 +2042,7 @@ class _TerminalHeader extends StatelessWidget {
                               child: Tooltip(
                                 message: status.detail,
                                 child: TextButton(
-                                  onPressed: canReconnect ? onReconnect : null,
+                                  onPressed: statusAction,
                                   style: TextButton.styleFrom(
                                     foregroundColor: color,
                                     disabledForegroundColor: AppColors.textSoft,
@@ -2038,6 +2061,12 @@ class _TerminalHeader extends StatelessWidget {
                                       const SizedBox(width: 6),
                                       Flexible(
                                         child: Text(
+                                          // The chip names the STATE; what
+                                          // pressing it does is in the tooltip
+                                          // and in `actionLabel`. "Link
+                                          // required" that can be pressed reads
+                                          // better than a bare verb where every
+                                          // neighbour is a status.
                                           status.label,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,

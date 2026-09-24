@@ -244,6 +244,8 @@ void main() {
         label: 'Offline',
         icon: Icons.cloud_off,
         detail: 'Test host is offline.',
+        actionLabel: null,
+        onAction: null,
       ),
     );
     expect(takenOverTitle, findsNothing);
@@ -635,6 +637,8 @@ void main() {
         label: 'Offline',
         icon: Icons.cloud_off,
         detail: 'Test host is offline.',
+        actionLabel: null,
+        onAction: null,
       ),
     );
     takeOver();
