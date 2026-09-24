@@ -47,15 +47,15 @@ import 'sheet_list.dart';
 /// until the field is focused; then the results take their place, and Cancel
 /// puts the tabs back.
 ///
-/// ⚠️ **In place, never a screen of its own.** Focusing the field once stood
-/// the sheet up to the top of the screen for the results, and it read as a
-/// second screen arriving over the first — the full-screen search this sheet
-/// replaced. The results take the tabs' place and nothing else moves: the
-/// keyboard, when it comes, takes the bottom of the sheet and leaves its top
-/// where it was.
+/// ⚠️ **The keyboard lifts the sheet; nothing else moves it.** The results take
+/// the tabs' place and focusing the field changes nothing about the sheet's
+/// size. A keyboard, when it comes, pushes the whole sheet up on its top edge
+/// — as far as just under the status bar — rather than taking the sheet's
+/// bottom: pinned where it rested, the sheet let the keys cover all but two
+/// rows of results.
 ///
 /// ⚠️ **The field is not focused on the way in.** The tabs are what the sheet
-/// is opened to read, and a keyboard raised with it would cover half of them.
+/// is opened to read, and focus is what trades them for the results.
 ///
 /// ⚠️ **Not a route.** Pushed, the sheet would sit in a navigator above the
 /// shell, and an agent opened from it would be pushed over the shell rather
@@ -136,8 +136,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// [BottomSheet]'s own figure, so this sheet lets go like the others do.
   static const double _flingSpeed = 700;
 
-  /// What the sheet stands at while it reads the tabs: this share of the
-  /// screen, the strip at its foot included.
+  /// What the sheet stands at: this share of the screen, the strip at its
+  /// foot included — the same above a keyboard, up to where [_topGap] stops
+  /// it.
   ///
   /// ⚠️ **One height, whatever the tab holds** — see [DeskTabsPanel]. Enough
   /// for four or five rows, and the terminal keeps the rest in view above it.
@@ -148,18 +149,10 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// worth the moment Cancel's keyboard finished going down.
   static const double _restingShare = 0.64;
 
-  /// How close under the status bar the sheet may be pushed, when a keyboard
-  /// leaves it no room lower down: a strip of the dimmed page left showing,
-  /// which is what says it is a layer over the terminal rather than a page of
-  /// its own.
+  /// How close under the status bar a keyboard may push the sheet: a strip of
+  /// the dimmed page left showing, which is what says it is a layer over the
+  /// terminal rather than a page of its own.
   static const double _topGap = 8;
-
-  /// The least the sheet keeps above a keyboard: the grip, the field, the mode
-  /// chips and the first rows of results. A keyboard that would leave less — a
-  /// small phone, one lying on its side — lifts the sheet's top instead, since
-  /// a field with no room under it is a search with nowhere to put its
-  /// answers.
-  static const double _minHeight = 200;
 
   final _controller = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Terminal search');
@@ -177,10 +170,10 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// beside the field.
   ///
   /// ⚠️ **Entered on focus, left on Cancel — not tied to focus both ways.** The
-  /// keyboard goes away for plenty of reasons that are not "stop searching": a
-  /// drag on the results puts it away on purpose (see [PhoneSearchResults]),
-  /// and so does the return key. The results stay up through all of them, the
-  /// way a search does anywhere on a phone; only Cancel, or Back, ends it.
+  /// keyboard goes away for reasons that are not "stop searching" — the return
+  /// key puts it away on purpose. The results stay up through that, the way a
+  /// search does anywhere on a phone; only Cancel, or Back, ends it. (A drag
+  /// on the results keeps it: see [PhoneSearchResults].)
   bool _searching = false;
 
   /// Whether the results are BUILT — from the focus that started the search to
@@ -211,9 +204,21 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// How far a finger has pulled the sheet down, as a share of its height.
   late final AnimationController _pull = AnimationController(vsync: this);
 
+  /// How tall the keyboard stands, in logical pixels — the sheet's foot goes
+  /// on its top (see [_layOut]).
+  ///
+  /// Read off [View], for the reason `didChangeMetrics` in `terminal_page.dart`
+  /// gives: the MediaQuery here has had the inset taken out. And written on
+  /// every metrics tick, because nothing that reads [View] is rebuilt when it
+  /// moves — this is what carries the sheet up with the keys, frame by frame.
+  final _keyboard = ValueNotifier<double>(0);
+
+  late final _metrics = _MetricsWatch(_readKeyboard);
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(_metrics);
     _focus.addListener(_onFocus);
     _search.addListener(_followQuery);
     // The order the box opens in comes off disk. Not awaited: what is known
@@ -224,7 +229,22 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // A keyboard already up when the sheet opens — the terminal's own.
+    _readKeyboard();
+  }
+
+  void _readKeyboard() {
+    if (!mounted) return;
+    final view = View.of(context);
+    _keyboard.value = view.viewInsets.bottom / view.devicePixelRatio;
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(_metrics);
+    _keyboard.dispose();
     _focus.removeListener(_onFocus);
     _search.removeListener(_followQuery);
     _controller.dispose();
@@ -395,30 +415,32 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   }
 
   Widget _layOut(BuildContext context, Size area, Widget sheet) {
-    final view = View.of(context);
-    // What a keyboard has taken off the foot of the page — the view's own
-    // figure, since the MediaQuery here has had it taken out (see
-    // `didChangeMetrics` in `terminal_page.dart`).
-    final keyboard = view.viewInsets.bottom / view.devicePixelRatio;
+    final screen = MediaQuery.sizeOf(context).height;
     final ceiling = MediaQuery.paddingOf(context).top + _topGap;
-    final full = math.max(0.0, area.height - ceiling);
-    // ⚠️ **The top is placed against the page as it stands with NO keyboard**
-    // — a share of the screen up from its foot — so a keyboard coming up, the
-    // field's or the rename dialog's, takes the bottom of the sheet and leaves
-    // its top where it was. The sheet being read stays the sheet being read.
-    final top = math.max(
-      ceiling,
-      area.height +
-          keyboard -
-          MediaQuery.sizeOf(context).height * _restingShare,
-    );
-    final height = (area.height - top)
-        .clamp(math.min(full, _minHeight), full)
-        .toDouble();
+    final resting = screen * _restingShare;
     return AnimatedBuilder(
-      animation: Listenable.merge([widget.animation, _pull]),
+      animation: Listenable.merge([widget.animation, _pull, _keyboard]),
       child: sheet,
       builder: (context, sheet) {
+        // ⚠️ **The sheet stands on the keyboard as measured, not on the
+        // page's foot.** The page does not always end at the keyboard's top:
+        // where it has been resized for the keys this is zero, and where it
+        // has not it runs on under them and this is how far — so the foot
+        // lands on the keys either way. Taken against the window's height,
+        // because this overlay starts at the window's top (see where
+        // `terminal_page.dart` places it, under the status bar).
+        //
+        // A keyboard lifts the sheet whole, at the height it rests at. Only
+        // the ceiling stops it: a keyboard that leaves less room than that
+        // shortens the sheet instead.
+        final covered = math.min(
+          area.height,
+          math.max(0.0, area.height - (screen - _keyboard.value)),
+        );
+        final height = math.min(
+          resting,
+          math.max(0.0, area.height - covered - ceiling),
+        );
         final open = widget.animation.value;
         final pull = _pull.value;
         // How much of the veil is up: all of it with the sheet, and less of it
@@ -456,7 +478,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             Positioned(
               left: 0,
               right: 0,
-              bottom: 0,
+              bottom: covered,
               height: height,
               child: Transform.translate(
                 offset: Offset(0, (1 - open + pull) * height),
@@ -583,6 +605,18 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
         ),
     ],
   );
+}
+
+/// Calls [onChange] whenever the window's metrics move — a keyboard rising or
+/// falling among them. Its own object, so the sheet's state does not have to
+/// be a [WidgetsBindingObserver] for the one callback it needs.
+class _MetricsWatch extends WidgetsBindingObserver {
+  _MetricsWatch(this.onChange);
+
+  final VoidCallback onChange;
+
+  @override
+  void didChangeMetrics() => onChange();
 }
 
 /// What sits over the results: the modes while the field is empty, and once

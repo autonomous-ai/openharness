@@ -207,8 +207,8 @@ class SheetSearchField extends StatelessWidget {
                         controller: controller,
                         focus: focus,
                         onChanged: onChanged,
-                        // The sheet is opened to read its tabs, and a keyboard
-                        // raised with it would cover half of them.
+                        // The sheet is opened to read its tabs, and focus is
+                        // what trades them for the results.
                         autofocus: false,
                         hintText: hintText,
                         // The query's own size, and ink a step under it: the

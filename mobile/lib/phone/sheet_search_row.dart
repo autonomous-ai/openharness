@@ -67,20 +67,17 @@ class SheetSearchRow extends StatelessWidget {
       last: last,
       enabled: openable,
       selected: onScreen,
-      onTap: openable && !busy ? _open : null,
+      // ⚠️ **No unfocus here.** A tap on a project, a machine or a `?` row
+      // only narrows the search, and the keyboard has to stay up for the rest
+      // of the query; [PhoneSearchResults] puts it away once a tap is known to
+      // open something.
+      onTap: openable && !busy ? onTap : null,
       leading: _tile(row),
       title: _heading(row, matches),
       subtitle: _subtitle(row, matches),
       trailing: _trailing(row),
       chevron: openable && !onScreen && !resuming,
     );
-  }
-
-  void _open() {
-    // The keyboard goes away with the sheet, not a frame after it — dismissing
-    // it first keeps the terminal from opening under a collapsing inset.
-    FocusManager.instance.primaryFocus?.unfocus();
-    onTap();
   }
 
   static Widget _tile(PhoneDestination row) => switch (row.kind) {

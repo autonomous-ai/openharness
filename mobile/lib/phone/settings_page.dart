@@ -48,6 +48,9 @@ import 'voice_language_store.dart';
 ///    desktop had last written to `~/.harness`.
 ///  - **Terminal** carries the colour scheme beside the face and the size, because on a phone all
 ///    three answer the same question — what the pane looks like at arm's length.
+///  - **Voice** carries the language the mic is transcribed in. A section of one row, and it earns
+///    it: on a phone the mic is a way of typing, not a decoration on the terminal, and a person
+///    whose words came back in the wrong language looks for the word "Voice".
 ///
 /// The desktop's **Debug** screen has no counterpart here on purpose. It reads an in-memory ring
 /// that only a debug build fills, so on a shipped phone the row would open on an empty page — and
@@ -55,18 +58,6 @@ import 'voice_language_store.dart';
 ///
 /// What a phone adds instead is the account and the machine links, which the desktop keeps in its
 /// rail footer — on a phone there is no rail, so this is the only way to reach either.
-
-/// Whether the Terminal section offers the voice language.
-///
-/// Off: the mic transcribes in whatever [voiceLanguageStore] already holds, and there is no longer
-/// anywhere in the app to change it by hand.
-///
-/// ⚠️ **That is the whole of the setting, so turning this back on is the only way back to it.**
-/// The mic's long-press used to open the same picker, and hold-to-talk took that gesture for
-/// recording (see `voice_mic_mode.dart`) — so with this off, the stored language is whatever it was
-/// last set to, or the default for a phone that never set one. [_VoiceLanguageRow] and
-/// [showVoiceLanguagePicker] are both still here and still work; nothing but this flag was changed.
-const bool _showVoiceLanguage = false;
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.notifier, this.large = true});
@@ -140,17 +131,20 @@ class _Body extends StatelessWidget {
       const SettingsCaption('Terminal'),
       SettingsGroup(
         children: [
-          // ⚠️ Voice language is hidden, not removed — flip [_showVoiceLanguage]
-          // to bring the row back. [_VoiceLanguageRow] and the picker behind it
-          // are untouched and still work; this is the only thing that was
-          // drawing them.
-          if (_showVoiceLanguage) _VoiceLanguageRow(),
           _PhoneNameRow(notifier: notifier),
           _FontRow(),
           _SizeRow(),
           _TerminalThemeRow(),
         ],
       ),
+      // ⚠️ **Its own section, not a row under Terminal.** The rows above answer
+      // what the pane LOOKS like — face, size, colours, the name this phone
+      // signs its takeovers with. This one answers what the mic HEARS, which is
+      // the other half of the terminal and the one people go looking for when
+      // the transcript comes back in the wrong language. Under a Terminal
+      // caption it read as another thing about the type.
+      const SettingsCaption('Voice'),
+      SettingsGroup(children: [_VoiceLanguageRow()]),
       const SettingsCaption('Appearance'),
       SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
       const SettingsNote(
@@ -215,8 +209,13 @@ class _Avatar extends StatelessWidget {
   }
 }
 
-/// The language the mic under every terminal transcribes in. A long press on the mic opens the
-/// same picker.
+/// The language the mic under every terminal transcribes in.
+///
+/// ⚠️ **The mic's long press opens the same picker — but only in the build that taps to talk.**
+/// Hold-to-talk gives that gesture to the recording (`voice_mic_mode.dart`), so there this row is the
+/// whole of the setting: without it a phone transcribes in whatever language it guessed on first
+/// launch, for ever. It is drawn either way rather than only in the build that needs it — a setting
+/// that moves between releases is one nobody can be told where to find.
 class _VoiceLanguageRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
@@ -224,7 +223,10 @@ class _VoiceLanguageRow extends StatelessWidget {
     builder: (context, code, _) {
       AppTheme.watch(context);
       return SettingsRow(
-        title: 'Voice language',
+        // "Language", not "Voice language": the caption above the group
+        // already said Voice, and a row that repeats its own section reads as
+        // though there were a second kind of language further down.
+        title: 'Language',
         value: voiceLanguageName(code),
         onTap: () => unawaited(showVoiceLanguagePicker(context)),
       );

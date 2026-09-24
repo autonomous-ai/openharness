@@ -161,7 +161,6 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
       // couple of rows' height above the keyboard, and the empty state is
       // taller than that — laid out bare, it would overflow the sheet.
       return ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: EdgeInsets.fromLTRB(kSheetInset, 8, kSheetInset, bottom),
         children: [_empty(search, compact: true)],
       );
@@ -170,9 +169,10 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
     final previews = widget.notifier.sessionPreviews;
     final showing = widget.showing;
     return ListView.builder(
-      // As in the flat list: dragging is how a result is reached with the
-      // keyboard still up.
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      // ⚠️ **A drag keeps the keyboard, unlike the flat list's.** The sheet
+      // stands on the keyboard, so putting the keys away mid-scroll dropped
+      // the whole sheet under the finger and took the field's focus with it.
+      // The return key and Cancel are how this search puts them away.
       // No top padding: the caption or the chips over the list end in the gap
       // a group keeps from what labels it.
       padding: EdgeInsets.fromLTRB(kSheetInset, 0, kSheetInset, bottom),
@@ -221,6 +221,11 @@ class _PhoneSearchResultsState extends State<PhoneSearchResults> {
   void _tap(PhoneDestination row) {
     final opened = widget.controller.submit(row);
     if (opened == null) return;
+    // The keyboard goes away with the search, not a frame after it —
+    // dismissing it first keeps what opens from animating over a collapsing
+    // inset. Only here, past the controller: a tap it absorbed is still a
+    // search in progress, and the keyboard stays up for the rest of it.
+    FocusManager.instance.primaryFocus?.unfocus();
     if (opened.isCommand) {
       widget.onOpen?.call();
       _run(opened);
