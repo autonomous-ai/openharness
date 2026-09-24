@@ -434,6 +434,7 @@ class NewHarnessController extends ChangeNotifier {
         : harnessId != null && engine != null && !isHarnessId(engine)
         ? engine
         : _initialEngine(isHarnessId(engine) ? null : engine);
+    if (!explicitSelection) _forgetUnofferedHarness();
     _model = isTerminal ? null : draft?.model;
     _modelUsage = modelUsage;
     _ownsModelUsage = modelUsage == null;
@@ -491,6 +492,7 @@ class NewHarnessController extends ChangeNotifier {
         if (!_selectionTouched && !explicitSelection) {
           _harnessId = app.agentPreference.harness;
           _engine = _initialEngine(null);
+          _forgetUnofferedHarness();
           if (_project.generated != null) _project = _generatedProject();
         } else if (!_selectionTouched && draft == null && isHarnessId(engine)) {
           _engine = _initialEngine(null);
@@ -525,6 +527,7 @@ class NewHarnessController extends ChangeNotifier {
           return;
         }
         _engine = _initialEngine(null);
+        if (!explicitSelection) _forgetUnofferedHarness();
         _refresh();
       }),
     );
@@ -550,6 +553,37 @@ class NewHarnessController extends ChangeNotifier {
   late String _engine;
   String? _harnessId;
   String? get harnessId => _harnessId;
+
+  /// The harness this form is installing, or failed to install, on its way to
+  /// starting — so the form can show the machine's own narration of it.
+  String? _installing;
+
+  /// The install that start is waiting on, while it runs and after it fails.
+  /// Cleared by choosing another harness or machine, or by starting again.
+  DshInstallRun? get installRun =>
+      _installing == null ? null : _machine?.dsh.runs[_installing];
+
+  /// Whether [id] can be offered on the selected machine: anything, until its
+  /// catalog has answered; afterwards only a launchable package it lists. A
+  /// harness removed from the Store stays in the recents file, and must not
+  /// be offered — or opened on — as though it could still start.
+  bool _offered(String id) {
+    final machine = _machine;
+    if (machine == null || !machine.dsh.loaded) return true;
+    final entry = harnessForOperation(machine.dsh.entries, id);
+    return entry != null && !entry.isViewerPackage;
+  }
+
+  /// A remembered harness the machine no longer offers opens as Coding. Only
+  /// a remembered one: a harness someone asked for by name keeps its row, and
+  /// its start explains what is wrong.
+  void _forgetUnofferedHarness() {
+    final id = _harnessId;
+    if (id == null || _offered(id)) return;
+    _harnessId = null;
+    _engine = _initialEngine(null);
+  }
+
   String get harnessLabel =>
       _harnessId == null ? 'Coding' : labelOf(_harnessId!);
   bool advancedOpen = false;
@@ -1774,6 +1808,7 @@ class NewHarnessController extends ChangeNotifier {
   void _selectHarness(String? id) {
     _selectionTouched = true;
     _harnessId = id;
+    _installing = null;
     _selectEngine(_initialEngine(app.agentPreference.engineFor(id) ?? _engine));
     if (_project.generated != null) {
       _project = _generatedProject();
@@ -1782,6 +1817,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   void _selectMachine(String id) {
+    _installing = null;
     if (_machineId == id) return;
     _projectsByMachine[_machineId] = _project;
     _machineId = id;
@@ -2195,6 +2231,14 @@ class NewHarnessController extends ChangeNotifier {
       null,
       ...app.agentPreference.recentHarnesses,
       null,
+      // An install narrates through pushes that change no catalog row.
+      if (installRun case final run?) ...[
+        run.phase,
+        run.line,
+        run.detail,
+        run.log.length,
+        null,
+      ],
       // Projects can arrive after the box opens, including metadata recovered
       // by the local CLI. Terminal output alone must not reorder this list.
       ..._recentProjectFolders(),
@@ -2494,42 +2538,40 @@ class NewHarnessController extends ChangeNotifier {
           id,
         )?.id ??
         canonicalHarnessId(id);
-    final ids = <String>{
-      for (final id in [
-        // Keep the inherited choice beside the prompt, followed by recent choices.
-        ?_harnessId,
-        ...app.agentPreference.recentHarnesses.where(isHarnessId),
-        ...harnesses,
-      ])
-        operationId(id),
+    // Recent harnesses, then Coding, then what this machine has installed,
+    // then the rest of the Store — every harness is here, and searchable; one
+    // that is not installed yet installs when it starts.
+    final recents = <String>{
+      for (final id in app.agentPreference.recentHarnesses.where(isHarnessId))
+        if (_offered(id)) operationId(id),
     };
+    final rest = <String>{
+      for (final id in [?_harnessId, ...harnesses]) operationId(id),
+    }.difference(recents);
+    bool installed(String id) => machine?.dsh[id]?.installed != false;
+    NewHarnessOption row(String id) => NewHarnessOption(
+      id: id,
+      title: labelOf(id),
+      engine: id,
+      // Every row here is a harness (Terminal moved to the Agent list), so
+      // every row carries its description.
+      detail: [
+        machine?.dsh[id]?.tagline ??
+            engineIdentity(id).tagline ??
+            machine?.dsh[id]?.category ??
+            engineIdentity(id).category,
+        if (machine?.dsh[id]?.installed == false) 'installs first',
+      ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
+    );
     return _ranked([
+      for (final id in recents) row(id),
       const NewHarnessOption(
         id: codingId,
         title: 'Coding',
         detail: 'Work in any code project',
       ),
-      for (final id in ids)
-        NewHarnessOption(
-          id: id,
-          title: labelOf(id),
-          engine: id,
-          detail: [
-            // Terminal is not a harness here — it moved to the Agent list — so
-            // only a harness row carries a description.
-            if (isHarnessId(id))
-              machine?.dsh[id]?.tagline ??
-                  engineIdentity(id).tagline ??
-                  machine?.dsh[id]?.category ??
-                  engineIdentity(id).category
-            // Every plain engine is "Code"; a column saying so eight times is
-            // noise. Only what sets a row apart is said.
-            else
-              null,
-            if (isHarnessId(id) && machine?.dsh[id]?.installed == false)
-              'installs first',
-          ].whereType<String>().where((part) => part.isNotEmpty).join(' · '),
-        ),
+      for (final id in rest.where(installed)) row(id),
+      for (final id in rest.where((id) => !installed(id))) row(id),
     ]);
   }
 
@@ -3047,6 +3089,7 @@ class NewHarnessController extends ChangeNotifier {
     if (!recheck) {
       _attempt = AgentCreationAttempt();
       _warnedAboutClosing = false;
+      _installing = null;
     }
     final attempt = _attempt!;
     busy = true;
@@ -3075,10 +3118,12 @@ class NewHarnessController extends ChangeNotifier {
           harnessForOperation(machine.dsh.entries, harness)?.id ?? harness;
       if (machine.dsh[harness]?.installed == false) {
         status = 'Installing ${labelOf(harness)}… this can take a few minutes';
+        _installing = harness;
         notifyListeners();
         final failure = await app.installDsh(_machineId, harness);
         if (_disposed) return NewHarnessOutcome.failed;
         if (failure != null) return _fail(failure);
+        _installing = null;
         await app.probeDsh(_machineId, force: true);
         if (_disposed) return NewHarnessOutcome.failed;
         status = 'Starting harness…';
