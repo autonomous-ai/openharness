@@ -1602,7 +1602,13 @@ private final class SwarmTabStrip: NSView {
     // (owner, 2026-09-15); tabs shrink and then scroll instead of taking it.
     let grip: CGFloat = spacious ? 84 : 44
     // Reserve three adjacent controls: Machines, Models, Harnesses.
-    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - modelsWidth - 88)
+    // Air between Machines, Models, Harnesses and the Store pill. 16, not 8: the
+    // marks are ~17pt wide, and 8 left about one mark's width between them
+    // where the menu bar leaves about one and a half (measured, owner
+    // 2026-09-24) — they read as a clump rather than as three controls.
+    let actionGap: CGFloat = 16
+    let available = max(32, bounds.width - leading - trailing - (newButton.isHidden ? 0 : 36) - grip - storeWidth - modelsWidth
+      - 28 * 2 - actionGap * 3 - 8)
     // As in Chrome, tabs keep shrinking until they are only their mark, so thirty tabs still sit in
     // one strip with nothing hidden; only past that does the strip scroll (the wheel scrolls it).
     let width = min(220, max(min(SwarmTabButton.minimumWidth, available), available / CGFloat(max(1, tabs.count))))
@@ -1618,9 +1624,9 @@ private final class SwarmTabStrip: NSView {
     let buttonY = (bounds.height - 28) / 2
     newButton.frame = NSRect(x: leading + occupied + 4, y: buttonY, width: 28, height: 28)
     storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth, y: buttonY, width: storeWidth, height: 28)
-    sessionsButton.frame = NSRect(x: storeButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
-    modelsButton.frame = NSRect(x: sessionsButton.frame.minX - modelsWidth - 8, y: buttonY, width: modelsWidth, height: 28)
-    machinesButton.frame = NSRect(x: modelsButton.frame.minX - 36, y: buttonY, width: 28, height: 28)
+    sessionsButton.frame = NSRect(x: storeButton.frame.minX - actionGap - 28, y: buttonY, width: 28, height: 28)
+    modelsButton.frame = NSRect(x: sessionsButton.frame.minX - actionGap - modelsWidth, y: buttonY, width: modelsWidth, height: 28)
+    machinesButton.frame = NSRect(x: modelsButton.frame.minX - actionGap - 28, y: buttonY, width: 28, height: 28)
     let geometryChanged = scroll.frame.size != previousScrollSize || document.frame.size != previousDocumentSize
     if let active, revealActiveAfterLayout || (activeWasVisible && (geometryChanged || tabOrderChanged)) {
       document.scrollToVisible(active.frame)
