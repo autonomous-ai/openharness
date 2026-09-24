@@ -12,7 +12,6 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import 'box_chrome.dart';
-import 'engine_identity.dart';
 
 /// Every answer a new harness needs, on one screen, changed where it stands.
 ///
@@ -671,6 +670,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   TextStyle _ink([Color? color]) =>
       terminalContentStyle(color: color ?? Colors.white);
 
+  /// ONE row unit for the whole form. Every line on either side occupies
+  /// exactly this, and anything taller is a whole number of them — a field
+  /// is one, a choice with a description is two, the gap between entries is
+  /// one. Per-container padding is what let the two columns drift apart;
+  /// a grid cannot drift.
+  double get _line => (terminalFontStore.size * 1.6).roundToDouble();
+
   /// Geometry follows the same size, so the columns keep their proportions.
   double _scale = 1;
 
@@ -763,7 +769,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   for (final row in _rows.where(
                     (row) => row != _Row.start,
                   )) ...[
-                    if (row == _Row.machine) const SizedBox(height: 12),
+                    if (row == _Row.machine) SizedBox(height: _line),
                     _buildRow(row),
                   ],
                 ],
@@ -921,6 +927,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               child: Text(shown[i].group!, style: _ink(kBoxFaint)),
             ),
           _matchRow(shown[i]),
+          if (_showsDetail(shown[i]) && i + 1 < shown.length)
+            SizedBox(height: _line),
           // One gap where the doors end and the projects begin.
           if (shown[i].synthetic &&
               i + 1 < shown.length &&
@@ -1034,6 +1042,15 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     return machine.isLocalMachine ? 'This machine' : null;
   }
 
+  /// Whether a choice carries a description under its name.
+  bool _showsDetail(NewHarnessOption option) =>
+      (_row == _Row.harness ||
+          _row == _Row.agent ||
+          _row == _Row.model ||
+          _row == _Row.profile) &&
+      option.detail.isNotEmpty &&
+      !_isDoor(option);
+
   Widget _matchRow(NewHarnessOption option) {
     final on = identical(option, box.selected);
     final note = box.field == NewHarnessField.machine
@@ -1046,13 +1063,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       NewHarnessController.newProjectId => LucideIcons.plus300,
       _ => null,
     };
-    final showDetail =
-        (_row == _Row.harness ||
-            _row == _Row.agent ||
-            _row == _Row.model ||
-            _row == _Row.profile) &&
-        option.detail.isNotEmpty &&
-        !_isDoor(option);
+    final showDetail = _showsDetail(option);
     final title = Text(
       option.title,
       maxLines: 1,
@@ -1078,9 +1089,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         child: Container(
           key: on ? _choiceKey : null,
           color: on && _picking ? _activeFill : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          padding: EdgeInsets.symmetric(horizontal: 12 * _scale),
+          height: _line * (showDetail ? 2 : 1),
+          alignment: Alignment.centerLeft,
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               if (actionIcon != null) ...[
                 Icon(
@@ -1089,34 +1102,16 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   color: _picking ? grid.AppPalette.swarmAccent : kBoxFaint,
                 ),
                 const SizedBox(width: 12),
-              ] else if (option.engine != null) ...[
-                EngineMark(
-                  engine: option.engine,
-                  size: terminalFontStore.size * 1.25,
-                ),
-                const SizedBox(width: 12),
               ],
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (note != null)
-                      Row(
-                        children: [
-                          Expanded(child: title),
-                          const SizedBox(width: 12),
-                          Text(
-                            note,
-                            style: _ink(
-                              kBoxFaint,
-                            ).copyWith(fontSize: terminalFontStore.size * .85),
-                          ),
-                        ],
-                      )
-                    else
+              // Name, then description on the line under it — and a blank
+              // line between entries, which is what a BIOS uses instead of
+              // an icon or a rule to tell one entry from the next.
+              if (showDetail)
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       title,
-                    if (showDetail) ...[
-                      const SizedBox(height: 4),
                       Text(
                         option.detail,
                         style: _ink(kBoxFaint),
@@ -1124,9 +1119,17 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
-                  ],
-                ),
-              ),
+                  ),
+                )
+              else ...[
+                Expanded(child: title),
+                // Main's note says WHY a machine cannot be chosen — offline,
+                // or never linked — which a dimmed row alone cannot.
+                if (note != null) ...[
+                  SizedBox(width: 12 * _scale),
+                  Text(note, style: _ink(kBoxFaint)),
+                ],
+              ],
             ],
           ),
         ),
@@ -1196,7 +1199,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           color: highlighted
               ? (_picking ? _idleFill : _activeFill)
               : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: EdgeInsets.symmetric(horizontal: 16 * _scale),
+          height: _line,
+          alignment: Alignment.centerLeft,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final label = Text(_label(row), style: _ink(kBoxFaint));
