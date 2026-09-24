@@ -1470,6 +1470,9 @@ describe('BackendSocket outbound queue', () => {
 })
 
 describe('desk_changed relay', () => {
+  // Other suites can leave closed sockets in the shared mock inventory. A
+  // shuffled run must send to this test's connection, not an earlier one.
+  beforeEach(() => { wsMock.instances.length = 0 })
   afterEach(() => {
     wsMock.instances.length = 0
     vi.restoreAllMocks()
@@ -2430,6 +2433,28 @@ describe('machines_changed relay', () => {
     ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 42, extra: 'x' } } })
     await vi.waitFor(() => expect(frames).toContainEqual({ type: 'machines_changed', payload: { reason: 'updated' } }))
     await socket.unregisterLocalClient('local:machines')
+    await socket.stop()
+  })
+})
+
+describe('local terminal focus', () => {
+  it('passes a registered window\'s focus to its terminals, and ignores a connection it never registered', async () => {
+    const socket = new BackendSocket('token')
+    const setFocusedAgent = vi.fn()
+    socket.setTerminalStreamManager({
+      setFocusedAgent,
+      closeConnection: vi.fn(async () => undefined),
+      closeConnectionsWhere: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    } as unknown as TerminalStreamManager)
+    socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
+
+    socket.setLocalTerminalFocus('local:window', 'agent-1')
+    socket.setLocalTerminalFocus('local:window', null)
+    socket.setLocalTerminalFocus('local:stranger', 'agent-1')
+    expect(setFocusedAgent.mock.calls).toEqual([['local:window', 'agent-1'], ['local:window', null]])
+
+    await socket.unregisterLocalClient('local:window')
     await socket.stop()
   })
 })

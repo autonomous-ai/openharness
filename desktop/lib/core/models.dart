@@ -1080,6 +1080,9 @@ class GridModels {
   /// daemon is older and sends no such list — read as "offer everything", the behaviour before.
   final Set<String>? localModelEngines;
 
+  /// New-session model selections are understood by this daemon.
+  final bool supportsModelLaunch;
+
   /// Which `grid` the machine would run — see [GridCli]. Null when the daemon is older and does
   /// not say, which claims nothing.
   final GridCli? gridCli;
@@ -1097,6 +1100,7 @@ class GridModels {
     required this.models,
     this.grids = const [],
     this.localModelEngines,
+    this.supportsModelLaunch = false,
     this.gridCli,
     this.reachable = true,
   });
@@ -1116,6 +1120,7 @@ class GridModels {
       models = const [],
       grids = const [],
       localModelEngines = null,
+      supportsModelLaunch = false,
       gridCli = null,
       reachable = false;
 

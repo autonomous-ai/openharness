@@ -73,7 +73,7 @@ import { gridAvailable } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, ENGINES, PROCESS_ENGINES, engineBin, enginePathOverride } from './lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from './engines/types.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell, namedAgentArgs, permissionModeApproves, permissionModeFlags } from './lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, dropPermissionFlagIfUnsupported, namedAgentArgs, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './lib/engineLaunch.js'
 import { workspaceMissing } from './lib/workspaceCheck.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, gridEnvVarNames, type GridLaunchMachine, type GridWebSearchStatus } from './lib/gridLaunch.js'
 import { HERMES_SYSTEM_MANAGED_DIR } from './lib/gridWebMcp.js'
@@ -85,6 +85,7 @@ import { AgentRestartCoordinator, bypassPermissionFor, restartAgent, type Restar
 import { claudeContinuation, findLiveSession, findResumedTranscript } from './lib/sessionRepair.js'
 import { TmuxBackend } from './lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from './lib/hostTheme.js'
+import { describeAgentCreateFailure, summarizePaneOutput } from './lib/agentCreateDiagnosis.js'
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
@@ -105,8 +106,9 @@ import { dshPinnedPermissionMode, dshVerdictPath, dshViewerName } from './dsh/ma
 import { catalogEntry } from './dsh/catalog.js'
 import { removeDsh } from './dsh/install.js'
 import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
-import { materializeWorkspace, relinkSkills } from './dsh/materialize.js'
-import { dshLaunch, type DshAccount } from './dsh/launch.js'
+import { materializeWorkspace } from './dsh/materialize.js'
+import { harnessEnvToClear, type DshAccount } from './dsh/launch.js'
+import { forkRuntimeKey, harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from './dsh/runtime.js'
 import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
@@ -1898,6 +1900,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // and skipping the recap here would leave them permanently blank.
   /** Agents with a tile open in the desktop window right now. Empty when no window is attached. */
   let openPaneAgents = new Set<string>()
+  /** Whether the window those tiles belong to is actually in front. See onAppPanes. */
+  let appWindowForeground = true
+  /**
+   * Is this agent already in front of somebody at this desk?
+   *
+   * Both halves are needed and neither alone is enough: a tile on the tab says WHERE it is, the window
+   * being in front says whether anyone can see it. The dial used to be told the first half only, so it
+   * stayed quiet about a turn that finished while the window sat behind a browser — which is the one
+   * case a notification exists for — and the window, which checks both (`_visibleOnTab`), spoke up.
+   * Two screens, two answers, from one tab.
+   */
+  const alreadyOnScreen = (agentId: string): boolean =>
+    appWindowForeground && openPaneAgents.has(agentId)
   const cableWatchingLocal = (): boolean => cableRef?.isConnected === true
 
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || backend.autonomousDeviceConnected()
@@ -2526,6 +2541,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           return summarizeTurnText(text, signal, userMessage, session?.engine ?? 'claude', gateway, previousRecap)
         },
       }
+  /**
+   * A turn that belongs to a SUB-AGENT: an Orchestrator specialist, or its Director while specialists
+   * are still out.
+   *
+   * Hoisted out of the commander's options because the dial is no longer the only screen that has to
+   * know. The cable learns it as `silent` on the summary card; the window learns it as `subagent` on
+   * `turn_ended` (see emitSessionEvents). One rule, asked twice — the two surfaces used to disagree
+   * here, and a four-specialist project put ONE row on the dial and FIVE marks in the window.
+   *
+   * ⚠️ The commander ORs this with its own `abandoned` state — a held turn released because a
+   * sub-agent went silent — which lives inside it and is not reachable from here. That case is rare
+   * (a killed or crashed sub-agent) and costs the window one extra mark, not five.
+   */
+  const isSubagentSession = (sessionId: string): boolean => {
+    const agentId = registry.bySession(sessionId)?.agentId
+    if (!agentId) return false
+    const role = backend.orchestratorRoleOf(agentId)
+    return role?.role === 'worker' || (role?.role === 'director' && role.busy)
+  }
   const mirror = new CommanderMirror({
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
@@ -2538,12 +2572,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
     // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
     // announced: the person asked to hear from the main agent once, not from every sub-agent.
-    isSubagent: (sessionId) => {
-      const agentId = registry.bySession(sessionId)?.agentId
-      if (!agentId) return false
-      const role = backend.orchestratorRoleOf(agentId)
-      return role?.role === 'worker' || (role?.role === 'director' && role.busy)
-    },
+    isSubagent: isSubagentSession,
     // A claude sub-agent still at work is one whose transcript is still growing:
     // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
     // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
@@ -2685,6 +2714,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // skips these; every other consumer ignores an unknown field. Measured before this existed: one
       // agent credited with 42 turns in a single second, all re-reads.
       if (event.type === 'turn_started' && (opts?.resumed || opts?.replay)) frame.replay = true
+      // WHOSE turn ended, in the clear beside `agentId`, for the same reason `replay` is: the payload
+      // is E2EE and the window has to read this without opening it.
+      //
+      // The dial has always been told (`silent` on the summary card) and the window never was, so the
+      // two screens counted different things: an Orchestrator project of four specialists put ONE row
+      // on the dial and FIVE marks in the window. Same predicate for both now — see isSubagentSession.
+      // An older client ignores an unknown field, which is the behaviour it has today.
+      if (event.type === 'turn_ended' && isSubagentSession(sessionId)) frame.subagent = true
       backend.send(frame)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())
@@ -3854,6 +3891,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       autonomousDeviceService?.appFocus(machineId, agentId, connId)
     },
     onAppFocus: (machineId, agentId) => { void cableRef?.followApp(machineId, agentId) },
+    // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
+    // cable attaches, which is the one moment its own drawer is known to be empty.
+    onAppUnread: (items) => { cableHostRef?.setUnread(items); void cableRef?.replaceNotifications(items) },
+    // The window looked at a harness, so the dial's drawer row for it is stale.
+    // The dial's own tap already reaches the window (`agent.open`); this is the
+    // return leg, and the pair is what keeps the badge and the pill equal.
+    onAgentSeen: (agentId) => { void cableRef?.agentSeen(agentId) },
     // Agents the window has a tile for. A finished turn on one of these is
     // already in front of the person, so the dial updates its tile in silence
     // rather than beeping about something being looked at.
@@ -3869,7 +3913,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void cableRef?.syncSwarms()
       void cableRef?.syncAgents()
     },
-    onAppPanes: (agentIds) => {
+    onAppPanes: (agentIds, foreground) => {
       // ORDER matters here, not just membership. The dial's carousel is built
       // around these — tiles first, in tile order — so the thumb walks the same
       // grid the eyes are on. `openPaneAgents` below only ever asks "is this
@@ -3883,6 +3927,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const deskChanged = agentIds.length !== appPaneAgents.length
         || agentIds.some((id, at) => id !== appPaneAgents[at])
       appPaneAgents = agentIds
+      // A tile behind a browser is not a tile anybody is looking at. The roster
+      // does not change when the window loses focus, so without this the dial
+      // went quiet about work nobody could see — the one case the notification
+      // is for — while the window, which does check, spoke up. `openPaneAgents`
+      // below is what `quiet` is read from, so emptying it is how both screens
+      // come to the same answer.
+      appWindowForeground = foreground
       cableHostRef?.setDesk(agentIds)
       const next = new Set(agentIds)
       // Logged on CHANGE only. It fires on every pane add, close and reconnect,
@@ -4214,20 +4265,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) installCodexHooks(hookPort, codexHome) },
-    dshLaunch: (id, workspace) => {
+    dshLaunch: (id, workspace, engine, runtimeKey) => {
       const installed = installedDsh(id)
       if (!installed) {
-        console.warn(`[dsh] ${id} is not installed on this machine · relaunching as its plain base engine`)
+        console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
         return null
       }
-      // Its skills as they are now, not as they were when the workspace was made — see relinkSkills.
-      try {
-        const relinked = relinkSkills(installed, workspace)
-        if (relinked.created.length) console.log(`[dsh] ${id} relaunch · skills repointed: ${relinked.created.join(', ')}`)
-      } catch (err) {
-        console.warn(`[dsh] ${id} relaunch · skills not repointed: ${(err as Error).message}`)
-      }
-      return dshLaunch(installed, workspace, { privateGrid: backend.gridName() })
+      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: backend.gridName() })
     },
   }
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
@@ -4235,7 +4279,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // agent is, or bring a pane opened as `harness-compute` back as a general session.
   const relaunchOverrides = (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
     prepareApiTools(session.cwd, session.engine)
-    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
   }
 
   /**
@@ -4322,10 +4366,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // pane that fails to come up is reported failed by the frame regardless of this field.
         refreshGridWebSearch(entry.agentId, built.overrides)
         const { env: launchEnv, extraArgs, clearEnv } = built.overrides
+        // The engine may have been downgraded while the daemon was down. Coming back in Ask beats
+        // coming back as a pane of help text, and beats not coming back at all.
+        const permission = await downgradedPermission(entry, entry.bypassPermission === true, 'restore')
         const argv = buildEngineLaunchArgv(entry.engine, {
           ...opts,
-          bypassPermission: entry.bypassPermission === true,
-          ...(entry.permissionMode ? { permissionMode: entry.permissionMode } : {}),
+          bypassPermission: permission.bypassPermission === true,
+          ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
           ...(entry.cwd ? { cwd: entry.cwd } : {}),
           ...(extraArgs.length ? { extraArgs } : {}),
@@ -4547,6 +4594,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // the error where it was printed and types the command again, rather than being handed a
         // "Start failed" tile they cannot type into.
         if (paneState.engineExit !== null) {
+          // Say what happened before the evidence goes. The pane is about to become an ordinary
+          // terminal and `releaseEngine` rewrites the launch to `ready`, so after this point nothing
+          // anywhere — frame, registry, archive — records that an engine was ever meant to be here
+          // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
+          // it did not know, and the only trace was one line saying the pane had become a terminal.
+          // `describeAgentCreateFailure` was written for this and had no caller.
+          // `dead: true` describes the ENGINE, which is what the diagnosis is about, not the pane —
+          // the pane is alive and about to become a terminal. That is the sentence this state
+          // selects ("started and exited with status N"), and it is the true one here.
+          const captured = await captureTerminal(pending.agentId, 40)
+          console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
+            + describeAgentCreateFailure({
+              state: { dead: true, exitStatus: paneState.engineExit, command: engine },
+              output: summarizePaneOutput(captured ?? ''),
+              engineBin: command[0],
+              shellName: null,
+              processes: [],
+              elapsedMs: Date.now() - startedAt,
+            }))
           await clearPaneRemainOnExit(spawned.runtime.paneId)
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
@@ -4590,29 +4656,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       permissionMode = pinnedMode
       bypassPermission = permissionModeApproves(pinnedMode)
     }
-    // `--approve-for-me` was added after older Codex CLI releases. Refuse the
-    // incompatible Auto mode before opening a pane, rather than letting Codex
-    // reject the flag and leaving the person in an unexpected fallback shell.
-    // Ask mode has no flag and remains a useful workaround until Codex updates.
-    const codexAutoApprove =
-      engine === 'codex' &&
-      (permissionMode !== null
-        ? permissionModeFlags(engine, permissionMode)?.includes('--approve-for-me') === true
-        : bypassPermission)
-    if (codexAutoApprove) {
-      const support = await commandSupportsFlagInInteractiveShell(
-        engineBin('codex'),
-        '--approve-for-me',
-      )
-      if (support === 'unsupported') {
-        const detail =
-          'Your installed Codex CLI does not support --approve-for-me, which Harness uses for Auto approvals. Update Codex and try again, or choose Ask permissions for this harness.'
-        console.warn(`[agent] create codex refused · ${detail}`)
-        return { ok: false, error: 'CODEX_CLI_TOO_OLD', detail }
-      }
+    // An engine too old for the flag this permission mode launches it with prints its help and
+    // exits; the wrapper then hands the pane to a shell, and what the person gets is a terminal
+    // full of help text with nothing anywhere saying why (openharness#285, opencode without
+    // `--auto`). Refuse before opening a pane — this is a launch somebody is waiting on, and Ask
+    // works today. Codex has been checked this way since it gained `--approve-for-me`; every other
+    // engine with a permission flag was not, and carried the same failure.
+    const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission })
+    if (refusal) {
+      console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
+      return { ok: false, ...refusal }
     }
-    // A domain-specific harness: put its files into the workspace first (template, AGENTS.md, skill
-    // links) and take its env/argv for the launch. Refused, never approximated, when it is not here.
+    // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
+    // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
+    // before the grid block because a file-configured engine keys its config directory on it.
+    // The `harness-` prefix is also discovery's whitelist (see `isHarnessSession` /
+    // `TmuxBackend.inventory()`) — every pane outside it is invisible to the daemon.
+    const label = buildHarnessSessionLabel(engine)
+    // Prepare the harness workspace, then bind its session context to the selected engine.
+    // Missing packages or invalid runtimes refuse the launch before the agent is started.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
     /** A DSH's own name ("Blender"), which the agent is named after instead of its engine. */
@@ -4623,8 +4685,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const installed = installedDsh(dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
       if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
-      if (installed.manifest.engine !== engine) {
-        return { ok: false, error: 'INVALID_DSH', detail: `${dsh} runs on ${installed.manifest.engine}, not ${engine}` }
+      const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
+      if (refusal) {
+        return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
       if (!(await tmuxSupportsSessionEnv())) {
         const detail = `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
@@ -4635,7 +4698,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
-        const materialized = await materializeWorkspace(installed, cwd, dshAccount)
+        const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went in: the folder is the harness's, and Claude Code need not ask.
@@ -4650,17 +4713,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const launch = dshLaunch(installed, cwd, dshAccount)
-      dshEnv = launch.env
-      dshArgs = launch.args
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount))
+      if (!prepared.ok) return prepared
+      dshEnv = prepared.launch.env
+      dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
-    // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
-    // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
-    // before the grid block because a file-configured engine keys its config directory on it.
-    // The `harness-` prefix is also discovery's whitelist (see `isHarnessSession` /
-    // `TmuxBackend.inventory()`) — every pane outside it is invisible to the daemon.
-    const label = buildHarnessSessionLabel(engine)
     // A grid is the user's answer to "where should this run", so every way of not honouring it is a
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked.
@@ -4712,7 +4770,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // key wins on its own terms — OpenCode picked Anthropic over a grid it had been handed, and said
     // only `invalid x-api-key`. Nothing is cleared when no grid is in play: an agent on its own login
     // is supposed to use exactly these variables.
-    const clearEnv = gridLaunch ? gridConflictingEnvToClear(gridLaunch) : undefined
+    const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv)]
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED), so this cannot throw.
@@ -4745,6 +4803,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       codexHome,
       dsh,
+      dshRuntime: dsh ? label : null,
       agent,
       bypassPermission,
       permissionMode,
@@ -4805,24 +4864,29 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
 
-    // The harness the source was created as: its env and argv, not a second materialisation — the
-    // folder already holds the template, AGENTS.md and skill links the source got.
+    const label = buildHarnessSessionLabel(engine)
+    // Fork the source's saved harness context. Workspace templates and init are not run again.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
     let dshLabel: string | undefined
     if (source.dsh) {
       const installed = installedDsh(source.dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
-      const launch = dshLaunch(installed, source.cwd, { privateGrid: backend.gridName() })
-      dshEnv = launch.env
-      dshArgs = launch.args
+      // Narrowed above; a closure would lose that, so the checked values are named here.
+      const cwd = source.cwd
+      const sourceKey = forkRuntimeKey({ cwd, agentId: source.agentId, dshRuntime: source.dshRuntime })
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label,
+        { privateGrid: backend.gridName() }, sourceKey))
+      if (!prepared.ok) return prepared
+      dshEnv = prepared.launch.env
+      dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
-    const label = buildHarnessSessionLabel(engine)
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     const extraArgs = [...dshArgs, ...(source.agent ? namedAgentArgs(engine, source.agent) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {
+      clearEnv: harnessEnvToClear(dshEnv),
       bypassPermission: source.bypassPermission ?? false,
       ...(source.permissionMode ? { permissionMode: source.permissionMode } : {}),
       extraArgs: extraArgs.length ? extraArgs : undefined,
@@ -4831,6 +4895,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       harnessNode: source.dsh ? true : undefined,
       ...(plan.level === 'native' ? { forkSessionId: plan.forkSessionId } : {}),
       ...(firstPrompt ? { firstPrompt } : {}),
+    }
+    // Same refusal as create: the clone inherits the source's permission mode, and an engine that
+    // has since been downgraded would hand back a pane of help text instead of a harness.
+    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions)
+    if (forkRefusal) {
+      console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
+      return { ok: false, ...forkRefusal }
     }
     prepareApiTools(source.cwd, engine)
     const command = buildEngineCommandArgv(engine, launchOptions)
@@ -4846,6 +4917,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       grid: null,
       gridLaunchRecord: null,
       codexHome: source.codexHome ?? null,
+      dshRuntime: source.dsh ? label : null,
       dsh: source.dsh ?? null,
       agent: source.agent ?? null,
       bypassPermission: source.bypassPermission ?? false,
@@ -4882,10 +4954,40 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       && current.tmuxPane === session.tmuxPane && current.engine === session.engine
   }
 
+  /**
+   * The permission this relaunch can actually ask for. Nobody is waiting on a restart, a retarget, a
+   * restore or a resume, so an engine that no longer takes the row's flag costs it the mode, not the
+   * harness — the alternative is a pane of help text, or no pane at all (openharness#285).
+   *
+   * The row is NOT rewritten. `permissionMode` is the person's recorded choice and `setPermissionMode`
+   * is fill-only for that reason; an engine put back the way it was gets Auto again on the next
+   * relaunch, with nobody having to ask for it twice. The row stops CLAIMING the mode on its own:
+   * discovery re-derives `bypassPermission` from the live argv on every pass (`setBypassPermission`
+   * above), so a launch without the flag reads as one within a reconcile.
+   */
+  const downgradedPermission = async (
+    session: RegisteredSession,
+    bypassPermission: boolean,
+    what: string,
+  ): Promise<{ permissionMode?: string | null; bypassPermission?: boolean }> => {
+    const { choice, droppedFlag } = await dropPermissionFlagIfUnsupported(session.engine, {
+      permissionMode: session.permissionMode ?? null,
+      bypassPermission,
+    })
+    if (droppedFlag) {
+      console.warn(`[agent] ${what} ${sid(session.agentId)} · ${session.engine} does not take ${droppedFlag}`
+        + ` · starting in Ask · update ${session.engine} to get ${session.permissionMode ?? 'Auto'} back`)
+    }
+    return choice
+  }
+
   const paneSwapDeps = (
     session: RegisteredSession,
     runtime: TmuxRuntimeRef,
     launch: { env?: Record<string, string>; extraArgs?: readonly string[]; clearEnv?: readonly string[] } = {},
+    /** The mode this swap may actually ask for — the row's own, unless the engine on disk has since
+     *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
+    permissionMode: string | null = session.permissionMode ?? null,
   ): RestartAgentDeps => ({
     prepareResume: () => prepareSessionResume(session),
     holdOpen: async () => {
@@ -4929,7 +5031,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ...opts,
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
       // Plan or Accept edits would come back as Ask without it.
-      ...(session.permissionMode ? { permissionMode: session.permissionMode } : {}),
+      ...(permissionMode ? { permissionMode } : {}),
       ...(session.cwd ? { cwd: session.cwd } : {}),
       ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
       // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
@@ -5114,10 +5216,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           return { ok: false, error: 'GRID_CLEAR_FAILED', detail: 'reason' in cleared ? cleared.reason : 'tmux would not clear the pane environment' }
         }
       }
+      const retargetPermission = await downgradedPermission(session,
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'retarget')
       const outcome = await restartAgent(
         { engine: session.engine, sessionId: session.sessionId },
-        await bypassPermissionFor(session, () => liveBypassPermission(session)),
-        paneSwapDeps(session, pane, built.overrides),
+        retargetPermission.bypassPermission === true,
+        paneSwapDeps(session, pane, built.overrides, retargetPermission.permissionMode ?? null),
       )
       if (!outcome.ok) {
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
@@ -5255,11 +5359,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
     agentReconciler.holdRoute(routeKey)
     try {
-      const bypassPermission = await bypassPermissionFor(session, () => liveBypassPermission(session))
+      const restartPermission = await downgradedPermission(session,
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart')
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId },
-        bypassPermission,
-        { ...paneSwapDeps(session, runtime, built.overrides), isCurrent: current },
+        restartPermission.bypassPermission === true,
+        { ...paneSwapDeps(session, runtime, built.overrides, restartPermission.permissionMode ?? null), isCurrent: current },
       )
 
       if (!current()) return changed
@@ -5766,7 +5871,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Quiet when the window already has this agent on screen; silent when the
       // turn was a sub-agent's. The tile still updates — the recap is what it
       // draws — only the beep and the drawer entry are withheld.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent)
+      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent)
     }
     else void cable.turnError(event.agentId, event.text)
   }
@@ -5793,7 +5898,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // turn was a sub-agent's (decided on its own machine). The tile still
       // updates — the recap is what it draws — only the beep and the drawer
       // entry are withheld.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent === true)
+      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent === true)
     }
     else void cable.turnError(event.agentId, event.text)
   })

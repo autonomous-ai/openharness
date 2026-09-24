@@ -23,10 +23,17 @@ The defaults, in the workspace:
 | ⇧⌘arrows | Move the focused pane |
 | ⌘⏎ · ⌘; · ⇧⌘W | Zoom or restore · last pane · close pane |
 | ⌘S | Harness Store |
+| ⌘M | Machines — connect another computer or set this computer's password |
+| ⌘I | Models — subscriptions, local models, shared models, and APIs |
 | ⇧⌘L | Layout palette |
 | ⌘F · ⌘G · ⇧⌘G | Find in terminal · next · previous match |
 | ⇧⌘I | Agents needing input |
 | ⌘, · ⌘/ | Settings · keyboard shortcuts |
+
+New Tab starts with three clickable shortcuts: ⌘N to start your first harness,
+⌘M to manage it from another computer, and ⌘I to power it with a local model.
+Checkmarks record actual use and persist per account on this device. After all
+three are complete, the next New Tab shows the everyday ⌘N, ⌘O, and ⌘S shortcuts.
 
 In the harness picker, New agent is selected when the query is empty. Typing selects the best matching existing harness; the creation row stays pinned above it and carries the query into the first task. Projects and machines filter individual harnesses rather than opening whole groups. The destination is shown in the picker and carried into creation. A harness can have views in several tabs, with one view per tab; closing a pane only removes that view.
 

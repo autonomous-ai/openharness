@@ -18,6 +18,11 @@ import {
   buildEngineLaunchArgv,
   commandAvailableInInteractiveShell,
   commandSupportsFlagInInteractiveShell,
+  dropPermissionFlagIfUnsupported,
+  permissionFlagToVerify,
+  permissionModeFlags,
+  refusePermissionFlagIfUnsupported,
+  resetCommandFlagSupportCache,
   engineFallbackPrelude,
   firstPromptArgs,
   gridPanePrelude,
@@ -31,6 +36,7 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
 import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
+import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
@@ -48,6 +54,18 @@ const FALLBACK = (engine: AgentEngine, shell: string) => engineFallbackPrelude(e
 const NO_TMUX = null
 
 describe('buildEngineLaunchArgv', () => {
+  it.each(['claude', 'terminal'] as const)('clears inherited harness context before a plain %s session runs', (engine) => {
+    const argv = buildEngineLaunchArgv(engine, { clearEnv: harnessEnvToClear() }, '/bin/sh', undefined, undefined, NO_TMUX)
+    const probe = 'for name in HARNESS_DSH HARNESS_DSH_DIR HARNESS_WORKSPACE HARNESS_CONTEXT_FILE HARNESS_SKILLS_DIR HARNESS_PRIVATE_GRID; do printenv "$name" && exit 9; done; printf "%s" "$KEEP_ME"'
+    const args = engine === 'terminal' ? ['harness-terminal', ''] : ['harness-engine']
+    const out = execFileSync(argv[0], [argv[1], argv[2], ...args, '/bin/sh', '-c', probe], {
+      encoding: 'utf8',
+      env: { ...process.env, ...Object.fromEntries(DSH_SESSION_ENV.map((name) => [name, 'stale-harness'])), KEEP_ME: 'retained' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    expect(out).toBe('retained')
+  })
+
   it('wraps zsh in its interactive login form and execs the resolved binary', () => {
     expect(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)).toEqual([
       '/bin/zsh', '-lic', `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}harness_engine "$@"`, 'harness-engine', engineBin('claude'),
@@ -602,6 +620,76 @@ describe('commandAvailableInInteractiveShell', () => {
   })
 })
 
+/** A fake engine whose `--help` prints exactly `help`, and nothing else. */
+function fakeEngine(dir: string, name: string, help: string): void {
+  writeFileSync(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
+  chmodSync(join(dir, name), 0o700)
+}
+
+describe('the permission gates', () => {
+  /** A fake opencode on the probe shell's PATH, and the shell that will find it. */
+  function withFakeOpencode(help: string): string {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'opencode', help)
+    return bashProbeShell()
+  }
+
+  it('refuses a create whose engine does not take the flag, naming the engine and the flag', async () => {
+    const shell = withFakeOpencode('--auto-update')
+    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
+    expect(refusal?.error).toBe('CODEX_CLI_TOO_OLD')
+    expect(refusal?.detail).toContain('opencode')
+    expect(refusal?.detail).toContain('--auto')
+  })
+
+  it('lets a create through when the flag is there, and when there is no flag to check', async () => {
+    const shell = withFakeOpencode('--auto')
+    await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)).resolves.toBeNull()
+    await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'ask' }, shell)).resolves.toBeNull()
+  })
+
+  it('drops the flag for a relaunch instead of refusing it, leaving the launch in Ask', async () => {
+    const shell = withFakeOpencode('--auto-update')
+    const dropped = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, shell)
+    expect(dropped).toEqual({ choice: { permissionMode: 'ask', bypassPermission: false }, droppedFlag: '--auto' })
+  })
+
+  it('leaves a relaunch alone when the flag is supported', async () => {
+    const shell = withFakeOpencode('--auto')
+    const kept = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, shell)
+    expect(kept).toEqual({ choice: { permissionMode: 'auto', bypassPermission: true }, droppedFlag: null })
+  })
+})
+
+describe('permissionFlagToVerify', () => {
+  it('names the single token a mode adds', () => {
+    expect(permissionFlagToVerify('opencode', { permissionMode: 'auto' })).toBe('--auto')
+    expect(permissionFlagToVerify('cursor', { permissionMode: 'auto' })).toBe('--force')
+    expect(permissionFlagToVerify('codex', { permissionMode: 'auto' })).toBe('--approve-for-me')
+  })
+
+  it('reads the bypass table when no mode was recorded', () => {
+    expect(permissionFlagToVerify('opencode', { bypassPermission: true })).toBe('--auto')
+    expect(permissionFlagToVerify('opencode', { bypassPermission: false })).toBeNull()
+  })
+
+  // The documented limit: help never prints the pair, so only the token can be asked about, and a
+  // build that lists `--permission-mode` while having dropped the `auto` VALUE is not caught here.
+  it('takes the flag token of a pair, never its value', () => {
+    expect(permissionModeFlags('claude', 'auto')).toEqual(['--permission-mode', 'auto'])
+    expect(permissionFlagToVerify('claude', { permissionMode: 'auto' })).toBe('--permission-mode')
+    expect(permissionFlagToVerify('codex', { permissionMode: 'readOnly' })).toBe('--sandbox')
+  })
+
+  it('has nothing to verify for Ask, an engine with no table, or a terminal', () => {
+    expect(permissionFlagToVerify('claude', { permissionMode: 'ask' })).toBeNull()
+    expect(permissionFlagToVerify('muse', { bypassPermission: true })).toBeNull()
+    expect(permissionFlagToVerify('terminal', { bypassPermission: true })).toBeNull()
+  })
+})
+
 describe('commandSupportsFlagInInteractiveShell', () => {
   it('distinguishes an older CLI help surface from a supported flag', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
@@ -625,6 +713,53 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     await expect(
       commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
     ).resolves.toBe('supported')
+  })
+
+  // openharness#285: opencode 1.14.51 has no `--auto`, prints its help and exits, and the wrapper
+  // hands the pane to a shell. A substring match reads `--auto-update` in a newer help as support
+  // for `--auto` and launches that very pane.
+  it('does not read a longer flag as the one it was asked about', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-boundary-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+
+    fakeEngine(binDir, 'opencode', '--auto-update   keep opencode current')
+    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', bashProbeShell()))
+      .resolves.toBe('unsupported')
+
+    fakeEngine(binDir, 'opencode', '--auto   approve automatically')
+    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', bashProbeShell()))
+      .resolves.toBe('supported')
+  })
+
+  it('answers a flag that ends the help text', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-tail-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'cursor-agent', '--force')
+    await expect(commandSupportsFlagInInteractiveShell('cursor-agent', '--force', bashProbeShell()))
+      .resolves.toBe('supported')
+  })
+
+  // Every relaunch asks, and a restore asks once per agent. Only the working answer is remembered:
+  // the cure for the other two is to change the engine on disk, and a remembered refusal would
+  // outlive the upgrade that fixed it — which is how openharness#285's reporter resolved theirs.
+  it('remembers that a flag IS supported, and keeps asking when it is not', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-cache-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    const shell = bashProbeShell()
+
+    fakeEngine(binDir, 'opencode', '--auto')
+    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+    // Downgraded underneath us; the cached yes stands until the cache is reset.
+    fakeEngine(binDir, 'opencode', '--auto-update')
+    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
+    resetCommandFlagSupportCache()
+    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
+    // A refusal is never remembered, so the upgrade is seen at once.
+    fakeEngine(binDir, 'opencode', '--auto')
+    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
   })
 
   // A shell's own failure exits 1 — as zsh's read-only `status` did — and must not read as a missing

@@ -301,11 +301,7 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'addAgent',
     keywords: ['resume', 'existing', 'pane'],
   ),
-  const HarnessCommand(
-    'agent.add',
-    'New Pane',
-    ShortcutGroup.actions,
-  ),
+  const HarnessCommand('agent.add', 'New Pane', ShortcutGroup.actions),
   const HarnessCommand(
     'agent.new',
     'New Harness',
@@ -352,6 +348,14 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     nativeAction: 'machineList',
     extraKeys: ['cmd+m'],
+  ),
+  const HarnessCommand(
+    'models.list',
+    'Open Models',
+    ShortcutGroup.actions,
+    nativeAction: 'models',
+    extraKeys: ['cmd+i'],
+    keywords: ['local', 'AI', 'model', 'intelligence'],
   ),
   const HarnessCommand(
     'machine.link',
@@ -490,6 +494,14 @@ final harnessCommands = <HarnessCommand>[
     'Open the selected result',
     ShortcutGroup.navigate,
     extraKeys: ['enter', 'ctrl+m'],
+    context: KeymapContext.picker,
+  ),
+  // Starts New Harness from any field, without walking down to its button.
+  const HarnessCommand(
+    'picker.start',
+    'Start the new harness from any field',
+    ShortcutGroup.actions,
+    extraKeys: ['shift+enter'],
     context: KeymapContext.picker,
   ),
   const HarnessCommand(

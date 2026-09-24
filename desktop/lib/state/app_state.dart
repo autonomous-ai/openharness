@@ -67,6 +67,7 @@ import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'pending_question.dart';
 import 'session_preview.dart';
+import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
@@ -1700,6 +1701,12 @@ class AppNotifier extends ChangeNotifier {
     // closing a tab, a restored layout, a reveal. Listening here catches all of
     // them, and a clear that finds nothing to clear notifies nobody.
     addListener(seeWatchedAgents);
+    // The dial is told the whole list whenever it changes, so a cable attaching
+    // later is handed it without asking. See [_announceUnreadToDial].
+    //
+    // `this.` because the constructor's own parameter of the same name is in
+    // scope here and is the nullable one.
+    this.agentUnread.addListener(_announceUnreadToDial);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -2078,6 +2085,7 @@ class AppNotifier extends ChangeNotifier {
     // the dial goes back to beeping about tiles in plain sight until the
     // next time a pane happens to change.
     _announceOpenPanesToDial();
+    _announceUnreadToDial();
     // ...nor which tile this window is looking at. The daemon repeats that to the dial after every
     // list push, which is what keeps the two screens from drifting apart — but it can only repeat
     // something it has been told, and until now the first telling waited for the focus to CHANGE.
@@ -2168,6 +2176,54 @@ class AppNotifier extends ChangeNotifier {
   /// The dial belongs to whichever daemon owns the cable, and only a complete
   /// roster lets that one judge; the others store a list they never use, which
   /// costs nothing and saves the window from having to know which is which.
+  /// THE WHOLE UNREAD LIST, for a dial that has just lost its own.
+  ///
+  /// The dial keeps its drawer in RAM, so a reboot — an OTA, a replug, a flash —
+  /// wipes it while this window still holds every mark. Measured: a turn ended
+  /// at 17:46:19, the dial came back at 17:46:26, a question arrived at
+  /// 17:46:28, and the two screens then read 2 and 1 forever.
+  ///
+  /// Sent on every change rather than asked for: the daemon holds the latest and
+  /// can hand it over the moment a cable attaches, without a round trip to a
+  /// window that may be busy. Ids and kinds only — the daemon already knows each
+  /// agent's name, machine and last recap, and re-deriving them here would be a
+  /// second place for them to be wrong.
+  void _announceUnreadToDial() {
+    final pool = _pool;
+    if (pool == null) return;
+    final items = [
+      for (final mark in agentUnread.newestFirst)
+        {
+          'agentId': mark.agentId,
+          'machineId': mark.machineId,
+          'question': mark.kind == AlertKind.needsYou,
+          // A QUESTION'S OWN WORDS, because nobody else has them. The daemon
+          // fills in the recap for a finished turn from what it summarised, but
+          // an open question lives here — in `blockedAgents` — and a dial that
+          // rebooted has no memory of having asked it. Without this its drawer
+          // row arrives blank and falls back to the word the row type used to
+          // assume: "done", on a question nobody has answered.
+          if (mark.kind == AlertKind.needsYou)
+            'text':
+                machineStates[mark.machineId]
+                    ?.blockedAgents[mark.agentId]
+                    ?.prompt ??
+                '',
+        },
+    ];
+    for (final machineId in pool.machineIds) {
+      pool[machineId]
+          ?.sendTerminalFrame('app_unread', {'items': items})
+          .catchError((_) => false)
+          .ignore();
+    }
+  }
+
+  /// Re-send the tile roster because the WINDOW moved, not because the tiles
+  /// did. Public so the lifecycle listener can say so; the roster itself is
+  /// unchanged and the `foreground` flag riding with it is the point.
+  void announceWindowForeground() => _announceOpenPanesToDial();
+
   void _announceOpenPanesToDial() {
     final pool = _pool;
     if (pool == null) return;
@@ -2219,7 +2275,23 @@ class AppNotifier extends ChangeNotifier {
       if (connection == null) continue;
       unawaited(
         connection
-            .sendTerminalFrame('app_panes', {'agentIds': agentIds})
+            .sendTerminalFrame('app_panes', {
+              'agentIds': agentIds,
+              // WHETHER THESE TILES ARE ACTUALLY IN FRONT OF ANYBODY.
+              //
+              // The daemon decides from this list whether a finished turn is
+              // already on screen, and the list alone cannot say: every pane
+              // keeps its place on the tab while this window sits behind a
+              // browser. The dial therefore stayed quiet about work nobody
+              // could see, which is the one case the notification exists for —
+              // and this window, which DOES check (see `_visibleOnTab`), spoke
+              // up. Two screens, two answers, from the same tab.
+              //
+              // Sent with the roster rather than on its own so the pair can
+              // never be read half-updated. An older daemon ignores it and
+              // behaves as it does today.
+              'foreground': lifecycle() == AppLifecycleState.resumed,
+            })
             .catchError((_) => false),
       );
       unawaited(
@@ -5080,6 +5152,8 @@ class AppNotifier extends ChangeNotifier {
             ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
             : null,
         gridCli: GridCli.parse(response['gridCli']),
+        supportsModelLaunch: response['supportsModelLaunch'] == true,
+        reachable: response['error'] == null,
       );
     } catch (_) {
       // NOT `gridName: null` with an empty list — that is the shape of "this account has no grid",
@@ -5094,6 +5168,14 @@ class AppNotifier extends ChangeNotifier {
   ModelManagerController? _modelManager;
   ModelManagerController get modelManager =>
       _modelManager ??= ModelManagerController(this);
+
+  ModelsMenuController? _modelsMenu;
+
+  /// Subscription readings for the whole window: the Models panel, New Harness and every pane's model
+  /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
+  /// picker said "Not signed in" beside a menu showing the same account with 8% left.
+  ModelsMenuController get modelsMenu =>
+      _modelsMenu ??= ModelsMenuController(remote: readRemoteUsage);
 
   Future<Map<String, dynamic>> localModels(
     String machineId, {
@@ -6236,8 +6318,8 @@ class AppNotifier extends ChangeNotifier {
   /// A seam, because reaching it through real panes means `focusPane`, which
   /// announces the focus to the machine, which dials it — and a test with no
   /// live connection hangs rather than fails.
-  late Iterable<({String machineId, String agentId})> Function()
-  watchedAgents = _visibleOnTab;
+  late Iterable<({String machineId, String agentId})> Function() watchedAgents =
+      _visibleOnTab;
 
   /// The real answer, reachable from a test without going through `focusPane`.
   @visibleForTesting
@@ -6266,7 +6348,56 @@ class AppNotifier extends ChangeNotifier {
   /// routes, which are many and would each have to remember.
   void seeWatchedAgents() {
     for (final w in watchedAgents()) {
-      agentUnread.clear(w.machineId, w.agentId);
+      // A QUESTION IS NOT CLEARED BY BEING LOOKED AT. Everything else here is
+      // news — an agent finished, and seeing it is the whole of what was owed.
+      // A blocked agent is a job: it is still waiting on a person however many
+      // times its tab came to the front, and a badge that stopped counting it
+      // would be saying the work was done because somebody glanced at it. It
+      // goes when the question is ANSWERED (`commander_question_close`).
+      if (agentUnread.kindFor(w.machineId, w.agentId) != AlertKind.done) {
+        continue;
+      }
+      _forgetUnread(w.machineId, w.agentId);
+    }
+  }
+
+  /// Drop this harness's mark and tell the daemon, so the dial drops its drawer
+  /// row for it too. Silent when there was no mark.
+  void _forgetUnread(String machineId, String agentId) {
+    if (agentUnread.kindFor(machineId, agentId) == null) return;
+    agentUnread.clear(machineId, agentId);
+    _announceAgentSeen(machineId, agentId);
+  }
+
+  /// Tell the daemon this harness has been looked at, so the dial drops its
+  /// drawer row for it.
+  ///
+  /// The two screens take a notification away on different gestures — a tap on
+  /// the dial, a tab coming to the front here — and each has to reach the other
+  /// or the two numbers part company the first time either is used. The dial's
+  /// half already travels: a tap sends `agent.open`, which brings the harness
+  /// forward here, and the sweep above clears it as anything else would.
+  ///
+  /// Guarded by the caller on "there was a mark", so an ordinary tab switch
+  /// does not put a frame on every socket.
+  void _announceAgentSeen(String machineId, String agentId) {
+    // No transport at all — a window still booting, or a plain `test()` with no
+    // live pool. `_conn` asserts one exists rather than answering null, which
+    // is right for the paths that cannot proceed without it and wrong for a
+    // diagnostic aside like this one.
+    if (_pool == null && connectionForTest == null) return;
+    // Through `_conn`, the resolver everything else on this socket uses — it
+    // refuses a shared harness, which this window has no business reporting on
+    // anyway, by throwing rather than by returning null.
+    try {
+      unawaited(
+        _conn(machineId)
+            .sendTerminalFrame('agent_seen', {'agentId': agentId})
+            .catchError((_) => false),
+      );
+    } on StateError {
+      // A view-only harness. Nothing to tell the dial about something this
+      // window does not drive.
     }
   }
 
@@ -6293,7 +6424,17 @@ class AppNotifier extends ChangeNotifier {
     // Nothing at all for the agent on screen in front of you. A sound, a banner
     // and a count are three ways of saying "look over here", and all three are
     // noise about the pane you are already in.
-    if (_isBeingWatched(machine.machine.machineId, agentId)) return;
+    //
+    // A QUESTION IS THE EXCEPTION, and it is the same exception the sweep makes
+    // (see [seeWatchedAgents]): it is a job rather than news, so it is owed
+    // until it is ANSWERED and being looked at is not an answer. Skipping it
+    // here would also have been self-defeating — a question asks the window to
+    // bring its agent forward, so "already on screen" was true by construction
+    // and the mark was never raised at all (owner, 2026-09-24).
+    if (kind != AlertKind.needsYou &&
+        _isBeingWatched(machine.machine.machineId, agentId)) {
+      return;
+    }
     final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
     // Before the banner and outside its switch: the mark is what the window can
     // still say when somebody has turned the interrupting halves off.
@@ -6340,8 +6481,14 @@ class AppNotifier extends ChangeNotifier {
   /// The person has gone to this agent — by clicking its row, its banner, or
   /// anything else that puts it in front of them. Whatever it was carrying has
   /// been seen.
-  void markAgentSeen(String machineId, String agentId) =>
-      agentUnread.clear(machineId, agentId);
+  /// This harness has been gone to — from a banner, from the dial, from a row.
+  ///
+  /// Same rule as the sweep: arriving at a blocked harness is not answering it,
+  /// so its mark stays. See [seeWatchedAgents].
+  void markAgentSeen(String machineId, String agentId) {
+    if (agentUnread.kindFor(machineId, agentId) != AlertKind.done) return;
+    _forgetUnread(machineId, agentId);
+  }
 
   /// Whatever tile is now in front of the person has been seen.
   ///
@@ -6771,6 +6918,7 @@ class AppNotifier extends ChangeNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -6793,6 +6941,8 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
+      'gridModel': ?model?.id,
+      'gridName': ?model?.grid,
       // A first message the engine is opened with, and the pane's name before
       // the engine reports a session title. Both absent unless asked for: a
       // daemon that predates them ignores an unknown field, but one that knows
@@ -6973,6 +7123,29 @@ class AppNotifier extends ChangeNotifier {
       return 'Not connected to $machineName yet.';
     }
     final connection = _conn(machineId);
+    if (!creation.awaitingConfirmation && choices['gridModel'] != null) {
+      final models = await gridModels(machineId);
+      if (!models.reachable) {
+        return creation._complete(
+          'Could not verify models on $machineName. Refresh models or use your subscription.',
+        );
+      }
+      if (!models.supportsModelLaunch) {
+        return creation._complete(
+          'Update Harness CLI on $machineName to choose a model before starting.',
+        );
+      }
+      if (!models.canRunLocally(choices['engine'] as String) ||
+          !models.sections.any(
+            (section) =>
+                section.name == choices['gridName'] &&
+                section.models.any((model) => model.id == choices['gridModel']),
+          )) {
+        return creation._complete(
+          'The selected model is unavailable. Refresh models or use your subscription.',
+        );
+      }
+    }
     var launchChoices = choices;
     if (!creation.awaitingConfirmation &&
         choices['projectSource'] != null &&
@@ -7084,6 +7257,7 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_CWD',
         'INVALID_ENGINE',
         'INVALID_GRID',
+        'GRID_UNAVAILABLE',
         'INVALID_CODEX_HOME',
         'INVALID_DSH',
         'PROMPT_UNSUPPORTED',
@@ -10853,13 +11027,46 @@ class AppNotifier extends ChangeNotifier {
         final requestId = payload['requestId'];
         if (agentId != null) {
           final open = machine.blockedAgents[agentId];
-          // Only if it is the one being closed: a stale close must not wipe the
-          // question that replaced it when a dialog advanced to its next page.
-          if (open != null &&
-              (requestId is! String ||
-                  requestId.isEmpty ||
-                  open.requestId == requestId)) {
+          // A stale close must not wipe the question that REPLACED it when a
+          // dialog advanced to its next page. That is the only thing the id
+          // guards, so it is asked as its own question and nothing else hangs
+          // off it.
+          final supersededByANewerQuestion =
+              open != null &&
+              requestId is String &&
+              requestId.isNotEmpty &&
+              open.requestId != requestId;
+          if (!supersededByANewerQuestion) {
             machine.blockedAgents.remove(agentId);
+            // A question stops being unread when it is ANSWERED, wherever that
+            // happened — here, in the pane by hand, on the dial, in another
+            // window. Being looked at is not enough: the badge counts what is
+            // still waiting on a person.
+            //
+            // ⚠️ NOT nested inside "the dialog is still open". It was, and the
+            // mark then outlived its own question: answering makes the turn end
+            // too, `_cancelTurnActivity` clears `blockedAgents` on the way past,
+            // and whichever of the two frames lands first decides whether this
+            // runs at all. The close is the authoritative word that the question
+            // is answered; the dialog bookkeeping is a separate thing that may
+            // already have been tidied.
+            //
+            // WHATEVER THE MARK IS, not only a question's.
+            //
+            // Answering ENDS THE TURN for these engines — measured, one
+            // millisecond apart and the turn first:
+            //
+            //   18:04:58.534 [turn] 395050e8 ended · 65175ms
+            //   18:04:58.535 [question] 395050e8 answered elsewhere · closing
+            //
+            // so the `done` that lands with every answer overwrote the question
+            // mark and the badge never went down. Reading it as news is wrong on
+            // its face: a turn that ended in the same breath as your own answer
+            // is not something that happened while you were away.
+            //
+            // A close means somebody just dealt with this agent. Anything unread
+            // for it at that moment is about the work they were standing over.
+            _forgetUnread(machine.machine.machineId, agentId);
           }
         }
         break;
@@ -10894,7 +11101,14 @@ class AppNotifier extends ChangeNotifier {
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
-          _raiseAlert(machine, agentId, AlertKind.done);
+          // A SUB-AGENT'S turn end is not news — an Orchestrator specialist, or
+          // its Director while specialists are still out. The dial has always
+          // known (`silent` on its summary card) and this window never did, so a
+          // project of four specialists put one row on the dial and five marks
+          // here. Same predicate now, asked on the daemon: `isSubagentSession`.
+          if (event['subagent'] != true) {
+            _raiseAlert(machine, agentId, AlertKind.done);
+          }
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {
           final sessionId = _eventSessionId(event, payload);
@@ -10960,6 +11174,7 @@ class AppNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _modelManager?.dispose();
+    _modelsMenu?.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }

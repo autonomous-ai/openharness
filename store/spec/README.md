@@ -39,20 +39,35 @@ Harness reads `harness.json` at its root and nothing else about its code.
 }
 ```
 
-Materialization, in order, at every create (idempotent):
+An agent package's `engine` is its default for clients that have not chosen an engine. The
+portable runtime binds every spec-1 harness to every integrated process engine. There is no
+package allowlist or opt-in flag. Terminal is a plain shell and is offered only with Coding.
+Older daemons still read the same manifest and use its default engine. New desktop clients use the
+machine's `dsh_list.engines` and fall back to `engine` for older daemons.
 
-1. If `workspace.marker` is absent: copy `workspace.template/*` into the workspace, then run
-   `workspace.init` if declared.
-2. `AGENTS.md`: copy if absent; else append the DSH file under a marker line
-   `<!-- harness:dsh <id> -->` if that marker is not already present. For a `claude` base also
-   ensure `CLAUDE.md` contains `@AGENTS.md` (Claude Code reads `CLAUDE.md`, imports the rest).
-3. Skills: symlink each skill dir into `<workspace>/.claude/skills/<name>` (claude) or
-   `<workspace>/.agents/skills/<name>` (codex). Symlinks, so a DSH update is live.
-4. Create `<workspace>/.harness/`.
+Materialization prepares the workspace independently of the engine:
 
-Launch env, always: `HARNESS_DSH=<id>`, `HARNESS_DSH_DIR=<install dir>`,
-`HARNESS_WORKSPACE=<workspace>`, plus `agent.env` expanded. Set through tmux `-e`, the same channel
-grids and Codex profiles use, on create AND on every relaunch (`buildLaunchOverrides`).
+1. If `workspace.marker` is absent: copy `workspace.template/*` without overwriting existing files,
+   then run `workspace.init` if declared.
+2. Create `<workspace>/.harness/` for verdicts and runtime state.
+3. Bind the selected engine to a session-scoped context bundle under `.harness/runtime/`.
+   Its instructions and skill index are loaded through the engine adapter. A small, generic
+   bootstrap in the engine's project instruction file reads `HARNESS_CONTEXT_FILE`; it contains
+   no particular harness's instructions. Existing project text is preserved.
+
+Launch env includes `HARNESS_DSH`, `HARNESS_DSH_DIR`, `HARNESS_WORKSPACE`,
+`HARNESS_CONTEXT_FILE`, and `HARNESS_SKILLS_DIR`, plus expanded `agent.env`. Skills are readable
+files with shell commands; native skills and MCP are not prerequisites. Old workspace skill paths
+in env are translated to the session's skills directory. `agent.args` remains a legacy extension
+for the manifest's default engine only; those flags are never handed to another engine.
+
+Create records a runtime key along with the chosen engine and harness. Resume uses that bundle;
+fork copies its configuration into a new bundle. Instructions, env and argv remain stable across
+package-default changes. Installed skill assets and toolchains follow package updates, as before.
+Missing packages or damaged contexts refuse a restart with a specific error.
+
+See [the runtime contract and adapter sources](portability.md) for lifecycle, migration, compatibility,
+and the coverage gate.
 
 ## Viewer packages (spec 1.1)
 
@@ -107,12 +122,15 @@ writes it beside the sidecar in `circuitpy.generation`; Workshop writes it from 
 ## Wire (daemon ↔ desktop)
 
 - `agent_create` payload gains `dsh?: string`. Refused with `INVALID_DSH` when not installed on
-  this machine or when `engine` is not the DSH's base.
+  this machine or when `engine` is not supported by the installed manifest. Saved sessions keep
+  their actual `engine` for resume, restart and fork, independently of the manifest's default.
 - `AgentFrame` gains `dsh: string | null`, `dshName: string | null`, `viewerUrl: string | null`,
   `verdict: { ready, summary, errors, warnings, artifact, phases, updatedAt } | null`. Null is a real answer
   (see `agentFrame.ts`'s doc on erased fields).
-- `dsh_list` → `{ dsh: [{ id, name, description, category, engine, installed, viewer, tier }] }`: installed
+- `dsh_list` → `{ dsh: [{ id, name, description, category, engine, engines, installed, viewer, tier }] }`: installed
   DSHs on this machine merged with the bundled registry (the `store/` folders and `store/registry/`).
+  `engines` lists supported engines. Installed metadata wins over catalog metadata; an older
+  daemon omitting `engines` supports only its advertised `engine`.
 - `dsh_install { id?, url?, ref? }` → runs clone → setup → doctor; pushes
   `dsh_install_status { id, phase: clone|setup|doctor|done|failed, detail? }`; replies `{ ok }` at
   the end (the desktop uses a 10-minute timeout for this one request).

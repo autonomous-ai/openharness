@@ -37,6 +37,7 @@ import { LocalModels } from './lib/localModels.js'
 import { ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { gridCapableEngines, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { listAllGridModels, resolveGridTarget } from './lib/gridModels.js'
+import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
 import { readAccountUsage, type AccountUsageReading } from './lib/accountUsage.js'
@@ -57,7 +58,7 @@ import { orchestratorRequest } from './orchestrator/wire.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
 import { engineLabel } from './lib/agentNames.js'
-import { DSH_ID_RE } from './dsh/manifest.js'
+import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
 import type { DshInstallProgress } from './dsh/install.js'
 import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshRemoveId, dshRemoveReply } from './dsh/wire.js'
@@ -1117,6 +1118,12 @@ export class BackendSocket {
     this.enqueueDown(frame, connId, 'local')
   }
 
+  /** The window's focused agent on this local connection — its terminal gets the short output window. */
+  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+    if (!this.localClients.has(connId)) return
+    this.terminalStreams?.setFocusedAgent(connId, agentId)
+  }
+
   /** Route an authenticated local terminal frame without applying cloud E2EE. */
   async handleLocalBinary(connId: string, frame: TerminalBinaryClear): Promise<void> {
     if (!this.localClients.has(connId)) return
@@ -1907,6 +1914,7 @@ export class BackendSocket {
               // whose retarget the daemon would refuse. An older app ignores the field; an older
               // daemon omits it, which the app reads as "offer everything", as before.
               localModelEngines: gridCapableEngines(),
+              supportsModelLaunch: true,
               // Whether this MACHINE has a `grid` to run at all — `managed`, `path` or `missing` —
               // as distinct from `gridName`, which is about the account. The Local model dialog was
               // gating on the account alone and starting an agent whose second step is `grid`; this
@@ -2155,6 +2163,8 @@ export class BackendSocket {
           // Absent is the ordinary case and stays indistinguishable from a client that predates grids;
           // present-but-malformed is refused here rather than half-applied at launch, because an agent
           // that quietly ran on the engine's own login would look like it worked.
+          const model = parseNewAgentModel(engine, payload)
+          if (model.state === 'invalid') { reply(type, requestId, { error: 'INVALID_GRID', detail: model.detail }); return }
           const grid = parseGridLaunchOverride(payload.grid)
           if (grid.state === 'invalid') { reply(type, requestId, { error: 'INVALID_GRID', detail: grid.reason }); return }
           if (terminal && grid.state === 'ok') { reply(type, requestId, { error: 'INVALID_GRID', detail: 'a terminal has no engine to point at a grid' }); return }
@@ -2184,8 +2194,8 @@ export class BackendSocket {
             if (installed.manifest.kind === 'viewer') {
               reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} is a viewer package, not an agent` }); return
             }
-            if (installed.manifest.engine !== engine) {
-              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} runs on ${installed.manifest.engine}, not ${engine}` }); return
+            if (!dshSupportedEngines(installed.manifest).includes(engine)) {
+              reply(type, requestId, { error: 'INVALID_DSH', detail: `${payload.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${engine} is not compatible` }); return
             }
             dsh = installed.id
           }
@@ -2243,13 +2253,19 @@ export class BackendSocket {
             name,
             agent,
           }
+          const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
           if (creationId !== undefined) {
             // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
             // New agent action carries a new one. Detach so a status check can pass a slow create
             // on this connection, just as engines_probe is detached above.
             const create = this.onCreateAgent
             try {
-              void this.agentCreations.run(creationId, creationFingerprint(projectFolder ? { ...input, projectFolder } : input), async () => {
+              void this.agentCreations.run(creationId, creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput), async () => {
+                if (model.state === 'ok') {
+                  const target = await resolveNewAgentModel(model.selection).catch(() => null)
+                  if (!target) return { state: 'failed', error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
+                  input.grid = target
+                }
                 let preparedFolder: string | undefined
                 if (projectFolder) {
                   try { preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
@@ -2278,6 +2294,11 @@ export class BackendSocket {
             return
           }
           // Clients predating receipts retain their existing response shape.
+          if (model.state === 'ok') {
+            const target = await resolveNewAgentModel(model.selection).catch(() => null)
+            if (!target) { reply(type, requestId, { error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }); return }
+            input.grid = target
+          }
           const result = await this.onCreateAgent(input)
           // `detail` carries the underlying cause (tmux's own message) so the person who clicked
           // Create can read it, rather than having to open a log on the machine that failed.

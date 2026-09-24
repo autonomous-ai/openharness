@@ -34,3 +34,36 @@ Future<void> chooseAgent(WidgetTester tester, String id) async {
   await tester.tap(find.byKey(ValueKey('new-agent-agent-row-$id')));
   await tester.pump();
 }
+
+final harnessBar = find.byKey(const Key('new-agent-harness-field'));
+final harnessSearch = find.byKey(const Key('new-agent-harness-search'));
+List<String> harnessRows(WidgetTester tester) => [
+  for (final element in find.byType(ListTile).evaluate())
+    if (element.widget.key case ValueKey<String>(value: final key)
+        when key.startsWith('new-agent-harness-row-'))
+      key.substring('new-agent-harness-row-'.length),
+];
+Future<void> openHarnessSearch(WidgetTester tester) async {
+  await tester.ensureVisible(harnessBar);
+  await tester.pump();
+  final bar = tester.getRect(harnessBar);
+  await tester.tapAt(Offset(bar.left + 90, bar.center.dy));
+  await tester.pump();
+  await tester.pump();
+}
+
+Future<void> chooseHarness(WidgetTester tester, String id) async {
+  await openHarnessSearch(tester);
+  await tester.enterText(harnessSearch, id);
+  await tester.pump();
+  await tester.tap(find.byKey(ValueKey('new-agent-harness-row-$id')));
+  await tester.pump();
+}
+
+Future<void> expandNewAgentAdvanced(WidgetTester tester) async {
+  final collapsed = find.textContaining('[+] Advanced');
+  if (collapsed.evaluate().isEmpty) return;
+  await tester.ensureVisible(collapsed);
+  await tester.tap(collapsed);
+  await tester.pumpAndSettle();
+}

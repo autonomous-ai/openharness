@@ -135,7 +135,7 @@ void main() {
         final box = tester
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;
-        expect(box.engine, 'studio/arm');
+        expect(box.harnessId, 'studio/arm');
         expect(box.task, prompt ?? '');
         expect(box.projectLabel, startsWith('~/harnesses/robot-studio-'));
         expect(box.projectFolderRequest!.isGenerated, isTrue);
@@ -152,7 +152,7 @@ void main() {
     );
   }
 
-  testWidgets('browsing from agent choices retains the task and defaults', (
+  testWidgets('browsing from harness choices retains the task and defaults', (
     tester,
   ) async {
     newHarnessOpensInBox = true;
@@ -174,11 +174,11 @@ void main() {
     box.task = 'Finish the login feature';
     await tester.pump();
     final draft = box.draft;
-    await openLaunchRow(tester, 'agent');
+    await openLaunchRow(tester, 'harness');
     await typeHarnessQuery(tester, 'a harness not in this catalog');
     await tester.pump();
     expect(box.selected?.id, NewHarnessController.storeId);
-    expect(find.text('Browse more harnesses…'), findsOneWidget);
+    expect(find.text('Browse Harness Store…'), findsOneWidget);
     await acceptSetupOrSearch(tester);
     expect(app.activeSwarm.isStore, isTrue);
     expect(find.byType(NewHarnessForm), findsNothing);

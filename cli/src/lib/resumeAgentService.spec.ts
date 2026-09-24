@@ -18,10 +18,14 @@ import { installedDsh } from '../dsh/installed.js'
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
 vi.mock('./tmuxAgentDiscovery.js', () => ({ listTmuxPanes: vi.fn() }))
 vi.mock('./tmux.js', () => ({ checkSessionRuntime: vi.fn(), clearPaneRemainOnExit: vi.fn(), resolvePaneEngineProcess: vi.fn(), tmuxPaneState: vi.fn() }))
-// `resumeCapability` reads the real flag table through this module; only the argv builder is faked.
+// `resumeCapability` reads the real flag table through this module; only the argv builder and the
+// capability gate are faked. The gate would otherwise spawn the tester's own login shell to ask
+// `<engine> --help` about a flag, which is neither this file's subject nor the same answer on two
+// machines. Its own behaviour is covered in `engineLaunch.spec.ts`.
 vi.mock('./engineLaunch.js', async importOriginal => ({
   ...(await importOriginal<typeof import('./engineLaunch.js')>()),
   buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']),
+  dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
 }))
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('./engineInstall.js', () => ({ engineInstallRecipe: () => ({ command: 'fixture-install' }) }))

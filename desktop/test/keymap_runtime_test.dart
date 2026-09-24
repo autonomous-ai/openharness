@@ -20,6 +20,7 @@ import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:xterm/xterm.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
+import 'support/launch_menu.dart';
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -91,6 +92,57 @@ Future<void> tabToResult(WidgetTester tester, {String? id}) async {
 }
 
 void main() {
+  testWidgets(
+    'New Harness remapped navigation works in both fields and choices',
+    (tester) async {
+      final previousEntry = newHarnessOpensInBox;
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = previousEntry);
+      final map = MemoryKeymap()
+        ..apply('''{"bindings":[
+      {"keys":"ctrl+j","command":"picker.next","when":"picker"},
+      {"keys":"ctrl+k","command":"picker.previous","when":"picker"},
+      {"keys":"ctrl+l","command":"picker.complete","when":"picker"},
+      {"keys":"ctrl+h","command":"picker.complete_back","when":"picker"}
+    ]}''');
+      final app = createApp();
+      addTearDown(map.dispose);
+      addTearDown(app.dispose);
+      await mount(tester, app, map);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      final box = tester
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+          .controller;
+      for (final (forward, backward) in [
+        (LogicalKeyboardKey.keyJ, LogicalKeyboardKey.keyK),
+        (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
+      ]) {
+        await key(tester, forward, ctrl: true);
+        expect(box.field, NewHarnessField.agent);
+        await key(tester, backward, ctrl: true);
+        expect(box.field, NewHarnessField.harness);
+        await key(tester, forward, ctrl: true);
+        await key(tester, LogicalKeyboardKey.enter);
+        final cursor = box.cursor;
+        final engine = box.engine;
+        await key(tester, forward, ctrl: true);
+        expect(box.cursor, (cursor + 1) % box.options.length);
+        await key(tester, backward, ctrl: true);
+        expect(box.cursor, cursor);
+        expect(box.engine, engine);
+        await key(tester, LogicalKeyboardKey.escape);
+        await key(tester, backward, ctrl: true);
+      }
+      await focusLaunchRow(tester, 'advanced');
+      final expanded = box.advancedOpen;
+      await key(tester, LogicalKeyboardKey.arrowRight);
+      expect(box.advancedOpen, !expanded);
+      await key(tester, LogicalKeyboardKey.arrowLeft);
+      expect(box.advancedOpen, expanded);
+      expect(app.panes, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   for (final command in ['newAgent', 'commands']) {
     testWidgets('native $command preserves composing New Harness input', (
       tester,
@@ -728,11 +780,13 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsNothing);
-        // The form opens with focus on its agent bar, and Escape there still
+        // The form opens with focus on its harness bar, and Escape there still
         // closes the form.
         expect(
           tester
-              .widget<AgentPicker>(find.byType(AgentPicker))
+              .widget<AgentPicker>(
+                find.byKey(const Key('new-agent-harness-picker')),
+              )
               .focusNode!
               .hasPrimaryFocus,
           isTrue,

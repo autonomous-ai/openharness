@@ -5,7 +5,7 @@
  */
 import type { DshInstallProgress } from './install.js'
 import { listInstalledDsh, type InstalledDsh } from './installed.js'
-import { DSH_ID_RE, dshTier, viewerUse } from './manifest.js'
+import { DSH_ID_RE, dshSupportedEngines, dshTier, viewerUse } from './manifest.js'
 import { registrySourceUrl, type DshRegistryEntry } from './registry.js'
 import { currentDshRegistry } from './catalog.js'
 import { dshUpdateInfo } from './updates.js'
@@ -46,6 +46,7 @@ export function dshListRows(
       category: entry.manifest.category ?? null,
       author: entry.manifest.author ?? null,
       engine: entry.manifest.engine ?? null,
+      engines: dshSupportedEngines(entry.manifest),
       installed: true,
       linked: entry.linked === true,
       viewer: !!entry.manifest.viewer,
@@ -65,6 +66,7 @@ export function dshListRows(
       category: entry.category ?? null,
       author: entry.author ?? null,
       engine: entry.engine ?? null,
+      engines: dshSupportedEngines(entry),
       installed: false,
       linked: false,
       viewer: (entry.tier ?? 0) >= 2,

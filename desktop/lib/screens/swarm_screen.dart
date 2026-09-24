@@ -228,7 +228,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   String? _nativeState;
   List<Object?>? _machinesPresentation;
   ModelsMenuController? _modelsMenu;
-  String? _modelsState;
   final _defaultKeymap = AppKeymap();
   AppKeymap? _providedKeymap;
   AppKeymap get _keymap => _providedKeymap ?? _defaultKeymap;
@@ -241,7 +240,11 @@ class _SwarmScreenState extends State<SwarmScreen>
   String? _commandCatalogMachine;
   final _newTabSources = <String, TerminalPane>{};
 
-  Widget _startGuide() => WorkspaceWelcome(onCommand: _runShortcut);
+  Widget _startGuide() => WorkspaceWelcome(
+    key: ValueKey('welcome:${app.activeSwarmId}'),
+    onboarding: _onboarding,
+    onCommand: _runShortcut,
+  );
 
   void _showKeyboardShortcuts() {
     if (_newHarness?.requestDismiss() == false) return;
@@ -263,7 +266,20 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.agentUnread.addListener(_unreadChanged);
     // Coming back to the window puts the tab in front of the person again, and
     // nothing in the app necessarily changes when that happens — so it is told.
-    _lifecycle = AppLifecycleListener(onResume: app.seeWatchedAgents);
+    //
+    // The daemon is told too, on the way out as well as the way back: it decides
+    // from `app_panes` whether a finished turn is already on screen, and that
+    // roster does not change when the window slips behind a browser. Without
+    // the second half the dial went quiet the first time this window lost focus
+    // and stayed quiet until a pane happened to change.
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        app.seeWatchedAgents();
+        app.announceWindowForeground();
+      },
+      onHide: app.announceWindowForeground,
+      onInactive: app.announceWindowForeground,
+    );
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);
@@ -280,8 +296,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     unawaited(_projects.load());
     unawaited(_navigation.load());
     _spokenTasks = app.spokenTasks.listen(_openSpokenTask);
-    _modelsMenu =
-        widget.modelsMenu ?? ModelsMenuController(remote: app.readRemoteUsage);
+    // The app's shared controller, so this menu and every pane's model picker show one reading.
+    _modelsMenu = widget.modelsMenu ?? app.modelsMenu;
     app.modelManager.addListener(_modelManagerChanged);
     _modelsRequests = app.modelsRequests.listen((_) {
       if (mounted && _modelsOverlay == null) {
@@ -290,18 +306,16 @@ class _SwarmScreenState extends State<SwarmScreen>
     });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) app.modelManager.start();
+        if (!mounted) return;
+        app.modelManager.start();
+        // Subscription usage is read ahead, so opening a menu shows it without waiting.
+        _modelsMenu!.start();
       });
     }
     if (_native) {
-      _modelsMenu!.addListener(_syncModels);
-      // Same trigger as the subscription rows: the daemon memoises its answer, so opening the menu
-      // repeatedly costs nothing after the first.
-      unawaited(_refreshLocalModels());
       _channel.setMethodCallHandler(_onNative);
       app.addListener(_syncNative);
       _syncNative();
-      _syncModels();
     }
   }
 
@@ -383,12 +397,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
-    _modelsMenu?.removeListener(_syncModels);
-    if (widget.modelsMenu == null) _modelsMenu?.dispose();
     if (_native) {
-      unawaited(
-        _channel.invokeMethod<void>('modelsState', {'subscriptions': []}),
-      );
       unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
       app.removeListener(_syncNative);
       _channel.setMethodCallHandler(null);
@@ -449,7 +458,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       _machinesPanel?.close(restoreFocus: false);
     }
     if (_sessionsOverlay != null) _closeSessions(restoreFocus: false);
-    if (_modelsOverlay != null) _closeModels(restoreFocus: false);
+    if (id != 'models.list' && _modelsOverlay != null) {
+      _closeModels(restoreFocus: false);
+    }
     if (id != 'navigation.command_bar') _closeCommandBar();
     if (id == 'agent.new' && _search != null) {
       final target = _search!.targetId;
@@ -753,10 +764,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   void _syncNative() {
-    // ⚠️ Also from here, not only from `initState`. At init the machine list is still empty, so the
-    // first read returned nothing and the Local section sat on its empty state forever. This fires
-    // on every app change, throttled, so it lands as soon as a machine appears.
-    unawaited(_refreshLocalModels());
     _syncMachines();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
@@ -953,113 +960,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     );
   }
 
-  void _syncModels() {
-    final payload = {
-      'subscriptions': _modelsMenu?.rows ?? [],
-      // Which subscription the menu marks as the one in use. The pane in focus decides, because
-      // "which account am I spending" is a question about the agent being looked at; a pane that
-      // has been moved onto a Local model is on no subscription, and then nothing is marked.
-      'currentEngine': _currentSubscriptionEngine(),
-      // Back-compat: the own grid's models, as the native menu understood them before sections.
-      'local': [
-        for (final s in _localSections)
-          if (s.own)
-            for (final m in s.models) {'id': m.id, 'node': m.node},
-      ],
-      // The picker's sections, own grid first then each shared grid — what the native menu draws.
-      'sections': [
-        for (final s in _localSections)
-          {
-            'name': s.name,
-            'own': s.own,
-            'models': [
-              for (final m in s.models) {'id': m.id, 'node': m.node},
-            ],
-          },
-      ],
-    };
-    final encoded = jsonEncode(payload);
-    if (encoded == _modelsState) return;
-    _modelsState = encoded;
-    unawaited(_channel.invokeMethod<void>('modelsState', payload));
-  }
-
-  /// The focused pane's engine while that pane runs on its own login, else null.
-  String? _currentSubscriptionEngine() {
-    final pane = app.focusedPane;
-    if (pane == null) return null;
-    final agent = app.machineStates[pane.machineId]?.agents
-        .where((a) => a.id == pane.agentId)
-        .firstOrNull;
-    if (agent == null || agent.gridModel != null) return null;
-    return agent.engine?.trim().toLowerCase();
-  }
-
-  /// What the picker's sections answer for the native Models menu.
-  ///
-  /// Read from a machine this window is connected to — the grid is per ACCOUNT, so any of them
-  /// answers the same, and the local one is asked first because its daemon is a loopback away.
-  /// Never throws and never blocks the menu: a machine that cannot answer leaves the list as it was.
-  List<GridSection> _localSections = const [];
-
-  DateTime? _localModelsAt;
-
-  Future<void> _refreshLocalModels() async {
-    final machines = app.machines
-        .where((machine) => !machine.isShared)
-        .toList();
-    if (machines.isEmpty) return;
-    // The daemon memoises its answer, so a repeat is nearly free — but this is called on every app
-    // change, and an RPC per keystroke-sized notification is not free. One read per window is
-    // plenty for a list that changes when someone starts or stops serving a model.
-    final now = DateTime.now();
-    final last = _localModelsAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 10)) {
-      return;
-    }
-    _localModelsAt = now;
-    final preferred = machines.firstWhere(
-      (m) => app.stateOf(m.machineId)?.isLocalMachine == true,
-      orElse: () => machines.first,
-    );
-    final answer = await app.gridModels(preferred.machineId);
-    if (!mounted) return;
-    final sections = _sectionsForModelMenu(answer);
-    if (_sameSections(sections, _localSections)) return;
-    _localSections = sections;
-    _syncModels();
-  }
-
-  /// The sections the Models menu draws, matching the pane picker's own: the account's own grid
-  /// first as "Local", then each shared grid that serves something. A shared grid with nothing
-  /// running is not a menu a person can pick from, so it is not drawn.
-  List<GridSection> _sectionsForModelMenu(GridModels answer) {
-    final sections = answer.sections
-        .where((s) => s.own || s.models.isNotEmpty)
-        .toList();
-    if (sections.any((s) => s.own)) return sections;
-    return [
-      GridSection(
-        name: answer.gridName ?? '',
-        own: true,
-        models: answer.models,
-      ),
-      ...sections,
-    ];
-  }
-
-  static bool _sameSections(List<GridSection> a, List<GridSection> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].name != b[i].name || a[i].own != b[i].own) return false;
-      if (a[i].models.length != b[i].models.length) return false;
-      for (var j = 0; j < a[i].models.length; j++) {
-        if (a[i].models[j].id != b[i].models[j].id) return false;
-      }
-    }
-    return true;
-  }
-
   Future<void> _onNative(MethodCall call) async {
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
@@ -1093,10 +993,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (call.method == 'models') {
       _toggleModels();
       await WidgetsBinding.instance.endOfFrame;
-      return;
-    }
-    if (call.method == 'modelsOpened') {
-      await _modelsMenu?.refresh();
       return;
     }
     final nativeCommand = switch (call.method) {
@@ -1637,11 +1533,12 @@ class _SwarmScreenState extends State<SwarmScreen>
       );
       return;
     }
-    final inherited = agent?.identityEngine;
+    final inherited = agent?.engine;
     _openNewHarness(
       machineId: id,
       // ⌘⇧T is how a shell is made; New Harness from a shell means an agent.
       engine: engine ?? (isTerminalEngine(inherited) ? null : inherited),
+      harnessId: engine == null ? agent?.dsh : null,
       folder: initialFolder,
       projectName: projectName,
       autoProject:
@@ -1726,6 +1623,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   void _openNewHarness({
     required String machineId,
     String? engine,
+    String? harnessId,
     String? folder,
     String? projectName,
     bool autoProject = false,
@@ -1756,7 +1654,10 @@ class _SwarmScreenState extends State<SwarmScreen>
         );
     bool matchesSelection(NewHarnessDraft candidate) =>
         origin.requestedEngine == null ||
-        (candidate.engine == origin.requestedEngine &&
+        ((isHarnessId(origin.requestedEngine)
+                ? candidate.harnessId == origin.requestedEngine
+                : candidate.engine == origin.requestedEngine &&
+                      candidate.harnessId == null) &&
             candidate.machineId == origin.machineId);
     final current = _newHarness;
     if (current != null) {
@@ -1804,6 +1705,7 @@ class _SwarmScreenState extends State<SwarmScreen>
       app,
       machineId: machineId,
       engine: engine,
+      harnessId: harnessId,
       folder: folder,
       projectName: projectName,
       task: task,
@@ -2354,16 +2256,19 @@ class _SwarmScreenState extends State<SwarmScreen>
                       ),
                     ],
                   ),
-                  child: ModelsPanel(
-                    newModelIds: _toolbarNotices.newModelIds,
-                    showOnboarding: _onboarding.next == OnboardingStep.models,
-                    onDismissOnboarding: () =>
-                        _onboarding.dismiss(OnboardingStep.models),
-                    controller: app.modelManager,
-                    subscriptions: _modelsMenu!,
-                    initialTab: initialTab,
-                    onClose: _closeModels,
-                    onManage: () => unawaited(_openModelManager()),
+                  child: KeymapProvider(
+                    keymap: _keymap,
+                    child: ModelsPanel(
+                      newModelIds: _toolbarNotices.newModelIds,
+                      showOnboarding: _onboarding.next == OnboardingStep.models,
+                      onDismissOnboarding: () =>
+                          _onboarding.dismiss(OnboardingStep.models),
+                      controller: app.modelManager,
+                      subscriptions: _modelsMenu!,
+                      initialTab: initialTab,
+                      onClose: _closeModels,
+                      onManage: () => unawaited(_openModelManager()),
+                    ),
                   ),
                 ),
               ),
@@ -2453,37 +2358,41 @@ class _SwarmScreenState extends State<SwarmScreen>
                   ),
                   child: Padding(
                     padding: const EdgeInsets.all(1),
-                    child: HarnessSessionManager(
-                      app: app,
-                      introduction: _onboarding.next == OnboardingStep.harnesses
-                          ? OnboardingCard(
-                              title: 'Run your first harness',
-                              description:
-                                  'Give an agent a task. Watch it get to work.',
-                              action: 'New harness',
-                              onAction: () {
-                                _closeSessions(restoreFocus: false);
-                                _runShortcut('agent.new');
-                              },
-                              onDismiss: () =>
-                                  _onboarding.dismiss(OnboardingStep.harnesses),
-                            )
-                          : null,
-                      initialFilter: filter ?? SessionFilter.all,
-                      recent: _navigation.recent,
-                      onClose: _closeSessions,
-                      onOpen: (row) async {
-                        final destination = swarmDestinations(app)
-                            .where((item) => item.id == row.id)
-                            .firstOrNull;
-                        if (destination == null) return false;
-                        final opened = await activateSwarmDestination(
-                          app,
-                          destination,
-                          destinationSwarmId: app.activeSwarmId,
-                        );
-                        return opened;
-                      },
+                    child: KeymapProvider(
+                      keymap: _keymap,
+                      child: HarnessSessionManager(
+                        app: app,
+                        introduction:
+                            _onboarding.next == OnboardingStep.harnesses
+                            ? OnboardingCard(
+                                title: 'Run your first harness',
+                                description: 'Give an agent a task. Watch it get to work.',
+                                action: 'New harness',
+                                onAction: () {
+                                  _closeSessions(restoreFocus: false);
+                                  _runShortcut('agent.new');
+                                },
+                                onDismiss: () => _onboarding.dismiss(
+                                  OnboardingStep.harnesses,
+                                ),
+                              )
+                            : null,
+                        initialFilter: filter ?? SessionFilter.all,
+                        recent: _navigation.recent,
+                        onClose: _closeSessions,
+                        onOpen: (row) async {
+                          final destination = swarmDestinations(app)
+                              .where((item) => item.id == row.id)
+                              .firstOrNull;
+                          if (destination == null) return false;
+                          final opened = await activateSwarmDestination(
+                            app,
+                            destination,
+                            destinationSwarmId: app.activeSwarmId,
+                          );
+                          return opened;
+                        },
+                      ),
                     ),
                   ),
                 ),
@@ -3179,6 +3088,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     'machine.link': _openMachines,
     'machines.manage': _manageMachines,
     'machines.list': _openMachines,
+    'models.list': _toggleModels,
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
     'keyboard.quick_start': _startQuickStart,
@@ -4066,7 +3976,7 @@ class _SwarmScreenState extends State<SwarmScreen>
             ),
             IconButton(
               key: const ValueKey('swarm-models-button'),
-              tooltip: 'Models',
+              tooltip: 'Models ${_keymap.hint('models.list') ?? ''}'.trim(),
               onPressed: _toggleModels,
               isSelected: _modelsOverlay != null,
               style: _toolbarIconStyle(_toolbarNotices.modelCount),

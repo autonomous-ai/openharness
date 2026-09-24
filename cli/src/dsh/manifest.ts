@@ -18,6 +18,7 @@ import { ENGINES } from '../engines/types.js'
 export const DSH_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/
 export const DSH_MANIFEST_FILE = 'harness.json'
 export const DEFAULT_VERDICT_PATH = '.harness/verdict.json'
+export { compatibleHarnessEngines as dshSupportedEngines } from './compatibility.js'
 
 function insideHarness(path: string): boolean {
   if (isAbsolute(path)) return false
@@ -91,9 +92,11 @@ export const DshManifestSchema = z.strictObject({
   } else if (!manifest.engine) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['engine'], message: 'an agent package needs a base engine' })
   }
+
 })
 
 export type DshManifest = z.infer<typeof DshManifestSchema>
+
 export type DshViewerSpec = z.infer<typeof OwnViewerSchema>
 export type DshViewerUse = z.infer<typeof UsedViewerSchema>
 
@@ -199,9 +202,4 @@ export function dshTier(manifest: DshManifest): 0 | 1 | 2 {
 /** The workspace-relative path of the verdict file, defaulted. */
 export function dshVerdictPath(manifest: DshManifest): string {
   return manifest.verdict ?? DEFAULT_VERDICT_PATH
-}
-
-/** Where a base engine looks for project-level skills. */
-export function dshSkillsDirFor(engine: NonNullable<DshManifest['engine']>): string {
-  return engine === 'claude' ? '.claude/skills' : '.agents/skills'
 }

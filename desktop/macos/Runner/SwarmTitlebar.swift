@@ -23,9 +23,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var history: [SwarmHistoryEntry] = []
   private var closedHistory: [SwarmHistoryEntry] = []
   private let historyIcons = SwarmHistoryIcons()
-  private let modelsMenu = NSMenu(title: "Models")
   private var machines: [SwarmMachineEntry] = []
-  private var subscriptions: [SwarmSubscriptionEntry] = []
   private var keymap: HarnessNativeKeymap?
   private var flutterKeyContext = "workspace"
   private var tabActionGeneration = 0
@@ -71,15 +69,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         ])
       case "sessionMinimized":
         self.strip.sessionsButton.receiveSession()
-        result(nil)
-      case "modelsState":
-        let state = call.arguments as? [String: Any] ?? [:]
-        self.updateModels(
-          state["subscriptions"] as? [[String: Any]] ?? [],
-          current: state["currentEngine"] as? String,
-          local: state["local"] as? [[String: Any]] ?? [],
-          sections: state["sections"] as? [[String: Any]] ?? []
-        )
         result(nil)
       case "playAlert":
         // A named macOS system sound. Every Mac has these, so no audio asset ships with the app,
@@ -166,6 +155,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Mouse controls teach the effective shortcuts, including user remaps.
     strip.newButton.toolTip = "New Tab " + (map.hint(for: "swarm.new", context: "workspace") ?? "")
     strip.machinesButton.toolTip = "Machines " + (map.hint(for: "machines.list", context: "workspace") ?? "")
+    strip.modelsButton.toolTip = "Models " + (map.hint(for: "models.list", context: "workspace") ?? "")
     strip.storeButton.toolTip = "Harness Store " + (map.hint(for: "app.store", context: "workspace") ?? "")
     if let main = NSApp.mainMenu, let window {
       let menu = main as? HarnessKeymapMenu ?? HarnessKeymapMenu.replacing(main)
@@ -239,7 +229,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func installWorkspaceMenus() {
-    guard let main = NSApp.mainMenu, main.item(withTitle: "Models") == nil else { return }
+    guard let main = NSApp.mainMenu, main.item(withTitle: "History") == nil else { return }
     // The stock Flutter nib includes a disabled Preferences placeholder. Make
     // the app-menu command work, and give ⌘, a single native owner.
     if let appMenu = main.item(at: 0)?.submenu {
@@ -319,12 +309,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       view.addItem(.separator())
       add(view, "Harnesses Needing Input…", "i", "notifications", [.command, .shift])
       add(view, "Machines", "m", "machineList")
+      add(view, "Models", "i", "models")
       add(view, "Machine Monitor", "", "manageMachines")
     }
-    modelsMenu.autoenablesItems = false
-    modelsMenu.delegate = self
-    rebuildModelsMenu()
-    install(modelsMenu, at: main.items.firstIndex(where: { $0.title == "Window" }) ?? main.numberOfItems)
     installTerminalFindMenu(main)
   }
 
@@ -342,10 +329,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         row.needsDisplay = true
       }
     }
-    guard menu === modelsMenu, actionsEnabled else { return }
-    // The native menu opens from its cache. Network/credential reads happen
-    // asynchronously in Dart and never hold up AppKit's menu tracking.
-    channel.invokeMethod("modelsOpened", arguments: nil)
   }
 
   func menuDidClose(_ menu: NSMenu) {
@@ -356,144 +339,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     let entries = rows.prefix(128).compactMap(SwarmMachineEntry.init)
     guard entries != machines else { return }
     machines = entries
-    // The Models menu's last row lists these too (see `rebuildModelsMenu`), so it is rebuilt on
-    // the same change rather than waiting for the next models push to catch up.
-    rebuildModelsMenu()
-  }
-
-  /// One heading's worth of the picker: the account's own grid ("Local") or a shared grid, with
-  /// the models it is serving. `own` picks the heading word; `name` names a shared grid under the
-  /// "Models shared with you" header, or is empty for the account's own grid.
-  private struct MenuGridSection {
-    let name: String
-    let own: Bool
-    let models: [(String, String)]  // (model id, node)
-  }
-
-  private func updateModels(_ rows: [[String: Any]], current: String?, local: [[String: Any]] = [],
-                            sections: [[String: Any]] = []) {
-    let entries = rows.prefix(32).compactMap(SwarmSubscriptionEntry.init)
-    // What the picker is actually serving RIGHT NOW, read off the machines that answer for it.
-    // Placeholder names lived here before and read as real ones — a menu naming a model nobody is
-    // serving is worse than a menu admitting it has none.
-    func paired(_ models: [[String: Any]]) -> [(String, String)] {
-      models.prefix(32).compactMap {
-        guard let id = $0["id"] as? String, !id.isEmpty else { return nil }
-        return (id, $0["node"] as? String ?? "")
-      }
-    }
-    let parsed: [MenuGridSection]
-    if sections.isEmpty {
-      // Older Flutter pushes only `local` (the account's own grid). Fall back to one own section.
-      let own = paired(local)
-      parsed = own.isEmpty ? [] : [MenuGridSection(name: "", own: true, models: own)]
-    } else {
-      parsed = sections.prefix(16).compactMap { dict -> MenuGridSection? in
-        guard let name = dict["name"] as? String,
-              let own = dict["own"] as? Bool,
-              let models = dict["models"] as? [[String: Any]] else { return nil }
-        return MenuGridSection(name: name, own: own, models: paired(models))
-      }
-    }
-    guard entries != subscriptions || current != currentEngine
-            || !sectionsEqual(parsed, localSections) else { return }
-    subscriptions = entries
-    currentEngine = current
-    localSections = parsed
-    rebuildModelsMenu()
-  }
-
-  private func sectionsEqual(_ a: [MenuGridSection], _ b: [MenuGridSection]) -> Bool {
-    guard a.count == b.count else { return false }
-    for (x, y) in zip(a, b) {
-      guard x.name == y.name, x.own == y.own,
-            x.models.map({ $0.0 }) == y.models.map({ $0.0 }),
-            x.models.map({ $0.1 }) == y.models.map({ $0.1 }) else { return false }
-    }
-    return true
-  }
-
-  /// `(model id, node)` for every model the account's grids are serving, grouped by the grid that
-  /// serves it — the sections the picker draws, the account's own first.
-  private var localSections: [MenuGridSection] = []
-
-  /// The engine of the pane in focus, when that pane is running on its own subscription — so the
-  /// menu can mark WHICH account is being spent. Null while the focused pane is on a Local model,
-  /// which is on no subscription at all.
-  private var currentEngine: String?
-
-  private func rebuildModelsMenu() {
-    modelsMenu.removeAllItems()
-    func label(_ title: String, in menu: NSMenu) {
-      let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-      item.isEnabled = false
-      menu.addItem(item)
-    }
-    func section(_ title: String) {
-      if #available(macOS 14.0, *) {
-        modelsMenu.addItem(NSMenuItem.sectionHeader(title: title))
-      } else {
-        label(title, in: modelsMenu)
-      }
-    }
-    section("Subscriptions")
-    // One width across every section. Measuring them separately let the menu's halves size
-    // independently, so the trailing column stepped in or out at each section break.
-    let allModels = localSections.flatMap { $0.models }
-    let metered = subscriptions.contains { $0.remaining != nil }
-    let balanceColumn = SwarmSubscriptionView.balanceColumn(subscriptions)
-    let rowWidth = max(
-      subscriptions.map { SwarmSubscriptionView.preferredWidth($0, metered: metered) }.max() ?? 352,
-      allModels.map { SwarmSubscriptionView.preferredWidth(title: $0.0, account: "", status: $0.1) }.max() ?? 352)
-    for entry in subscriptions {
-      let item = NSMenuItem(title: entry.accessibilityLabel, action: nil, keyEquivalent: "")
-      // The tick marks the subscription the pane in focus is running on. A pane that has been moved
-      // to a Local model is on none of them, and then no row is ticked — which is the truth, not a
-      // gap: the menu would otherwise claim an account the agent is not spending.
-      item.view = SwarmSubscriptionView(entry: entry, width: rowWidth,
-        current: entry.engine != nil && entry.engine == currentEngine,
-        balanceColumn: balanceColumn)
-      item.isEnabled = false
-      modelsMenu.addItem(item)
-    }
-    if subscriptions.isEmpty {
-      label("Anthropic", in: modelsMenu)
-      label("OpenAI", in: modelsMenu)
-    }
-    // No API section. `OpenRouter` and `fal.ai` were placeholders with nothing behind them, and a
-    // menu naming providers this app cannot reach reads as a list of things you could pick. The
-    // section returns when there is a real source for it, not before.
-    modelsMenu.addItem(.separator())
-    // One section per grid, the account's own first. Its heading names the COMPUTER rather than the
-    // feature ("On this Mac"), because that is the fact that distinguishes it from the shared grids
-    // under it; a shared grid folds its name into its own heading rather than hanging it on a
-    // second line, which read as an entry of the same kind as the models beneath it.
-    if localSections.isEmpty {
-      section("On this Mac")
-    }
-    for (index, gridSection) in localSections.enumerated() {
-      if index > 0 { modelsMenu.addItem(.separator()) }
-      section(gridSection.own ? "On this Mac" : "Shared from \(gridSection.name)")
-      for (id, node) in gridSection.models {
-        // The same row view as the subscriptions above, so the menu reads as one list: the model id
-        // at full strength where a provider's name sits, and the node — which machine answers, the
-        // detail that makes a grid legible — in the trailing column the figures use. Local rows
-        // were plain disabled `NSMenuItem`s once, which AppKit greys wholesale, so a served model
-        // looked unavailable beside the accounts above.
-        let item = NSMenuItem(title: [id, node].filter { !$0.isEmpty }.joined(separator: ", "),
-          action: nil, keyEquivalent: "")
-        item.view = SwarmSubscriptionView(title: id, account: "", status: node,
-          icon: nil, width: rowWidth, accessibility: item.title)
-        item.isEnabled = false
-        modelsMenu.addItem(item)
-      }
-    }
-    modelsMenu.addItem(.separator())
-    let run = NSMenuItem(title: "Open Models…", action: #selector(menuAction(_:)), keyEquivalent: "")
-    run.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "models")
-    run.target = self
-    run.representedObject = "models"
-    modelsMenu.addItem(run)
   }
 
   private func updateHistory(_ rows: [[String: Any]], closed: [[String: Any]] = []) {
@@ -715,215 +560,6 @@ private struct SwarmMachineAgent: Equatable {
     iconAsset = row["iconAsset"] as? String
     canOpen = row["canOpen"] as? Bool == true
     stopped = row["stopped"] as? Bool == true
-  }
-}
-
-private struct SwarmSubscriptionEntry: Equatable {
-  let title: String
-  let account: String
-  let status: String
-  let details: [String]
-  let engine: String?
-  let iconAsset: String?
-  /// How much of the tightest window is left, 0…100. Absent whenever the status is not a figure —
-  /// "Usage unavailable", "Checking usage…" — so a meter is never drawn for a reading nobody has.
-  let remaining: Double?
-
-  init?(_ row: [String: Any]) {
-    guard let title = row["title"] as? String, !title.isEmpty,
-          let status = row["status"] as? String else { return nil }
-    self.title = title
-    account = row["account"] as? String ?? ""
-    self.status = status
-    details = Array((row["details"] as? [String] ?? [status]).prefix(16))
-    engine = row["engine"] as? String
-    iconAsset = row["iconAsset"] as? String
-    remaining = row["remainingPercent"] as? Double
-  }
-
-  /// Amber once the tightest window is nearly out, so the bar and the words agree.
-  static let lowWater: Double = 20
-
-  var isLow: Bool { (remaining ?? 100) <= Self.lowWater }
-
-  /// The figure, said the way the menu says it. Falls back to whatever sentence the reading had.
-  var balance: String { remaining.map { "\(Int($0.rounded(.down)))% left" } ?? status }
-
-  var accessibilityLabel: String {
-    [title, account, status].filter { !$0.isEmpty }.joined(separator: ", ")
-  }
-}
-
-
-
-/// Read-only account information, with aligned trailing balances. There is no
-/// action or submenu to suggest another step just to read the remaining usage.
-/// The quota meter: a track, and however much of it is left.
-///
-/// Drawn rather than an `NSProgressIndicator`, which carries a bezel and an animation this row has
-/// no use for and cannot recolour. Two rounded rects is the whole of it.
-private final class SwarmQuotaBar: NSView {
-  var fraction: CGFloat = 0 { didSet { needsDisplay = true } }
-  var tint: NSColor = .controlAccentColor { didSet { needsDisplay = true } }
-
-  override func draw(_ dirtyRect: NSRect) {
-    let radius = bounds.height / 2
-    NSColor.tertiaryLabelColor.withAlphaComponent(0.35).setFill()
-    NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
-    guard fraction > 0 else { return }
-    // Never thinner than its own height: a sliver narrower than the cap radius draws as a dot
-    // that reads as nothing left rather than as nearly nothing left.
-    let width = max(bounds.height, bounds.width * min(1, fraction))
-    tint.setFill()
-    NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: width, height: bounds.height),
-      xRadius: radius, yRadius: radius).fill()
-  }
-}
-
-private final class SwarmSubscriptionView: NSView {
-  private static let rowFont = NSFont.menuFont(ofSize: 0)
-  let identity = NSTextField(labelWithString: "")
-  let balance = NSTextField(labelWithString: "")
-  private let icon = NSImageView()
-  private let meter = SwarmQuotaBar()
-  private let tick = NSImageView()
-  /// The meter's own column, when the row has one. Wide enough to read as a quantity at a glance
-  /// and narrow enough to leave the identity its own room.
-  private static let meterWidth: CGFloat = 76
-  /// The tick's column, RESERVED on every row so a row becoming the current one does not shift
-  /// the figure beside it.
-  private static let tickWidth: CGFloat = 18
-
-  private static func textWidth(_ text: String) -> CGFloat {
-    // Include the native text cell's horizontal drawing insets. Measuring only
-    // glyphs or a label already constrained by its frame can clip the status.
-    ceil((text as NSString).size(withAttributes: [.font: rowFont]).width) + 8
-  }
-
-  static func preferredWidth(_ entry: SwarmSubscriptionEntry) -> CGFloat {
-    preferredWidth(title: entry.title, account: entry.account, status: entry.status)
-  }
-
-  static func preferredWidth(title: String, account: String, status: String) -> CGFloat {
-    let identityWidth = textWidth(title + "  " + account)
-    let balanceWidth = textWidth(status)
-    return min(576, max(352, identityWidth + balanceWidth + 88))
-  }
-
-  static func preferredWidth(_ entry: SwarmSubscriptionEntry, metered: Bool) -> CGFloat {
-    let base = preferredWidth(title: entry.title, account: entry.account, status: entry.balance)
-    return metered ? min(576, base + meterWidth + 12) : base
-  }
-
-  /// The orange a nearly-spent account is written in, legible in both appearances.
-  ///
-  /// `.systemOrange` is tuned to be *seen*, not to be *read*: on the light menu
-  /// it measures 1.86:1 against the panel, where text wants 4.5:1. It is only
-  /// right on the dark one, where it reaches 6.44:1. The light side takes the
-  /// same hue carried down to #A85400 (4.52:1). Measured with tool/contrast.py.
-  static let lowInk = NSColor(name: "harnessLowInk") { appearance in
-    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-      ? .systemOrange
-      : NSColor(srgbRed: 168 / 255, green: 84 / 255, blue: 0, alpha: 1)
-  }
-
-  /// What the trailing figures need to share a column — the widest of them.
-  static func balanceColumn(_ entries: [SwarmSubscriptionEntry]) -> CGFloat {
-    entries.map { textWidth($0.balance) }.max() ?? 0
-  }
-
-  convenience init(entry: SwarmSubscriptionEntry, width: CGFloat, current: Bool,
-                   balanceColumn: CGFloat) {
-    self.init(title: entry.title, account: entry.account.isEmpty ? "" : "···" + entry.account,
-      status: entry.balance, icon: nil, width: width,
-      accessibility: entry.accessibilityLabel + (current ? ", current" : ""),
-      tint: nil, meter: entry.remaining.map { $0 / 100 },
-      meterTint: entry.isLow ? Self.lowInk : .controlAccentColor,
-      balanceTint: entry.isLow ? Self.lowInk : .secondaryLabelColor,
-      showsTick: current, balanceColumn: balanceColumn)
-  }
-
-  /// Every row in this menu is built here, subscription or local. Sharing the construction is what
-  /// keeps the two sections reading as one menu: same font, same label/secondary split, same icon
-  /// column, same right-aligned trailing field. Local rows were plain disabled `NSMenuItem`s before,
-  /// which AppKit greys wholesale, so a served model looked unavailable beside the accounts above.
-  init(title primary: String, account: String, status: String, icon: NSImage?, width: CGFloat,
-       accessibility: String, tint: NSColor? = nil, meter: Double? = nil,
-       meterTint: NSColor = .controlAccentColor, balanceTint: NSColor = .secondaryLabelColor,
-       showsTick: Bool = false, balanceColumn: CGFloat = 0) {
-    super.init(frame: NSRect(x: 0, y: 0, width: width, height: 26))
-    autoresizingMask = [.width]
-    self.icon.image = icon
-    self.icon.imageScaling = .scaleProportionallyDown
-    // Brand artwork carries its own colour; an SF Symbol arrives as a template and would paint flat
-    // black without this, which reads as a hole in the row on a dark menu.
-    self.icon.contentTintColor = tint
-    let title = NSMutableAttributedString(string: primary,
-      attributes: [.font: Self.rowFont, .foregroundColor: NSColor.labelColor])
-    if !account.isEmpty {
-      title.append(NSAttributedString(string: "  " + account,
-        attributes: [.font: Self.rowFont, .foregroundColor: NSColor.secondaryLabelColor]))
-    }
-    identity.attributedStringValue = title
-    identity.usesSingleLineMode = true
-    identity.lineBreakMode = .byTruncatingMiddle
-    balance.stringValue = status
-    balance.font = Self.rowFont
-    balance.textColor = balanceTint
-    balance.alignment = .right
-    balance.usesSingleLineMode = true
-    balance.lineBreakMode = .byClipping
-    self.meter.isHidden = meter == nil
-    self.meter.fraction = CGFloat(meter ?? 0)
-    self.meter.tint = meterTint
-    self.hasMeter = meter != nil
-    self.balanceColumn = balanceColumn
-    tick.image = showsTick
-      ? NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
-      : nil
-    tick.contentTintColor = .labelColor
-    tick.imageScaling = .scaleProportionallyDown
-    for view in [self.icon, identity, balance, self.meter, tick] {
-      addSubview(view)
-      view.setAccessibilityElement(false)
-    }
-    setAccessibilityElement(true)
-    setAccessibilityRole(.staticText)
-    setAccessibilityLabel(accessibility)
-    layout()
-  }
-
-  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-  private var hasMeter = false
-
-  /// The width every row's trailing figure is laid out in, so the meters beside them start at one
-  /// x rather than each one floating off the width of its own text.
-  ///
-  /// Sizing the figure to itself right-aligns the TEXT correctly — every row shares a right edge —
-  /// but it moves that column's LEFT edge per row, and the meter hangs off that. `7% left` is
-  /// narrower than `78% left`, so one bar began further right than the other and the two read as
-  /// different lengths. Zero means "size to my own text", for rows with no meter to align.
-  private var balanceColumn: CGFloat = 0
-
-  override func layout() {
-    super.layout()
-    icon.frame = NSRect(x: 16, y: (bounds.height - 16) / 2, width: 16, height: 16)
-    let height = ceil(Self.rowFont.ascender - Self.rowFont.descender + Self.rowFont.leading)
-    // The tick's column is reserved whether or not this row draws one — see [tickWidth].
-    tick.frame = NSRect(x: bounds.width - 16 - 13, y: (bounds.height - 13) / 2, width: 13, height: 13)
-    let balanceWidth = max(balanceColumn, Self.textWidth(balance.stringValue))
-    balance.frame = NSRect(x: bounds.width - 16 - Self.tickWidth - balanceWidth,
-      y: (bounds.height - height) / 2, width: balanceWidth, height: height)
-    if hasMeter {
-      meter.frame = NSRect(x: balance.frame.minX - 10 - Self.meterWidth,
-        y: (bounds.height - 5) / 2, width: Self.meterWidth, height: 5)
-    }
-    // No icon column: the rows carry no artwork, so the text starts where a menu's text starts.
-    let identityLeft: CGFloat = icon.image == nil ? 16 : 40
-    let identityRight = hasMeter ? meter.frame.minX : balance.frame.minX
-    identity.frame = NSRect(x: identityLeft, y: balance.frame.minY,
-      width: max(0, identityRight - 16 - identityLeft), height: height)
   }
 }
 
@@ -1535,7 +1171,6 @@ private final class SwarmTabStrip: NSView {
     modelsButton.isEnabled = actionsEnabled
     modelsButton.state = state["modelsOpen"] as? Bool == true ? .on : .off
     modelsButton.attention = max(0, state["modelNotices"] as? Int ?? 0)
-    modelsButton.toolTip = "Models"
     let modelExpanded = modelsButton.state == .on ? "Expanded" : "Collapsed"
     modelsButton.setAccessibilityValue(modelsButton.attention > 0
       ? "\(modelExpanded), \(modelsButton.attention) \(modelsButton.attention == 1 ? "model" : "models") ready to use" : modelExpanded)

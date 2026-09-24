@@ -129,10 +129,10 @@ void main() {
 
   /// The welcome page is terminal text: the terminal's face at its size.
   void checkWelcome(WidgetTester tester) {
-    final line = tester.widget<Text>(find.text('Follow your curiosity.'));
-    final style = DefaultTextStyle.of(
-      tester.element(find.text('Follow your curiosity.')),
-    ).style.merge(line.style);
+    final tagline = find.byKey(const ValueKey('welcome-tagline'));
+    final line = tester.widget<Text>(tagline);
+    final style = DefaultTextStyle.of(tester.element(tagline)).style
+        .merge(line.style);
     expect(style.fontSize, terminalFontStore.size);
     expect(style.fontFamily, terminalFontStore.value.fontFamily);
   }
@@ -257,11 +257,17 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       final box = checkText(tester, atLeast: 1);
-      expect(tester.widget<Text>(find.text('New Harness')).style!.fontSize, 18);
+      expect(
+        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
+        18,
+      );
       selectFont(22);
       await tester.pumpAndSettle();
       expectSameSizes(box, checkText(tester, atLeast: 1));
-      expect(tester.widget<Text>(find.text('New Harness')).style!.fontSize, 22);
+      expect(
+        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
+        22,
+      );
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
         LogicalKeyboardKey.keyO,
