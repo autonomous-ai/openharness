@@ -228,7 +228,7 @@ void main() {
       for (final next in [
         reading(reset: instant),
         reading(session: double.nan),
-        reading(fetched: instant.subtract(const Duration(minutes: 3))),
+        reading(fetched: instant.subtract(const Duration(minutes: 61))),
       ]) {
         value = next;
         now = now.add(const Duration(minutes: 1));
@@ -238,6 +238,71 @@ void main() {
       }
     },
   );
+
+  test(
+    'an expired reading says "Checking usage…" while the next read runs',
+    () async {
+      var now = instant;
+      var answer = Completer<ProviderUsage>();
+      final source = _Source(UsageProvider.claude, () => answer.future);
+      final usage = UsageController(sources: [source], autoStart: false);
+      final menu = ModelsMenuController(usage: usage, now: () => now);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      final first = menu.refresh();
+      answer.complete(reading());
+      await first;
+      expect(menu.rows.single['status'], '15% remaining');
+
+      now = now.add(const Duration(minutes: 61));
+      expect(menu.rows.single['status'], 'Usage unavailable');
+      answer = Completer<ProviderUsage>();
+      final second = menu.refresh();
+      expect(menu.rows.single['status'], 'Checking usage…');
+      expect(menu.rows.single['remainingPercent'], isNull);
+      answer.complete(reading(fetched: now));
+      await second;
+      expect(menu.rows.single['status'], '15% remaining');
+    },
+  );
+
+  test(
+    'a cached figure stays for up to an hour and says how old it is',
+    () async {
+      var now = instant;
+      final source = _Source(UsageProvider.claude, () async => reading());
+      final usage = UsageController(sources: [source], autoStart: false);
+      final menu = ModelsMenuController(usage: usage, now: () => now);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      await menu.refresh();
+      now = now.add(const Duration(minutes: 30));
+      expect(menu.rows.single['status'], '15% remaining');
+      expect(menu.rows.single['details'], contains('Read 30 min ago'));
+    },
+  );
+
+  test('a failed read keeps the last good figure', () async {
+    var fail = false;
+    final source = _Source(
+      UsageProvider.claude,
+      () async => fail
+          ? const ProviderUsage(
+              provider: UsageProvider.claude,
+              status: UsageStatus.failed,
+            )
+          : reading(),
+    );
+    final usage = UsageController(sources: [source], autoStart: false);
+    final menu = ModelsMenuController(usage: usage, now: () => instant);
+    addTearDown(usage.dispose);
+    addTearDown(menu.dispose);
+    await usage.refresh();
+    fail = true;
+    await usage.refresh();
+    expect(source.calls, 2);
+    expect(menu.rows.single['status'], '15% remaining');
+  });
 
   test(
     'a positive fraction of remaining usage is not rounded to zero',

@@ -283,8 +283,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     unawaited(_projects.load());
     unawaited(_navigation.load());
     _spokenTasks = app.spokenTasks.listen(_openSpokenTask);
-    _modelsMenu =
-        widget.modelsMenu ?? ModelsMenuController(remote: app.readRemoteUsage);
+    // The app's shared controller, so this menu and every pane's model picker show one reading.
+    _modelsMenu = widget.modelsMenu ?? app.modelsMenu;
     app.modelManager.addListener(_modelManagerChanged);
     _modelsRequests = app.modelsRequests.listen((_) {
       if (mounted && _modelsOverlay == null) {
@@ -293,7 +293,10 @@ class _SwarmScreenState extends State<SwarmScreen>
     });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) app.modelManager.start();
+        if (!mounted) return;
+        app.modelManager.start();
+        // Subscription usage is read ahead, so opening a menu shows it without waiting.
+        _modelsMenu!.start();
       });
     }
     if (_native) {
@@ -381,7 +384,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
-    if (widget.modelsMenu == null) _modelsMenu?.dispose();
     if (_native) {
       unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
       app.removeListener(_syncNative);

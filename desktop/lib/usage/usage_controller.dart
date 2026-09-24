@@ -134,6 +134,12 @@ class UsageController extends ChangeNotifier {
     // backwards.
     if (_disposed || request != _request) return;
     for (final result in results) {
+      // A failed read keeps the last good figures, as the class promises: a network hiccup or a
+      // rate-limited request used to replace a live reading with "Usage unavailable".
+      final previous = _readings[result.provider];
+      if (result.status == UsageStatus.failed && previous?.hasFigures == true) {
+        continue;
+      }
       _readings[result.provider] = result;
     }
     _landed = true;
