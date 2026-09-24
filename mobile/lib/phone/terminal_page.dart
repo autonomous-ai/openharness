@@ -1463,6 +1463,7 @@ class _TerminalPageState extends State<TerminalPage>
                               TerminalHeader(
                                 agent: agent,
                                 status: headerStatus,
+                                machineName: machine?.machine.displayName,
                                 trailing: [
                                   // Read-only is a state to get OUT of, so its way
                                   // out is a labelled button in the header rather
