@@ -5877,9 +5877,7 @@ class AppNotifier extends ChangeNotifier {
       if (!tab.nameIsCustom &&
           tab.titleMachineId == machine.machine.machineId &&
           tab.titleAgentId == agent.id) {
-        final title = agent.displayName == kUntitledPane
-            ? Swarm.defaultName
-            : agent.displayName;
+        final title = Swarm.titleFor(agent);
         if (tab.name != title) {
           tab.name = title;
           changed = true;
@@ -8916,9 +8914,7 @@ class AppNotifier extends ChangeNotifier {
           .firstOrNull;
       target.titleMachineId = machineId;
       target.titleAgentId = agentId;
-      target.name = agent == null || agent.displayName == kUntitledPane
-          ? Swarm.defaultName
-          : agent.displayName;
+      target.name = Swarm.titleFor(agent);
     }
     if (replaced != null && !allPanes.contains(replaced)) {
       // Release just the desktop stream. The CLI agent process keeps running.
@@ -9482,9 +9478,7 @@ class AppNotifier extends ChangeNotifier {
             .firstOrNull;
         target.titleMachineId = pane.machineId;
         target.titleAgentId = pane.agentId;
-        target.name = agent == null || agent.displayName == kUntitledPane
-            ? Swarm.defaultName
-            : agent.displayName;
+        target.name = Swarm.titleFor(agent);
       }
       for (final viewer in viewers) {
         if (target.panes.length >= maxPanes) break;

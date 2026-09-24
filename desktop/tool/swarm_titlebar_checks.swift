@@ -114,7 +114,9 @@ private extension SwarmTabStrip {
     let engineIcon = tab.icon
     try checkTitlebar(engineIcon != nil && engineIcon?.isTemplate == false, "A single-agent tab shows its engine mark")
     show(2)
-    try checkTitlebar(tabs[0] === tab && tab.icon === SwarmIdentity.menuIcon, "Adding an agent changes the icon while retaining the tab control")
+    try checkTitlebar(tabs[0] === tab && tab.icon == nil, "A tab of several harnesses carries its name alone, and keeps the tab control")
+    show(0)
+    try checkTitlebar(tabs[0] === tab && tab.icon == nil, "An empty tab carries its name alone")
     show(1, engine: "claude")
     try checkTitlebar(tabs[0] === tab && tab.icon === engineIcon, "Closing back to one agent restores the cached engine icon")
   }

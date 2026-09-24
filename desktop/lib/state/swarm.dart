@@ -1,6 +1,7 @@
 import 'dart:ui' show Size;
 
-import '../core/models.dart' show isAutomaticHarnessName;
+import '../core/models.dart'
+    show Agent, isAutomaticHarnessName, kUntitledPane;
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'terminal_pane.dart';
@@ -37,10 +38,10 @@ class Swarm {
   String? orchestratorId, orchestratorMachineId;
   static const storeName = 'Harness Store';
 
-  static const defaultName = 'Untitled Tab';
-  // 'New Harness' was the default until 2026-09-15 and 'New Agent' for a day
-  // after; a layout saved then still carries one, and it must read as the same
-  // fresh tab.
+  static const defaultName = 'New Tab';
+  // 'New Harness' was the default until 2026-09-15, 'New Agent' for a day
+  // after, and 'Untitled Tab' until 2026-09-24; a layout saved then still
+  // carries one, and it must read as the same fresh tab.
   static String normalizeName(String name) =>
       const {
             'New swarm',
@@ -48,6 +49,7 @@ class Swarm {
             'New Tab',
             'New Harness',
             'New Agent',
+            'Untitled Tab',
           }.contains(name) ||
           isAutomaticHarnessName(name)
       ? defaultName
@@ -71,6 +73,18 @@ class Swarm {
   int? previousPaneId;
   int? gridColumns;
   final Map<int, int> pinnedSlots = {};
+
+  /// What a tab is called after the first harness opened into it: that
+  /// harness's project — the folder it works in, as the pane header shows it —
+  /// because a tab holds a piece of work, and the work is where the harness is
+  /// (owner, 2026-09-24). A harness with no project falls back to its own name,
+  /// and one with neither leaves the tab new.
+  static String titleFor(Agent? agent) {
+    final project = agent?.project?.label.trim();
+    if (project != null && project.isNotEmpty) return project;
+    if (agent == null || agent.displayName == kUntitledPane) return defaultName;
+    return agent.displayName;
+  }
 
   bool get isEmptyStarter =>
       name == defaultName && panes.isEmpty && presets.isEmpty;

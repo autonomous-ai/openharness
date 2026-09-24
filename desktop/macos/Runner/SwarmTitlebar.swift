@@ -1510,13 +1510,15 @@ private final class SwarmTabStrip: NSView {
       let count = row["agentCount"] as? Int ?? 0
       // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
       let store = row["kind"] as? String == "store"
+      // Only a mark that says something: the engine of a tab's one harness, or
+      // the Store's own. The grid a tab of several wore and the plus of an
+      // empty one said "tab" on a tab (owner, 2026-09-24), so those tabs carry
+      // their name alone.
       tab.icon = store
         ? icons.image(engine: "store", asset: row["iconAsset"] as? String)
         : count == 1
         ? icons.image(engine: row["engine"] as? String, asset: row["iconAsset"] as? String)
-        : count > 1
-        ? SwarmIdentity.menuIcon
-        : NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
+        : nil
       tab.selected = id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
@@ -1879,8 +1881,17 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let trailing = shortcut.map { value in
         max(42, ceil(("⌘\(value)" as NSString).size(withAttributes: [.font: badgeFont]).width) + 22)
       } ?? 42
-      label.draw(in: NSRect(x: 46, y: contentCenterY - labelHeight / 2,
-        width: max(0, bounds.width - 46 - trailing), height: labelHeight))
+      // Without a mark the name takes the mark's place rather than leaving a hole.
+      let x: CGFloat = icon == nil ? 22 : 46
+      label.draw(in: NSRect(x: x, y: contentCenterY - labelHeight / 2,
+        width: max(0, bounds.width - x - trailing), height: labelHeight))
+    } else if icon == nil, label.length > 0 {
+      // Too narrow for the name and no mark to stand in: its first letter.
+      let initial = NSAttributedString(string: String(name.prefix(1)),
+        attributes: label.attributes(at: 0, effectiveRange: nil))
+      let size = initial.size()
+      initial.draw(at: NSPoint(x: ((bounds.width - size.width) / 2).rounded(),
+        y: contentCenterY - size.height / 2))
     }
     if attention {
       NSColor.systemOrange.setFill()
