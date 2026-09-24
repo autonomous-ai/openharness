@@ -433,9 +433,19 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
         // A keyboard lifts the sheet whole, at the height it rests at. Only
         // the ceiling stops it: a keyboard that leaves less room than that
         // shortens the sheet instead.
+        //
+        // ⚠️ **Read from the view HERE, not from the notifier's last value.**
+        // [_keyboard] is written from metrics ticks and is what makes this
+        // rebuild, but the value it holds can be a frame behind the page: a
+        // tick that lands while the page has already grown back left the sheet
+        // lifted by a keyboard that was no longer there, floating at the top of
+        // the screen over a band of empty background — which is what opening
+        // search from a keyboard looked like.
+        final view = View.of(context);
+        final keyboard = view.viewInsets.bottom / view.devicePixelRatio;
         final covered = math.min(
           area.height,
-          math.max(0.0, area.height - (screen - _keyboard.value)),
+          math.max(0.0, area.height - (screen - keyboard)),
         );
         final height = math.min(
           resting,

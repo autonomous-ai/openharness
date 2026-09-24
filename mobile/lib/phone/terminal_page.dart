@@ -1282,6 +1282,20 @@ class _TerminalPageState extends State<TerminalPage>
       // turning it off.
       body: Stack(
         children: [
+          // ⚠️ **What gives this Stack the window's height instead of the
+          // page's.** A Stack is as tall as its tallest NON-POSITIONED child,
+          // and that child is the column below — whose terminal is frozen at
+          // the height it had when search opened (see [HeldHeight]). With a
+          // keyboard up at that moment the column is a keyboard shorter than
+          // the screen, so the search sheet, laid over this Stack, was clipped
+          // to a box that ended a keyboard's height above the bottom: it drew
+          // at the top of the screen with a band of empty page under it, long
+          // after the keyboard had gone.
+          //
+          // An empty box that asks for everything is enough. It paints nothing
+          // and takes no hits; it only stops the Stack from inheriting a height
+          // that belongs to something being deliberately held still.
+          const SizedBox.expand(),
           MediaQuery.removePadding(
             context: context,
             removeBottom: true,
