@@ -4512,6 +4512,8 @@ static char *dup_str(const char *s)
                            + 2 * RECAP_CARD_PAD_V + 2)
 
 static void tile_layout_apply(proj_t *p);   // the tile's two layouts, chosen by state — defined with its macros below
+static void tile_center_if_cardless(proj_t *p);  // …and the half of it that measures, defined beside it
+static void ev_body_resized(lv_event_t *e);      // the body grew mid-turn → centre it again
 static void shell_name_fit(proj_t *p);       // the name's width and line budget — defined with the header
 
 // The tile after a turn: WHAT it did, in a line. Built into p->list from the model (m_preview is what says
@@ -4530,7 +4532,7 @@ static void render_recap_block(proj_t *p)
     char *reader_text = dup_str(p->m_full ? p->m_full : p->m_preview);
     if (!reader_text) return;
     if (p->empty) { lv_obj_delete(p->empty); p->empty = NULL; }
-    tile_layout_apply(p);   // a card needs the room below the name
+    tile_layout_apply(p);   // drop the centred rest; a card is anchored
 
     // The card: flat dark surface, hairline edge. Not a gradient — that version merged into the black face
     // and read as nothing at all — and not a shadow, which costs a temp layer on the tile that is on screen
@@ -4602,11 +4604,13 @@ static void render_recap_block(proj_t *p)
     p->card = card;                            // ui_tap hit-tests against this, and only this
     lv_obj_set_user_data(card, reader_text);   // ev_card_free frees this
     lv_obj_add_event_cb(card, ev_card_free, LV_EVENT_DELETE, NULL);   // the reader opens on a tap, not a card tap
+    tile_layout_apply(p);   // again, now the card's real height is the thing being measured against
 }
 
 // Build the Figma "working" status into p->body from the model. A centred block: a green "<verb> <elapsed>"
 // line + a grey teaser (last recap). No spinning sparkle — the green LED ring is the loading indicator now.
-// Also recentres the whole tile ([name][busy]) vertically for this state (clear_busy restores the recap layout).
+// Also recentres the whole tile ([tab line][name][busy]) vertically for this state — see tile_layout_apply;
+// clear_busy re-applies it, and a recap arriving is what puts the tile back on the fixed anchor.
 static void render_busy_row(proj_t *p)
 {
     if (!p->body || p->busy) return;
@@ -4625,6 +4629,7 @@ static void render_busy_row(proj_t *p)
     lv_obj_set_style_text_color(p->busy_verb, COL_VOICE, 0);   // Figma #00ff2f
     p->busy_meta = NULL;   // no stale-recap teaser here; live activity shows via tool_line when the backend sends it
     busy_compose(p);
+    tile_layout_apply(p);   // again, now the verb line has its text and therefore its height
 }
 
 // Agent-tile vertical rhythm. Set in TWO places (build + the restore after a busy turn), so keep it here:
@@ -4639,12 +4644,28 @@ static void render_busy_row(proj_t *p)
 // 11 → 21 as what sits under the name changed shape and then asked for more air around it.
 #define TILE_NAME_GAP   21
 
-// THE TILE HAS ONE LAYOUT. It used to have two — top-anchored under a recap card, centred on the glass
-// for "Working…" and "No activity yet" — and the name jumped a band between them at every turn start
-// and end. With the previous/next pair on the bottom arc that jump became a thing the thumb had to
-// chase (owner, 2026-09-22: "cùng chung bố cục, không có dịch chuyển"), so every state now sits where
-// the recap layout put it: the pill at y=69, the name at y=119, and whatever the state has to say —
-// the card, the working line, the placeholder — at TILE_NAME_GAP under the name.
+// The action arc — Goal / prev / next / Loop, built at y=322 in agent_actions_apply — and the air the
+// centred layout keeps above it. Named here because tile_center_if_cardless has to know where the
+// bottom of the face stops being free.
+#define TILE_ARC_Y      322
+#define TILE_ARC_GAP    20
+
+// ONE ANCHOR, TWO RESTING PLACES — and which one a tile uses is decided by whether it has a card.
+//
+// History, because this went back and forth. It had two layouts, then one: the name used to jump a band
+// between them at every turn start and end, and with the previous/next pair on the bottom arc that jump
+// was a thing the thumb had to chase (owner, 2026-09-22: "cùng chung bố cục, không có dịch chuyển"), so
+// every state was pinned where the recap layout put it — pill at y=69, name at y=119, body 21px under it.
+//
+// What that pinning costs the OTHER two states is visible in the dial log's own `tile:` line. The recap
+// card is 119px tall and lands the block's middle at y=214 against a glass middle of 232 — near enough.
+// "Working…" and the resting placeholder are a single 51px line, and at the same anchor their middle
+// falls at y=180: 52px high, with most of the face empty underneath. So those two centre themselves and
+// the card keeps the fixed anchor (owner, 2026-09-24).
+//
+// THE MOVEMENT IS BACK, AND IT IS THE POINT. A turn starting or ending changes which resting place the
+// tile uses, so the block slides. That is the trade the 2026-09-22 note refused and this one accepts —
+// what was wrong then was the jump, what is wrong now is the empty half-screen.
 static void tile_layout_apply(proj_t *p)
 {
     if (!p->tile) return;
@@ -4652,6 +4673,67 @@ static void tile_layout_apply(proj_t *p)
     lv_obj_set_style_pad_top(p->tile, TILE_PAD_TOP, 0);
     lv_obj_set_style_pad_row(p->tile, TILE_NAME_GAP, 0);
     shell_name_fit(p);   // the name's line budget follows the state
+    tile_center_if_cardless(p);
+}
+
+// Slide the block down until its middle is the glass's, for the states that have no card to fill the face.
+//
+// Measured, not computed from constants: the block's height is the name's line count plus whatever the
+// body grew to, and both are LVGL's answer rather than ours. So the fixed anchor is applied first (the
+// caller has just done that), the layout is settled, and the pad absorbs the difference.
+//
+// WHAT IS CENTRED IS [name .. body], not [tab line .. body] — measured, tried on the glass, and the
+// difference is 26px of the wrong thing. The tab line floats a band above the name, so counting it
+// pushes everything 26px lower: the name lands at y=197 and the body's bottom at y=320, two pixels off
+// the action arc at y=322. Centring the name and what it says leaves the pill riding above the pair,
+// which is where it rides in the recap layout too, and the block ends at y=294 — clear of the arc.
+//
+// It is also the block the `tile:` log line has always measured, so the two agree and a layout change
+// stays checkable from the dial log without eyes on the device.
+//
+// ARITHMETIC, NOT COORDINATES, because this also runs from the body's own size-changed event and asking
+// LVGL to settle a layout from inside one is not allowed. Heights are all it needs, and it reproduces
+// the measured answer exactly: 466/2 − (51 + 21 + 51)/2 = 171, which is where the name sits.
+static int32_t tile_block_pad(proj_t *p)
+{
+    const int32_t block_h = lv_obj_get_height(p->name_lbl) + TILE_NAME_GAP + lv_obj_get_height(p->body);
+    int32_t pad = lv_obj_get_height(p->tile) / 2 - block_h / 2;
+    // Two rims to stay inside, because a centred block grows in BOTH directions and a working tile's
+    // body is whatever the daemon has streamed into it — a tool line, a sub-agent list, a checklist.
+    // Below: the action arc's buttons sit at y=322 and the body must not reach them.
+    const int32_t most = TILE_ARC_Y - TILE_ARC_GAP - block_h;
+    if (pad > most) pad = most;
+    // Above: the floating tab line is drawn OUTSIDE the header's box, so nothing else stops a tall
+    // block from lifting it off the glass. On a round face the rim eats the corners, hence a margin.
+    const int32_t least = ctl_band_h() + 24;
+    if (pad < least) pad = least;
+    return pad;
+}
+
+// Slide the block until its middle is the glass's, for the states that have no card to fill the face.
+// [settled] false when the caller is the body's size-changed event, which arrives mid-layout.
+static void tile_center_apply(proj_t *p, bool settled)
+{
+    if (!p->tile || !p->name_lbl || !p->body) return;
+    if (p->m_preview && !p->busy_model) return;   // a card holds the face up on its own
+    if (settled) lv_obj_update_layout(p->tile);
+    const int32_t pad = tile_block_pad(p);
+    if (lv_obj_get_style_pad_top(p->tile, 0) != pad) lv_obj_set_style_pad_top(p->tile, pad, 0);
+}
+
+static void tile_center_if_cardless(proj_t *p) { tile_center_apply(p, true); }
+
+// A WORKING TILE KEEPS GROWING AFTER IT IS BUILT, and that is what the first attempt at this missed.
+// render_busy_row puts one verb line in the body and centres it, and then the daemon streams the rest
+// in through ui_project_set_tool / _set_agents / _set_todos — each of which changes the body's height
+// and none of which goes anywhere near the layout. So the tile was centred for the half-second before
+// the first tool line landed and crooked for the rest of the turn.
+//
+// Hooking the body's own size is what covers all of them, including whichever one gets added next.
+static void ev_body_resized(lv_event_t *e)
+{
+    proj_t *p = (proj_t *)lv_event_get_user_data(e);
+    if (p) tile_center_apply(p, false);
 }
 
 
@@ -4904,6 +4986,7 @@ static void materialize_content(int i)
     lv_obj_set_flex_align(p->body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(p->body, 12, 0);
     lv_obj_clear_flag(p->body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(p->body, ev_body_resized, LV_EVENT_SIZE_CHANGED, p);   // see ev_body_resized
 
     p->list = lv_obj_create(p->body);
     lv_obj_remove_style_all(p->list);
@@ -6440,7 +6523,7 @@ static void clear_busy(proj_t *p)
     p->busy_verb = NULL; p->busy_meta = NULL; p->busy_icon = NULL; p->busy_tokens = 0; p->busy_last_ms = 0;
     if (p->todo) { lv_obj_delete(p->todo); p->todo = NULL; p->todo_active = NULL; }  // drop the checklist
     if (p->list) { lv_obj_clear_flag(p->list, LV_OBJ_FLAG_HIDDEN); lv_obj_set_style_opa(p->list, LV_OPA_COVER, 0); }
-    tile_layout_apply(p);   // a recap card takes the top-anchored layout; nothing yet stays centred
+    tile_layout_apply(p);   // the card is gone → whatever is left centres itself again
     overview_working_apply();   // this agent stopped working → refresh the Overview "N working" count
     agent_actions_apply();      // …and the actions come back on the tile
 }
