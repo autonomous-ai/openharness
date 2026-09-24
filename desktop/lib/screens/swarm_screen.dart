@@ -228,7 +228,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   String? _nativeState;
   List<Object?>? _machinesPresentation;
   ModelsMenuController? _modelsMenu;
-  String? _modelsState;
   final _defaultKeymap = AppKeymap();
   AppKeymap? _providedKeymap;
   AppKeymap get _keymap => _providedKeymap ?? _defaultKeymap;
@@ -298,14 +297,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       });
     }
     if (_native) {
-      _modelsMenu!.addListener(_syncModels);
-      // Same trigger as the subscription rows: the daemon memoises its answer, so opening the menu
-      // repeatedly costs nothing after the first.
-      unawaited(_refreshLocalModels());
       _channel.setMethodCallHandler(_onNative);
       app.addListener(_syncNative);
       _syncNative();
-      _syncModels();
     }
   }
 
@@ -387,12 +381,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
-    _modelsMenu?.removeListener(_syncModels);
     if (widget.modelsMenu == null) _modelsMenu?.dispose();
     if (_native) {
-      unawaited(
-        _channel.invokeMethod<void>('modelsState', {'subscriptions': []}),
-      );
       unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
       app.removeListener(_syncNative);
       _channel.setMethodCallHandler(null);
@@ -759,10 +749,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   void _syncNative() {
-    // ⚠️ Also from here, not only from `initState`. At init the machine list is still empty, so the
-    // first read returned nothing and the Local section sat on its empty state forever. This fires
-    // on every app change, throttled, so it lands as soon as a machine appears.
-    unawaited(_refreshLocalModels());
     _syncMachines();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
@@ -959,113 +945,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     );
   }
 
-  void _syncModels() {
-    final payload = {
-      'subscriptions': _modelsMenu?.rows ?? [],
-      // Which subscription the menu marks as the one in use. The pane in focus decides, because
-      // "which account am I spending" is a question about the agent being looked at; a pane that
-      // has been moved onto a Local model is on no subscription, and then nothing is marked.
-      'currentEngine': _currentSubscriptionEngine(),
-      // Back-compat: the own grid's models, as the native menu understood them before sections.
-      'local': [
-        for (final s in _localSections)
-          if (s.own)
-            for (final m in s.models) {'id': m.id, 'node': m.node},
-      ],
-      // The picker's sections, own grid first then each shared grid — what the native menu draws.
-      'sections': [
-        for (final s in _localSections)
-          {
-            'name': s.name,
-            'own': s.own,
-            'models': [
-              for (final m in s.models) {'id': m.id, 'node': m.node},
-            ],
-          },
-      ],
-    };
-    final encoded = jsonEncode(payload);
-    if (encoded == _modelsState) return;
-    _modelsState = encoded;
-    unawaited(_channel.invokeMethod<void>('modelsState', payload));
-  }
-
-  /// The focused pane's engine while that pane runs on its own login, else null.
-  String? _currentSubscriptionEngine() {
-    final pane = app.focusedPane;
-    if (pane == null) return null;
-    final agent = app.machineStates[pane.machineId]?.agents
-        .where((a) => a.id == pane.agentId)
-        .firstOrNull;
-    if (agent == null || agent.gridModel != null) return null;
-    return agent.engine?.trim().toLowerCase();
-  }
-
-  /// What the picker's sections answer for the native Models menu.
-  ///
-  /// Read from a machine this window is connected to — the grid is per ACCOUNT, so any of them
-  /// answers the same, and the local one is asked first because its daemon is a loopback away.
-  /// Never throws and never blocks the menu: a machine that cannot answer leaves the list as it was.
-  List<GridSection> _localSections = const [];
-
-  DateTime? _localModelsAt;
-
-  Future<void> _refreshLocalModels() async {
-    final machines = app.machines
-        .where((machine) => !machine.isShared)
-        .toList();
-    if (machines.isEmpty) return;
-    // The daemon memoises its answer, so a repeat is nearly free — but this is called on every app
-    // change, and an RPC per keystroke-sized notification is not free. One read per window is
-    // plenty for a list that changes when someone starts or stops serving a model.
-    final now = DateTime.now();
-    final last = _localModelsAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 10)) {
-      return;
-    }
-    _localModelsAt = now;
-    final preferred = machines.firstWhere(
-      (m) => app.stateOf(m.machineId)?.isLocalMachine == true,
-      orElse: () => machines.first,
-    );
-    final answer = await app.gridModels(preferred.machineId);
-    if (!mounted) return;
-    final sections = _sectionsForModelMenu(answer);
-    if (_sameSections(sections, _localSections)) return;
-    _localSections = sections;
-    _syncModels();
-  }
-
-  /// The sections the Models menu draws, matching the pane picker's own: the account's own grid
-  /// first as "Local", then each shared grid that serves something. A shared grid with nothing
-  /// running is not a menu a person can pick from, so it is not drawn.
-  List<GridSection> _sectionsForModelMenu(GridModels answer) {
-    final sections = answer.sections
-        .where((s) => s.own || s.models.isNotEmpty)
-        .toList();
-    if (sections.any((s) => s.own)) return sections;
-    return [
-      GridSection(
-        name: answer.gridName ?? '',
-        own: true,
-        models: answer.models,
-      ),
-      ...sections,
-    ];
-  }
-
-  static bool _sameSections(List<GridSection> a, List<GridSection> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].name != b[i].name || a[i].own != b[i].own) return false;
-      if (a[i].models.length != b[i].models.length) return false;
-      for (var j = 0; j < a[i].models.length; j++) {
-        if (a[i].models[j].id != b[i].models[j].id) return false;
-      }
-    }
-    return true;
-  }
-
   Future<void> _onNative(MethodCall call) async {
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
@@ -1099,10 +978,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (call.method == 'models') {
       _toggleModels();
       await WidgetsBinding.instance.endOfFrame;
-      return;
-    }
-    if (call.method == 'modelsOpened') {
-      await _modelsMenu?.refresh();
       return;
     }
     final nativeCommand = switch (call.method) {

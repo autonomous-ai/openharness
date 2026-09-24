@@ -275,7 +275,7 @@ void main() {
   );
 
   testWidgets(
-    'native Models opens lazily without changing the swarm or search',
+    'View Models refreshes subscriptions only when the shared panel opens',
     (tester) async {
       const channel = MethodChannel('harness/swarm_tabs');
       final messenger = tester.binding.defaultBinaryMessenger;
@@ -308,39 +308,29 @@ void main() {
         ),
       );
       expect(source.calls, 0);
-      final previousUpdates = messages
-          .where((c) => c.method == 'update')
-          .length;
       final reply = Completer<void>();
       messenger.handlePlatformMessage(
         channel.name,
         const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('modelsOpened'),
+          const MethodCall('models'),
         ),
         (_) => reply.complete(),
       );
-      await reply.future;
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(reply.isCompleted, isTrue);
       expect(source.calls, 1);
       expect(app.activeSwarmId, original);
-      expect(
-        messages.where((c) => c.method == 'update').length,
-        previousUpdates,
-      );
-      expect(messages.where((c) => c.method == 'closeSearch'), isEmpty);
-      final snapshot =
-          messages.lastWhere((c) => c.method == 'modelsState').arguments as Map;
-      expect((snapshot['subscriptions'] as List).single['title'], 'OpenAI');
-      expect(
-        (snapshot['subscriptions'] as List).single['status'],
-        'Not signed in',
-      );
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      expect(find.text('OpenAI'), findsOneWidget);
+      expect(find.text('Not signed in'), findsOneWidget);
+      expect(messages.where((c) => c.method == 'modelsState'), isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelsPanel), findsNothing);
+      expect(app.activeSwarmId, original);
       await tester.pumpWidget(const SizedBox());
-      expect(
-        (messages.lastWhere((c) => c.method == 'modelsState').arguments
-            as Map)['subscriptions'],
-        isEmpty,
-      );
+      expect(source.calls, 1);
+      expect(messages.where((c) => c.method == 'modelsState'), isEmpty);
       menu.dispose();
       usage.dispose();
       app.dispose();
@@ -348,7 +338,7 @@ void main() {
     },
   );
 
-  /// Mount the swarm screen on [app] and send the native Models menu's
+  /// Mount the swarm screen on [app] and send the native local-model
   /// `runLocalModel` command, with or without a machine.
   Future<void> openGridDoor(
     WidgetTester tester,
