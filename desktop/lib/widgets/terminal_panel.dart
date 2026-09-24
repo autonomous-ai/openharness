@@ -665,7 +665,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool get _inputBlocked =>
       !widget.readOnly &&
       widget.notice == null &&
-      widget.session.status == TerminalSessionStatus.takenOver;
+      // A watcher is the same situation seen from the other side: this window
+      // has the output but another client has the terminal, and the band's
+      // button is how a person here asks for it.
+      (widget.session.watching ||
+          widget.session.status == TerminalSessionStatus.takenOver);
 
   /// Retakes the stream, the same path as the header chip: `selectAgent` on a
   /// dead pane is `reopen()`, and a repeat while it is already `opening` only

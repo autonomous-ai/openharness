@@ -166,6 +166,37 @@ class TerminalSession extends ChangeNotifier {
   /// for a viewer that never takes control and so is never anyone's taker.
   final TerminalClientDescriptor? client;
 
+  /// Whether the next `terminal_open` may TAKE the terminal from whoever holds
+  /// it. A terminal has one controller, and an ordinary open wins it — which is
+  /// right when a person on THIS window asked for the pane, and wrong for every
+  /// other reason a pane attaches: a tab another Mac opened arriving over the
+  /// desk, a reconnect, a machine answering its agent list, the dial turning.
+  /// Those open with `takeover: false` and are answered as a WATCHER (the
+  /// daemon attaches tmux read-only and the person typing keeps the terminal),
+  /// or `CONTROL_LEASE_HELD` if the race is lost.
+  ///
+  /// ⚠️ **An arrival arms ONE open.** Lowered again the moment an open it armed
+  /// is answered, because from then on this session HOLDS the lease and its
+  /// later opens rest on holding it. Left standing, it would outlive the
+  /// gesture: a window reconnecting hours later would take the terminal off
+  /// whoever had it by then, with nobody having touched this Mac at all.
+  ///
+  /// ⚠️ Only meaningful against a daemon that advertises `noTakeover`; an older
+  /// one ignores the key and takes over regardless, so the caller checks first
+  /// — `MachineState.terminalNoTakeoverAvailable`.
+  bool takeover;
+
+  /// What the open now in flight asked for — [takeover] as it was when that
+  /// frame was built. The two differ when a person lands on the pane while a
+  /// polite open is still out.
+  bool _openAskedTakeover = true;
+
+  /// Whether the stream this session holds is a WATCHER: real output, live, but
+  /// another client drives it and the daemon refuses anything typed here. Told
+  /// by `readOnly` on `terminal_ready`. A normal state, not a failure — the
+  /// pane shows the band and its "Take control" button. Reset by every open.
+  bool watching = false;
+
   TerminalSession({
     required this.machineId,
     required this.agentId,
@@ -175,6 +206,7 @@ class TerminalSession extends ChangeNotifier {
     required this.sendBinary,
     this.client,
     this.onOpenStalled,
+    this.takeover = true,
     this.readOnly = false,
     this.resyncTimeout = const Duration(seconds: 4),
     DateTime Function()? now,
@@ -254,6 +286,7 @@ class TerminalSession extends ChangeNotifier {
 
   bool get acceptsInput =>
       !readOnly &&
+      !watching &&
       status == TerminalSessionStatus.controlling &&
       streamId != null;
 
@@ -295,10 +328,13 @@ class TerminalSession extends ChangeNotifier {
 
   /// Reconnect the same agent without discarding its last usable screen.
   /// Input resumes only after the replacement stream's first keyframe.
-  Future<void> reopen() async {
+  /// [force] is a person asking: it arms one takeover and reopens a stream this
+  /// session is merely watching, which is what the band's "Take control" does.
+  Future<void> reopen({bool force = false}) async {
+    if (force) takeover = true;
     if (_disposed ||
         status == TerminalSessionStatus.opening ||
-        status == TerminalSessionStatus.controlling ||
+        (status == TerminalSessionStatus.controlling && !(force && watching)) ||
         status == TerminalSessionStatus.resyncing) {
       return;
     }
@@ -333,6 +369,7 @@ class TerminalSession extends ChangeNotifier {
     _inputSendTail = Future<void>.value();
     streamId = null;
     linkMode = null;
+    watching = false;
     errorCode = null;
     errorMessage = null;
     takenOverBy = null;
@@ -391,7 +428,11 @@ class TerminalSession extends ChangeNotifier {
       'rows': rows,
       'compression': const ['zlib', 'none'],
       if (client != null) 'client': client!.toJson(),
+      // Absent is the takeover an open has always been; `false` asks the daemon
+      // to leave whoever holds the terminal alone and hand this one a watcher.
+      if (!takeover) 'takeover': false,
     };
+    _openAskedTakeover = takeover;
     var sent = await send('terminal_open', openPayload);
     if (!_isCurrent(generation) ||
         status != TerminalSessionStatus.opening ||
@@ -505,6 +546,13 @@ class TerminalSession extends ChangeNotifier {
           _fail('TERMINAL_READY_INVALID', 'Harness returned no stream id');
           return true;
         }
+        // Which kind of stream came back. A watcher renders the terminal and
+        // may not type into it; the band says who has it and offers to ask.
+        watching = payload['readOnly'] == true;
+        // The claim is spent here: from now on this session holds the lease,
+        // and every later open of its own rests on holding it rather than on a
+        // gesture nobody has made since. See [takeover].
+        if (!watching) takeover = false;
         _resyncTimer?.cancel();
         _resyncTimer = null;
         _heartbeat = Timer.periodic(
@@ -632,6 +680,29 @@ class TerminalSession extends ChangeNotifier {
             _inputBytes.clear();
             unawaited(_recoverByReopen(reason: 'TERMINAL_INPUT_INVALID'));
           }
+          return true;
+        }
+        // A polite open, refused: another client is driving this terminal and
+        // this open asked not to take it from them. Not a failure, and it must
+        // not read as one — `error` is what the notifier's reattach sweep
+        // retries, which would ask again for as long as the other client stayed.
+        // `takenOver` already means "someone else has it, and only a person
+        // gets it back", which is exactly this.
+        //
+        // Only for an open that ASKED to be polite: the daemon answers the same
+        // code to an ordinary open that lost a race, and that one keeps the
+        // retry it has always had, below.
+        if (errorCode == 'CONTROL_LEASE_HELD' && !_openAskedTakeover) {
+          _cancelTimers();
+          streamId = null;
+          watching = false;
+          status = TerminalSessionStatus.takenOver;
+          this.errorCode = 'TERMINAL_TAKEN_OVER';
+          errorMessage = 'Another client is using this terminal.';
+          notifyListeners();
+          // Somebody landed on this pane while the polite open was still out:
+          // ask again, the way a pane a person is looking at always has.
+          if (takeover) unawaited(reopen(force: true));
           return true;
         }
         // A genuine mid-transfer failure (the daemon couldn't write the clipboard/disk, or the

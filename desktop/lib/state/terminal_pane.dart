@@ -66,6 +66,13 @@ class TerminalPane {
   /// carries "this machine has no agents yet".
   String? agentId;
 
+  /// A tile this window restored when it opened. Opening the app IS the
+  /// gesture, so this tile's FIRST attach may claim the terminal even if
+  /// another screen is driving it (see `AttachIntent`). Spent on that attach —
+  /// a machine that only comes back hours later is not the same arrival — and
+  /// dropped wholesale a few minutes after launch either way.
+  bool claimOnFirstAttach = false;
+
   TerminalSession? session;
   SharedHarness? sharedHarness;
   String? sharedOwnerName;
