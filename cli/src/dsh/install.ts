@@ -9,7 +9,7 @@
  * leaves nothing behind.
  */
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -473,10 +473,11 @@ export function removeDsh(id: string): { ok: true } | { ok: false; error: string
       // A linked install is a symlink: remove the link, never the checkout it points at.
       let isLink = false
       try { isLink = lstatSync(record.dir).isSymbolicLink() } catch { isLink = false }
-      if (isLink) rmSync(record.dir, { force: true })
+      // unlink, not rmSync: Node 25 refuses a non-recursive rm of a link to a directory (EISDIR).
+      if (isLink) unlinkSync(record.dir)
       else if (existsSync(record.dir)) rmSync(record.dir, { recursive: true, force: true })
     } catch (error) {
-      // rmSync throws only system errors (EACCES, EBUSY).
+      // Only system errors reach here (EACCES, EBUSY).
       return { ok: false, error: 'REMOVE_FAILED', detail: (error as Error).message }
     }
     removeInstalledRecord(id)
