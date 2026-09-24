@@ -22,6 +22,9 @@ class WorkspaceOnboarding extends ChangeNotifier {
   Set<OnboardingStep> _observed = {};
   Future<void> _saving = Future.value();
 
+  String? get scope => _scope;
+  bool get loaded => _loaded;
+  bool get complete => _loaded && OnboardingStep.values.every(completed);
   bool completed(OnboardingStep step) => _completed.contains(step);
   OnboardingStep? get next {
     if (!_loaded) return null;

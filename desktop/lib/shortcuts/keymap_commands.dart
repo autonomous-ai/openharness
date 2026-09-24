@@ -301,11 +301,7 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'addAgent',
     keywords: ['resume', 'existing', 'pane'],
   ),
-  const HarnessCommand(
-    'agent.add',
-    'New Pane',
-    ShortcutGroup.actions,
-  ),
+  const HarnessCommand('agent.add', 'New Pane', ShortcutGroup.actions),
   const HarnessCommand(
     'agent.new',
     'New Harness',
@@ -352,6 +348,14 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     nativeAction: 'machineList',
     extraKeys: ['cmd+m'],
+  ),
+  const HarnessCommand(
+    'models.list',
+    'Open Models',
+    ShortcutGroup.actions,
+    nativeAction: 'models',
+    extraKeys: ['cmd+i'],
+    keywords: ['local', 'AI', 'model', 'intelligence'],
   ),
   const HarnessCommand(
     'machine.link',

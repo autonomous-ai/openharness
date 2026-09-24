@@ -6,13 +6,14 @@ import 'package:harness/core/models.dart';
 import 'package:harness/models/models_panel.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/workspace_onboarding.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/onboarding_card.dart';
 
-import 'keymap_host_test.dart' show key;
+import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'support/model_manager.dart';
 import 'swarm_screen_test.dart' show terminal;
 
@@ -69,7 +70,11 @@ void main() {
     app.dispose();
     journey.dispose();
   });
-  Future<void> mount(WidgetTester tester) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    AppKeymap? keymap,
+    bool native = false,
+  }) async {
     journey = WorkspaceOnboarding();
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1280, 800);
@@ -77,9 +82,12 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
+        builder: (context, child) => keymap == null
+            ? child!
+            : KeymapProvider(keymap: keymap, child: child!),
         home: SwarmScreen(
           notifier: app,
-          nativeTabs: false,
+          nativeTabs: native,
           onboarding: journey,
         ),
       ),
@@ -103,6 +111,132 @@ void main() {
     ];
     app.adoptSessionForTest(terminal('work', []));
   }
+
+  for (final native in [false, true]) {
+    testWidgets(
+      'welcome clicks and keyboard open real panels (native=$native)',
+      (tester) async {
+        await mount(tester, native: native);
+        final models = find.byType(ModelsPanel);
+        final machines = find.byKey(const ValueKey('machines-panel'));
+        await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+        await tester.pumpAndSettle();
+        expect(models, findsOneWidget);
+        await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+        await tester.pumpAndSettle();
+        expect(models, findsNothing);
+
+        if (!native) {
+          await tap(tester, find.byTooltip('Harnesses'));
+          expect(find.byKey(const ValueKey('session-manager')), findsOneWidget);
+          await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+          await tester.pumpAndSettle();
+          expect(find.byKey(const ValueKey('session-manager')), findsNothing);
+          expect(models, findsOneWidget);
+          await key(tester, LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+        }
+
+        await tap(tester, find.byKey(const ValueKey('welcome-models.list')));
+        expect(models, findsOneWidget);
+        await key(tester, LogicalKeyboardKey.keyM, cmd: true);
+        await tester.pumpAndSettle();
+        expect(models, findsNothing);
+        expect(machines, findsOneWidget);
+        await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+        await tester.pumpAndSettle();
+        expect(machines, findsNothing);
+        expect(models, findsOneWidget);
+        await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+        await tester.pumpAndSettle();
+        expect(models, findsNothing);
+        expect(find.byType(NewHarnessForm), findsOneWidget);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await tap(tester, find.byKey(const ValueKey('welcome-machines.list')));
+        expect(machines, findsOneWidget);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await tap(tester, find.byKey(const ValueKey('welcome-agent.new')));
+        expect(find.byType(NewHarnessForm), findsOneWidget);
+        expect(OnboardingStep.values.any(journey.completed), isFalse);
+        expect(app.actions, isEmpty);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('Models shortcut, welcome hint and toolbar follow a live remap', (
+    tester,
+  ) async {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    await mount(tester, keymap: map);
+    expect(find.byTooltip('Models ⌘I'), findsOneWidget);
+    map.apply('''{"bindings":[
+      {"keys":"cmd+i","command":null},
+      {"keys":"cmd+u","command":"models.list"}
+    ]}''');
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Models ⌘U'), findsOneWidget);
+    expect(find.text('⌘U'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+    expect(find.byType(ModelsPanel), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyU, cmd: true);
+    await tester.pumpAndSettle();
+    expect(find.byType(ModelsPanel), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      '> Open Models',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Open Models'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byType(ModelsPanel), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'completed welcome switches on New Tab and everyday clicks open their destinations',
+    (tester) async {
+      await mount(tester);
+      journey.sync(
+        scope: journey.scope!,
+        observed: OnboardingStep.values.toSet(),
+        otherComputer: true,
+        modelsAvailable: true,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('✓'), findsNWidgets(3));
+      expect(find.text('Harness like a boss.'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await tester.pumpAndSettle();
+      expect(find.text('Follow your curiosity.'), findsOneWidget);
+      expect(find.text('✓'), findsNothing);
+      await tap(tester, find.byKey(const ValueKey('welcome-agent.open')));
+      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await tap(tester, find.byKey(const ValueKey('welcome-app.store')));
+      expect(app.activeSwarm.isStore, isTrue);
+      await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.keyS, cmd: true);
+      await tester.pumpAndSettle();
+      expect(app.activeSwarm.isStore, isTrue);
+      await key(tester, LogicalKeyboardKey.keyI, cmd: true);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'first invitation opens real creation and survives merely viewing',

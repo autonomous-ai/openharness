@@ -136,7 +136,7 @@ void main() {
     await _mount(tester, app);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('Follow your curiosity.'), findsOneWidget);
+    expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(search, findsNothing);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
@@ -146,9 +146,9 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     final tab = app.activeSwarmId;
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('Follow your curiosity.'), findsOneWidget);
+    expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(search, findsNothing);
-    await tester.tap(find.byKey(const ValueKey('welcome-agent.open')));
+    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
     await tester.pump();
     expect(search, findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);

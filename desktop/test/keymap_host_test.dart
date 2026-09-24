@@ -77,6 +77,7 @@ void main() {
       ('cmd+shift+j', 'navigation.command_bar'),
       ('cmd+s', 'app.store'),
       ('cmd+m', 'machines.list'),
+      ('cmd+i', 'models.list'),
       ('cmd+shift+l', 'pane.layout'),
       ('cmd+b', 'task.route'),
       ('cmd+shift+w', 'pane.close'),

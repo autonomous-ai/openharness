@@ -17,6 +17,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/workspace_onboarding.dart';
 import 'package:harness/widgets/machines_panel.dart';
 import 'package:harness/widgets/toolbar_icon.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
@@ -1119,12 +1120,23 @@ void main() {
   ) async {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
+    final onboarding = WorkspaceOnboarding();
+    addTearDown(onboarding.dispose);
+    onboarding.sync(
+      scope: 'welcome-test',
+      observed: {},
+      otherComputer: false,
+      modelsAvailable: true,
+    );
     final commands = <String>[];
     await tester.pumpWidget(
       MaterialApp(
         home: KeymapProvider(
           keymap: map,
-          child: WorkspaceWelcome(onCommand: commands.add),
+          child: WorkspaceWelcome(
+            onboarding: onboarding,
+            onCommand: commands.add,
+          ),
         ),
       ),
     );
