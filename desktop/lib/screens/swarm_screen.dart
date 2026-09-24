@@ -267,7 +267,13 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.agentUnread.addListener(_unreadChanged);
     // Coming back to the window puts the tab in front of the person again, and
     // nothing in the app necessarily changes when that happens — so it is told.
-    _lifecycle = AppLifecycleListener(onResume: app.seeWatchedAgents);
+    _lifecycle = AppLifecycleListener(
+      onResume: app.seeWatchedAgents,
+      // Whether the app is in front of anyone decides whether the model surfaces refresh at all
+      // (`AppNotifier.foreground`): a minimised or background window asks no daemon anything.
+      onStateChange: app.appLifecycleChanged,
+    );
+    app.appLifecycleChanged(WidgetsBinding.instance.lifecycleState);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);
@@ -299,6 +305,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
     if (_native) {
       _modelsMenu!.addListener(_syncModels);
+      app.gridPictures.addListener(_gridPictureChanged);
+      app.foreground.addListener(_foregroundChanged);
       // Same trigger as the subscription rows: the daemon memoises its answer, so opening the menu
       // repeatedly costs nothing after the first.
       unawaited(_refreshLocalModels());
@@ -395,6 +403,8 @@ class _SwarmScreenState extends State<SwarmScreen>
       );
       unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
       app.removeListener(_syncNative);
+      app.gridPictures.removeListener(_gridPictureChanged);
+      app.foreground.removeListener(_foregroundChanged);
       _channel.setMethodCallHandler(null);
       unawaited(
         _channel.invokeMethod<void>('update', {'tabs': [], 'enabled': false}),
@@ -978,6 +988,10 @@ class _SwarmScreenState extends State<SwarmScreen>
           {
             'name': s.name,
             'own': s.own,
+            // How the grid answered the daemon's last look (`GridSectionState`), when a daemon new
+            // enough to say sends it. Nothing native draws it yet; it is here so a change of state
+            // alone reaches the menu.
+            if (s.state != null) 'state': s.state!.name,
             'models': [
               for (final m in s.models) {'id': m.id, 'node': m.node},
             ],
@@ -1010,26 +1024,63 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   DateTime? _localModelsAt;
 
-  Future<void> _refreshLocalModels() async {
-    final machines = app.machines
-        .where((machine) => !machine.isShared)
-        .toList();
-    if (machines.isEmpty) return;
+  Future<void> _refreshLocalModels({bool force = false}) async {
+    // A minimised or background window asks nothing: every read here is for a menu nobody can see
+    // until the app comes back, and it refreshes once when it does ([_foregroundChanged]). A forced
+    // read is a person's act — the menu opening — and runs whatever the lifecycle last said: a
+    // window can read as inactive while its own menu is tracking.
+    if (!app.inForeground && !force) return;
+    final preferred = _modelsMachine();
+    if (preferred == null) return;
     // The daemon memoises its answer, so a repeat is nearly free — but this is called on every app
     // change, and an RPC per keystroke-sized notification is not free. One read per window is
-    // plenty for a list that changes when someone starts or stops serving a model.
+    // plenty for a list that changes when someone starts or stops serving a model; opening the menu
+    // and coming back to the app ([force]) are the exceptions, and read at once.
     final now = DateTime.now();
     final last = _localModelsAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+    if (!force &&
+        last != null &&
+        now.difference(last) < const Duration(seconds: 10)) {
       return;
     }
     _localModelsAt = now;
-    final preferred = machines.firstWhere(
-      (m) => app.stateOf(m.machineId)?.isLocalMachine == true,
-      orElse: () => machines.first,
-    );
-    final answer = await app.gridModels(preferred.machineId);
+    final picture = await app.readGridPicture(preferred);
     if (!mounted) return;
+    _adoptLocalSections(picture);
+  }
+
+  /// The machine whose daemon answers for the Models menu — the grid is per ACCOUNT, so any of them
+  /// answers the same, and the local one is asked first because its daemon is a loopback away.
+  String? _modelsMachine() {
+    final machines = app.machines
+        .where((machine) => !machine.isShared)
+        .toList();
+    if (machines.isEmpty) return null;
+    return machines
+        .firstWhere(
+          (m) => app.stateOf(m.machineId)?.isLocalMachine == true,
+          orElse: () => machines.first,
+        )
+        .machineId;
+  }
+
+  /// A new picture — from a read here, another surface's read, or the daemon's push — redraws the
+  /// menu when it changes what the menu shows. No request of its own.
+  void _gridPictureChanged() {
+    if (!mounted) return;
+    final machine = _modelsMachine();
+    final picture = machine == null ? null : app.gridPictures[machine];
+    if (picture != null) _adoptLocalSections(picture);
+  }
+
+  /// Back in front of the person: the one refresh the background skipped.
+  void _foregroundChanged() {
+    if (mounted && app.inForeground) {
+      unawaited(_refreshLocalModels(force: true));
+    }
+  }
+
+  void _adoptLocalSections(GridModels answer) {
     final sections = _sectionsForModelMenu(answer);
     if (_sameSections(sections, _localSections)) return;
     _localSections = sections;
@@ -1054,13 +1105,23 @@ class _SwarmScreenState extends State<SwarmScreen>
     ];
   }
 
+  /// Whether the menu would draw [a] exactly as [b]. The machine serving a row and the state of a
+  /// section are compared too: a model that moved to another computer, or a grid that went to sleep,
+  /// is a different menu even when every id is the same.
   static bool _sameSections(List<GridSection> a, List<GridSection> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (a[i].name != b[i].name || a[i].own != b[i].own) return false;
+      if (a[i].name != b[i].name ||
+          a[i].own != b[i].own ||
+          a[i].state != b[i].state) {
+        return false;
+      }
       if (a[i].models.length != b[i].models.length) return false;
       for (var j = 0; j < a[i].models.length; j++) {
-        if (a[i].models[j].id != b[i].models[j].id) return false;
+        if (a[i].models[j].id != b[i].models[j].id ||
+            a[i].models[j].node != b[i].models[j].node) {
+          return false;
+        }
       }
     }
     return true;
@@ -1102,6 +1163,9 @@ class _SwarmScreenState extends State<SwarmScreen>
       return;
     }
     if (call.method == 'modelsOpened') {
+      // The menu opens from its cache; the models are re-read beside the subscriptions, and a
+      // change lands in the open menu through `modelsState`.
+      unawaited(_refreshLocalModels(force: true));
       await _modelsMenu?.refresh();
       return;
     }

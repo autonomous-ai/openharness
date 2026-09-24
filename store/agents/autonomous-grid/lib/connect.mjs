@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { atomicJson, gridJson, gridSelect, now, readConfig, readJson, stateDir, text, validateConfig } from './fleet.mjs';
+import { ASLEEP_CODE, atomicJson, gridJson, gridSelect, NO_WAKE, now, readConfig, readJson, stateDir, text, validateConfig } from './fleet.mjs';
 import { discoverMachines } from './harness.mjs';
 
 /** The email `grid login` recorded in the credential store, or null. `GRID_HOME` is honoured the way grid honours it. */
@@ -56,6 +56,12 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
   let config = await readConfig(workspace), source = 'workspace', message = '', candidates = [];
   const controller = () => config.machines.find(m => m.id === config.controller);
   const read = (mode, args) => runJson(controller(), mode, args, { timeoutMs: 5000 }).catch(() => ({ ok: false }));
+  // "Does this grid answer?" — asked on a workspace's first start, which nobody clicked, so it must not
+  // wake a sleeping grid to find out (NO_WAKE on a remote grid). Asleep is an answer: the grid is there.
+  // A `grid` too old for the flag cannot ask without waking; the grids probed here are the account's own
+  // or its active selection, so that is taken as there too rather than choosing nothing.
+  const probe = (mode, grid) => read(mode, ['engines', grid, ...(mode === 'remote' ? [NO_WAKE] : [])]);
+  const answers = result => (result.ok && Array.isArray(result.value)) || result.refusal === ASLEEP_CODE || result.outdated === true;
   if (!config.grid) {
     const saved = await readJson(profilePath, null);
     if (saved) {
@@ -75,8 +81,7 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
       // and the viewer agree from the first minute — never a team's or a community grid by guess.
       const active = text((await read(preferred, ['use'])).value?.active);
       if (active && !active.startsWith('-')) {
-        const engines = await read(preferred, ['engines', active]);
-        if (engines.ok && Array.isArray(engines.value)) { config.grid = active; source = 'Grid selection'; }
+        if (answers(await probe(preferred, active))) { config.grid = active; source = 'Grid selection'; }
       }
       const remote = listings.find(l => l.mode === 'remote')?.result;
       // Harness names the account's grid (HARNESS_PRIVATE_GRID, from the backend that minted it);
@@ -85,8 +90,7 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
       config.personalGrid = env.HARNESS_PRIVATE_GRID?.trim() || pickPrivateGrid(await email(), remote?.value);
       const own = config.grid ? null : config.personalGrid;
       if (own) {
-        const engines = await read('remote', ['engines', own]);
-        if (engines.ok && Array.isArray(engines.value)) {
+        if (answers(await probe('remote', own))) {
           config.mode = 'remote'; config.grid = own; source = 'your private grid';
           // The write form of `use` answers in prose, not JSON (lib/fleet.mjs gridSelect).
           await select(controller(), 'remote', own, { timeoutMs: 5000 }).catch(() => ({ ok: false }));
@@ -100,8 +104,8 @@ export async function initializeWorkspace(workspace, { runJson = gridJson, selec
         // Only a unique known grid is an unambiguous fallback. Multiple grids stay a choice,
         // even when one happens to have more traffic. Probe only the candidate we may select.
         if (candidates.length === 1) {
-          const candidate = candidates[0], engines = await read(candidate.mode,['engines',candidate.grid]);
-          if (engines.ok && Array.isArray(engines.value)) {
+          const candidate = candidates[0];
+          if (answers(await probe(candidate.mode, candidate.grid))) {
             config.mode = candidate.mode; config.grid = candidate.grid; source = 'only reachable grid';
           }
         }

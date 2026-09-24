@@ -51,6 +51,7 @@ import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
+import 'grid_pictures.dart';
 import 'harness_placement.dart';
 import 'desk_sync.dart';
 import 'pane_layout_store.dart';
@@ -558,6 +559,25 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
   final Map<String, Timer> _turnActivityWatchdogs = {};
+
+  /// What each machine's daemon last said the account's grids serve — the one list the pane
+  /// picker, the macOS Models menu and the Model Manager all read. See [GridPictures].
+  final GridPictures gridPictures = GridPictures();
+
+  /// Whether the app is in front of the person (`AppLifecycleState.resumed`). The three surfaces
+  /// that refresh [gridPictures] on their own — the Model Manager's timer, the macOS menu's refresh
+  /// and the pane picker's prefetch — run only while this is true, and each refreshes once when it
+  /// turns true again. A minimised or background app asks nothing. True until the platform says
+  /// otherwise, so a state nobody reported (a test, the first frame) behaves as it always did.
+  final ValueNotifier<bool> foreground = ValueNotifier(true);
+
+  bool get inForeground => foreground.value;
+
+  /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
+  void appLifecycleChanged(AppLifecycleState? state) {
+    if (_disposed) return;
+    foreground.value = state == null || state == AppLifecycleState.resumed;
+  }
 
   late final sessionPreviews = SessionPreviewStore(
     canFetch: _canFetchPreview,
@@ -2955,6 +2975,7 @@ class AppNotifier extends ChangeNotifier {
     machinesAreStale = false;
     machineStates.clear();
     sessionPreviews.clear();
+    gridPictures.clear();
     expandedMachines.clear();
     selectedMachineId = null;
     _ensurePool();
@@ -3294,6 +3315,7 @@ class AppNotifier extends ChangeNotifier {
     machinesAreStale = false;
     machineStates.clear();
     sessionPreviews.clear();
+    gridPictures.clear();
     expandedMachines.clear();
     selectedMachineId = null;
     _closedHistory.clear();
@@ -5025,11 +5047,12 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Live models on the account's private harness grid, for the pane header's picker.
+  /// One `grid_models_list` read of [machineId]'s daemon, as it answered — the raw read behind
+  /// [refreshGridModels], which keeps the result as the app's one picture ([gridPictures]).
   ///
-  /// Asked of the machine the pane belongs to rather than kept in app state: the answer is whatever
-  /// that machine's `grid` reports at this moment (an engine can join or leave between two opens),
-  /// and a cached list would offer a model nobody is serving any more.
+  /// The daemon answers from ITS picture of each grid, read without waking any of them, so a sleeping
+  /// grid keeps its last known models. Surfaces read [readGridPicture]; a caller that must know this
+  /// machine answered right now (the creation check) reads [refreshGridModels].
   ///
   /// Never throws — a machine whose daemon is too old to know the RPC, one with no grid, and one
   /// that timed out are all "nothing to offer", which is what the picker shows.
@@ -5037,58 +5060,51 @@ class AppNotifier extends ChangeNotifier {
     try {
       final response = await _conn(machineId)
           .request('grid_models_list', timeout: const Duration(seconds: 12));
-      final models = (response['models'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(
-            (m) => GridModel(
-              id: (m['id'] as String?) ?? '',
-              node: (m['node'] as String?) ?? '',
-            ),
-          )
-          .where((m) => m.id.isNotEmpty)
-          .toList();
-      final capable = response['localModelEngines'];
-      List<GridModel> parseModels(Object? raw) => (raw as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(
-            (m) => GridModel(
-              id: (m['id'] as String?) ?? '',
-              node: (m['node'] as String?) ?? '',
-            ),
-          )
-          .where((m) => m.id.isNotEmpty)
-          .toList();
-      final grids = (response['grids'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .where((g) => (g['name'] as String?)?.isNotEmpty == true)
-          .map(
-            (g) => GridSection(
-              name: g['name'] as String,
-              own: g['own'] == true,
-              models: [
-                for (final m in parseModels(g['models']))
-                  GridModel(id: m.id, node: m.node, grid: g['name'] as String),
-              ],
-            ),
-          )
-          .toList();
-      return GridModels(
-        gridName: response['gridName'] as String?,
-        models: models,
-        grids: grids,
-        localModelEngines: capable is List
-            ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
-            : null,
-        gridCli: GridCli.parse(response['gridCli']),
-        supportsModelLaunch: response['supportsModelLaunch'] == true,
-        reachable: response['error'] == null,
-      );
+      return GridModels.fromReply(response);
     } catch (_) {
       // NOT `gridName: null` with an empty list — that is the shape of "this account has no grid",
       // and a caller cannot tell it from "the machine did not answer". A signed-in user whose daemon
       // was offline was told to sign in again, which was both wrong and unactionable.
       return const GridModels.unreachable();
     }
+  }
+
+  final Map<String, Future<GridModels>> _gridReads = {};
+
+  /// Ask [machineId]'s daemon for the model list and take the answer as its [gridPictures] entry.
+  ///
+  /// One read feeds every surface. Reads for one machine that overlap are one request — the Model
+  /// Manager, the menu and every pane's picker all refresh on the same return to the foreground, and
+  /// that is one question to the daemon, not one per surface. An answer that was already on its way
+  /// when a `grid_models_changed` push landed is returned to its caller but not adopted: the push is
+  /// newer. An answer that is not one — the machine could not be asked — is returned but not adopted
+  /// either: one surface's timed-out read must not blank the list every other surface is showing.
+  Future<GridModels> refreshGridModels(String machineId) {
+    final inFlight = _gridReads[machineId];
+    if (inFlight != null) return inFlight;
+    final epoch = gridPictures.epochOf(machineId);
+    late final Future<GridModels> read;
+    read = gridModels(machineId)
+        .then((answer) {
+          if (!_disposed && answer.reachable) {
+            gridPictures.adopt(machineId, answer, ifEpoch: epoch);
+          }
+          return answer;
+        })
+        .whenComplete(() {
+          if (identical(_gridReads[machineId], read)) {
+            _gridReads.remove(machineId);
+          }
+        });
+    return _gridReads[machineId] = read;
+  }
+
+  /// What a surface shows after a read: the app's picture — newer than the answer when a push landed
+  /// meanwhile, and the last good list when this read could not reach the machine — or the answer
+  /// itself when there has never been a picture.
+  Future<GridModels> readGridPicture(String machineId) async {
+    final answer = await refreshGridModels(machineId);
+    return gridPictures[machineId] ?? answer;
   }
 
   /// Model Manager keeps the original package ID for installed workspaces.
@@ -6979,7 +6995,7 @@ class AppNotifier extends ChangeNotifier {
     }
     final connection = _conn(machineId);
     if (!creation.awaitingConfirmation && choices['gridModel'] != null) {
-      final models = await gridModels(machineId);
+      final models = await refreshGridModels(machineId);
       if (!models.reachable) {
         return creation._complete(
           'Could not verify models on $machineName. Refresh models or use your subscription.',
@@ -10673,6 +10689,12 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      case 'grid_models_changed':
+        // The daemon's picture of the account's grids changed — read without waking any of them,
+        // so this arrives for a grid going to sleep as well as for a model coming up. The payload
+        // is the whole `grid_models_list` document: adopted as it is, with no request.
+        gridPictures.adopt(machineId, GridModels.fromReply(payload));
+        break;
       case 'machines_changed':
         // The account's machine list changed somewhere: a machine created,
         // renamed or deleted, or a shared harness invited or taken back. The
@@ -10996,6 +11018,8 @@ class AppNotifier extends ChangeNotifier {
     terminalThemeStore.removeListener(_announceTerminalThemeEverywhere);
     _localGitProjects.dispose();
     sessionPreviews.dispose();
+    gridPictures.dispose();
+    foreground.dispose();
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();
     agentUnread.dispose();

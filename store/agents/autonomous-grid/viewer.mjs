@@ -5,20 +5,22 @@ import { pathToFileURL } from 'node:url';
 import { atomicJson, gridSelect, now, operations, PACKAGE, readConfig } from './lib/fleet.mjs';
 import { createCollector } from './lib/telemetry.mjs';
 
-export function createViewer({ workspace, port = 0, intervalMs = 8000, collect = createCollector(workspace, { intervalMs }), select = gridSelect }) {
+export function createViewer({ workspace, port = 0, intervalMs = 8000, collect = createCollector(workspace, { intervalMs }), select = gridSelect, timer = setTimeout }) {
   const clients = new Set();
   let snapshot = { spec: 1, status: 'connecting', grid: 'Your grid', nodes: [], machines: [], models: [], events: [], operations: [], history: {}, sources: {}, summary: {}, observedAt: null, pollIntervalMs: intervalMs };
   let stopped = false, pollTimer, opTimer, heartbeat, inFlight = false, lastPollAt = 0;
   // The next tick is booked only while a pane is connected: a viewer nobody is looking at must not keep
   // running the grid CLI every few seconds. A request for the observation still wakes one read if the
-  // one on hand has gone stale.
+  // one on hand has gone stale. The observation names its own pace — a sleeping grid is looked at every
+  // 30 s rather than every few (lib/telemetry.mjs) — and a stale-read request honours the same pace.
+  const pace = () => snapshot.pollIntervalMs || intervalMs;
   const schedule = () => {
     clearTimeout(pollTimer); pollTimer = null;
     if (stopped || clients.size === 0) return;
-    pollTimer = setTimeout(poll, intervalMs);
+    pollTimer = timer(poll, pace());
   };
   const wake = () => {
-    if (stopped || inFlight || Date.now() - lastPollAt < intervalMs) return;
+    if (stopped || inFlight || Date.now() - lastPollAt < pace()) return;
     clearTimeout(pollTimer); pollTimer = null;
     void poll();
   };
@@ -63,7 +65,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
         if (!pollTimer && !inFlight) schedule();
         return;
       }
-      const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/app.css': ['app.css', 'text/css; charset=utf-8'] };
+      const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/stream.js': ['stream.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/app.css': ['app.css', 'text/css; charset=utf-8'] };
       if (!assets[url.pathname]) { json(res, 404, { error: 'Not found' }); return; }
       const [file, contentType] = assets[url.pathname];
       const content = await readFile(join(PACKAGE, 'viewer', file));

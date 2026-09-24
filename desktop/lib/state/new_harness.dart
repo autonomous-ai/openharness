@@ -920,7 +920,7 @@ class NewHarnessController extends ChangeNotifier {
     // Native credential reads stay out of fixture tests, as in the session picker.
     if (!kUnderTest) unawaited(_modelUsage!.refresh());
     _refresh();
-    final answer = await app.gridModels(machine);
+    final answer = await app.refreshGridModels(machine);
     if (_disposed || request != _modelRequest || machine != _machineId) return;
     _modelCatalog = answer;
     _loadingModels = false;

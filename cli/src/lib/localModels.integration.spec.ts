@@ -1,6 +1,7 @@
 import { it, expect } from 'vitest'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalModels } from './localModels.js'
@@ -57,7 +58,11 @@ else if (args.includes('leave')) { rmSync(record); rmSync(registered); }
 else if (args.includes('info')) console.log("export OPENAI_BASE_URL='${base}/v1'\\nexport OPENAI_API_KEY='inference-fixture'");
 else process.exitCode = 2;
 `, { mode: 0o700 })
-    const options = { stateDir, processEnv: { GRID_HOME: gridHome, HARNESS_GRID_BIN: executable, PATH: root } }
+    // The grid's own answer, as the credential-less reader would give it: the engine is listed while its
+    // run record exists (the fake's `join` writes it, `leave` removes it).
+    const record = join(gridHome, 'run', 'engines', 'fixture-grid', 'remote.json')
+    const inventory = async () => ({ state: 'awake' as const, nodes: existsSync(record) ? [{ node_id: 'fixture-node', online: true, models: ['tiny'] }] : [] })
+    const options = { stateDir, processEnv: { GRID_HOME: gridHome, HARNESS_GRID_BIN: executable, PATH: root }, inventory }
     service = new LocalModels(options)
     expect((await service.list('home')).models[0]).toMatchObject({ state: 'available', canStart: true })
     expect(replies).toBe(0)

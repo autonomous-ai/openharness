@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { rmSync, writeFileSync } from 'node:fs'
-import { compatibleModels, LocalModels } from './localModels.js'
+import { spawnSync } from 'node:child_process'
+import { compatibleModels, LocalModels, readRunRecords, type GridInventory } from './localModels.js'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 
@@ -18,6 +19,11 @@ let calls: string[][], serving: boolean, catalogCards: ReturnType<typeof card>[]
 let request: Mock<(url: string | URL, init?: RequestInit) => Promise<Response>>
 let run: Mock<(args: string[], output?: (s: string) => void) => Promise<GridFleetResult>>
 let downloadFails: boolean, catalogFails: boolean
+// What the grid says it serves. Production reads it without a credential (`gridModels.gridInventory`);
+// here it is the scenario the fake `grid` below answers for `engines`, so each test keeps its meaning,
+// and `gridState` is what the grid's own answer said about it.
+let gridState: GridInventory['state']
+let inventory: Mock<(grid: string, force: boolean) => Promise<GridInventory>>
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'local-models-'))
   home = join(root, 'grid'); stateDir = join(root, 'receipts'); records = join(home, 'run', 'engines', 'grid-home')
@@ -55,7 +61,13 @@ beforeEach(async () => {
     }
     return response({ choices: [{ message: { content: 'ok' } }] })
   })
-  service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+  gridState = 'awake'
+  inventory = vi.fn(async (grid: string) => {
+    const answer = await run(['--remote', 'engines', grid, '--json'])
+    if (!answer.ok) throw new Error('unreadable')
+    return { state: gridState, nodes: gridState === 'awake' ? JSON.parse(answer.stdout) : [] }
+  })
+  service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
 })
 afterEach(async () => { await service.settled(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); await rm(root, { recursive: true, force: true }) })
 
@@ -175,7 +187,7 @@ describe('local model discovery and lifecycle', () => {
   it('keeps existing local engines visible when the catalog cannot be reached', async () => {
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     catalogFails = true
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
     const snapshot = await fresh.list('home')
     expect(snapshot.models[0]).toMatchObject({ state: 'running', canStop: true })
     expect(snapshot.error).toContain('unavailable')
@@ -210,7 +222,7 @@ describe('local model discovery and lifecycle', () => {
     const first = await service.list('home')
     expect(first.models[0]).toMatchObject({ id: 'local:Small-Q4.gguf', state: 'running', canStop: true })
     await service.act('home', first.models[0].id, 'stop'); await service.settled()
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
     expect((await fresh.list('home')).models[0]).toMatchObject({ state: 'downloaded', canStart: true })
     await fresh.act('home', first.models[0].id, 'start'); await fresh.settled()
     expect(calls.some(args => args[0] === 'pull')).toBe(false)
@@ -231,7 +243,7 @@ describe('local model discovery and lifecycle', () => {
     if (scenario === 'legacy') delete saved[0].aliases
     if (scenario === 'malformed') saved[0].aliases = [42, '', '--invalid', 'invalid\nname']
     await writeFile(path, JSON.stringify(saved))
-    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch , inventory })
     await fresh.act('home', id, 'start'); await fresh.settled()
     const expectedAlias = scenario === 'current' ? 'team/my-model' : scenario === 'legacy' ? 'my-model' : null
     const joined = calls.find(args => args.includes('join'))!
@@ -348,7 +360,7 @@ describe('local model discovery and lifecycle', () => {
 
   it.each([undefined, 'https://alternate.example.test'])('uses the configured or default catalog when the credential store omits it', async base => {
     await writeFile(join(home, 'credentials.toml'), 'session_token = "test-only-token"\n')
-    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home, GRID_CONTROL_PLANE_URL: base }, run, request: request as typeof fetch })
+    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home, GRID_CONTROL_PLANE_URL: base }, run, request: request as typeof fetch , inventory })
     await service.list('home')
     expect(String(request.mock.calls[0][0])).toBe(`${base ?? 'https://api-grid.autonomous.ai'}/v1/grid/catalog`)
   })
@@ -536,7 +548,7 @@ describe('local model discovery and lifecycle', () => {
   it.each([false, true])('handles an explicit engine override (available=%s)', async available => {
     const binary = join(root, 'custom-llama')
     if (available) await writeFile(binary, '#!/bin/sh\nexit 0', { mode: 0o700 })
-    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home, LLAMA_SERVER: binary }, run, request: request as typeof fetch })
+    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home, LLAMA_SERVER: binary }, run, request: request as typeof fetch , inventory })
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     const operation = (await service.list('home')).models[0].operation
     expect(operation?.phase).toBe(available ? 'done' : 'failed')
@@ -589,7 +601,7 @@ describe('local model discovery and lifecycle', () => {
     vi.stubEnv('GRID_HOME', home)
     vi.stubGlobal('fetch', request)
     const rpc = vi.spyOn(GridFleetRpc.prototype, 'run').mockImplementation(async (_owner, _id, options, output) => run(options.args, output))
-    service = new LocalModels({ stateDir })
+    service = new LocalModels({ stateDir, inventory })
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     expect((await service.list('home')).models[0].operation?.phase).toBe('done')
     expect(rpc).toHaveBeenCalledWith('local-models', expect.any(String), expect.objectContaining({ timeoutMs: 30_000, thinking: false }), undefined, 4 * 1024 * 1024)
@@ -686,5 +698,97 @@ describe('local model discovery and lifecycle', () => {
     run.mockImplementation(async (args, output) => args.includes('leave') ? { ...ok(), ok: false } : original(args, output))
     await service.act('home', 'local:Small-Q4.gguf', 'stop'); await service.settled()
     expect((await service.list('home')).models[0]).toMatchObject({ name: 'Small-Q4', state: 'running', operation: { phase: 'failed' } })
+  })
+})
+
+/** A pid that existed a moment ago and no longer does. */
+function deadPid(): number {
+  return Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout)
+}
+
+describe('the Model Manager while its grid sleeps (grid-reads-without-waking issue 02)', () => {
+  const parkedRecord = (pid: unknown) => JSON.stringify({ node_id: 'local-node', meta_name: 'This computer', pid,
+    engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'] }], advertise_as: [] })
+
+  it('is not an inventory error: Start and Pause stay enabled, and a parked engine reads running', async () => {
+    gridState = 'asleep'
+    const next = card('org/Next-GGUF'); next.versions[0].pull_spec = 'org/Next-GGUF:Next.gguf'
+    catalogCards = [card(), next]
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), parkedRecord(process.pid))
+
+    const snapshot = await service.list('home')
+
+    expect(snapshot.error).not.toBe('Running models could not be checked. Try again.')
+    expect(snapshot.models[0]).toMatchObject({ id: 'org/Small-GGUF', state: 'running', gridAsleep: true, canStop: true })
+    expect(snapshot.models[1]).toMatchObject({ id: 'org/Next-GGUF', canStart: true })
+    expect(inventory).toHaveBeenCalledWith('home', false)
+  })
+
+  it('reads a parked engine running on a row the catalog does not know, too', async () => {
+    gridState = 'asleep'; catalogCards = []
+    await writeFile(join(records, 'remote.json'), parkedRecord(process.pid))
+    expect((await service.list('home')).models).toEqual([expect.objectContaining({ id: 'local:Small-Q4.gguf', state: 'running', gridAsleep: true, canStop: true })])
+  })
+
+  it.each([['a process that is gone', () => deadPid()], ['a join mid-spawn (pid 0)', () => 0], ['no pid at all', () => 'x']])(
+    'does not call %s parked', async (_name, pid) => {
+      gridState = 'asleep'; catalogCards = []
+      await writeFile(join(records, 'remote.json'), parkedRecord(pid()))
+      const [row] = (await service.list('home')).models
+      expect(row).toMatchObject({ id: 'local:Small-Q4.gguf', state: 'available', canStop: true })
+      expect(row).not.toHaveProperty('gridAsleep')
+    })
+
+  it('an engine the awake grid lists is running with no asleep flag', async () => {
+    serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), parkedRecord(process.pid))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const [row] = (await service.list('home')).models
+    expect(row).toMatchObject({ state: 'running' })
+    expect(row).not.toHaveProperty('gridAsleep')
+  })
+
+  it('a grid that answered nothing readable is still an inventory error', async () => {
+    gridState = 'unknown'
+    expect((await service.list('home')).error).toBe('Running models could not be checked. Try again.')
+  })
+
+  it.each([['failed', { ...ok(), ok: false, code: 1 }], ['answered with something that is not JSON', { ...ok(), stdout: 'not json' }]])(
+    'so is a grid list that %s', async (_how, answer) => {
+      const original = run.getMockImplementation()!
+      run.mockImplementation(async (args, output) => args.includes('ls') ? answer : original(args, output))
+      expect((await service.list('home')).error).toBe('Running models could not be checked. Try again.')
+    })
+
+  it('tells its owner when a start or stop has finished, so the lists are read again', async () => {
+    const onChanged = vi.fn()
+    service = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory, onChanged })
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
+})
+
+describe('readRunRecords — what servedHere knows about this computer', () => {
+  it('reads the name, the advertised ids (else the models under the display rule) and whether the pid lives', async () => {
+    await writeFile(join(records, 'a.json'), JSON.stringify({ meta_name: 'mac', pid: process.pid, advertise_as: ['Team/Model', 7, ''], models: ['ignored.gguf'] }))
+    await writeFile(join(records, 'b.json'), JSON.stringify({ meta_name: 'mac', pid: deadPid(), models: ['Qwen3-8B-Q4_K_M.GGUF', 'plain'] }))
+    await writeFile(join(records, 'c.json'), JSON.stringify({ pid: 0, models: 'not a list' }))
+    await writeFile(join(records, 'd.json'), '{ not json')
+    await writeFile(join(records, 'e.heartbeat'), '')
+
+    const found = (await readRunRecords(home, 'grid-home')).sort((x, y) => x.ids.join().localeCompare(y.ids.join()))
+
+    expect(found).toEqual([
+      { name: '', ids: [], pid: null, alive: false },
+      { name: 'mac', ids: ['Qwen3-8B-Q4_K_M', 'plain'], pid: expect.any(Number), alive: false },
+      { name: 'mac', ids: ['Team/Model'], pid: process.pid, alive: true },
+    ])
+  })
+
+  it.each(['', '../grid-home', 'missing'])('answers nothing for grid id %j', async (gridId) => {
+    await writeFile(join(records, 'a.json'), JSON.stringify({ meta_name: 'mac', pid: process.pid, advertise_as: ['X'] }))
+    expect(await readRunRecords(home, gridId)).toEqual([])
   })
 })

@@ -92,7 +92,7 @@ class ModelManagerTestApp extends AppNotifier {
   bool installed = true;
   String? installError, probeError, resumeError;
   bool resumeThrows = false;
-  int localReads = 0, resumes = 0;
+  int localReads = 0, resumes = 0, gridReads = 0;
   Completer<Map<String, dynamic>>? localReply;
   Completer<void>? probeReply;
   String? sendError;
@@ -179,7 +179,11 @@ class ModelManagerTestApp extends AppNotifier {
   }
 
   @override
-  Future<GridModels> gridModels(String machineId) async => inventory;
+  Future<GridModels> gridModels(String machineId) async {
+    gridReads++;
+    return inventory;
+  }
+
   @override
   Future<RestartAgentResult> resumeAgent(
     String machineId,

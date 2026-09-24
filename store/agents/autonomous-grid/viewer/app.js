@@ -22,13 +22,15 @@
     if (!snapshot) return;
     const late = lastReceived && Date.now() - lastReceived > Math.max(30_000, (snapshot.pollIntervalMs || 8000)*3);
     const state = transportLost || late ? 'disconnected' : snapshot.status;
-    const labels={live:'Grid connected',partial:'Partial telemetry',unavailable:'Grid unavailable',unconfigured:'Choose a grid',connecting:'Connecting',disconnected:'Connection lost'};
+    const labels={live:'Grid connected',partial:'Partial telemetry',unavailable:'Grid unavailable',unconfigured:'Choose a grid',connecting:'Connecting',disconnected:'Connection lost',asleep:'Asleep',updating:'Showing an earlier reading'};
     // The connection state rides on the grid dropdown's title: the header that carried a dot and a
     // label is gone, and the dropdown is where the grid is named now.
     $('grid-select').title=labels[state] || 'Waiting for Grid';
     // The footer that used to say "ask Grid to reconnect" is gone (it cost a row of height for a
     // sentence nobody needed while things worked); the activity heading says it when it matters.
-    $('observed').textContent=['unavailable','disconnected'].includes(state)?`${labels[state]} · ask Grid to reconnect`:snapshot.observedAt?`Observed ${age(snapshot.observedAt)}`:'Waiting for Grid';
+    // A resting grid, or a reading held because this computer's grid tool is being updated, says so in
+    // the viewer's own sentence (lib/telemetry.mjs) instead of an age that would read as a live one.
+    $('observed').textContent=['unavailable','disconnected'].includes(state)?`${labels[state]} · ask Grid to reconnect`:snapshot.notice?snapshot.notice:snapshot.observedAt?`Observed ${age(snapshot.observedAt)}`:'Waiting for Grid';
   }
   function consume(data) {
     if (!data || data.spec!==1 || !Array.isArray(data.nodes)) return;
@@ -42,7 +44,10 @@
   function render() {
     if (!snapshot) return;
     renderGridSelect();
-    const available=!['connecting','unavailable','unconfigured'].includes(snapshot.status);
+    // Held (asleep, or an earlier reading kept on screen): every node is a last-known one, so the
+    // totals would count nothing live. A dash says "not measured now" where a zero would say "none".
+    const held=['asleep','updating'].includes(snapshot.status);
+    const available=!held&&!['connecting','unavailable','unconfigured'].includes(snapshot.status);
     $('total-engines').textContent=available?fmt(snapshot.summary.enginesOnline,0):'—';
     $('total-known').textContent=snapshot.nodes.length?`${snapshot.nodes.length} known to this grid`:'waiting for engines';
     $('total-models').textContent=available?fmt(snapshot.summary.modelsServing,0):'—';
@@ -54,8 +59,8 @@
     $('map-subtitle').textContent=snapshot.nodes.length>12?`12 of ${snapshot.nodes.length} engines · see every engine in Rack`:'Every machine has a place.';
     $('map-empty').hidden=graphNodes.length>0;
     $('hub').hidden=graphNodes.length===0;
-    $('empty-message').textContent=snapshot.status==='unconfigured'?'Ask the Model Manager to connect one of your existing grids, or help you create your first fleet.':snapshot.status==='unavailable'?'Grid isn’t reachable yet. Ask the agent to check your connection, choose a grid, or start one.':'Ask the Model Manager to discover this machine and deploy your first model.';
-    $('hub-status').textContent=available?`${snapshot.summary.enginesOnline || 0} engines online`:'awaiting connection';
+    $('empty-message').textContent=snapshot.status==='asleep'?'Resting to save resources. It starts by itself when you send a message.':snapshot.status==='unconfigured'?'Ask the Model Manager to connect one of your existing grids, or help you create your first fleet.':snapshot.status==='unavailable'?'Grid isn’t reachable yet. Ask the agent to check your connection, choose a grid, or start one.':'Ask the Model Manager to discover this machine and deploy your first model.';
+    $('hub-status').textContent=snapshot.status==='asleep'?'asleep':snapshot.status==='updating'?'earlier reading':available?`${snapshot.summary.enginesOnline || 0} engines online`:'awaiting connection';
     const ids=new Set(graphNodes.map(n=>n.id));
     for (const [id,b] of nodeButtons) if (!ids.has(id)) { b.remove();nodeButtons.delete(id); }
     for (const n of graphNodes) {
@@ -278,10 +283,15 @@
     else if(copy){try{await navigator.clipboard.writeText(copy.dataset.prompt);toast('Request copied. Paste it into your Model Manager.');}catch{toast('Select the request text and paste it into your Model Manager.');}}
   });
   new ResizeObserver(()=>resize()).observe(stage);
-  const stream=new EventSource('events');
-  stream.addEventListener('snapshot',event=>{try{consume(JSON.parse(event.data));}catch{transportLost=true;status();}});
-  stream.onerror=()=>{transportLost=true;status();};
+  // Open only while the page is visible (stream.js): a hidden pane that kept listening kept the viewer
+  // reading for nobody.
+  window.harnessViewerStream.liveStream({
+    doc:document,open:url=>new EventSource(url),
+    onSnapshot:event=>{try{consume(JSON.parse(event.data));}catch{transportLost=true;status();}},
+    onError:()=>{transportLost=true;status();},
+  });
   const fetchSnapshot=()=>fetch('api/snapshot',{signal:AbortSignal.timeout(12_000)}).then(r=>{if(!r.ok)throw new Error();return r.json();}).then(consume).catch(()=>{transportLost=true;status();});
-  fetchSnapshot();setInterval(()=>{status();if(transportLost)fetchSnapshot();},8000);
+  // The fallback read asks for a fresh observation too, so it waits for the page to be seen as well.
+  fetchSnapshot();setInterval(()=>{status();if(transportLost&&!document.hidden)fetchSnapshot();},8000);
   requestAnimationFrame(frame);
 })();

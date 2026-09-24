@@ -36,7 +36,7 @@ import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGrid
 import { LocalModels } from './lib/localModels.js'
 import { ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { gridCapableEngines, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
-import { listAllGridModels, resolveGridTarget } from './lib/gridModels.js'
+import { forgetGridModels, gridInventory, listAllGridModels, onGridModelsChanged, resolveGridTarget, type GridSection } from './lib/gridModels.js'
 import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
@@ -365,9 +365,42 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
   }
 }
 
+/** What `grid_models_list` answers and `grid_models_changed` pushes — one shape, so a window parses both
+ *  with one reader. `gridName` and `models` keep naming the own grid alone, for an app that predates
+ *  `grids`; each section's `state`, `seenAt` and `lastKnownAge` are additive. */
+function gridModelsPayload(gridName: string | null, grids: GridSection[]): Record<string, unknown> {
+  return {
+    gridName,
+    models: grids.find((g) => g.own)?.models ?? [],
+    grids,
+    // Which engines a Local model can be offered to at all. Static per CLI version — it is
+    // the set of launch contracts in `gridLaunch.ts` — and answered here, beside the list,
+    // so the picker can say "Cursor runs only on its own login" instead of offering a row
+    // whose retarget the daemon would refuse. An older app ignores the field; an older
+    // daemon omits it, which the app reads as "offer everything", as before.
+    localModelEngines: gridCapableEngines(),
+    supportsModelLaunch: true,
+    // Whether this MACHINE has a `grid` to run at all — `managed`, `path` or `missing` —
+    // as distinct from `gridName`, which is about the account. The Local model dialog was
+    // gating on the account alone and starting an agent whose second step is `grid`; this
+    // is what lets it, and the picker, say so first. An older app ignores the field.
+    gridCli: gridCliPresence(),
+  }
+}
+
 export class BackendSocket {
   private readonly gridFleet = new GridFleetRpc()
-  private readonly localModels = new LocalModels({ stateDir: join(env.ADAPTER_DATA_DIR, 'local-models') })
+  // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
+  // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
+  // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
+  private readonly localModels = new LocalModels({
+    stateDir: join(env.ADAPTER_DATA_DIR, 'local-models'),
+    inventory: gridInventory,
+    onChanged: () => { forgetGridModels(); void this.pushGridModels() },
+  })
+  /** A read the window did not ask for changed what a picker would show: tell the window
+   *  (`grid_models_changed`), so its one picture stays current without polling. */
+  private readonly stopGridModelsPush = onGridModelsChanged(() => { void this.pushGridModels() })
   private readonly apiConnections = new ApiConnections(env.ADAPTER_DATA_DIR)
   private ws: WebSocket | null = null
   private connecting = false
@@ -763,6 +796,17 @@ export class BackendSocket {
    *  workspace that must be told which grid is "yours" rather than work it out or ask. */
   privateGridName(): Promise<string | null> { return this.resolveGridName() }
 
+  /** `grid_models_changed` to the windows on this computer: the same payload `grid_models_list` answers,
+   *  built from the pictures as they stand — no read is started to build it, so a push never causes one. */
+  private async pushGridModels(): Promise<void> {
+    if (this.closed || this.localClients.size === 0) return
+    try {
+      const gridName = await this.resolveGridName()
+      const grids = await listAllGridModels(gridName, { refresh: false })
+      this.sendLocal({ type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids) })
+    } catch { /* the next ask answers the same thing */ }
+  }
+
   /**
    * The account's private grid: the backend's word when it gave one, else what this machine can
    * work out for itself (`lib/gridDerive.ts`). A backend that predates `machine_meta.gridName`
@@ -930,6 +974,7 @@ export class BackendSocket {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.stopGridModelsPush()
     this.orchestratorService?.stop()
     this.viewerForwarder.closeAll()
     if (this.heartbeat) this.heartbeat.stop()
@@ -1869,7 +1914,8 @@ export class BackendSocket {
           // and `models` keep naming the own grid alone, for an app that predates `grids`.
           //
           // DETACHED from this connection's ordered RPC chain, like `engines_probe`: it waits on a
-          // grid reconcile (up to 6s), then `grid` spawns that each go to the network (up to 30s).
+          // grid reconcile (up to 6s), then a `grid ls` spawn and — for a grid this daemon has never
+          // read — up to 4s of its first read (`gridModels.ts`); every other grid answers from its picture.
           // The desktop asks for it in the same breath as `terminal_capabilities` and `agents_list`
           // on every connect, and awaited here it held both behind it — with no network, past the
           // app's 10s request timeout, on which the app forces a reconnect and asks all three again.
@@ -1878,9 +1924,8 @@ export class BackendSocket {
           // until the wifi came back. Request ids make the reply safe to land out of order.
           //
           // One computation at a time: detached, a second ask that lands while the first is still
-          // out (the app re-asks on every connect, and its own 12s timeout is shorter than the grid
-          // spawns' 30s) would start more `grid` processes for the same answer. Later askers share
-          // the one in flight; the cache in listGridModels covers the settled case.
+          // out (the app re-asks on every connect) would spawn another `grid ls` for the same answer.
+          // Later askers share the one in flight; each grid's reads are single-flight in the service.
           void (async () => {
             const gridName = await this.resolveGridName()
             const inFlight = this.gridModelsInFlight
@@ -1892,24 +1937,7 @@ export class BackendSocket {
                     if (this.gridModelsInFlight?.gridName === gridName) this.gridModelsInFlight = null
                   }),
                 }).grids
-            const grids = await listing
-            reply(type, requestId, {
-              gridName,
-              models: grids.find((g) => g.own)?.models ?? [],
-              grids,
-              // Which engines a Local model can be offered to at all. Static per CLI version — it is
-              // the set of launch contracts in `gridLaunch.ts` — and answered here, beside the list,
-              // so the picker can say "Cursor runs only on its own login" instead of offering a row
-              // whose retarget the daemon would refuse. An older app ignores the field; an older
-              // daemon omits it, which the app reads as "offer everything", as before.
-              localModelEngines: gridCapableEngines(),
-              supportsModelLaunch: true,
-              // Whether this MACHINE has a `grid` to run at all — `managed`, `path` or `missing` —
-              // as distinct from `gridName`, which is about the account. The Local model dialog was
-              // gating on the account alone and starting an agent whose second step is `grid`; this
-              // is what lets it, and the picker, say so first. An older app ignores the field.
-              gridCli: gridCliPresence(),
-            })
+            reply(type, requestId, gridModelsPayload(gridName, await listing))
           })().catch(() => reply(type, requestId, { error: 'GRID_MODELS_FAILED' }))
           return
         }

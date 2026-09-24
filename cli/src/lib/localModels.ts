@@ -5,8 +5,10 @@ import { readFile, readdir, stat, mkdir, rename, writeFile, statfs } from 'node:
 import { basename, dirname, join } from 'node:path'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import { gridCredentialsPath } from './gridCredentials.js'
-import { forgetGridModels } from './gridModels.js'
 import { binaryOnPath } from './binaryOnPath.js'
+import { processExists } from './processLiveness.js'
+import type { LocalRecord, PictureState } from './gridPicture.js'
+import { displayModelName } from './gridReader.js'
 
 const GiB = 1024 ** 3
 const obj = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v : {}
@@ -24,6 +26,8 @@ export interface LocalModel {
   sizeBytes?: number; quant?: string; recommended?: boolean; canStart: boolean; canStop: boolean
   tokensPerSecond?: number; requests?: number; windowSeconds?: number
   operation?: ModelOperation
+  /** Running here, parked while its grid sleeps (additive: an older desktop reads plain `running`). */
+  gridAsleep?: boolean
 }
 export interface ModelOperation {
   id: string; modelId: string; action: 'start' | 'stop'; phase: 'running' | 'done' | 'failed'
@@ -38,12 +42,22 @@ interface Candidate {
   id: string; name: string; pull: string; file: string; files: string[]; size: number; quant: string; context: number
   aliases?: string[]
 }
-interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; context: number; siblings: number }
+/** `live`: its heartbeat sidecar is fresh (the grid is hearing from it). `pidAlive`: the process its run
+ *  record names exists — the only liveness that holds while the grid sleeps and the sidecar goes stale. */
+interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; pidAlive: boolean; context: number; siblings: number }
 interface Receipt { spec: 1; grid: string; operation?: ModelOperation }
+/** What the grid says is running on it, read WITHOUT waking it (`gridModels.gridInventory`): the
+ * overview's node objects while it is awake, nothing while it sleeps. */
+export interface GridInventory { state: PictureState; nodes: Record<string, unknown>[] }
 interface Options {
   stateDir: string; processEnv?: NodeJS.ProcessEnv
   run?: (args: string[], output?: (chunk: string) => void, timeout?: number) => Promise<GridFleetResult>
   request?: typeof fetch
+  /** Injected, never a `grid engines` call: that read carries the grid credential, and a signed-in read
+   * of a sleeping grid WAKES it — once a tick, for as long as the panel is open. */
+  inventory: (grid: string, force: boolean) => Promise<GridInventory>
+  /** Told when a start or stop has finished, so the model lists are read again. */
+  onChanged?: () => void
 }
 
 /** One concrete, machine-fitted version per model. Non-chat and unprobed offline
@@ -199,7 +213,8 @@ export class LocalModels {
         const advertised = Array.isArray(record.advertise_as) && specs.length === 1
           ? record.advertise_as.filter((v: unknown) => typeof v === 'string' && v.length > 0) : []
         const aliases: string[] = advertised.length ? advertised : [file]
-        result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live, context: Math.min(16384, num(record.ctx_size) || 8192), siblings: specs.length + (record.media ? 1 : 0) })
+        const pid = recordPid(record)
+        result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live, pidAlive: pid !== null && processExists(pid), context: Math.min(16384, num(record.ctx_size) || 8192), siblings: specs.length + (record.media ? 1 : 0) })
         this.blockers.set(grid, `Stop ${cleanName(aliases[0])} first to start another local model.`)
       }
     }
@@ -284,9 +299,15 @@ export class LocalModels {
   }
   private async readList(grid: string, force: boolean): Promise<LocalModelsSnapshot> {
     await Promise.all([this.loadCatalog(force), this.readReceipt(grid)])
-    let owned: Owned[] = [], nodes: Record<string, any>[] = [], inventoryError: string | undefined
+    let owned: Owned[] = [], nodes: Record<string, any>[] = [], inventoryError: string | undefined, asleep = false
     try {
-      [owned, nodes] = await Promise.all([this.owned(grid), this.json(['--remote', 'engines', grid, '--json']).then(rows)])
+      let inventory: GridInventory
+      [owned, inventory] = await Promise.all([this.owned(grid), this.options.inventory(grid, force)])
+      // Asleep is not an inventory error: the grid is resting, what runs here is still known here, and
+      // Start and Pause stay enabled. Only a read that failed some other way is.
+      if (inventory.state === 'unknown') throw new Error('unanswered')
+      asleep = inventory.state !== 'awake'
+      nodes = rows(inventory.nodes)
     } catch { inventoryError = 'Running models could not be checked. Try again.' }
     const operation = this.active?.grid === grid ? this.active.operation : this.receipt?.grid === grid ? this.receipt.operation : undefined
     const choices = [...this.candidates, ...(await this.known(grid, owned)).filter(k => !this.candidates.some(c => c.file === k.file))]
@@ -305,10 +326,14 @@ export class LocalModels {
           modelKey(str(typeof m === 'string' ? m : obj(m).model)) === modelKey(alias)))) : []
       return matches.length === 1 ? matches[0] : undefined
     }
+    // A parked engine: its grid sleeps, so the grid lists nothing, but the process that serves it is alive
+    // here and rejoins the moment the grid wakes. Liveness is the record's pid — never the heartbeat
+    // sidecar, which goes stale while a healthy provider is parked.
+    const parked = (instance?: Owned): boolean => asleep && !!instance?.pidAlive
     const models = choices.map((candidate, index): LocalModel => {
       const instance = owned.find(o => owners.get(o.file) === candidate)
       const node = servingNode(instance)
-      const running = !!node
+      const running = !!node || parked(instance)
       const available = downloaded[index]
       const answered = obj(node?.answered)
       const perModel = rows(answered.by_model).find(a => instance?.aliases.some(alias => modelKey(alias) === modelKey(str(a.model))))
@@ -320,12 +345,15 @@ export class LocalModels {
         tokensPerSecond: single && running ? num(node?.throughput_tok_s) : undefined,
         requests: running ? num(perModel?.requests) : undefined,
         windowSeconds: running ? num(answered.window_seconds) : undefined,
-        operation: operation?.modelId === candidate.id ? operation : undefined }
+        operation: operation?.modelId === candidate.id ? operation : undefined,
+        ...(!node && parked(instance) ? { gridAsleep: true } : {}) }
     })
     for (const instance of owned.filter(o => !choices.some(c => c.file === o.file))) {
+      const serving = !!servingNode(instance)
       models.push({ id: `local:${instance.file}`, name: cleanName(instance.aliases[0]),
-        state: servingNode(instance) ? 'running' : 'available', canStart: false, canStop: !inventoryError,
-        operation: operation?.modelId === `local:${instance.file}` ? operation : undefined })
+        state: serving || parked(instance) ? 'running' : 'available', canStart: false, canStop: !inventoryError,
+        operation: operation?.modelId === `local:${instance.file}` ? operation : undefined,
+        ...(!serving && parked(instance) ? { gridAsleep: true } : {}) })
     }
     const value: LocalModelsSnapshot = { models, memoryBytes: num(obj(this.device.memory).total_gb) === undefined ? undefined : this.device.memory.total_gb * GiB,
       hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), error: inventoryError || this.catalogError,
@@ -349,7 +377,7 @@ export class LocalModels {
       operation.phase = 'failed'
       operation.error = error instanceof ModelError ? error.message : 'The model could not finish. Start again to retry.'
       await this.save(grid, operation).catch(() => {})
-    }).finally(() => { this.active = undefined; this.cached = undefined; forgetGridModels() })
+    }).finally(() => { this.active = undefined; this.cached = undefined; this.options.onChanged?.() })
     return { operation }
   }
 
@@ -453,3 +481,39 @@ export class LocalModels {
   }
 }
 class ModelError extends Error {}
+
+/** More names than any one engine advertises: a record past it is cut, never trusted to be small. */
+const MAX_RECORD_IDS = 64
+
+/** A run record's pid while a process holds it; null while a join is mid-spawn (`grid join` writes 0). */
+function recordPid(record: Record<string, any>): number | null {
+  return Number.isSafeInteger(record.pid) && record.pid > 0 ? record.pid : null
+}
+
+/**
+ * This computer's own run records for one grid, as `servedHere` reads them (`gridPicture.ts`): the node
+ * name each registers under, what it advertises, and whether a process still holds it.
+ *
+ * ⚠️ The keys are the ones `grid join` writes (autonomous-grid `remote_provider._build_record`), and that
+ * repository's `tests/test_grid_reads_lockstep.py` pins every `record.<key>` read in THIS file against
+ * them — which is why this lives here rather than in a module of its own. A key `grid join` stopped
+ * writing is a model this computer silently stops recognising as its own: stale, never a wrong hide.
+ */
+export async function readRunRecords(home: string, gridId: string): Promise<LocalRecord[]> {
+  if (!gridId || basename(gridId) !== gridId) return []
+  const folder = join(home, 'run', 'engines', gridId)
+  const names = await readdir(folder).catch(() => [])
+  const result: LocalRecord[] = []
+  for (const name of names.filter(n => n.endsWith('.json'))) {
+    let record: Record<string, any>
+    try { record = obj(JSON.parse(await readFile(join(folder, name), 'utf8'))) } catch { continue }
+    const strings = (v: unknown): string[] => Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string' && s.length > 0) : []
+    // What the grid lists it as: the alias it advertises when it has one, else its model under the
+    // master's display rule (a trailing .gguf removed, case kept).
+    const advertised = strings(record.advertise_as)
+    const ids = (advertised.length ? advertised : strings(record.models).map(displayModelName)).slice(0, MAX_RECORD_IDS)
+    const pid = recordPid(record)
+    result.push({ name: str(record.meta_name), ids, pid, alive: pid !== null && processExists(pid) })
+  }
+  return result
+}

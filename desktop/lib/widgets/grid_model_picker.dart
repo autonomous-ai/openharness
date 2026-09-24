@@ -97,14 +97,44 @@ class _GridModelPickerState extends State<GridModelPicker> {
   ModelsMenuController? _usage;
   GridModels? _last;
 
+  /// Set when the control was built while the app was in the background: the warm-up it skipped is
+  /// owed, and paid once when the app comes back to the foreground.
+  bool _prefetchOwed = false;
+
   @override
   void initState() {
     super.initState();
+    // The app's one picture of the grids, when some other surface has already read it — or the
+    // daemon has pushed it — is a warm answer for this control's first click.
+    _last = widget.notifier.gridPictures[widget.machineId];
+    widget.notifier.gridPictures.addListener(_pictureChanged);
+    widget.notifier.foreground.addListener(_foregroundChanged);
     // Warm the answer as soon as the control exists, so a click lands on a memo rather than on two
     // subprocess spawns and two network round trips — measured at ~1.4s, which is a person watching
     // a header do nothing. Fire-and-forget: nothing here waits on it, and a failure just means the
-    // first open pays what it used to.
-    unawaited(_prefetch());
+    // first open pays what it used to. Not while the app is in the background: a pane restored
+    // behind a minimised window asks nothing until somebody can see it.
+    if (widget.notifier.inForeground) {
+      unawaited(_prefetch());
+    } else {
+      _prefetchOwed = true;
+    }
+  }
+
+  void _foregroundChanged() {
+    if (!mounted || !_prefetchOwed || !widget.notifier.inForeground) return;
+    _prefetchOwed = false;
+    unawaited(_prefetch().then((_) => _refreshOpenMenu()));
+  }
+
+  /// The app's picture of this machine's grids changed — another surface read it, or the daemon
+  /// pushed it. Taken as this control's memo, and drawn into the menu if one is open.
+  void _pictureChanged() {
+    if (!mounted) return;
+    final fresh = widget.notifier.gridPictures[widget.machineId];
+    if (fresh == null || identical(fresh, _last)) return;
+    _last = fresh;
+    _refreshOpenMenu();
   }
 
   Future<void> _prefetch() async {
@@ -116,8 +146,9 @@ class _GridModelPickerState extends State<GridModelPicker> {
     // usage rail keeps out of tests (kUnderTest) — here every test that drew a pane header left that
     // work's timers pending after the tree was gone. Opening the menu still refreshes.
     if (!kUnderTest) unawaited(_usage!.refresh().catchError((_) {}));
-    final answer = await widget.notifier.gridModels(widget.machineId);
-    if (mounted) _last = answer;
+    _prefetchOwed = false;
+    final picture = await widget.notifier.readGridPicture(widget.machineId);
+    if (mounted) _last = picture;
   }
 
   /// Closes the menu this control has open, if any. Set while one is showing.
@@ -200,6 +231,9 @@ class _GridModelPickerState extends State<GridModelPicker> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _entry == entry) entry.markNeedsBuild();
     });
+    // A post-frame callback waits for a frame, and nothing else may be drawing: a list pushed by the
+    // daemon lands in an idle window, where the redraw would sit until some unrelated repaint.
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   /// The answer the OPEN menu is drawing, and the overlay entry drawing it. Both set only while a
@@ -212,6 +246,8 @@ class _GridModelPickerState extends State<GridModelPicker> {
 
   @override
   void dispose() {
+    widget.notifier.gridPictures.removeListener(_pictureChanged);
+    widget.notifier.foreground.removeListener(_foregroundChanged);
     _expiry?.cancel();
     // A pane can go away under an open menu — closed, moved, or its swarm switched — and an overlay
     // entry outlives the State that inserted it.
@@ -266,7 +302,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
       // This open uses whatever is cached; the refresh lands for the next one. `refresh()` is itself
       // capped at once a minute, so opening the menu repeatedly costs nothing.
       unawaited(_usage!.refresh().catchError((_) {}));
-      answer = await widget.notifier.gridModels(widget.machineId);
+      answer = await widget.notifier.readGridPicture(widget.machineId);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -426,6 +462,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
       final right = b.grids[i];
       if (left.name != right.name ||
           left.own != right.own ||
+          left.state != right.state ||
           left.models.length != right.models.length) {
         return false;
       }

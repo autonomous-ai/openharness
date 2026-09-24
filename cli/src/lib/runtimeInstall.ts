@@ -246,6 +246,33 @@ export async function ensureManagedGrid(log: (message: string) => void = () => {
   })
 }
 
+/** How often a running daemon re-reads the managed `grid` pin. */
+export const GRID_PIN_RECHECK_MS = 10 * 60_000
+
+/**
+ * Follow the pin while the daemon RUNS, not only when it starts.
+ *
+ * A daemon updates itself within about a minute of a release, but it can then run for days, and a pin
+ * moved in between would wait for the next restart. That matters here because the pin and the daemon's
+ * code are released in an ORDER (grid-reads-without-waking: CLI tag → harness tag → pin, never 0.3.48
+ * alone): the pin has to reach the daemons already running the new code, the same day.
+ *
+ * Idempotent by construction — [ensureManagedGrid] fetches only the manifest and writes nothing while the
+ * installed grid IS the pin — and one check at a time. Every `grid` call resolves the binary afresh
+ * (`gridBinaryPath` reads `current-grid`), so a moved pin takes effect on the next call. Returns a stop.
+ */
+export function startGridPinRecheck(options: { ensure?: () => Promise<unknown>; intervalMs?: number } = {}): () => void {
+  const ensure = options.ensure ?? (() => ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`)))
+  let checking = false
+  const timer = setInterval(() => {
+    if (checking) return
+    checking = true
+    void ensure().catch(() => {}).finally(() => { checking = false })
+  }, options.intervalMs ?? GRID_PIN_RECHECK_MS)
+  timer.unref?.()
+  return () => clearInterval(timer)
+}
+
 /** The trailing `exec …` line, which is the only line any launcher we ship varies. */
 const EXEC_LINE = /^exec .*$/m
 

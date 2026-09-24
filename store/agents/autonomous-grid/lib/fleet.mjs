@@ -13,6 +13,47 @@ const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/;
 export const text = (value, max = 240) => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max) : '';
 export const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 
+/**
+ * The flag that reads a grid WITHOUT waking it (`grid` ≥ 0.3.49): the overview goes out with no
+ * credential, so a sleeping grid answers "asleep" at once instead of being started for a glance.
+ * Every automatic engines/models/stats read of a REMOTE grid carries it (lib/telemetry.mjs), always,
+ * with no version check — the binary `toolchain/grid.sh` resolves can change between two polls when
+ * the managed pin moves. A `grid` too old for it refuses the whole command with argparse's exit 2,
+ * which is loud and wakes nothing; the caller shows its last reading and never asks again without it.
+ *
+ * ⚠️ A cross-repo literal: the public CLI's `cli/remote_overview.NO_WAKE_FLAG`, pinned by its
+ * `tests/test_grid_reads_lockstep.py`, which finds it here by this exact quoted spelling.
+ */
+export const NO_WAKE = '--no-wake';
+/**
+ * The code beside `detail` when the platform says a grid is resting (grid-apis' proxy), carried to us
+ * in `grid`'s `--json` error envelope. Compared for EQUALITY and nothing else: any other refusal —
+ * codeless, stopped, master down, deleted — is a failed read and keeps today's handling.
+ * ⚠️ Cross-repo like NO_WAKE, and pinned the same way.
+ */
+export const ASLEEP_CODE = 'grid_asleep';
+/** The owner status of a grid the platform put to sleep (`grid info --json`'s `status`). Only the
+ *  grid's owner is shown a status; a member sees null and learns it from ASLEEP_CODE instead. */
+export const ASLEEP_STATE = 'asleep';
+/** argparse's exit status for an argument it does not know — how an old `grid` refuses NO_WAKE. */
+const USAGE_EXIT = 2;
+
+/** The `code` of `grid`'s JSON error envelope (`{"error": {"code": …, "message": …}}`, one line on
+ *  either stream), or null. A program branches on this; the sentence beside it is for people. */
+export function refusalCode(stdout, stderr) {
+  for (const chunk of [stderr, stdout]) {
+    for (const line of String(chunk || '').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{')) continue;
+      try {
+        const code = JSON.parse(trimmed)?.error?.code;
+        if (typeof code === 'string' && code) return code;
+      } catch { /* not an envelope */ }
+    }
+  }
+  return null;
+}
+
 export async function readJson(file, fallback, limit = 2 * 1024 * 1024) {
   try {
     if ((await stat(file)).size > limit) throw new Error('File is too large');
@@ -150,25 +191,36 @@ export function cleanDetail(message) {
     .replace(/(^[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, '$1…@'), 280);
 }
 
+/**
+ * Run a `--json` read and classify it. A failure carries two things a caller may branch on beside the
+ * sentence: `refusal`, the envelope's code (ASLEEP_CODE is the one this package reads), and
+ * `outdated`, true when the binary refused an argument it does not know — argparse's exit 2 with its
+ * usage line, which is how a `grid` older than NO_WAKE answers it. The usage line is required as well
+ * as the status because a Harness machine's own RPC also answers 2 for a request it would not start.
+ */
 export async function gridJson(machine, mode, args, options) {
   const result = await execute(machine, [`--${mode}`, ...args, '--json'], options);
   if (!result.ok) {
+    const refusal = refusalCode(result.stdout, result.stderr);
+    const outdated = result.code === USAGE_EXIT && /\busage:|unrecognized arguments/i.test(`${result.stderr}\n${result.stdout}`);
+    const fail = error => ({ ok: false, error, refusal, outdated });
     const blocked = /(?:could not reach|network|socket)[\s\S]{0,600}(?:operation not permitted|EPERM|denied|blocked)/i.test(`${result.stdout}\n${result.stderr}`);
-    if (blocked) return { ok: false, error: 'Network access was blocked by the agent sandbox. Use fleet status for viewer observations, or request scoped network approval before retrying this Grid command.' };
-    if (result.code === 127) return { ok: false, error: result.error };
+    if (blocked) return fail('Network access was blocked by the agent sandbox. Use fleet status for viewer observations, or request scoped network approval before retrying this Grid command.');
+    if (result.code === 127) return fail(result.error);
     // Exit 1 carries the reason on stderr (e.g. a dead relay URL): repeat it so the
     // viewer and the agent see "could not reach grid …", not just an exit code.
     const detail = cliDetail(result.stdout, result.stderr);
-    return { ok: false, error: detail ? `grid ${args[0]} failed (${result.code}): ${detail}` : `grid ${args[0]} failed (${result.code}). Run it in the agent terminal for details.` };
+    return fail(detail ? `grid ${args[0]} failed (${result.code}): ${detail}` : `grid ${args[0]} failed (${result.code}). Run it in the agent terminal for details.`);
   }
   try {
     const value = JSON.parse(result.stdout);
     if (value?.error) {
       const detail = typeof value.error === 'string' ? cleanDetail(value.error) : cleanDetail(value.error.message || 'Grid reported an error.');
-      return { ok: false, error: `grid ${args[0]} reported: ${detail}` };
+      const refusal = typeof value.error?.code === 'string' && value.error.code ? value.error.code : null;
+      return { ok: false, error: `grid ${args[0]} reported: ${detail}`, refusal, outdated: false };
     }
     return { ok: true, value };
-  } catch { return { ok: false, error: `grid ${args[0]} did not return valid JSON.` }; }
+  } catch { return { ok: false, error: `grid ${args[0]} did not return valid JSON.`, refusal: null, outdated: false }; }
 }
 
 /**

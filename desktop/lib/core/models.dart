@@ -1048,6 +1048,28 @@ enum GridCli {
   };
 }
 
+/// What the daemon last learned about one grid, as it reports beside the section (`state`).
+///
+/// The daemon reads grids without waking them, so a section can describe a grid that is resting:
+/// [asleep] keeps its last known models rather than blanking them, [unknown] is a read that failed
+/// some other way (or none yet), and [waking] is reserved for a person asking it to start. An older
+/// daemon sends no field, read as null: nothing is claimed either way, and the section draws as it
+/// always did.
+enum GridSectionState {
+  awake,
+  asleep,
+  waking,
+  unknown;
+
+  static GridSectionState? parse(Object? raw) => switch (raw) {
+    'awake' => GridSectionState.awake,
+    'asleep' => GridSectionState.asleep,
+    'waking' => GridSectionState.waking,
+    'unknown' => GridSectionState.unknown,
+    _ => null,
+  };
+}
+
 /// The picker's whole answer: which grid was asked, and what it offers.
 ///
 /// One grid the machine is signed into, with what it serves. [own] marks the account's private
@@ -1057,10 +1079,23 @@ class GridSection {
   final bool own;
   final List<GridModel> models;
 
+  /// How the grid answered the daemon's last look — see [GridSectionState]. Null from an older
+  /// daemon, and nothing here draws it yet.
+  final GridSectionState? state;
+
+  /// When the grid was last seen awake, or null.
+  final DateTime? seenAt;
+
+  /// How old [models] is, in seconds, or null when nothing is known.
+  final int? lastKnownAge;
+
   const GridSection({
     required this.name,
     required this.own,
     required this.models,
+    this.state,
+    this.seenAt,
+    this.lastKnownAge,
   });
 }
 
@@ -1104,6 +1139,58 @@ class GridModels {
     this.gridCli,
     this.reachable = true,
   });
+
+  /// The daemon's `grid_models_list` reply — and the `grid_models_changed` push, which carries the
+  /// same document — read defensively: the fields of an older or newer daemon are simply absent or
+  /// ignored, never a failure. `reachable` is false only when the daemon answered with an `error`.
+  factory GridModels.fromReply(Map<String, dynamic> reply) {
+    List<GridModel> parseModels(Object? raw, {String? grid}) =>
+        (raw is List ? raw : const <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(
+              (m) => GridModel(
+                id: m['id'] is String ? m['id'] as String : '',
+                node: m['node'] is String ? m['node'] as String : '',
+                grid: grid,
+              ),
+            )
+            .where((m) => m.id.isNotEmpty)
+            .toList();
+    final rawGrids = reply['grids'];
+    final grids = (rawGrids is List ? rawGrids : const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .where((g) => g['name'] is String && (g['name'] as String).isNotEmpty)
+        .map((g) {
+          final name = g['name'] as String;
+          final seen = g['seenAt'];
+          final known = g['lastKnownAge'];
+          return GridSection(
+            name: name,
+            own: g['own'] == true,
+            models: parseModels(g['models'], grid: name),
+            state: GridSectionState.parse(g['state']),
+            seenAt: seen is String ? DateTime.tryParse(seen) : null,
+            lastKnownAge: known is num && known.isFinite && known >= 0
+                ? known.round()
+                : null,
+          );
+        })
+        .toList();
+    final capable = reply['localModelEngines'];
+    return GridModels(
+      gridName: reply['gridName'] is String
+          ? reply['gridName'] as String
+          : null,
+      models: parseModels(reply['models']),
+      grids: grids,
+      localModelEngines: capable is List
+          ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
+          : null,
+      gridCli: GridCli.parse(reply['gridCli']),
+      supportsModelLaunch: reply['supportsModelLaunch'] == true,
+      reachable: reply['error'] == null,
+    );
+  }
 
   /// The sections to draw: [grids] when the daemon sent them, else the own grid alone.
   List<GridSection> get sections => grids.isNotEmpty
