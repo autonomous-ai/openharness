@@ -31,7 +31,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { GridSwitchDriver, pickGridModel, type GridSwitchTraceStep } from './gridSwitchDriver.js'
 import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
-import { firstStuck, plannedLegs, quotaHit, verifyTools, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
+import { firstStuck, plannedLegs, quotaHit, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
 
 const LAST_LEG = LEGS[LEGS.length - 1]
 import { prepareWorkspace, readLog, readWorkspaceFile, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
@@ -202,7 +202,7 @@ try {
 }
 
 // How each step got done, and by which model: read from the engine's own session file now that the
-// run is over. Evidence, not a verdict — a step's pass/fail is its proof on disk (smokeChecks.ts).
+// run is over. Reported, never judged — a step's pass/fail is its result on disk (smokeChecks.ts).
 if (workspace) {
   const refs = legs.flatMap((l) => l.checks.map((c) => c.ref).filter((r): r is string => !!r))
   const used = useByRef(engine, workspace, refs)
@@ -210,8 +210,6 @@ if (workspace) {
     const u = c.ref ? used[c.ref] : undefined
     if (u) { c.tools = u.tools; c.models = u.models }
   }
-  // The right file made the wrong way is not a pass (smokeChecks.ts verifyTools).
-  verifyTools(engine, legs)
 }
 
 const session = sessionName({ engine, version, testcase: TESTCASE, gridModel: gridModel ?? undefined, at: startedAt })

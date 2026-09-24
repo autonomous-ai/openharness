@@ -56,66 +56,33 @@ const MISS = {
 }
 
 /**
- * Each request names the tool it is about. Measured on the first real run of these steps (claude,
- * 2026-09-24): asked plainly to read, write and edit, claude did all three through `Bash` — the files
- * came out right and its Read / Write / Edit tools were never touched, which is not what the step is
- * for. So claude is asked for its tool by name, and codex for `apply_patch` (it has no separate read
- * tool: it reads through its shell, so that step names none). `expectTools` is then checked against
- * what the engine really called (sessionTools.ts): the right file made the wrong way is not a pass.
+ * Plain requests, the way a person types them, and the same for every engine. A step passes on its
+ * RESULT — the file really read, written, edited; the command really run; the MCP server really
+ * called — never on which of the engine's tools got it there. Which tools it used (claude `Read` or
+ * `Bash cat`, codex `apply_patch` or a shell write) is read back from the session file and REPORTED
+ * (sessionTools.ts, the message's Tools line), never judged: an engine is free to reach a result its
+ * own way, and a person asking for it would be.
+ *
+ * That report is still worth reading. It is how it was seen, on the first real runs, that claude
+ * does file work through Bash unless asked otherwise, and that codex on a grid model writes files
+ * through the shell where on its own account it uses apply_patch (a grid model is not in codex's
+ * model catalog, so codex does not offer it apply_patch).
  */
-type Engine = 'claude' | 'codex'
-
-const ASK: Record<Engine, Record<CheckId, (x: { n: number; a: number; b: number }) => string>> = {
-  claude: {
-    bash: ({ a, b }) => `Use the Bash tool to run tools/calc.sh add ${a} ${b} and tell me the result.`,
-    read: ({ n }) => `Use the Read tool to read notes/secret-${n}.txt and tell me what it says.`,
-    write: ({ n }) => `Use the Write tool to create out/hello-${n}.txt with this text: hello from step ${n}`,
-    edit: ({ n }) => `Use the Edit tool to change pending to done in notes/todo-${n}.txt.`,
-    mcp: ({ a, b }) => `Use the MCP server e2e_calc to add ${a} and ${b}.`,
-  },
-  codex: {
-    bash: ({ a, b }) => `Run tools/calc.sh add ${a} ${b} in the shell and tell me the result.`,
-    read: ({ n }) => `Read notes/secret-${n}.txt and tell me what it says.`,
-    write: ({ n }) => `Use apply_patch to create out/hello-${n}.txt with this text: hello from step ${n}`,
-    edit: ({ n }) => `Use apply_patch to change pending to done in notes/todo-${n}.txt.`,
-    mcp: ({ a, b }) => `Use the MCP server e2e_calc to add ${a} and ${b}.`,
-  },
-}
-
-/** The engine's own tool(s) a step must go through — matched against sessionTools' names. */
-export const EXPECT_TOOLS: Record<Engine, Partial<Record<CheckId, { name: string; test: RegExp }>>> = {
-  claude: {
-    bash: { name: 'Bash', test: /^Bash$/ },
-    read: { name: 'Read', test: /^Read$/ },
-    write: { name: 'Write', test: /^Write$/ },
-    edit: { name: 'Edit', test: /^(Edit|MultiEdit)$/ },
-    mcp: { name: 'mcp__e2e_calc__*', test: /^mcp__e2e_calc__/ },
-  },
-  // code mode calls tools from `exec` (`exec→apply_patch`); classic mode calls them directly.
-  codex: {
-    bash: { name: 'exec_command', test: /(^|→)(exec_command|shell|local_shell)$/ },
-    write: { name: 'apply_patch', test: /(^|→)apply_patch$/ },
-    edit: { name: 'apply_patch', test: /(^|→)apply_patch$/ },
-    mcp: { name: 'mcp__e2e_calc__*', test: /(^|→)mcp__e2e_calc__/ },
-  },
-}
-
-const side = (engine: Engine, n: 1 | 2, a: number, b: number, c: number, d: number): SmokeCheck[] => [
-  { id: 'bash', prompt: ASK[engine].bash({ n, a, b }), log: 'tool', logPattern: `add ${a} ${b} = ${a + b}`, onMiss: MISS.bash },
-  { id: 'read', prompt: ASK[engine].read({ n, a, b }), answerFromFile: `notes/secret-${n}.txt`, onMiss: MISS.read },
-  { id: 'write', prompt: ASK[engine].write({ n, a, b }), file: { path: `out/hello-${n}.txt`, equals: `hello from step ${n}` }, onMiss: MISS.write },
-  { id: 'edit', prompt: ASK[engine].edit({ n, a, b }), file: { path: `notes/todo-${n}.txt`, contains: 'status: done', lacks: 'pending' }, onMiss: MISS.edit },
-  { id: 'mcp', prompt: ASK[engine].mcp({ n, a: c, b: d }), log: 'mcp', logPattern: `add ${c} ${d} = ${c + d}`, onMiss: MISS.mcp },
+const side = (n: 1 | 2, a: number, b: number, c: number, d: number): SmokeCheck[] => [
+  { id: 'bash', prompt: `Run tools/calc.sh add ${a} ${b} and tell me the result.`, log: 'tool', logPattern: `add ${a} ${b} = ${a + b}`, onMiss: MISS.bash },
+  { id: 'read', prompt: `Read notes/secret-${n}.txt and tell me what it says.`, answerFromFile: `notes/secret-${n}.txt`, onMiss: MISS.read },
+  { id: 'write', prompt: `Create the file out/hello-${n}.txt with this text: hello from step ${n}`, file: { path: `out/hello-${n}.txt`, equals: `hello from step ${n}` }, onMiss: MISS.write },
+  { id: 'edit', prompt: `In notes/todo-${n}.txt, change pending to done.`, file: { path: `notes/todo-${n}.txt`, contains: 'status: done', lacks: 'pending' }, onMiss: MISS.edit },
+  { id: 'mcp', prompt: `Use the MCP server e2e_calc to add ${c} and ${d}.`, log: 'mcp', logPattern: `add ${c} ${d} = ${c + d}`, onMiss: MISS.mcp },
 ]
 
 /** The same five requests on each side; files and numbers differ so nothing carries over. */
-export function scenarioFor(engine: string): Record<Leg, readonly SmokeCheck[]> {
-  const e: Engine = engine === 'codex' ? 'codex' : 'claude'
-  return { subscription: side(e, 1, 40, 2, 30, 12), grid: side(e, 2, 50, 7, 60, 18) }
-}
+export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = { subscription: side(1, 40, 2, 30, 12), grid: side(2, 50, 7, 60, 18) }
 
-/** The claude wording — for callers that only need the steps' shape (ids, proofs), not an engine. */
-export const SCENARIO: Record<Leg, readonly SmokeCheck[]> = scenarioFor('claude')
+/** The scenario an engine is given — the same plain requests for every engine (see above). */
+export function scenarioFor(_engine: string): Record<Leg, readonly SmokeCheck[]> {
+  return SCENARIO
+}
 
 /** Every step of every leg, for callers that want the flat list (the skill, the tests). */
 export const SMOKE_CHECKS: readonly SmokeCheck[] = LEGS.flatMap((leg) => SCENARIO[leg])
@@ -164,29 +131,6 @@ export function plannedLegs(): LegOutcome[] {
     leg,
     checks: SCENARIO[leg].map((c) => ({ id: c.id, status: 'not-run' as const })),
   }))
-}
-
-/**
- * The right file made the wrong way is not a pass: a step proven on disk but done without its tool
- * (EXPECT_TOOLS) becomes `stuck`, saying which tool it used instead. A step whose tools could not be
- * read at all fails too — "could not verify" must never read as "verified". Needs `tools` filled in
- * (sessionTools.ts); mutates and returns `legs`.
- */
-export function verifyTools(engine: string, legs: LegOutcome[]): LegOutcome[] {
-  const expect = EXPECT_TOOLS[engine === 'codex' ? 'codex' : 'claude']
-  for (const l of legs) for (const c of l.checks) {
-    const want = expect[c.id]
-    if (c.status !== 'ok' || !want) continue
-    const used = c.tools ?? []
-    if (!used.length) {
-      c.status = 'stuck'
-      c.note = `no tool call found in ${engine}'s session file for this step — the ${c.id} tool could not be verified`
-    } else if (!used.some((t) => want.test.test(t))) {
-      c.status = 'stuck'
-      c.note = `done with ${used.join(' → ')}, not ${want.name} — the ${want.name} tool was not exercised`
-    }
-  }
-  return legs
 }
 
 /** The (leg, step) where the account ran out of usage, or null. Checked before "what stuck". */

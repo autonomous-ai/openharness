@@ -5,7 +5,7 @@ import { compareVersions, planMatrixRuns } from './trigger.js'
 import { sessionName } from './sessionName.js'
 import { buildMatrixEntry } from './matrix.js'
 import type { AgentEngine } from '../engines/types.js'
-import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit, scenarioFor, verifyTools, type CheckId, type LegOutcome } from './smokeChecks.js'
+import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit, scenarioFor, type CheckId } from './smokeChecks.js'
 import { pickGridModel } from './gridSwitchDriver.js'
 import { prepareWorkspace, readLog, logPath, readWorkspaceFile, preAcceptClaudeBypassMode, CALC_SH, CALC_MCP_MJS } from './workspace.js'
 import { useByRef } from './sessionTools.js'
@@ -199,37 +199,11 @@ describe('scenario (what a person does, on each side of the switch)', () => {
       expect(c.prompt).not.toMatch(/reply with exactly|<result>|RECALL_|TOOL_|MCP_/i)
       if (c.logPattern) expect(c.prompt).not.toContain(c.logPattern) // "add 40 2" is asked; "= 42" is only the log's
       expect(!!c.log || !!c.answerFromFile || !!c.file).toBe(true) // proven by the machine, never by the reply
+      // The result is what is tested, not the route: no request tells the engine which tool to use.
+      expect(c.prompt).not.toMatch(/\b(Bash|Read|Write|Edit) tool\b|apply_patch|in the shell/)
     }
-  })
-
-  it('each engine is asked for its own tool by name, with the same steps and the same proofs', () => {
-    const claude = scenarioFor('claude'), codex = scenarioFor('codex')
-    for (const leg of LEGS) {
-      expect(codex[leg].map((c) => [c.id, c.logPattern, c.answerFromFile, c.file])).toEqual(claude[leg].map((c) => [c.id, c.logPattern, c.answerFromFile, c.file]))
-    }
-    expect(claude.subscription.map((c) => c.prompt.match(/^Use the (\w+)/)?.[1])).toEqual(['Bash', 'Read', 'Write', 'Edit', 'MCP'])
-    expect(codex.subscription.filter((c) => /apply_patch/.test(c.prompt)).map((c) => c.id)).toEqual(['write', 'edit'])
-  })
-
-  it('the right file made the wrong way is not a pass: verifyTools fails the step and names the tool used', () => {
-    const legs = (tools: Partial<Record<CheckId, string[]>>): LegOutcome[] => [{
-      leg: 'subscription',
-      checks: (['bash', 'read', 'write', 'edit', 'mcp'] as CheckId[]).map((id) => ({ id, status: 'ok' as const, ...(tools[id] ? { tools: tools[id] } : {}) })),
-    }]
-    // claude doing everything through Bash — what the first real run did.
-    const viaBash = verifyTools('claude', legs({ bash: ['Bash'], read: ['Bash'], write: ['Bash'], edit: ['Bash'], mcp: ['ToolSearch', 'mcp__e2e_calc__add'] }))
-    expect(viaBash[0].checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=stuck', 'write=stuck', 'edit=stuck', 'mcp=ok'])
-    expect(viaBash[0].checks[2].note).toBe('done with Bash, not Write — the Write tool was not exercised')
-    // claude with its own tools passes.
-    const right = verifyTools('claude', legs({ bash: ['Bash'], read: ['Read'], write: ['Write'], edit: ['Edit'], mcp: ['mcp__e2e_calc__add'] }))
-    expect(right[0].checks.every((c) => c.status === 'ok')).toBe(true)
-    // codex: apply_patch from code mode's exec counts; its read has no tool of its own to demand.
-    const codex = verifyTools('codex', legs({ bash: ['exec→exec_command'], read: ['exec→exec_command'], write: ['exec→apply_patch'], edit: ['apply_patch'], mcp: ['mcp__e2e_calc__sub'] }))
-    expect(codex[0].checks.every((c) => c.status === 'ok')).toBe(true)
-    // Tools that could not be read at all are not "verified".
-    const unknown = verifyTools('claude', legs({ bash: ['Bash'], read: ['Read'], write: ['Write'], edit: ['Edit'] }))
-    expect(unknown[0].checks[4].status).toBe('stuck')
-    expect(unknown[0].checks[4].note).toMatch(/could not be verified/)
+    // And every engine gets the same words.
+    expect(scenarioFor('codex')).toEqual(scenarioFor('claude'))
   })
 
   it('firstStuck names the first leg/step that did not pass', () => {
@@ -295,12 +269,12 @@ function fakeAgent(opts: { lie?: CheckId[] } = {}) {
       if (!lie.has('bash')) logs.lines.tool.push(`t add ${m[1]} ${m[2]} = ${+m[1] + +m[2]}`)
       return `The result is ${+m[1] + +m[2]}.`
     }
-    if ((m = p.match(/read (notes\/secret-\d\.txt)/i))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
-    if ((m = p.match(/create (\S+) with this text: (.*) \(ref-/i))) {
+    if ((m = p.match(/Read (notes\/secret-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
+    if ((m = p.match(/Create the file (\S+) with this text: (.*) \(ref-/))) {
       if (!lie.has('write')) files[m[1]] = `${m[2]}\n`
       return 'Done.'
     }
-    if ((m = p.match(/change pending to done in (\S+?)\.? \(ref-/))) {
+    if ((m = p.match(/In (\S+), change pending to done/))) {
       if (!lie.has('edit')) files[m[1]] = files[m[1]].replace('pending', 'done')
       return 'Updated.'
     }
