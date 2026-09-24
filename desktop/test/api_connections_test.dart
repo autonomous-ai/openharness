@@ -243,6 +243,7 @@ void main() {
     double width = 640,
     double height = 820,
     ModelsTab initialTab = ModelsTab.apis,
+    bool showOnboarding = false,
   }) async {
     tester.view.resetPhysicalSize();
     tester.view.physicalSize = const Size(1280, 1100);
@@ -268,6 +269,7 @@ void main() {
                 controller: controller,
                 subscriptions: subscriptions,
                 initialTab: initialTab,
+                showOnboarding: showOnboarding,
                 onClose: () {},
                 onManage: () {},
               ),
@@ -689,6 +691,26 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('API editing preserves the local-model onboarding flow', (
+    tester,
+  ) async {
+    await mount(tester, showOnboarding: true);
+    expect(find.text('Explore local models'), findsOneWidget);
+    await tester.tap(find.byTooltip('Add OpenRouter'));
+    await tester.pumpAndSettle();
+    expect(find.text('Explore local models'), findsNothing);
+    expect(field('API key'), findsOneWidget);
+    await tester.tap(find.byTooltip('Back to APIs'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Explore local models'));
+    await tester.pumpAndSettle();
+    expect(find.text('Explore local models'), findsNothing);
+    expect(find.text('Search models…'), findsOneWidget);
+    expect(field('API key'), findsNothing);
+    expect(find.byTooltip('Add OpenRouter'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('subscription providers stay editable without API suggestions', (
     tester,
