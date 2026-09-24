@@ -4,12 +4,12 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { rmSync, writeFileSync } from 'node:fs'
-import { compatibleModels, LocalModels } from './localModels.js'
+import { compatibleModels, contextLadder, LocalModels } from './localModels.js'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 
 const card = (id = 'org/Small-GGUF') => ({ repo_id: id, runnable: true, task: 'text-generation', format: 'GGUF',
-  fit: { version: 'Q4', ctx: 32768, size: 64 },
+  fit: { version: 'Q4', ctx: 131072, size: 64 },
   versions: [{ version: 'Q4', size_bytes: 64, pull_spec: `${id}:Small-Q4.gguf`, urls: ['https://example.test/Small-Q4.gguf'] }] })
 const ok = (value: unknown = {}) => ({ ok: true, code: 0, stdout: JSON.stringify(value), stderr: '', error: null })
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -21,6 +21,12 @@ let downloadFails: boolean, catalogFails: boolean
 /** What `grid info` says of the grid. Down (`stopped`/`asleep`) refuses `engines` and `join`, as
  *  the real grid does, until `grid start` brings it back. */
 let gridState: 'running' | 'stopped' | 'asleep'
+/** What `grid ctx FILE` reads from a file's header (null: the command fails), and the window the
+ *  serving engine reports once started (undefined: Grid does not say). */
+let trainedWindow: number | null, servedWindow: number | undefined
+/** The relay's own test request — as opposed to the probe sent straight to the engine on this
+ *  machine (`127.0.0.1`), which a start now makes first. */
+const RELAY_CHAT = 'inference.example.test/v1/chat/completions'
 const refused = (message: string) => ({ ok: false, code: 1, stdout: '', stderr: message, error: 'Grid command failed.' })
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'local-models-'))
@@ -28,6 +34,7 @@ beforeEach(async () => {
   await mkdir(records, { recursive: true }); await mkdir(join(home, 'models'))
   await writeFile(join(home, 'credentials.toml'), 'session_token = "test-only-token"\napi_url = "https://catalog.example.test"\n')
   calls = []; serving = false; catalogCards = [card()]; downloadFails = false; catalogFails = false; gridState = 'running'
+  trainedWindow = null; servedWindow = undefined
   run = vi.fn(async (args: string[], output?: (s: string) => void) => {
     calls.push(args)
     if (args[0] === 'device-info') return ok({ device_class: 'apple-silicon', backend: 'metal', usable_bytes: 54 * 1024 ** 3, memory: { total_gb: 64 } })
@@ -36,7 +43,9 @@ beforeEach(async () => {
     if (args[1] === 'start') { gridState = 'running'; return ok() }
     const down = gridState !== 'running'
     if (down && (args.includes('engines') || args.includes('join'))) return refused("Grid home isn't up; run `grid start home` first.")
+    if (args[0] === 'ctx') return trainedWindow === null ? refused('no header') : ok({ file: args[1], context_length: trainedWindow })
     if (args.includes('engines')) return ok(serving ? [{ node_id: 'local-node', online: true, models: ['Small-Q4.gguf'], throughput_tok_s: 17.6,
+      ...(servedWindow === undefined ? {} : { model_capabilities: { 'small-q4': { context_length: servedWindow, vision: false } } }),
       vram_used_mb: 99999, answered: { window_seconds: 3600, requests: 4, by_model: [{ model: 'Small-Q4.gguf', requests: 4 }] } }] : [])
     if (args[0] === 'pull') {
       output?.('42%')
@@ -102,8 +111,8 @@ describe('local model discovery and lifecycle', () => {
     expect(snapshot.models[0]).toMatchObject({ state: 'running', canStop: true,
       tokensPerSecond: 17.6, requests: 4, windowSeconds: 3600, operation: { phase: 'done', stage: 'verifying' } })
     expect(snapshot.models[0]).not.toHaveProperty('memoryBytes')
-    expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '1', '--ctx-size', '16384', '--reasoning-budget', '0'])
-    expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(true)
+    expect(calls.find(args => args.includes('join'))).toEqual(['--remote', 'join', 'home', '--serve', 'Small-Q4.gguf', '--max-concurrency', '1', '--ctx-size', '131072', '--endpoint-port', expect.stringMatching(/^\d+$/), '--reasoning-budget', '0'])
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     expect(await readFile(join(stateDir, (await readdir(stateDir))[0]), 'utf8')).not.toContain('token')
   })
 
@@ -138,12 +147,12 @@ describe('local model discovery and lifecycle', () => {
     let release!: () => void
     const barrier = new Promise<void>(resolve => { release = resolve })
     const original = request.getMockImplementation()!
-    request.mockImplementation(async (url, init) => { if (String(url).includes('chat/completions')) await barrier; return original(url, init) })
+    request.mockImplementation(async (url, init) => { if (String(url).includes(RELAY_CHAT)) await barrier; return original(url, init) })
     const first = await service.act('home', 'org/Small-GGUF', 'start')
     const second = await service.act('home', 'org/Small-GGUF', 'start')
     expect(second.operation?.id).toBe(first.operation?.id)
     expect((await service.act('home', 'other', 'start')).error).toContain('Wait')
-    await vi.waitFor(() => expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(true))
+    await vi.waitFor(() => expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true))
     expect((await service.list('home')).models[0].operation).toMatchObject({ stage: 'verifying', phase: 'running' })
     release(); await service.settled()
     expect(calls.filter(args => args.includes('join'))).toHaveLength(1)
@@ -236,6 +245,8 @@ describe('local model discovery and lifecycle', () => {
     const path = join(stateDir, (await readdir(stateDir)).find(name => name.endsWith('.known.json'))!)
     const saved = JSON.parse(await readFile(path, 'utf8'))
     expect(saved[0].aliases).toEqual(['team/my-model'])
+    // What receipts from before the 64K floor carried: a pinned 16K that must not be replayed.
+    saved[0].context = 16384
     if (scenario === 'legacy') delete saved[0].aliases
     if (scenario === 'malformed') saved[0].aliases = [42, '', '--invalid', 'invalid\nname']
     await writeFile(path, JSON.stringify(saved))
@@ -243,8 +254,11 @@ describe('local model discovery and lifecycle', () => {
     await fresh.act('home', id, 'start'); await fresh.settled()
     const expectedAlias = scenario === 'current' ? 'team/my-model' : scenario === 'legacy' ? 'my-model' : null
     const joined = calls.find(args => args.includes('join'))!
-    expect(joined.slice(11)).toEqual(expectedAlias ? ['--advertise-as', expectedAlias] : [])
-    const inference = request.mock.calls.find(([url]) => String(url).includes('chat/completions'))!
+    expect(joined.slice(joined.indexOf('--reasoning-budget') + 2)).toEqual(expectedAlias ? ['--advertise-as', expectedAlias] : [])
+    // Not sized by any catalog and its header unread here, so the start begins at 128K — and a
+    // receipt's saved context, which older ones pinned at 16K, is never replayed.
+    expect(joined[joined.indexOf('--ctx-size') + 1]).toBe('131072')
+    const inference = request.mock.calls.find(([url]) => String(url).includes(RELAY_CHAT))!
     expect(JSON.parse(String(inference[1]?.body)).model).toBe(expectedAlias ?? 'Small-Q4.gguf')
     expect((await fresh.list('home')).models[0].operation?.phase).toBe('done')
   })
@@ -598,7 +612,7 @@ describe('local model discovery and lifecycle', () => {
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     expect(calls.filter(args => args.includes('join'))).toHaveLength(1)
-    expect(request.mock.calls.filter(([url]) => String(url).includes('chat/completions'))).toHaveLength(2)
+    expect(request.mock.calls.filter(([url]) => String(url).includes(RELAY_CHAT))).toHaveLength(2)
   })
 
   it.each([false, true])('handles an explicit engine override (available=%s)', async available => {
@@ -616,7 +630,7 @@ describe('local model discovery and lifecycle', () => {
     run.mockImplementation(async (args, output) => args.includes('info') ? ok() : original(args, output))
     await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
     expect((await service.list('home')).models[0].operation?.phase).toBe('failed')
-    expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(false)
   })
 
   it.each(['reasoning only', 'http error', 'network error'])('requires a real test reply and bounds retries for %s', async scenario => {
@@ -624,7 +638,8 @@ describe('local model discovery and lifecycle', () => {
     let attempted!: () => void
     const first = new Promise<void>(resolve => { attempted = resolve })
     request.mockImplementation(async (url, init) => {
-      if (String(url).includes('/catalog')) return original(url, init)
+      // The catalog, and the engine on this machine, answer normally: this is about the RELAY check.
+      if (String(url).includes('/catalog') || String(url).includes('127.0.0.1')) return original(url, init)
       attempted()
       if (scenario === 'network error') throw new Error('private-token')
       return scenario === 'http error' ? new Response('private-token', { status: 503 })
@@ -754,5 +769,158 @@ describe('local model discovery and lifecycle', () => {
     run.mockImplementation(async (args, output) => args.includes('leave') ? { ...ok(), ok: false } : original(args, output))
     await service.act('home', 'local:Small-Q4.gguf', 'stop'); await service.settled()
     expect((await service.list('home')).models[0]).toMatchObject({ name: 'Small-Q4', state: 'running', operation: { phase: 'failed' } })
+  })
+})
+
+describe('a context a coding agent can work in', () => {
+  // ⚠️ REGRESSION. Every model was offered and started at 16K or less — a model that loads, passes
+  // its one-word check, and then cannot hold a coding agent's first prompt. Codex, Claude Code and
+  // OpenCode all need 64K at the least; the most this machine can give is what a start now asks for.
+
+  it.each([
+    [32768, false], [65535, false], [65536, true], [262144, true],
+  ])("a catalog fit of %i on this machine is offered: %s", async (ctx, offered) => {
+    catalogCards[0].fit.ctx = ctx
+    expect((await service.list('home')).models.length).toBe(offered ? 1 : 0)
+  })
+
+  it('pins the whole fit, capped at the most the model was trained for', async () => {
+    Object.assign(catalogCards[0].fit, { ctx: 262144, max_ctx: 196608 })
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const joined = calls.find(args => args.includes('join'))!
+    expect(joined[joined.indexOf('--ctx-size') + 1]).toBe('196608')
+  })
+
+  it('shrinks to what fits at start when memory has since tightened, but never under 64K', async () => {
+    catalogCards[0].fit.ctx = 262144
+    await service.list('home')
+    catalogCards[0].fit.ctx = 98304
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const joined = calls.find(args => args.includes('join'))!
+    expect(joined[joined.indexOf('--ctx-size') + 1]).toBe('98304')
+  })
+
+  it('refuses to start at all when the fit at start is under 64K', async () => {
+    await service.list('home')
+    catalogCards[0].fit.ctx = 32768
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(calls.some(args => args.includes('join'))).toBe(false)
+    expect((await service.list('home')).models[0].operation).toMatchObject({ phase: 'failed', error: expect.stringContaining('make room') })
+  })
+
+  it('hides a model on disk whose file can never hold 64K, and keeps one it cannot read', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ models: ['Small-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const id = (await service.list('home')).models[0].id
+    await service.act('home', id, 'stop'); await service.settled()
+    // Unreadable header: unknown is not "too small".
+    expect((await service.list('home', true)).models.map(m => m.id)).toEqual([id])
+    trainedWindow = 32768
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    expect((await fresh.list('home')).models).toEqual([])
+  })
+
+  it.each([
+    [131072, 'done'], [undefined, 'done'], [32768, 'failed'],
+  ] as const)('after a start that served %s tokens, the start is %s', async (window, phase) => {
+    servedWindow = window
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const operation = (await service.list('home', true)).models[0].operation
+    expect(operation?.phase).toBe(phase)
+    if (phase === 'failed') {
+      // Served too small: taken back down rather than left answering prompts it cannot hold.
+      expect(calls.find(args => args.includes('leave'))).toEqual(['--remote', 'leave', 'home', '--engine', 'Small-Q4.gguf'])
+      expect(operation?.error).toBe('Small could only get a 32K context here. Coding agents need at least 64K. Close some apps, or choose a smaller model.')
+    } else {
+      expect(calls.some(args => args.includes('leave'))).toBe(false)
+    }
+  })
+})
+
+describe('stepping down to the context that actually runs', () => {
+  // ⚠️ REGRESSION, measured on a 64 GB M1 Max. Left to the engine, a 35B model took its whole
+  // trained 256K, loaded, and then failed its very first request — "Insufficient Memory
+  // (kIOGPUCommandBufferCallbackErrorOutOfMemory)", then "Compute error." for every request after.
+  // The relay check waited three minutes and said only "did not answer". The same file ran at 128K.
+
+  const joinedAt = () => calls.filter(args => args.includes('join')).map(args => Number(args[args.indexOf('--ctx-size') + 1]))
+  /** The engine on this machine runs out of memory at any context above [limit]. */
+  const gpuHolds = (limit: number) => {
+    const original = request.getMockImplementation()!
+    request.mockImplementation(async (url, init) => {
+      if (String(url).includes('127.0.0.1') && String(url).endsWith('/chat/completions') && joinedAt().at(-1)! > limit) {
+        return new Response(JSON.stringify({ error: { code: 500, message: 'Compute error.', type: 'server_error' } }), { status: 500 })
+      }
+      return original(url, init)
+    })
+  }
+
+  it('halves to the 64K floor and no further', () => {
+    expect(contextLadder(262144)).toEqual([262144, 131072, 65536])
+    expect(contextLadder(196608)).toEqual([196608, 98304, 65536])
+    expect(contextLadder(100000)).toEqual([100000, 65536])
+    expect(contextLadder(65536)).toEqual([65536])
+    expect(contextLadder(50000)).toEqual([])
+  })
+
+  it('takes a size the GPU cannot run back down, and settles on the next that does', async () => {
+    catalogCards[0].fit.ctx = 262144
+    gpuHolds(131072)
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(joinedAt()).toEqual([262144, 131072])
+    // Down between the two, and Grid's registration restored before the second join.
+    const between = calls.slice(calls.findIndex(a => a.includes('join')) + 1, calls.findLastIndex(a => a.includes('join')))
+    expect(between).toContainEqual(['--remote', 'leave', 'home', '--engine', 'Small-Q4.gguf'])
+    expect(between).toContainEqual(['--remote', 'sync'])
+    expect((await service.list('home', true)).models[0]).toMatchObject({ state: 'running', operation: { phase: 'done' } })
+  })
+
+  it('says it is memory, in words, when not even 64K runs — without waiting on the relay', async () => {
+    catalogCards[0].fit.ctx = 262144
+    gpuHolds(0)
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(joinedAt()).toEqual([262144, 131072, 65536])
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(false)
+    expect((await service.list('home', true)).models[0].operation).toMatchObject({ phase: 'failed',
+      error: 'This computer does not have the memory to run Small with a 64K context. Close some apps, or choose a smaller model.' })
+  })
+
+  it('steps down from a size whose join fails, since a failed allocation at load looks like that', async () => {
+    catalogCards[0].fit.ctx = 262144
+    const original = run.getMockImplementation()!
+    run.mockImplementation(async (args, output) => args.includes('join') && args.includes('262144') ? refused('engine exited') : original(args, output))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    const joins = run.mock.calls.map(([args]) => args).filter(args => args.includes('join'))
+    expect(joins.map(a => a[a.indexOf('--ctx-size') + 1])).toEqual(['262144', '131072'])
+    expect((await service.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+
+  it.each([
+    ['nothing is listening on this machine', () => { throw new Error('ECONNREFUSED') }],
+    ['the engine fails for another reason', () => new Response('{"error":{"message":"template error"}}', { status: 500 })],
+    // Not a load in progress (503), so not waited on for ten minutes.
+    ['its health check answers something unexpected', () => new Response('teapot', { status: 418 })],
+  ])('leaves the judgement to the relay check when %s', async (_case, answer) => {
+    const original = request.getMockImplementation()!
+    request.mockImplementation(async (url, init) => String(url).includes('127.0.0.1') ? answer() : original(url, init))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(joinedAt()).toEqual([131072])
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
+    expect((await service.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+
+  it('starts a file on disk at the most its header says it holds', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ models: ['Small-Q4.gguf'] }] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const id = (await service.list('home')).models[0].id
+    await service.act('home', id, 'stop'); await service.settled()
+    trainedWindow = 262144
+    const fresh = new LocalModels({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch })
+    await fresh.act('home', id, 'start'); await fresh.settled()
+    expect(joinedAt()).toEqual([262144])
   })
 })
