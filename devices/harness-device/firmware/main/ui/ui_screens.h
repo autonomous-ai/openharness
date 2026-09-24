@@ -299,6 +299,20 @@ void ui_voice_quota_exceeded(void);
 // `name`, `machine` and `recap` come from the frame: the dial holds one tab, and the agent may be on
 // another — the row has nobody else to ask. Any may be NULL; a held tile's own model wins when present.
 void ui_notify_task_done(const char *project_id, const char *name, const char *machine, const char *recap);
+// The WINDOW looked at this agent → drop its FINISHED-turn row here, as a tap on that row does.
+//
+// The two screens take a notification away on different gestures — a tap here, a tab coming to the
+// front over there — and each has to reach the other or the pill and the badge stop agreeing the
+// first time either is used. The tap's half already travels (cable_client_send_open); this is the
+// return leg. No-op when no row names this agent. Safe from the reader task.
+void ui_notif_seen(const char *project_id);
+// Replace the WHOLE drawer with what the window still has unread, newest first.
+//
+// Sent once per attach, because that is the one moment this dial is known to have nothing: the rows
+// live in RAM and an OTA, a replug or a flash takes them while the window keeps every mark. Without
+// it the two screens read different numbers from that moment on, with nothing to bring them back.
+// Safe from the reader task.
+void ui_notif_replace(const cable_notif_t *rows, int count);
 // Append a commander event to a project's tile as a readable text card (keeps the last 2).
 // kind: "say" | "act" | "ask" | "done" | "error". session_id is the dbSessionId for voice resume.
 // `recap` (optional, may be NULL): a short headline shown on the tile at a glance; `text` is the
@@ -331,6 +345,9 @@ void ui_project_set_agents(const char *project_id, const struct cJSON *agents);
 // Show the question screen: tap an option row to answer (single/multi-select). Tap-only — there is no
 // voice answer. `questions` is the cJSON array from the `commander_question` frame; copied out
 // synchronously, so the caller may free the JSON right after this returns.
+// Also records it behind the bell: a blocked agent is counted, and stays counted until the question is
+// ANSWERED rather than until somebody looks at it. Not gated on the window having the agent on screen —
+// showing a question asks the window to bring it forward, so that gate could never open.
 void ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
 // That question was answered somewhere else (the app, or the pane by hand) — leave the screen instead of
 // waiting for an answer that can no longer be delivered. No-op unless THIS request is the one on screen.

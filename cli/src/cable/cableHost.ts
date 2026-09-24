@@ -381,6 +381,17 @@ export class DaemonCableHost implements CableHost {
     this.swarms = swarms
   }
 
+  /** What the window still has unread, newest first. Empty until a window says otherwise. */
+  private unread: Array<{ agentId: string; machineId: string; question: boolean; text: string }> = []
+
+  setUnread(items: Array<{ agentId: string; machineId: string; question: boolean; text: string }>): void {
+    this.unread = items
+  }
+
+  listUnread(): Array<{ agentId: string; machineId: string; question: boolean; text: string }> {
+    return this.unread
+  }
+
   listSwarms(): { selected: string; swarms: CableSwarm[] } {
     const app = this.swarms
     if (!app) return { selected: '', swarms: [] }

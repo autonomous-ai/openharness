@@ -376,7 +376,11 @@ class ModelManagerController extends ChangeNotifier {
             refresh: force,
           );
           if (!_current(owner) || revision != _actionRevision) return;
-          error = answer['error'] as String?;
+          // `notice` is a sentence BESIDE the list. A reply carrying `error` never reaches here:
+          // the RPC layer fails it whole and keeps nothing, which is how a daemon that sent its
+          // warning in `error` once emptied this list. `error` is still read for a daemon too old
+          // to send models at all.
+          error = (answer['notice'] ?? answer['error']) as String?;
           if (answer['models'] is! List) {
             inventoryAvailable = false;
             return;

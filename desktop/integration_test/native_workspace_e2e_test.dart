@@ -142,6 +142,43 @@ class _CreationConnection extends WsConn {
   }
 }
 
+/// A machine that lacks one harness and installs it when asked, narrating
+/// through `dsh_install_status` pushes the test sends while the request is
+/// held. The first install fails in setup; the second lands.
+class _InstallingConnection extends _CreationConnection {
+  _InstallingConnection()
+    : super(
+        products: [
+          {
+            'id': 'autonomous/circuit',
+            'name': 'Autonomous Circuit',
+            'engine': 'claude',
+            'engines': ['claude', 'codex'],
+            'installed': false,
+          },
+        ],
+      );
+
+  final installs = <String>[];
+  Completer<Map<String, dynamic>>? reply;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'dsh_install') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    installs.add(payload['id'] as String);
+    reply = Completer();
+    final answer = await reply!.future;
+    if (answer['ok'] == true) products.single['installed'] = true;
+    return answer;
+  }
+}
+
 class _FirstCreationApp extends AppNotifier {
   _FirstCreationApp(WsConn connection)
     : super(
@@ -887,6 +924,96 @@ void main() {
       expect(app.focusedPane, same(pane));
       await key(tester, LogicalKeyboardKey.arrowRight);
       expect(input.single.bytes, [27, 91, 67]);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 100));
+    },
+  );
+
+  testWidgets(
+    'native New Harness installs a missing harness, retries a failure, then starts',
+    (tester) async {
+      final connection = _InstallingConnection();
+      final app = _FirstCreationApp(connection);
+      addTearDown(app.dispose);
+      addTearDown(connection.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: SwarmScreen(notifier: app, nativeTabs: true),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      Future<void> settle() async {
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      Future<void> say(Map<String, Object?> progress) => app.handleEventForTest(
+        'm',
+        {'type': 'dsh_install_status', 'payload': progress},
+      );
+      final pane = find.byKey(const ValueKey('new-harness-install'));
+      Finder inPane(String text) =>
+          find.descendant(of: pane, matching: find.text(text));
+
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      await settle();
+      await focusLaunchRow(tester, 'harness');
+      await key(tester, LogicalKeyboardKey.enter);
+      await settle();
+      await tester.enterText(
+        find.byKey(const ValueKey('new-harness-query')),
+        'circuit',
+      );
+      await settle();
+      await key(tester, LogicalKeyboardKey.enter);
+      await settle();
+      final box = tester
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+          .controller;
+      expect(box.harnessId, 'autonomous/circuit');
+
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await settle();
+      expect(connection.installs, ['autonomous/circuit']);
+      expect(
+        inPane('Installing Autonomous Circuit on This Mac'),
+        findsOneWidget,
+      );
+      await say({
+        'id': 'autonomous/circuit',
+        'phase': 'setup',
+        'line': 'npm ci',
+      });
+      await settle();
+      expect(inPane('✓'), findsOneWidget);
+      expect(inPane('npm ci'), findsWidgets);
+      await say({
+        'id': 'autonomous/circuit',
+        'phase': 'failed',
+        'error': 'DSH_SETUP_FAILED',
+        'detail': 'setup exited 1',
+      });
+      connection.reply!.complete({
+        'ok': false,
+        'error': 'DSH_SETUP_FAILED',
+        'detail': 'setup exited 1',
+      });
+      await settle();
+      expect(inPane('✗'), findsOneWidget);
+      expect(connection.creates, isEmpty);
+
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await settle();
+      expect(connection.installs, hasLength(2));
+      expect(inPane('✗'), findsNothing);
+      await say({'id': 'autonomous/circuit', 'phase': 'done'});
+      connection.reply!.complete({'ok': true});
+      await settle();
+      await settle();
+      expect(connection.creates, hasLength(1));
+      expect(connection.creates.single['dsh'], 'autonomous/circuit');
+      expect(find.byType(NewHarnessForm), findsNothing);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(milliseconds: 100));
     },

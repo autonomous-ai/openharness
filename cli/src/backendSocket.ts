@@ -395,9 +395,13 @@ export class BackendSocket {
   // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
   private readonly localModels = new LocalModels({
     stateDir: join(env.ADAPTER_DATA_DIR, 'local-models'),
+    machineName: () => this.machineDisplayName,
     inventory: gridInventory,
     onChanged: () => { forgetGridModels(); void this.pushGridModels() },
   })
+  /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
+   *  until the first one arrives. */
+  private machineDisplayName: string | null = null
   /** A read the window did not ask for changed what a picker would show: tell the window
    *  (`grid_models_changed`), so its one picture stays current without polling. */
   private readonly stopGridModelsPush = onGridModelsChanged(() => { void this.pushGridModels() })
@@ -791,6 +795,9 @@ export class BackendSocket {
 
   /** Which grid this machine's agents can be pointed at — for `harness status` and the models RPC. */
   gridName(): string | null { return this.harnessGridName }
+
+  /** This machine's name as the Machines list shows it — what a model it serves is labelled with. */
+  machineName(): string | null { return this.machineDisplayName }
 
   /** The account's private grid, resolved the way the models RPC resolves it — for a harness
    *  workspace that must be told which grid is "yours" rather than work it out or ask. */
@@ -1549,6 +1556,8 @@ export class BackendSocket {
       if ('gridName' in meta) {
         this.harnessGridName = typeof meta.gridName === 'string' && meta.gridName.trim() ? meta.gridName.trim() : null
       }
+      // The same rule for the name: a frame that does not carry it leaves it as it was.
+      if ('name' in meta) this.machineDisplayName = typeof name === 'string' && name.trim() ? name.trim() : null
       this.onMachineMeta?.(typeof name === 'string' && name.trim() ? name.trim() : null)
       return
     }

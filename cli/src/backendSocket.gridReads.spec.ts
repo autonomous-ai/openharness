@@ -142,14 +142,19 @@ describe('grid_fleet_models_list (the Model Manager) on a sleeping own grid', ()
 })
 
 describe('agent_retarget', () => {
-  it('moves an agent onto a grid model without reading the grid at all', async () => {
+  it('reads nothing on its own: the one request is the model lookup of the move a person made', async () => {
     const answers = fakeGridAnswers()
-    grid.replan(answers.plan)
+    // The relay the grid's `info --env` names is this test's, so nothing here can reach a real host.
+    const relay = `${base}/g/${OWN_ID}/relay/v1`
+    grid.replan({ ...answers.plan, info: { stdout: `export OPENAI_BASE_URL="${relay}"\nexport OPENAI_API_KEY="${answers.token}"\n` } })
     socket.onRetargetAgent = vi.fn(async () => ({ ok: true as const }))
 
     const reply = await ask('agent_retarget', { agentId: 'agent-1', gridModel: 'GLM-4.7-Flash', gridName: answers.gridName })
 
     expect(reply).toMatchObject({ retargeted: true })
-    expect(seen).toEqual([])
+    // Moving an agent onto a model is a person's act, which may wake the grid (and is meant to: the
+    // pane is about to use it). What must not happen is any read on the app's own schedule.
+    expect(seen.map((r) => r.path)).toEqual([`/g/${OWN_ID}/relay/v1/models`])
+    expect(seen.some((r) => r.path.endsWith('/grid/overview') || r.path.endsWith('/nodes/discover'))).toBe(false)
   })
 })

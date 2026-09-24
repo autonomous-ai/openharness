@@ -73,6 +73,39 @@ export async function atomicJson(file, value) {
   } finally { await unlink(temporary).catch(() => {}); }
 }
 
+/**
+ * The name a machine goes by in Harness Machines, read live from `harness machines --json` rows
+ * ([rows], as `discoverMachines` returns them), or null when Harness has none for it (an SSH target,
+ * or discovery failed). Live because the person renames machines: a name recorded at setup went stale
+ * the moment they did.
+ */
+export function harnessNameFor(machine, rows) {
+  if (!machine || !Array.isArray(rows)) return null;
+  const row = machine.transport === 'local' ? rows.find(r => r.current)
+    : machine.transport === 'harness' ? rows.find(r => r.machineId === machine.machineId) : null;
+  const name = typeof row?.name === 'string' ? row.name.trim() : '';
+  return name && !name.startsWith('-') && !/[\x00-\x1f]/.test(name) ? name : null;
+}
+
+/**
+ * [args] for `grid join` with `--name` set to [name], replacing any name the caller gave.
+ *
+ * ⚠️ Grid labels every engine with `--name`, and that label is what a person reads under the model in
+ * every picker. Left to the agent it was invented (`macbookpro-qwen3.6-35b`) or left off (Grid then
+ * takes the host name, `mac.lan`) — either way not the name Machines shows for the same computer. So
+ * the runner sets it. Anything that is not a join, or no name to set, passes through untouched.
+ */
+export function nameJoin(args, name) {
+  if (!name || args[0] !== 'join') return args;
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--name') { i++; continue; }
+    if (args[i].startsWith('--name=')) continue;
+    out.push(args[i]);
+  }
+  return [...out, '--name', name];
+}
+
 export function validateConfig(raw) {
   if (!raw || raw.spec !== 1 || !['local', 'remote'].includes(raw.mode)) throw new Error('grid-fleet.json needs spec: 1 and mode: local or remote.');
   if (raw.grid !== null && (typeof raw.grid !== 'string' || !raw.grid.trim() || raw.grid.length > 240 || raw.grid.startsWith('-') || /[\x00-\x1f]/.test(raw.grid))) throw new Error('grid must be a name, ID, URL, or null.');

@@ -73,4 +73,41 @@ void main() {
     unread.mark('m1', 'a1', AlertKind.done);
     expect(rebuilds, 1);
   });
+
+  // ── Parity with the dial ───────────────────────────────────────────────────
+  // The badge here and the pill there count the same finished turns, so this
+  // store holds as many agents as the dial's drawer holds rows, and lets go of
+  // them the same way.
+
+  group('as many as the dial holds', () {
+    test('at most as many agents as the dial has rows', () {
+      for (var i = 0; i < AgentUnread.capacity + 3; i++) {
+        unread.mark('m1', 'a$i', AlertKind.done);
+      }
+
+      expect(unread.count, AgentUnread.capacity);
+      expect(unread.kindFor('m1', 'a0'), isNull, reason: 'the oldest went');
+      expect(unread.kindFor('m1', 'a2'), isNull);
+      expect(unread.kindFor('m1', 'a3'), isNotNull, reason: 'the rest stayed');
+    });
+
+    test('a mark touched again is the newest, and outlives an older one', () {
+      // `notif_push` lifts an existing row out and puts it back on top; without
+      // that here, an agent that keeps working would be evicted before agents
+      // that have said nothing for an hour.
+      for (var i = 0; i < AgentUnread.capacity; i++) {
+        unread.mark('m1', 'a$i', AlertKind.done);
+      }
+      unread.mark('m1', 'a0', AlertKind.needsYou); // the oldest speaks again
+      unread.mark('m1', 'fresh', AlertKind.done); // …and one more arrives
+
+      expect(
+        unread.kindFor('m1', 'a0'),
+        AlertKind.needsYou,
+        reason: 'it was touched, so it is no longer the oldest',
+      );
+      expect(unread.kindFor('m1', 'a1'), isNull, reason: 'a1 was');
+      expect(unread.count, AgentUnread.capacity);
+    });
+  });
 }

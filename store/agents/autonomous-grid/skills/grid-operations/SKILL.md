@@ -1,6 +1,6 @@
 ---
 name: grid-operations
-description: "Look after the models on the user's machines — one laptop or a fleet: recognise their private grid, ask what they need in plain words, pick a model that fits from disk, catalog or Hugging Face, start it with vision and context that fit, prove it answers with one bounded call, change or stop a running one, and use Grid routing, usage, media and training commands."
+description: "Look after the models on the user's machines — one laptop or a fleet: recognise their private grid, pick the model and settings that fit this machine for coding without asking, start it with the longest context the machine can give (never under 64K), say what it costs in memory, prove it answers with one bounded call, change or stop a running one, and use Grid routing, usage, media and training commands."
 ---
 
 # Grid operations
@@ -76,47 +76,45 @@ that runs the engine; listing, routing and requests can run on the controller.
 ## First local model: help from this conversation
 
 The Models panel normally handles discovery and Start/Stop directly. If the user asks this
-conversation to help set up a local model, begin inspecting
-this computer immediately. This is the short onboarding path: coding and everyday work, one
-person, a responsive first reply, and enough free memory for other apps. Prefer a suitable
-model already running or downloaded. Inspect device-info and the live catalog, choose one
-comfortable fit, and explain the download size and memory needs in plain words. Offer
-**Start this model** and **Other options** through the question tool. That single choice
-covers installing the required engine and downloading/starting the recommended model.
-Choose context from the model's measured fit and the session's needs. Do not ask the user to
-choose an engine, quantization, token count, concurrency, or vision setting. Use suitable
-existing defaults; extra questions belong to explicit advanced requests. Keep setup on this
-computer. Other machines are available when the user asks for them.
+conversation to help set up a local model, begin inspecting this computer immediately and follow
+**Start a model** below — the same defaults, no setup questions. Keep setup on this computer;
+other machines are available when the user asks for them.
 
 Use the tracked fleet runner for hardware checks, downloads, and startup, so the viewer retains
-progress while the conversation is closed or interrupted. After the model appears in discovery,
-run `"$GRID_FLEET" verify --grid GRID --model MODEL_ALIAS` once. This bounded check records
-readiness only after a real reply. On failure, report the problem and offer recovery. On success,
-say **"Your model is running. Select it from the model picker in a session."** The setup ends at a usable model.
+progress while the conversation is closed or interrupted. The setup ends at a usable model: on
+success, say **"Your model is running. Select it from the model picker in a session."**
 
 ## Start a model
 
 Slow steps are a real stop: a download or an engine build is asked about through the question tool
 and runs in the **next** turn, never in the message that asks. Every model you offer comes from
 something you looked up — the host's disk, the catalog, or Hugging Face — never from memory. The
-pick is made once; after the person chooses, that is the model through the download, the vision
-question and the start, unless it fails (won't fit, won't pull, won't answer).
+pick is made once; that is the model through the download and the start, unless it fails (won't
+fit, won't pull, won't answer) or the person asks for a different one.
 
-**1. What they need — three questions, in plain words, through the question tool.** Skip any the
-person already answered. The engine numbers in brackets are yours; they are never shown.
+**1. What they need — decided for them, not asked.** Harness is a coding tool: the model is for a
+coding agent unless the person says otherwise. Do **not** ask them to choose an engine,
+quantization, context size, concurrency or vision — pick what fits this machine best, say what you
+picked and what it costs, and change one thing only when they ask for something different ("make it
+two at once", "turn vision off", "a smaller one"). The defaults:
 
-    "What will you mostly use it for?"  — the work decides which model is worth downloading
-      Coding · Chat and writing · Reading images · Just something fast
-    "How much can it hold in its head at once?"  — its working memory for one conversation; when it
-      fills, it forgets the beginning; more costs memory on the machine
-      Short, about 20 pages [32K] · Medium, about 40 pages [64K] · Long, about 80 pages [128K] ·
-      As much as this machine can give it
-    "How many things will talk to it at the same time?"  — each one reserves its own share of memory
-      up front; when every share is taken, the next request waits
-      Just me, one agent at a time [1] · Two agents at once [2] · A few agents or people at once [4]
+  - **Context: the longest this machine can give, and never under 64K tokens.** Codex, Claude Code
+    and OpenCode each open a session with thousands of tokens of instructions and tools and grow
+    from there; below 64K a session survives a few turns and then fails. A model that cannot get
+    64K on this machine is not offered — pick a smaller model or quant instead. There is no 32K
+    option.
+  - **One at a time** (`--max-concurrency 1`): one agent. Every extra slot reserves its own full
+    context up front, so a second one halves what each can hold.
+  - **Vision on** when the model has a projector (it reads screenshots) and the context still clears
+    64K with it; otherwise text only, said in one line.
+  - **The quant the catalog fits** (`fit.version`), or the file already on disk.
 
-Coding wants Long (an agent burns context as a session grows); chat is fine at Short; "just me" on
-a laptop someone is also working on.
+**Say it in pages, and say what it costs.** A page is about 650 tokens (≈500 words), so 64K is
+about 100 pages, 128K about 200 and 256K about 400 — tokens ÷ 650, rounded. Never shown as bare
+token counts. The cost in memory is the weights (the file size) plus the context's reservation:
+before the start say "the model takes W GB, and its context uses the rest of the U GB this computer
+can give models" (`usable_bytes` from `device-info`); after the start, give Grid's measured figure
+when `engines --json` reports one. Never invent a number.
 
 **2. What the host has.** `device-info --json` on the intended host first: `usable_bytes` is the
 real ceiling for weights plus context. Per-machine, never summed across hosts. The engine check is
@@ -127,15 +125,16 @@ install what was already built. Only when the binary is missing, ask (build from
 and run `engine install llama.cpp [--from-source]` in the next turn.
 
 **3. What is already on the host's disk comes first.** `ls ~/.grid/models/*.gguf` minus the
-`.mmproj.gguf` sidecars; `ctx FILE --json` says how much each can hold; a `<stem>.mmproj.gguf`
-beside a file means it reads images. Anything that fits the answers is offered first as "already on
-this computer, no download", beside one option to fetch something new. Only that option goes on.
+`.mmproj.gguf` sidecars; `ctx FILE --json` says the most each was trained to hold — a file under
+64K is skipped; a `<stem>.mmproj.gguf` beside a file means it reads images. A suitable file already
+here is the pick ("already on this computer, no download"); fetch something new only when none is.
 
 **4. The catalog, then Hugging Face.** `catalog --json` is sized for the host: keep entries that are
-`runnable`, whose `fit.ctx` covers the context asked, and that suit the purpose; pull
-`fit.version`'s `pull_spec`. Offer 2–3 in the same plain terms as step 1 — what it is good at, the
-download size in GB, how much it can hold in pages, whether it reads images. No speed figure
-(`fit.est_tok_s` only orders the list for "fast"), no quant name, no token count as the whole answer.
+`runnable`, whose `fit.ctx` is at least 65536, and that are good at code; pull `fit.version`'s
+`pull_spec`. Pick the best one for coding yourself and name it with the download size in GB, how
+much it can hold in pages and whether it reads images; offer a shortlist of 2–3 only when the person
+asks for other options. No speed figure (`fit.est_tok_s` only orders the list for "fast"), no quant
+name, no token count as the whole answer.
 When the person names a model the catalog lacks, the catalog is not a wall — `pull` takes any
 `<repo>:<file>.gguf` on Hugging Face and fetches its projector too:
 
@@ -157,28 +156,34 @@ the file names, and put "reads images" or "text only" on each option; for "Readi
 only repos with an mmproj. After the pull, the disk proves it:
 `test -f ~/.grid/models/<stem>.mmproj.gguf`.
 
-**5. Two checks, then the start.** *Fit:* `--ctx-size` is per request and the engine reserves
-context × slots up front (grid passes `ctx × slots` to llama.cpp; 4 slots at 64K is 256K tokens of
-KV cache before the first request, and a size the host cannot hold fails to start rather than
-shrinking). Check context × the asked concurrency against `usable_bytes` minus the weights and
-`keepFreeMemoryGb`; if it doesn't fit, offer a smaller context or fewer slots through a tool.
-*Vision:* when the projector is on disk, ONE question whose options say what each does —
-"Serve it with vision on?" · *Yes, with vision — it reads screenshots and photos (some extra
-memory)* · *No, text only — the vision file is set aside for this run; say the word to put it back*.
-On "no", rename the projector yourself (`mv <stem>.mmproj.gguf <stem>.mmproj.gguf.off`) before the
-join and say so in one line — never a second question about the file.
+**5. The context, then the start.** `--ctx-size` is per request and the engine reserves context ×
+slots up front (4 slots at 64K is 256K tokens of KV cache before the first request). **Always pass
+it** — start from the most the model is sized for: a catalog model's `fit.ctx` (capped at
+`fit.max_ctx`), or for a file the catalog never sized, what `ctx FILE --json` says it was trained
+for. ⚠️ Never leave it off. Left to the engine, a 35B model took its whole trained 256K on a 64 GB
+Mac whose GPU could hold 128K: it loaded, then failed its very first request with `Insufficient
+Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)` and every request after with `Compute
+error.`; the catalog's fit is optimistic the same way. So **step down when it does not run**: if
+the first request after the join (step 6) answers `Compute error`, out of memory, or the join itself
+fails, `leave`, `sync`, and join again at half — 256K → 128K → 64K. If 64K fails too, stop and say
+this computer does not have the memory for this model with a 64K context; offer a smaller model. *Vision:* on by default when the projector is
+on disk. When the person asks for text only, rename the projector yourself
+(`mv <stem>.mmproj.gguf <stem>.mmproj.gguf.off`) before the join and say so in one line.
 
     "$GRID_FLEET" run --machine MACHINE -- pull OWNER/REPO:EXACT_FILE.gguf
     "$GRID_FLEET" run --machine MACHINE -- join GRID --serve EXACT_FILE.gguf --advertise-as MODEL_ALIAS \
-      --name MACHINE-MODEL --max-concurrency N --ctx-size CTX --endpoint-port PORT
+      --max-concurrency N --ctx-size CTX --endpoint-port PORT
 
-`--advertise-as` is the name the person will see in their model picker; `--name` is the machine's
-display name — different things. `--max-concurrency N` is the step-1 answer; don't pass
+`--advertise-as` is the name the person will see in their model picker. **Don't pass `--name`:**
+the runner sets it on every `join` to the machine's name as Harness Machines shows it right now, and
+replaces any you give — it is the label under the model in every picker, and a name made up here
+(`macbookpro-qwen3.6-35b`) or Grid's host-name default (`mac.lan`) read as a different computer.
+Say the machine by that same name. `--max-concurrency N` is 1 unless they asked for more; don't pass
 `--parallel` (grid derives the slot count from it) and don't pass `--jinja` (on by default in the
-engine grid ships). `--ctx-size` always, capped at the file's `fit.max_ctx` ("as much as fits" =
-`fit.ctx`): left off, the engine takes a 16K default, smaller than an agent's own prompt. Use
+engine grid ships). Never pin `--ctx-size` under 65536 — a window that small cannot hold a coding
+agent's own prompt (a 32K engine here refused an agent's first request of 59,561 tokens). Use
 explicit ports when several instances share a host. An existing Ollama, vLLM, MLX or LM Studio
-engine can join with `--at URL -m MODEL --name NAME`; do not install a second engine needlessly.
+engine can join with `--at URL -m MODEL` (the runner names it too); do not install a second engine needlessly.
 
 Choose a reasoning budget deliberately. Grid's GPU default can spend more tokens thinking than a
 small output limit permits, yielding no final answer. For an everyday low-latency assistant, start
@@ -196,6 +201,12 @@ is "not yet", not "broken"):
     until "$GRID_FLEET" run -- models GRID 2>/dev/null | grep -qx 'MODEL_ALIAS'; do sleep 10; done
     "$GRID_FLEET" verify --grid GRID --model MODEL_ALIAS
 
+A `verify` that fails with a compute or out-of-memory error is the context not fitting — step down
+as step 5 says rather than retrying the same size. Then read the window it actually got:
+`engines GRID --json`, this machine's row, `model_capabilities[<model>].context_length`. Under
+65536, `leave` it, say in one line it could only get N pages here, and move to a smaller model or
+quant. A null means Grid did not say; report the context you passed.
+
 ⚠️ Not `chat` for this check. `chat` sets no output limit and the engine's default is tens of
 thousands of tokens, so a small model that runs away answering "ok" holds the slot for minutes — and
 with one slot everything after it waits, including a second check. `max_tokens` is what makes this
@@ -210,8 +221,9 @@ one step larger from the same list (tiny models loop), or more requests at once,
 `message.content` contains the requested result; reasoning text alone or a successful HTTP status is
 not acceptance. Then `"$GRID_FLEET" refresh`.
 
-**7. Say where it is.** "<alias> is running on <machine>, N at a time, vision on/off. Pick it from
-the model dropdown at the top of any agent's pane, and that agent switches to it." In the Models
+**7. Say where it is, and what it costs.** "<alias> is running on <machine> with room for about
+N pages (<K>K tokens), one at a time, vision on/off; it uses about M GB of memory. Pick it from the
+model dropdown at the top of any agent's pane, and that agent switches to it." In the Models
 panel, **Use** returns to the person's session or opens one when needed. Don't offer to wire it into an agent's
 config or add a provider — the picker is the whole hand-off.
 
@@ -268,8 +280,8 @@ Say what failed and stop; translate every message, never repeat a raw line that 
   - **`No providers available for this model`** right after a join → not registered yet; wait as
     step 6 says.
   - **`exceeds the available context size`** (an agent may show it as a garbled "expected array
-    `choices`") → served with too small a window, usually `--ctx-size` left off: leave, join again
-    with the asked context.
+    `choices`") → served with too small a window: leave, and join again with the longest context
+    that fits (step 5) — never under 64K.
   - **`Jinja Exception: System message must be at the beginning`** → the model's template refuses a
     system message after the first turn; the relay now hoists system/developer messages to the
     front, so the relay this machine talks to predates that fix. The model is fine; nothing to

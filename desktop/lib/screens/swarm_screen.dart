@@ -228,7 +228,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   String? _nativeState;
   List<Object?>? _machinesPresentation;
   ModelsMenuController? _modelsMenu;
-  String? _modelsState;
   final _defaultKeymap = AppKeymap();
   AppKeymap? _providedKeymap;
   AppKeymap get _keymap => _providedKeymap ?? _defaultKeymap;
@@ -267,8 +266,19 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.agentUnread.addListener(_unreadChanged);
     // Coming back to the window puts the tab in front of the person again, and
     // nothing in the app necessarily changes when that happens — so it is told.
+    //
+    // The daemon is told too, on the way out as well as the way back: it decides
+    // from `app_panes` whether a finished turn is already on screen, and that
+    // roster does not change when the window slips behind a browser. Without
+    // the second half the dial went quiet the first time this window lost focus
+    // and stayed quiet until a pane happened to change.
     _lifecycle = AppLifecycleListener(
-      onResume: app.seeWatchedAgents,
+      onResume: () {
+        app.seeWatchedAgents();
+        app.announceWindowForeground();
+      },
+      onHide: app.announceWindowForeground,
+      onInactive: app.announceWindowForeground,
       // Whether the app is in front of anyone decides whether the model surfaces refresh at all
       // (`AppNotifier.foreground`): a minimised or background window asks no daemon anything.
       onStateChange: app.appLifecycleChanged,
@@ -290,8 +300,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     unawaited(_projects.load());
     unawaited(_navigation.load());
     _spokenTasks = app.spokenTasks.listen(_openSpokenTask);
-    _modelsMenu =
-        widget.modelsMenu ?? ModelsMenuController(remote: app.readRemoteUsage);
+    // The app's shared controller, so this menu and every pane's model picker show one reading.
+    _modelsMenu = widget.modelsMenu ?? app.modelsMenu;
     app.modelManager.addListener(_modelManagerChanged);
     _modelsRequests = app.modelsRequests.listen((_) {
       if (mounted && _modelsOverlay == null) {
@@ -300,20 +310,16 @@ class _SwarmScreenState extends State<SwarmScreen>
     });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) app.modelManager.start();
+        if (!mounted) return;
+        app.modelManager.start();
+        // Subscription usage is read ahead, so opening a menu shows it without waiting.
+        _modelsMenu!.start();
       });
     }
     if (_native) {
-      _modelsMenu!.addListener(_syncModels);
-      app.gridPictures.addListener(_gridPictureChanged);
-      app.foreground.addListener(_foregroundChanged);
-      // Same trigger as the subscription rows: the daemon memoises its answer, so opening the menu
-      // repeatedly costs nothing after the first.
-      unawaited(_refreshLocalModels());
       _channel.setMethodCallHandler(_onNative);
       app.addListener(_syncNative);
       _syncNative();
-      _syncModels();
     }
   }
 
@@ -395,16 +401,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
-    _modelsMenu?.removeListener(_syncModels);
-    if (widget.modelsMenu == null) _modelsMenu?.dispose();
     if (_native) {
-      unawaited(
-        _channel.invokeMethod<void>('modelsState', {'subscriptions': []}),
-      );
       unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
       app.removeListener(_syncNative);
-      app.gridPictures.removeListener(_gridPictureChanged);
-      app.foreground.removeListener(_foregroundChanged);
       _channel.setMethodCallHandler(null);
       unawaited(
         _channel.invokeMethod<void>('update', {'tabs': [], 'enabled': false}),
@@ -769,10 +768,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   void _syncNative() {
-    // ⚠️ Also from here, not only from `initState`. At init the machine list is still empty, so the
-    // first read returned nothing and the Local section sat on its empty state forever. This fires
-    // on every app change, throttled, so it lands as soon as a machine appears.
-    unawaited(_refreshLocalModels());
     _syncMachines();
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
@@ -969,164 +964,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     );
   }
 
-  void _syncModels() {
-    final payload = {
-      'subscriptions': _modelsMenu?.rows ?? [],
-      // Which subscription the menu marks as the one in use. The pane in focus decides, because
-      // "which account am I spending" is a question about the agent being looked at; a pane that
-      // has been moved onto a Local model is on no subscription, and then nothing is marked.
-      'currentEngine': _currentSubscriptionEngine(),
-      // Back-compat: the own grid's models, as the native menu understood them before sections.
-      'local': [
-        for (final s in _localSections)
-          if (s.own)
-            for (final m in s.models) {'id': m.id, 'node': m.node},
-      ],
-      // The picker's sections, own grid first then each shared grid — what the native menu draws.
-      'sections': [
-        for (final s in _localSections)
-          {
-            'name': s.name,
-            'own': s.own,
-            // How the grid answered the daemon's last look (`GridSectionState`), when a daemon new
-            // enough to say sends it. Nothing native draws it yet; it is here so a change of state
-            // alone reaches the menu.
-            if (s.state != null) 'state': s.state!.name,
-            'models': [
-              for (final m in s.models) {'id': m.id, 'node': m.node},
-            ],
-          },
-      ],
-    };
-    final encoded = jsonEncode(payload);
-    if (encoded == _modelsState) return;
-    _modelsState = encoded;
-    unawaited(_channel.invokeMethod<void>('modelsState', payload));
-  }
-
-  /// The focused pane's engine while that pane runs on its own login, else null.
-  String? _currentSubscriptionEngine() {
-    final pane = app.focusedPane;
-    if (pane == null) return null;
-    final agent = app.machineStates[pane.machineId]?.agents
-        .where((a) => a.id == pane.agentId)
-        .firstOrNull;
-    if (agent == null || agent.gridModel != null) return null;
-    return agent.engine?.trim().toLowerCase();
-  }
-
-  /// What the picker's sections answer for the native Models menu.
-  ///
-  /// Read from a machine this window is connected to — the grid is per ACCOUNT, so any of them
-  /// answers the same, and the local one is asked first because its daemon is a loopback away.
-  /// Never throws and never blocks the menu: a machine that cannot answer leaves the list as it was.
-  List<GridSection> _localSections = const [];
-
-  DateTime? _localModelsAt;
-
-  Future<void> _refreshLocalModels({bool force = false}) async {
-    // A minimised or background window asks nothing: every read here is for a menu nobody can see
-    // until the app comes back, and it refreshes once when it does ([_foregroundChanged]). A forced
-    // read is a person's act — the menu opening — and runs whatever the lifecycle last said: a
-    // window can read as inactive while its own menu is tracking.
-    if (!app.inForeground && !force) return;
-    final preferred = _modelsMachine();
-    if (preferred == null) return;
-    // The daemon memoises its answer, so a repeat is nearly free — but this is called on every app
-    // change, and an RPC per keystroke-sized notification is not free. One read per window is
-    // plenty for a list that changes when someone starts or stops serving a model; opening the menu
-    // and coming back to the app ([force]) are the exceptions, and read at once.
-    final now = DateTime.now();
-    final last = _localModelsAt;
-    if (!force &&
-        last != null &&
-        now.difference(last) < const Duration(seconds: 10)) {
-      return;
-    }
-    _localModelsAt = now;
-    final picture = await app.readGridPicture(preferred);
-    if (!mounted) return;
-    _adoptLocalSections(picture);
-  }
-
-  /// The machine whose daemon answers for the Models menu — the grid is per ACCOUNT, so any of them
-  /// answers the same, and the local one is asked first because its daemon is a loopback away.
-  String? _modelsMachine() {
-    final machines = app.machines
-        .where((machine) => !machine.isShared)
-        .toList();
-    if (machines.isEmpty) return null;
-    return machines
-        .firstWhere(
-          (m) => app.stateOf(m.machineId)?.isLocalMachine == true,
-          orElse: () => machines.first,
-        )
-        .machineId;
-  }
-
-  /// A new picture — from a read here, another surface's read, or the daemon's push — redraws the
-  /// menu when it changes what the menu shows. No request of its own.
-  void _gridPictureChanged() {
-    if (!mounted) return;
-    final machine = _modelsMachine();
-    final picture = machine == null ? null : app.gridPictures[machine];
-    if (picture != null) _adoptLocalSections(picture);
-  }
-
-  /// Back in front of the person: the one refresh the background skipped.
-  void _foregroundChanged() {
-    if (mounted && app.inForeground) {
-      unawaited(_refreshLocalModels(force: true));
-    }
-  }
-
-  void _adoptLocalSections(GridModels answer) {
-    final sections = _sectionsForModelMenu(answer);
-    if (_sameSections(sections, _localSections)) return;
-    _localSections = sections;
-    _syncModels();
-  }
-
-  /// The sections the Models menu draws, matching the pane picker's own: the account's own grid
-  /// first as "Local", then each shared grid that serves something. A shared grid with nothing
-  /// running is not a menu a person can pick from, so it is not drawn.
-  List<GridSection> _sectionsForModelMenu(GridModels answer) {
-    final sections = answer.sections
-        .where((s) => s.own || s.models.isNotEmpty)
-        .toList();
-    if (sections.any((s) => s.own)) return sections;
-    return [
-      GridSection(
-        name: answer.gridName ?? '',
-        own: true,
-        models: answer.models,
-      ),
-      ...sections,
-    ];
-  }
-
-  /// Whether the menu would draw [a] exactly as [b]. The machine serving a row and the state of a
-  /// section are compared too: a model that moved to another computer, or a grid that went to sleep,
-  /// is a different menu even when every id is the same.
-  static bool _sameSections(List<GridSection> a, List<GridSection> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].name != b[i].name ||
-          a[i].own != b[i].own ||
-          a[i].state != b[i].state) {
-        return false;
-      }
-      if (a[i].models.length != b[i].models.length) return false;
-      for (var j = 0; j < a[i].models.length; j++) {
-        if (a[i].models[j].id != b[i].models[j].id ||
-            a[i].models[j].node != b[i].models[j].node) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-
   Future<void> _onNative(MethodCall call) async {
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
@@ -1160,13 +997,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (call.method == 'models') {
       _toggleModels();
       await WidgetsBinding.instance.endOfFrame;
-      return;
-    }
-    if (call.method == 'modelsOpened') {
-      // The menu opens from its cache; the models are re-read beside the subscriptions, and a
-      // change lands in the open menu through `modelsState`.
-      unawaited(_refreshLocalModels(force: true));
-      await _modelsMenu?.refresh();
       return;
     }
     final nativeCommand = switch (call.method) {
@@ -3851,13 +3681,6 @@ class _SwarmScreenState extends State<SwarmScreen>
                           // Last in the stack, so a banner is never painted
                           // under a pane, a tab or the palette. It takes
                           // pointers only on the banners themselves.
-                          if (!_commandBarOpen && _newHarness == null)
-                            LocalModelInvitation(
-                              controller: app.modelManager,
-                              showIntroduction: false,
-                              onOpen: () =>
-                                  _toggleModels(initialTab: ModelsTab.local),
-                            ),
                           AgentAlertBanners(notifier: app),
                         ],
                       ),

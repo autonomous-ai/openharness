@@ -356,6 +356,20 @@ void main() {
     expect(controller.localModels, isEmpty);
   });
 
+  test('a notice beside the list keeps the list, and every row it offers', () async {
+    // ⚠️ REGRESSION. The daemon's sentence for a grid it could not fully read rode in `error`,
+    // and an `error` fails the request whole — the rows it came with were thrown away and the
+    // Local tab read 0. The sentence now arrives as `notice`, and the list with it.
+    app.localInventory = {
+      ...modelInventory(),
+      'notice': 'Running models could not be checked. Try again.',
+    };
+    await controller.refresh();
+    expect(controller.localModels, hasLength(5));
+    expect(controller.inventoryAvailable, isTrue);
+    expect(controller.error, 'Running models could not be checked. Try again.');
+  });
+
   test('an old daemon or malformed inventory disables actions without clearing the last view', () async {
     await controller.refresh();
     app.localInventory = {'error': 'Update Harness to manage local models.'};

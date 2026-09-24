@@ -21,7 +21,7 @@ it('discovers, downloads, starts, verifies, stops and restarts across real subpr
       expect(body.device.usable_bytes).toBe(16 * 1024 ** 3)
       catalogReads++
       res.end(JSON.stringify({ models: [{ repo_id: modelId, runnable: true, task: 'text-generation', format: 'GGUF',
-        fit: { version: 'Q4', ctx: 4096 }, versions: [{ version: 'Q4', size_bytes: 64, pull_spec: `${modelId}:tiny.gguf` }] }] }))
+        fit: { version: 'Q4', ctx: 131072 }, versions: [{ version: 'Q4', size_bytes: 64, pull_spec: `${modelId}:tiny.gguf` }] }] }))
     } else {
       expect(req.url).toBe('/v1/chat/completions')
       expect(req.headers.authorization).toBe('Bearer inference-fixture')
@@ -55,13 +55,14 @@ else if (args[0] === 'pull') { mkdirSync(join(home, 'models'), { recursive: true
 else if (args[0] === 'engine') { mkdirSync(join(home, 'bin'), { recursive: true }); writeFileSync(join(home, 'bin', 'llama-server'), '#!/bin/sh\\nexit 0\\n', { mode: 0o700 }); }
 else if (args.includes('join')) { if (!existsSync(registered)) process.exit(1); mkdirSync(recordDir, { recursive: true }); writeFileSync(record, JSON.stringify({ node_id: 'fixture-node', engines: [{ models: ['tiny.gguf'] }] })); writeFileSync(join(recordDir, 'remote.heartbeat'), ''); }
 else if (args.includes('leave')) { rmSync(record); rmSync(registered); }
+else if (args.includes('info') && args.includes('--json')) result({ grid: 'home', status: 'running' });
 else if (args.includes('info')) console.log("export OPENAI_BASE_URL='${base}/v1'\\nexport OPENAI_API_KEY='inference-fixture'");
 else process.exitCode = 2;
 `, { mode: 0o700 })
     // The grid's own answer, as the credential-less reader would give it: the engine is listed while its
     // run record exists (the fake's `join` writes it, `leave` removes it).
     const record = join(gridHome, 'run', 'engines', 'fixture-grid', 'remote.json')
-    const inventory = async () => ({ state: 'awake' as const, nodes: existsSync(record) ? [{ node_id: 'fixture-node', online: true, models: ['tiny'] }] : [] })
+    const inventory = async () => ({ state: 'awake' as const, status: 'running', nodes: existsSync(record) ? [{ node_id: 'fixture-node', online: true, models: ['tiny'] }] : [] })
     const options = { stateDir, processEnv: { GRID_HOME: gridHome, HARNESS_GRID_BIN: executable, PATH: root }, inventory }
     service = new LocalModels(options)
     expect((await service.list('home')).models[0]).toMatchObject({ state: 'available', canStart: true })

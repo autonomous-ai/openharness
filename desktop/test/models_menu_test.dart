@@ -228,7 +228,7 @@ void main() {
       for (final next in [
         reading(reset: instant),
         reading(session: double.nan),
-        reading(fetched: instant.subtract(const Duration(minutes: 3))),
+        reading(fetched: instant.subtract(const Duration(minutes: 61))),
       ]) {
         value = next;
         now = now.add(const Duration(minutes: 1));
@@ -238,6 +238,71 @@ void main() {
       }
     },
   );
+
+  test(
+    'an expired reading says "Checking usage…" while the next read runs',
+    () async {
+      var now = instant;
+      var answer = Completer<ProviderUsage>();
+      final source = _Source(UsageProvider.claude, () => answer.future);
+      final usage = UsageController(sources: [source], autoStart: false);
+      final menu = ModelsMenuController(usage: usage, now: () => now);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      final first = menu.refresh();
+      answer.complete(reading());
+      await first;
+      expect(menu.rows.single['status'], '15% remaining');
+
+      now = now.add(const Duration(minutes: 61));
+      expect(menu.rows.single['status'], 'Usage unavailable');
+      answer = Completer<ProviderUsage>();
+      final second = menu.refresh();
+      expect(menu.rows.single['status'], 'Checking usage…');
+      expect(menu.rows.single['remainingPercent'], isNull);
+      answer.complete(reading(fetched: now));
+      await second;
+      expect(menu.rows.single['status'], '15% remaining');
+    },
+  );
+
+  test(
+    'a cached figure stays for up to an hour and says how old it is',
+    () async {
+      var now = instant;
+      final source = _Source(UsageProvider.claude, () async => reading());
+      final usage = UsageController(sources: [source], autoStart: false);
+      final menu = ModelsMenuController(usage: usage, now: () => now);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      await menu.refresh();
+      now = now.add(const Duration(minutes: 30));
+      expect(menu.rows.single['status'], '15% remaining');
+      expect(menu.rows.single['details'], contains('Read 30 min ago'));
+    },
+  );
+
+  test('a failed read keeps the last good figure', () async {
+    var fail = false;
+    final source = _Source(
+      UsageProvider.claude,
+      () async => fail
+          ? const ProviderUsage(
+              provider: UsageProvider.claude,
+              status: UsageStatus.failed,
+            )
+          : reading(),
+    );
+    final usage = UsageController(sources: [source], autoStart: false);
+    final menu = ModelsMenuController(usage: usage, now: () => instant);
+    addTearDown(usage.dispose);
+    addTearDown(menu.dispose);
+    await usage.refresh();
+    fail = true;
+    await usage.refresh();
+    expect(source.calls, 2);
+    expect(menu.rows.single['status'], '15% remaining');
+  });
 
   test(
     'a positive fraction of remaining usage is not rounded to zero',
@@ -275,7 +340,7 @@ void main() {
   );
 
   testWidgets(
-    'native Models opens lazily without changing the swarm or search',
+    'View Models refreshes subscriptions only when the shared panel opens',
     (tester) async {
       const channel = MethodChannel('harness/swarm_tabs');
       final messenger = tester.binding.defaultBinaryMessenger;
@@ -308,39 +373,29 @@ void main() {
         ),
       );
       expect(source.calls, 0);
-      final previousUpdates = messages
-          .where((c) => c.method == 'update')
-          .length;
       final reply = Completer<void>();
       messenger.handlePlatformMessage(
         channel.name,
         const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('modelsOpened'),
+          const MethodCall('models'),
         ),
         (_) => reply.complete(),
       );
-      await reply.future;
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(reply.isCompleted, isTrue);
       expect(source.calls, 1);
       expect(app.activeSwarmId, original);
-      expect(
-        messages.where((c) => c.method == 'update').length,
-        previousUpdates,
-      );
-      expect(messages.where((c) => c.method == 'closeSearch'), isEmpty);
-      final snapshot =
-          messages.lastWhere((c) => c.method == 'modelsState').arguments as Map;
-      expect((snapshot['subscriptions'] as List).single['title'], 'OpenAI');
-      expect(
-        (snapshot['subscriptions'] as List).single['status'],
-        'Not signed in',
-      );
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      expect(find.text('OpenAI'), findsOneWidget);
+      expect(find.text('Not signed in'), findsOneWidget);
+      expect(messages.where((c) => c.method == 'modelsState'), isEmpty);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelsPanel), findsNothing);
+      expect(app.activeSwarmId, original);
       await tester.pumpWidget(const SizedBox());
-      expect(
-        (messages.lastWhere((c) => c.method == 'modelsState').arguments
-            as Map)['subscriptions'],
-        isEmpty,
-      );
+      expect(source.calls, 1);
+      expect(messages.where((c) => c.method == 'modelsState'), isEmpty);
       menu.dispose();
       usage.dispose();
       app.dispose();
@@ -348,7 +403,7 @@ void main() {
     },
   );
 
-  /// Mount the swarm screen on [app] and send the native Models menu's
+  /// Mount the swarm screen on [app] and send the native local-model
   /// `runLocalModel` command, with or without a machine.
   Future<void> openGridDoor(
     WidgetTester tester,

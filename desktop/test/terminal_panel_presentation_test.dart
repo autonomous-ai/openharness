@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -50,17 +49,19 @@ void main() {
       await tester.pump();
       revision.value = 1;
       await tester.pump();
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(
-        location: tester.getCenter(find.text(session.agentName)),
-      );
-      await tester.pump(const Duration(milliseconds: 120));
-      await tester.tap(find.byTooltip('Show message composer'));
-      await tester.tap(find.byTooltip('Zoom Pane'));
-      await tester.tap(find.byTooltip('Restart Harness'));
-      await tester.tap(find.byTooltip('Stop Harness'));
-      await tester.tap(find.byTooltip('Close Pane'));
-      await tester.pump();
+      // Every pane action is one ⋮ menu away.
+      for (final label in [
+        'Show message composer',
+        'Zoom Pane',
+        'Restart Harness',
+        'Stop Harness',
+        'Close Pane',
+      ]) {
+        await tester.tap(find.byTooltip('Pane actions'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+      }
       expect(closed, [1]);
       expect(deleted, [1]);
       expect(restarted, [1]);
@@ -174,7 +175,7 @@ void main() {
       );
       revision.value = 2;
       await tester.pump();
-      expect(find.byTooltip('Zoom Pane'), findsOneWidget);
+      expect(find.byTooltip('Pane actions'), findsOneWidget);
       session.status = TerminalSessionStatus.takenOver;
       revision.value = 3;
       await tester.pump();
@@ -198,7 +199,6 @@ void main() {
         tester.widget<Text>(find.text('Renamed terminal')).style!.fontFamily,
         'Monaco',
       );
-      await mouse.removePointer();
       await tester.pumpWidget(const SizedBox());
       revision.dispose();
       session.dispose();
@@ -207,7 +207,7 @@ void main() {
   );
   for (final local in [true, false]) {
     testWidgets(
-      '${local ? 'local' : 'remote'} header swaps details for actions without moving its title',
+      '${local ? 'local' : 'remote'} header keeps its details in view and its actions in the ⋮ menu',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.localOnly = local;
@@ -245,13 +245,11 @@ void main() {
         );
         await tester.pump();
         final title = find.text('Onboarding');
-        final details = find.byKey(const ValueKey('pane-header-details'));
         final controls = find.byType(PaneHeaderActions);
         final terminalWidget = tester.widget<TerminalView>(
           find.byType(TerminalView),
         );
         final titleBounds = tester.getRect(title);
-        expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
         expect(find.text('harness'), findsOneWidget);
         expect(find.text('main'), findsOneWidget);
         if (local) {
@@ -275,31 +273,27 @@ void main() {
           tester.getRect(find.text('main')).left,
           greaterThan(tester.getRect(find.text('harness')).right),
         );
-        expect(find.byTooltip('Stop Harness').hitTestable(), findsNothing);
+        // One ⋮ menu, always in view, instead of a row of icons that took the details' place
+        // on hover.
         expect(
           find.descendant(of: controls, matching: find.byType(IconButton)),
-          findsNWidgets(local ? 5 : 6),
+          findsOneWidget,
         );
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(location: tester.getCenter(title));
-        await tester.pump(const Duration(milliseconds: 120));
-        expect(tester.widget<AnimatedOpacity>(details).opacity, 0);
-        expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
-        expect(find.byTooltip('Share harness').hitTestable(), findsOneWidget);
+        expect(find.byTooltip('Pane actions').hitTestable(), findsOneWidget);
+        await tester.tap(find.byTooltip('Pane actions'));
+        await tester.pumpAndSettle();
+        expect(find.text('Stop Harness'), findsOneWidget);
+        expect(find.text('Share harness'), findsOneWidget);
+        // The details stay in view, and neither the title nor the terminal moves.
+        expect(find.text('main').hitTestable(), findsOneWidget);
         expect(tester.getRect(title), titleBounds);
         expect(
           tester.widget<TerminalView>(find.byType(TerminalView)),
           same(terminalWidget),
         );
-        await mouse.moveTo(const Offset(300, 200));
-        await tester.pump(const Duration(milliseconds: 120));
-        expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
-        expect(find.byTooltip('Stop Harness').hitTestable(), findsNothing);
-        // Keyboard users can reveal and reach the same actions without a mouse.
-        Focus.of(tester.element(find.byTooltip('Stop Harness'))).nextFocus();
-        await tester.pump(const Duration(milliseconds: 120));
-        expect(find.byTooltip('Stop Harness').hitTestable(), findsOneWidget);
-        await mouse.removePointer();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(find.text('Stop Harness'), findsNothing);
         await tester.pumpWidget(const SizedBox());
         session.dispose();
         app.dispose();
@@ -359,38 +353,30 @@ void main() {
         expect(tester.getSize(title).width, greaterThan(64));
         expect(tester.takeException(), isNull);
         final titleBefore = tester.getRect(title);
-        final button = tester.widget<IconButton>(
-          find.widgetWithIcon(IconButton, Icons.more_horiz),
-        );
-        button.focusNode!.requestFocus();
-        await tester.pump(const Duration(milliseconds: 120));
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        final menu = find.widgetWithIcon(IconButton, Icons.more_vert);
+        await tester.tap(menu);
         await tester.pumpAndSettle();
         expect(find.text('Zoom Pane'), findsOneWidget);
         expect(find.text('Show viewer'), findsOneWidget);
         expect(find.text('Fork Harness'), findsOneWidget);
         expect(find.text('Stop Harness'), findsOneWidget);
         expect(tester.getRect(title), titleBefore);
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.tap(find.text('Zoom Pane'));
         await tester.pumpAndSettle();
         expect(zooms, [240.0, 280.0, 420.0].indexOf(width) + 1);
         expect(find.text('Zoom Pane'), findsNothing);
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.tap(menu);
         await tester.pumpAndSettle();
-        for (var i = 0; i < 5; i++) {
-          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-          await tester.pump();
-        }
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.tap(find.text('Fork Harness'));
         await tester.pumpAndSettle();
         expect(forks, zooms);
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        // Escape and a click elsewhere both close it without choosing anything.
+        await tester.tap(menu);
         await tester.pumpAndSettle();
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(find.text('Zoom Pane'), findsNothing);
-        expect(button.focusNode!.hasFocus, isTrue);
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.tap(menu);
         await tester.pumpAndSettle();
         dismissTransientMenus();
         await tester.pumpAndSettle();

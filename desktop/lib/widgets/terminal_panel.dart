@@ -1981,12 +1981,10 @@ class _TerminalHeader extends StatelessWidget {
     // Reserve space for the visible model name and the pane controls.
     // Engines without a picker keep their existing header width.
     final showModelPicker = !readOnly && modelPickerSupports(session.engineId);
-    final pickerWidth = showModelPicker ? 170.0 : 0.0;
-    final actionsWidth =
-        (remoteComposer == null ? 148.0 : 178.0) +
-        pickerWidth +
-        (onFork == null ? 0 : 30) +
-        (agent?.viewerUrl == null && agent?.viewerError == null ? 0 : 30);
+    // The picker: a model id up to 220px, its arrow and padding.
+    final pickerWidth = showModelPicker ? 250.0 : 0.0;
+    // The model, then the one ⋮ menu that holds every pane action.
+    final actionsWidth = 36.0 + pickerWidth;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
@@ -2006,6 +2004,27 @@ class _TerminalHeader extends StatelessWidget {
                   project?.shownBranch != null &&
                   constraints.maxWidth >= 360 * math.max(1, scale);
               final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
+              // The room the left side needs: the mark, the whole name as it will be drawn, and
+              // the status beside it — capped at 45% so a very long name still leaves the right
+              // side most of the header.
+              double titleRoom() {
+                final name = TextPainter(
+                  text: TextSpan(
+                    text: session.agentName,
+                    style: grid.AppType.monoLabel(fontWeight: FontWeight.w600),
+                  ),
+                  textDirection: TextDirection.ltr,
+                  textScaler: MediaQuery.textScalerOf(context),
+                  maxLines: 1,
+                )..layout();
+                final width = name.width;
+                name.dispose();
+                return math.min(
+                  17 + 10 + width + 8 + (status == null ? 16 : 120) + 8,
+                  constraints.maxWidth * .45,
+                );
+              }
+
               final rightWidth = narrow
                   ? math.max(
                       (showModelPicker ? 100.0 : 28.0) + badgeWidth,
@@ -2013,7 +2032,9 @@ class _TerminalHeader extends StatelessWidget {
                     )
                   : math.max(
                       actionsWidth + badgeWidth,
-                      constraints.maxWidth * .55,
+                      // Everything the name does not use. A fixed 55% left the folder and branch
+                      // shortened to "…" beside a short name with half the header empty.
+                      constraints.maxWidth - titleRoom(),
                     );
               return Row(
                 children: [
@@ -2171,7 +2192,8 @@ class _TerminalHeader extends StatelessWidget {
                               ),
                             )
                           : null,
-                      compact: narrow,
+                      // One ⋮ menu for the pane's actions at every width, not a row of icons.
+                      compact: true,
                       // Keep the current model visible, including while the
                       // terminal reconnects, without shifting the other controls.
                       modelPicker: showModelPicker

@@ -111,6 +111,34 @@ export interface GridLaunchOverride {
    * Absent means no web tools, which is exactly what an older desktop sends.
    */
   mcpUrl?: string
+  /**
+   * The model's context window in tokens, as the grid's relay reports it (`context_window` on its
+   * `/models` row) — the size the engine serving it was actually started with.
+   *
+   * ⚠️ Every coding agent here assumes a window for a model it does not recognise, and a grid model
+   * is never one it recognises: Claude Code assumes 200K, Codex and OpenCode know nothing at all. An
+   * agent that does not know the real window never compacts before it — the server rejects the
+   * request as too long first, and the session dies where it should have summarised. So each engine
+   * is TOLD, in its own dialect ([contextWindowHint] and the contracts below).
+   *
+   * Absent means the relay did not say, and each engine keeps its own assumption, as before.
+   */
+  contextWindow?: number
+}
+
+/** The smallest window believed. Anything below it is not a model a coding agent can run on, and a
+ *  value that small is likelier a misreport than a real engine — better to say nothing than to have
+ *  an agent compact every turn. */
+const MIN_CONTEXT_WINDOW = 4096
+/** The largest believed: no engine serves more, and a bigger number is a unit error. */
+const MAX_CONTEXT_WINDOW = 16 * 1024 * 1024
+
+/** A context window worth handing an engine, or undefined. Lenient on purpose, unlike every other
+ *  field here: this is a hint, and a malformed one must cost only the hint — refusing the whole
+ *  override would strand a persisted launch that is otherwise fine. */
+export function contextWindowHint(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= MIN_CONTEXT_WINDOW && value <= MAX_CONTEXT_WINDOW
+    ? value : undefined
 }
 
 export type GridOverrideParse =
@@ -184,6 +212,7 @@ export function parseGridLaunchOverride(raw: unknown): GridOverrideParse {
   if (hasMcpUrl && !mcpUrl) return { state: 'invalid', reason: 'grid mcpUrl must be a non-empty string' }
   const badMcpUrl = mcpUrl ? urlProblem('mcpUrl', mcpUrl) : null
   if (badMcpUrl) return { state: 'invalid', reason: badMcpUrl }
+  const contextWindow = contextWindowHint(source.contextWindow)
   return {
     state: 'ok',
     override: {
@@ -193,6 +222,7 @@ export function parseGridLaunchOverride(raw: unknown): GridOverrideParse {
       apiKey: apiKey as string,
       ...(model ? { model } : {}),
       ...(mcpUrl ? { mcpUrl } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
     },
   }
 }
@@ -263,11 +293,21 @@ export function gridProviderId(networkName: string): string {
  *     the literal is recommended, because an unset variable silently becomes an empty string and a
  *     human-launched OpenCode has no guarantee the variable is set. Here it IS guaranteed: the
  *     daemon puts it in the pane's environment with `tmux new-session -e` before the engine starts.
- *  4. **No `limit` block.** OpenCode requires `context` and `output` TOGETHER and rejects the config
- *     if only one is present. The relay reports a context window per model but this module is not
- *     the thing that read it, and inventing one would be worse than the defaults OpenCode already
- *     uses.
+ *  4. **`limit` only when the window is known, and then BOTH halves.** OpenCode requires `context`
+ *     and `output` together and rejects the config given only one. It is how OpenCode knows how much
+ *     room is left, so without it a session ran on until the relay refused a request as too long,
+ *     never having compacted. Absent when the relay did not report a window: inventing one would be
+ *     worse than OpenCode's own defaults. `output` is a quarter of the window, capped at OpenCode's
+ *     own 32K output ceiling — it is also what OpenCode holds back from the window for the reply, so
+ *     a larger share would compact a small window after every other turn.
  */
+/** OpenCode's own ceiling on a reply, which it also reserves out of the window. */
+const OPENCODE_OUTPUT_MAX = 32_000
+
+function opencodeOutputLimit(contextWindow: number): number {
+  return Math.min(OPENCODE_OUTPUT_MAX, Math.floor(contextWindow / 4))
+}
+
 function opencodeGridConfig(
   provider: string,
   override: GridLaunchOverride,
@@ -282,7 +322,14 @@ function opencodeGridConfig(
   // may rewrite. One model here makes the answer a fact about a file that cannot change under us.
   //
   // Choosing a different model is what every other engine here does too: per agent, at creation.
-  const models: Record<string, { name: string }> = { [model]: { name: model } }
+  const models: Record<string, { name: string; limit?: { context: number; output: number } }> = {
+    [model]: {
+      name: model,
+      ...(override.contextWindow
+        ? { limit: { context: override.contextWindow, output: opencodeOutputLimit(override.contextWindow) } }
+        : {}),
+    },
+  }
   return `${JSON.stringify({
     $schema: 'https://opencode.ai/config.json',
     provider: {
@@ -514,7 +561,7 @@ export function gridConflictingEnvToClear(launch: Pick<GridEngineLaunch, 'env' |
  * serves. The context/cost numbers are Pi's own bookkeeping for its display; the grid decides what
  * the model really takes.
  */
-function piModelsJson(baseUrl: string, model: string): string {
+function piModelsJson(baseUrl: string, model: string, contextWindow?: number): string {
   return JSON.stringify({
     providers: {
       [GRID_PROVIDER_ID]: {
@@ -528,7 +575,9 @@ function piModelsJson(baseUrl: string, model: string): string {
           name: model,
           reasoning: false,
           input: ['text'],
-          contextWindow: 200000,
+          // The real window when the relay reported one — the same fault as every engine here:
+          // told 200K, Pi never compacted before a smaller server refused the request.
+          contextWindow: contextWindow ?? 200000,
           maxTokens: 8192,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         }],
@@ -574,6 +623,11 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
           // has no standing to choose a user's model. That reasoning does not carry here: the desktop
           // app ASKED, and this is the answer. Left unset when the user picked no model.
           ...(override.model ? { ANTHROPIC_MODEL: override.model } : {}),
+          // The window to compact within. A grid model's id is one Claude Code does not recognise, so
+          // it assumes 200K and compacts only near that — on a smaller server, never, because the
+          // server refuses the request first. This is the documented variable for exactly that
+          // case (code.claude.com/docs/en/model-config, "unrecognized model IDs").
+          ...(override.contextWindow ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(override.contextWindow) } : {}),
           // Only when there are web tools to reach: the variable exists to be referenced by the config
           // below, and setting it otherwise would leave a key in the pane that nothing reads.
           ...(override.mcpUrl ? { [GRID_KEY_VAR]: override.apiKey } : {}),
@@ -625,6 +679,15 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
         ...CODEX_DISABLE_WEB_SEARCH_ARGS,
         ...(override.mcpUrl ? codexMcpArgs(override.mcpUrl) : []),
         ...(override.model ? ['-m', override.model] : []),
+        // The window, and where to compact inside it. Codex knows neither for a model it does not
+        // recognise, so it never compacted and the relay refused the request as too long instead.
+        // 90% leaves the summary request itself room to fit.
+        ...(override.contextWindow
+          ? [
+            '-c', `model_context_window=${override.contextWindow}`,
+            '-c', `model_auto_compact_token_limit=${Math.floor(override.contextWindow * 0.9)}`,
+          ]
+          : []),
       ],
       webSearch: webSearchWhenWired(override),
     }),
@@ -839,7 +902,7 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
         configDir: {
           envVar: 'PI_CODING_AGENT_DIR',
           files: [
-            { name: 'models.json', content: piModelsJson(relayBaseUrl(override.baseUrl), model) },
+            { name: 'models.json', content: piModelsJson(relayBaseUrl(override.baseUrl), model, override.contextWindow) },
             { name: 'settings.json', content: piSettingsJson(userPiSkillsDir()) },
           ],
         },
@@ -977,6 +1040,9 @@ const PROBE_OVERRIDE: GridLaunchOverride = {
   // this answers, and a probe that left them out would move an agent to another grid while its old
   // grid's MCP credential stayed in the pane — the exact staleness the doc comment below warns of.
   mcpUrl: 'https://example.invalid/v1/grid/web-mcp/',
+  // Present for the same reason: a launch that knew its window sets a variable (Claude Code's), and
+  // moving back to the own login must take it out of the pane with the rest.
+  contextWindow: 131072,
 }
 
 /**

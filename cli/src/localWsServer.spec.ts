@@ -191,6 +191,40 @@ describe('local CLI WebSocket', () => {
     await vi.waitFor(() => expect(rosters).toEqual([['a1', 'a2'], []]))
   })
 
+  it('says whether the window those tiles belong to is actually in front', async () => {
+    // The roster alone cannot answer it: every pane keeps its place on the tab
+    // while the window sits behind a browser. Without this the dial stayed quiet
+    // about work nobody could see, which is the one case it exists for.
+    const backend = new FakeBackend()
+    const seen: Array<{ ids: string[]; foreground: boolean }> = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, {
+      machineId,
+      backend,
+      onAppPanes: (ids, foreground) => seen.push({ ids, foreground }),
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
+
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+
+    ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['a1'], foreground: true } }))
+    ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['a1'], foreground: false } }))
+    // A window that predates the field only ever sent this list while it was up,
+    // so absence reads as in front — the behaviour it has today.
+    ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['a1'] } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(3))
+    expect(seen.map((row) => row.foreground)).toEqual([true, false, true])
+
+    ws.close()
+    // No window at all is not a window in front.
+    await vi.waitFor(() => expect(seen[3]).toEqual({ ids: [], foreground: false }))
+  })
+
   it('takes the window\'s swarms, drops what is not a swarm, and forgets them on close', async () => {
     const backend = new FakeBackend()
     const seen: unknown[] = []

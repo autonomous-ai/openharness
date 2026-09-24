@@ -2,6 +2,7 @@
  * download and process authority. A click is a durable daemon operation, never a chat task. */
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile, readdir, stat, mkdir, rename, writeFile, statfs } from 'node:fs/promises'
+import { createServer, type AddressInfo } from 'node:net'
 import { basename, dirname, join } from 'node:path'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
 import { gridCredentialsPath } from './gridCredentials.js'
@@ -20,6 +21,43 @@ const cleanName = (v: string): string => basename(v).replace(/\.gguf$/i, '').rep
 // Grid advertises a GGUF filename as a lowercase model name without its extension.
 const modelKey = (v: string): string => v.toLowerCase().replace(/\.gguf$/, '')
 const validArg = (v: string): boolean => !!v && !v.startsWith('-') && !/[\x00-\x1f]/.test(v)
+/** `grid info` statuses of a grid that is not up. Grid refuses `engines` and `join` on one, and
+ * names `grid start` as the way back. Anything else unknown stays unknown rather than "down". */
+const DOWN = new Set(['stopped', 'asleep'])
+/** The smallest context a coding agent can work in. Codex, Claude Code and OpenCode each open a
+ * session with a system prompt and tool list of several thousand tokens and grow from there; Ollama's
+ * own guides for all three put the floor at 64K, and below it a session survives a few turns and then
+ * fails. Every model offered here is one this machine can give at least this much. */
+export const MIN_CODING_CONTEXT = 64 * 1024
+/** Where a start begins for a file whose header could not be read: the size a 64 GB Mac was seen
+ * to hold for a 35B model, one step above the floor. */
+const UNREAD_CONTEXT = 128 * 1024
+
+/** The context sizes a start tries, largest first: [first], then halved, ending on the 64K floor.
+ * 256K → 128K → 64K. Empty when even [first] is under the floor. */
+export function contextLadder(first: number): number[] {
+  const sizes: number[] = []
+  for (let ctx = Math.floor(first); ctx >= MIN_CODING_CONTEXT; ctx = Math.floor(ctx / 2)) sizes.push(ctx)
+  if (sizes.length && sizes.at(-1)! > MIN_CODING_CONTEXT) sizes.push(MIN_CODING_CONTEXT)
+  return sizes
+}
+
+/** A port nothing on this machine is listening on, for the engine to take. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.unref()
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo
+      server.close(() => resolve(port))
+    })
+  })
+}
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+/** What llama.cpp answers once its GPU backend has failed an allocation — every request after. */
+const OUT_OF_MEMORY = /compute error|out of memory|insufficient memory|failed to allocate/i
 
 export interface LocalModel {
   id: string; name: string; state: 'available' | 'downloaded' | 'running'
@@ -35,22 +73,36 @@ export interface ModelOperation {
   progress?: number; error?: string; updatedAt: string
 }
 export interface LocalModelsSnapshot {
-  models: LocalModel[]; memoryBytes?: number; hardware?: string; error?: string
+  models: LocalModel[]; memoryBytes?: number; hardware?: string
+  /** A sentence to show BESIDE the list — never `error`. On this protocol an `error` field fails
+   * the whole request: the app's RPC layer drops the reply and keeps nothing of it, so a list sent
+   * with a warning in `error` arrived as no list at all and the Local tab read 0. */
+  notice?: string
   observedAt: string; busy: boolean
 }
 interface Candidate {
-  id: string; name: string; pull: string; file: string; files: string[]; size: number; quant: string; context: number
+  id: string; name: string; pull: string; file: string; files: string[]; size: number; quant: string
+  /** The window to pin at start: the catalog's fit for this machine, which is the largest it can
+   * hold. Absent for a model found on disk, which the catalog never sized — the engine then measures
+   * free memory at load and takes the largest window that fits (`grid join` without `--ctx-size`). */
+  context?: number
   aliases?: string[]
 }
 /** `live`: its heartbeat sidecar is fresh (the grid is hearing from it). `pidAlive`: the process its run
  *  record names exists — the only liveness that holds while the grid sleeps and the sidecar goes stale. */
-interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; pidAlive: boolean; context: number; siblings: number }
+interface Owned { file: string; selector: string; aliases: string[]; nodeId: string; name: string; live: boolean; pidAlive: boolean; siblings: number }
 interface Receipt { spec: 1; grid: string; operation?: ModelOperation }
 /** What the grid says is running on it, read WITHOUT waking it (`gridModels.gridInventory`): the
- * overview's node objects while it is awake, nothing while it sleeps. */
-export interface GridInventory { state: PictureState; nodes: Record<string, unknown>[] }
+ * overview's node objects while it is awake, nothing while it sleeps — and its owner status (`running`,
+ * `stopped`, `asleep`; null for a member or when it could not be read), remembered rather than asked on
+ * every tick. */
+export interface GridInventory { state: PictureState; nodes: Record<string, unknown>[]; status: string | null }
 interface Options {
   stateDir: string; processEnv?: NodeJS.ProcessEnv
+  /** This machine's name as Harness shows it. Grid labels an engine with its `--name`, and without
+   * one it takes the host name — so a model started here read `mac.lan` under "On your machines"
+   * while Machines called the same computer `M2`. */
+  machineName?: () => string | null | undefined
   run?: (args: string[], output?: (chunk: string) => void, timeout?: number) => Promise<GridFleetResult>
   request?: typeof fetch
   /** Injected, never a `grid engines` call: that read carries the grid credential, and a signed-in read
@@ -61,7 +113,12 @@ interface Options {
 }
 
 /** One concrete, machine-fitted version per model. Non-chat and unprobed offline
- * catalog rows are never called compatible. Split GGUF files stay one model. */
+ * catalog rows are never called compatible. Split GGUF files stay one model.
+ *
+ * ⚠️ A model whose fit on this machine is under [MIN_CODING_CONTEXT] is not offered at all. It used
+ * to be, pinned at 16K — a model that loads, answers "ok", and then cannot hold a coding agent's
+ * first prompt. The context pinned is the whole fit, not a slice of it: the fit is already the
+ * largest window this machine can hold beside the weights. */
 export function compatibleModels(raw: unknown): Candidate[] {
   const seen = new Set<string>()
   return rows(obj(raw).models).flatMap(row => {
@@ -70,7 +127,8 @@ export function compatibleModels(raw: unknown): Candidate[] {
     const version = rows(row.versions).find(v => v.version === fit.version)
     const pull = str(version?.pull_spec), size = num(version?.size_bytes)
     const id = str(row.repo_id), split = pull.indexOf(':')
-    if (!id || seen.has(id) || !validArg(pull) || split < 1 || !size || !num(fit.ctx)) return []
+    const fitted = Math.floor(Math.min(num(fit.ctx) ?? 0, num(fit.max_ctx) ?? Infinity))
+    if (!id || seen.has(id) || !validArg(pull) || split < 1 || !size || fitted < MIN_CODING_CONTEXT) return []
     const file = basename(pull.slice(split + 1))
     if (!file.toLowerCase().endsWith('.gguf')) return []
     const files = (Array.isArray(version?.urls) ? version.urls : []).flatMap((url: unknown) => {
@@ -78,7 +136,7 @@ export function compatibleModels(raw: unknown): Candidate[] {
     })
     seen.add(id)
     return [{ id, name: cleanName(id), pull, file, files: files.length ? files : [file], size,
-      quant: str(fit.version), context: Math.min(16384, Math.floor(fit.ctx)) }]
+      quant: str(fit.version), context: fitted }]
   })
 }
 
@@ -214,7 +272,7 @@ export class LocalModels {
           ? record.advertise_as.filter((v: unknown) => typeof v === 'string' && v.length > 0) : []
         const aliases: string[] = advertised.length ? advertised : [file]
         const pid = recordPid(record)
-        result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live, pidAlive: pid !== null && processExists(pid), context: Math.min(16384, num(record.ctx_size) || 8192), siblings: specs.length + (record.media ? 1 : 0) })
+        result.push({ file: basename(file), selector: file, aliases, nodeId: str(record.node_id), name: str(record.meta_name), live, pidAlive: pid !== null && processExists(pid), siblings: specs.length + (record.media ? 1 : 0) })
         this.blockers.set(grid, `Stop ${cleanName(aliases[0])} first to start another local model.`)
       }
     }
@@ -231,8 +289,10 @@ export class LocalModels {
       try {
         known = rows(JSON.parse(await readFile(path, 'utf8'))).filter(c =>
           c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
-          c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) && num(c.context) && c.context <= 16384 &&
-          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(c => ({
+          c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) &&
+          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(({ context: _pinned, ...c }) => ({
+            // A saved `context` is dropped, not carried: older receipts pinned 16K, and a model
+            // restarted from one would come back too small for a coding agent. The engine sizes it.
             ...c,
             // Older receipts kept only the displayed alias. Preserve that name
             // when upgrading, and never forward malformed saved argv values.
@@ -248,7 +308,7 @@ export class LocalModels {
       const file = await stat(join(this.home, 'models', instance.file)).catch(() => null)
       if (!file?.isFile() || !file.size) continue
       known.push({ id: `local:${instance.file}`, name: cleanName(instance.aliases[0]),
-        file: instance.file, files: [instance.file], pull: '', size: file.size, quant: '', context: instance.context,
+        file: instance.file, files: [instance.file], pull: '', size: file.size, quant: '',
         aliases: instance.aliases.filter(validArg) })
       changed = true
     }
@@ -257,8 +317,71 @@ export class LocalModels {
       const temp = `${path}.${randomUUID()}.tmp`
       await writeFile(temp, JSON.stringify(known), { mode: 0o600 }); await rename(temp, path)
     }
-    const existing = await Promise.all(known.map(async candidate => await this.downloaded(candidate) ? candidate : null))
+    const existing = await Promise.all(known.map(async candidate =>
+      await this.downloaded(candidate) && !await this.tooSmallToCode(candidate.file) ? candidate : null))
     return existing.filter((c): c is Candidate => c !== null)
+  }
+
+  /** The window each file was trained for, read once from its header (`grid ctx`). */
+  private trained = new Map<string, number | null>()
+
+  private async trainedWindow(file: string): Promise<number | null> {
+    if (!this.trained.has(file)) {
+      const window = await this.json(['ctx', file, '--json']).then(v => num(obj(v).context_length) ?? null, () => null)
+      this.trained.set(file, window)
+    }
+    return this.trained.get(file) ?? null
+  }
+
+  /** Whether [file] can never give a coding agent [MIN_CODING_CONTEXT], however much memory there
+   * is. Only a file the catalog did not size needs asking; unknown is not "too small". */
+  private async tooSmallToCode(file: string): Promise<boolean> {
+    const window = await this.trainedWindow(file)
+    return window != null && window < MIN_CODING_CONTEXT
+  }
+
+  /** Whether the engine just started on [port] can actually compute, asked of the engine itself.
+   *
+   * ⚠️ Not through the relay. An engine whose GPU ran out of memory answers every request with
+   * "Compute error." at once — but it reports that to the relay, and those reports timed out, so the
+   * relay check waited its whole three minutes and said only "did not answer". Asked directly, the
+   * failure is a second away and says what it is.
+   *
+   * `unknown` when there is nothing to ask (no engine listening on this machine, or no answer in
+   * time): the relay check that follows is then the judge, as it always was. */
+  private async probeEngine(port: number): Promise<'ok' | 'out-of-memory' | 'unknown'> {
+    const base = `http://127.0.0.1:${port}`
+    // `grid join` returns once the engine has loaded, so it is listening by now; 503 is a load still
+    // finishing, and the only answer worth waiting on. Nothing listening, twice, is not an engine
+    // this can reach; anything else is not a question this probe can answer.
+    const deadline = Date.now() + 10 * 60_000
+    for (let refused = 0; ;) {
+      const status = await this.request(`${base}/health`, { signal: AbortSignal.timeout(5_000), redirect: 'error' }).then(r => r.status, () => 0)
+      if (status === 200) break
+      if (status === 0 ? ++refused >= 2 : status !== 503) return 'unknown'
+      if (Date.now() > deadline) return 'unknown'
+      await sleep(500)
+    }
+    try {
+      const response = await this.request(`${base}/v1/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'Reply with the single word: ok' }], max_tokens: 8 }),
+        // Long: the engine's one slot may be busy with Grid's own first probe of the new engine.
+        signal: AbortSignal.timeout(5 * 60_000), redirect: 'error',
+      })
+      if (response.ok) return 'ok'
+      return OUT_OF_MEMORY.test(await response.text().catch(() => '')) ? 'out-of-memory' : 'unknown'
+    } catch { return 'unknown' }
+  }
+
+  /** The window the engine serving [model] on [grid] actually took, or undefined when Grid does not
+   * report one. Read after a start because a window left to the engine is decided at load. */
+  private async servedWindow(grid: string, model: string, nodeId: string): Promise<number | undefined> {
+    const nodes = rows(await this.json(['--remote', 'engines', grid, '--json']).catch(() => []))
+    const node = nodes.find(n => str(n.node_id || n.id) === nodeId) ?? (nodes.length === 1 ? nodes[0] : undefined)
+    const capabilities = obj(node?.model_capabilities)
+    const entry = Object.entries(capabilities).find(([name]) => modelKey(name) === modelKey(model))
+    return num(obj(entry?.[1]).context_length)
   }
 
   private receiptPath(grid: string): string { return join(this.options.stateDir, `${key(grid)}.json`) }
@@ -287,7 +410,7 @@ export class LocalModels {
   }
 
   async list(grid: string | null, force = false): Promise<LocalModelsSnapshot> {
-    if (!grid) return { models: [], error: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
+    if (!grid) return { models: [], notice: 'Sign in to find models for this computer.', observedAt: new Date().toISOString(), busy: false }
     if (!force && this.cached?.grid === grid && Date.now() - this.cached.at < 2500) return this.cached.value
     if (this.listPending) {
       if (this.listGrid === grid) return this.listPending
@@ -303,11 +426,12 @@ export class LocalModels {
     try {
       let inventory: GridInventory
       [owned, inventory] = await Promise.all([this.owned(grid), this.options.inventory(grid, force)])
-      // Asleep is not an inventory error: the grid is resting, what runs here is still known here, and
-      // Start and Pause stay enabled. Only a read that failed some other way is.
-      if (inventory.state === 'unknown') throw new Error('unanswered')
-      asleep = inventory.state !== 'awake'
-      nodes = rows(inventory.nodes)
+      // A grid that is down — its owner status says stopped or asleep (DOWN) — runs nothing: an answer,
+      // not a gap, so Start stays enabled (and brings it back up). Asleep says so even to a member, in
+      // the grid's own answer. Only a read that failed some other way is "could not be checked".
+      if (inventory.state === 'unknown' && !DOWN.has(inventory.status ?? '')) throw new Error('unanswered')
+      asleep = inventory.state === 'asleep' || inventory.status === 'asleep'
+      nodes = inventory.state === 'awake' ? rows(inventory.nodes) : []
     } catch { inventoryError = 'Running models could not be checked. Try again.' }
     const operation = this.active?.grid === grid ? this.active.operation : this.receipt?.grid === grid ? this.receipt.operation : undefined
     const choices = [...this.candidates, ...(await this.known(grid, owned)).filter(k => !this.candidates.some(c => c.file === k.file))]
@@ -356,10 +480,15 @@ export class LocalModels {
         ...(!serving && parked(instance) ? { gridAsleep: true } : {}) })
     }
     const value: LocalModelsSnapshot = { models, memoryBytes: num(obj(this.device.memory).total_gb) === undefined ? undefined : this.device.memory.total_gb * GiB,
-      hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), error: inventoryError || this.catalogError,
+      hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), notice: inventoryError || this.catalogError,
       observedAt: new Date().toISOString(), busy: !!this.active }
     this.cached = { grid, at: Date.now(), value }
     return value
+  }
+
+  /** What `grid info` says of [grid]: `running`, `stopped`, `asleep`. */
+  private async gridStatus(grid: string): Promise<string> {
+    return str(obj(await this.json(['--remote', 'info', grid, '--json'])).status)
   }
 
   /** A repeated click or lost RPC acknowledgement joins the same operation.
@@ -417,7 +546,7 @@ export class LocalModels {
         if (candidate.pull) {
           const current = compatibleModels(await this.catalog({ ...currentDevice, usable_bytes: Math.max(0, budget) })).find(c => c.id === candidate.id)
           if (!current || current.size < candidate.size) throw new ModelError('Stop a running model to make room, then try again.')
-          candidate.context = Math.min(candidate.context, current.context)
+          candidate.context = Math.min(candidate.context ?? Infinity, current.context ?? Infinity)
         } else if (candidate.size * 1.25 + 2 * GiB > budget) {
           throw new ModelError('Stop a running model to make room, then try again.')
         }
@@ -440,6 +569,12 @@ export class LocalModels {
           if (!await this.downloaded(candidate)) throw new ModelError('The download is incomplete. Start again to resume.')
         }
         await change('starting')
+        // A grid that is down refuses a join outright ("The model could not start"), and `sync`
+        // above restores its registration, not its process. Bring it up the way its own refusal
+        // says to. A grid already running is left alone: `start` is only for one that is not. An
+        // unreadable status blocks nothing — it is the join's refusal, not this read, that says a
+        // grid cannot take the model, and a Grid too old to answer `info --json` joined fine before.
+        if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await must(['--remote', 'start', grid], 'Your grid could not start. Try again.')
         const override = this.processEnv.LLAMA_SERVER
         const installed = override ? binaryOnPath(override, this.processEnv)
           : binaryOnPath(join(this.home, 'bin', 'llama-server'), this.processEnv) || binaryOnPath('llama-server', this.processEnv)
@@ -447,13 +582,51 @@ export class LocalModels {
           if (override) throw new ModelError('The local engine needs attention. Open Model Manager.')
           await must(['engine', 'install', 'llama.cpp'], 'The model engine could not start. Try again.')
         }
-        await must(['--remote', 'join', grid, '--serve', candidate.file,
-          '--max-concurrency', '1', '--ctx-size', String(candidate.context), '--reasoning-budget', '0',
-          ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])],
-        'The model could not start. Try again.')
+        // ⚠️ ALWAYS pinned, and stepped down when it does not run. Left to the engine, the window
+        // was the model's whole trained 256K on a 64 GB Mac whose GPU could hold 128K: it loaded, ran
+        // out of memory on its first request, and failed every request after. The catalog's fit is
+        // optimistic the same way. So the most the model is sized for is tried first, and each size
+        // that cannot compute is taken back down and halved — to the 64K floor, never below it.
+        const first = candidate.context ?? await this.trainedWindow(candidate.file) ?? UNREAD_CONTEXT
+        const named = this.options.machineName?.()?.trim()
+        const machineName = named && validArg(named) ? named : undefined
+        let started = false, outOfMemory = false
+        for (const ctx of contextLadder(first)) {
+          const port = await freePort()
+          const joined = await this.run(['--remote', 'join', grid, '--serve', candidate.file,
+            ...(machineName ? ['--name', machineName] : []),
+            '--max-concurrency', '1', '--ctx-size', String(ctx), '--endpoint-port', String(port),
+            '--reasoning-budget', '0',
+            ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])], undefined, 30 * 60_000)
+          // A join that fails at a size is also stepped down from: an allocation that fails at load
+          // takes the engine down before Grid can register it.
+          const probe = joined.ok ? await this.probeEngine(port) : 'failed'
+          if (probe === 'ok' || probe === 'unknown') { started = true; break }
+          outOfMemory ||= probe === 'out-of-memory'
+          // Down before the next size. The last engine leaving drops Grid's local registration, which
+          // the next join needs back — the same restore a start begins with.
+          await this.run(['--remote', 'leave', grid, '--engine', candidate.file], undefined, 30 * 60_000)
+          await this.run(['--remote', 'sync'], undefined, 30 * 60_000)
+          if (DOWN.has(await this.gridStatus(grid).catch(() => ''))) await this.run(['--remote', 'start', grid], undefined, 30 * 60_000)
+        }
+        if (!started) {
+          throw new ModelError(outOfMemory
+            ? `This computer does not have the memory to run ${candidate.name} with a 64K context. Close some apps, or choose a smaller model.`
+            : 'The model could not start. Try again.')
+        }
       }
       await change('verifying')
-      await this.verify(grid, instance?.aliases[0] || candidate.aliases?.[0] || candidate.file)
+      const model = instance?.aliases[0] || candidate.aliases?.[0] || candidate.file
+      await this.verify(grid, model)
+      // The floor, checked against what was actually served rather than what was asked: a window
+      // left to the engine is decided by the memory free at load, and can come in under it. A model
+      // that answers but cannot hold a coding agent's prompt is worse than one that did not start.
+      const serving = instance ?? (await this.owned(grid)).find(o => o.file === candidate.file)
+      const window = serving ? await this.servedWindow(grid, model, serving.nodeId) : undefined
+      if (serving && window !== undefined && window < MIN_CODING_CONTEXT) {
+        await this.run(['--remote', 'leave', grid, '--engine', serving.selector], undefined, 30 * 60_000)
+        throw new ModelError(`${candidate.name} could only get a ${Math.floor(window / 1024)}K context here. Coding agents need at least 64K. Close some apps, or choose a smaller model.`)
+      }
     }
     operation.phase = 'done'
     await this.save(grid, operation)

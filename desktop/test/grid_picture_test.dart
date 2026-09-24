@@ -1,18 +1,14 @@
-// The app-level picture of what the account's grids serve, and the three surfaces that refresh it
-// (the Model Manager, the macOS Models menu, the pane picker) keeping quiet while the app is in the
-// background. grid-reads-without-waking issue 02, desktop half.
+// The app-level picture of what the account's grids serve, and the surfaces that refresh it (the Model
+// Manager, the pane picker) keeping quiet while the app is in the background. (The macOS Models menu
+// this also covered was removed on main in #303 — Models opens from the View menu now.)
+// grid-reads-without-waking issue 02, desktop half.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/model_manager_controller.dart';
-import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/swarm_catalog.dart';
-import 'package:harness/usage/models_menu_controller.dart';
-import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -339,170 +335,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Pushed-Model'), findsOneWidget);
       expect(daemon.asked, asked);
-    });
-  });
-
-  group('the macOS Models menu', () {
-    const channel = MethodChannel('harness/swarm_tabs');
-    late _Daemon daemon;
-    late AppNotifier app;
-    late List<MethodCall> messages;
-    late ModelsMenuController menu;
-    late UsageController usage;
-    late SwarmProjectStore projects;
-
-    setUp(() {
-      daemon = _Daemon(_reply());
-      app = createApp(connectionForTest: (_) => daemon);
-      usage = UsageController(sources: const [], autoStart: false);
-      menu = ModelsMenuController(usage: usage);
-      projects = SwarmProjectStore();
-    });
-    tearDown(() {
-      menu.dispose();
-      usage.dispose();
-      app.dispose();
-      projects.dispose();
-    });
-
-    Future<void> mount(WidgetTester tester) async {
-      final messenger = tester.binding.defaultBinaryMessenger;
-      messages = <MethodCall>[];
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        messages.add(call);
-        return true;
-      });
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SwarmScreen(
-            notifier: app,
-            nativeTabs: true,
-            projectStore: projects,
-            modelsMenu: menu,
-          ),
-        ),
-      );
-      await tester.pump();
-    }
-
-    Future<void> native(WidgetTester tester, String method) async {
-      final reply = Completer<void>();
-      tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-        channel.name,
-        const StandardMethodCodec().encodeMethodCall(MethodCall(method)),
-        (_) => reply.complete(),
-      );
-      await reply.future;
-      await tester.pump();
-    }
-
-    List<Map<Object?, Object?>> lastSections() =>
-        ((messages.lastWhere((c) => c.method == 'modelsState').arguments
-                    as Map)['sections']
-                as List)
-            .cast<Map<Object?, Object?>>();
-
-    testWidgets(
-      'does not refresh in the background, and refreshes once on return',
-      (tester) async {
-        tester.binding.handleAppLifecycleStateChanged(
-          AppLifecycleState.inactive,
-        );
-        addTearDown(
-          () => tester.binding.handleAppLifecycleStateChanged(
-            AppLifecycleState.resumed,
-          ),
-        );
-        await mount(tester);
-        // Every app change asks the menu to refresh; in the background none of them may.
-        for (var i = 0; i < 5; i++) {
-          app.notifyListeners();
-          await tester.pump(const Duration(seconds: 15));
-        }
-        expect(daemon.asked, 0);
-        tester.binding.handleAppLifecycleStateChanged(
-          AppLifecycleState.resumed,
-        );
-        await tester.pump();
-        expect(daemon.asked, 1);
-        await tester.pumpWidget(const SizedBox());
-      },
-    );
-
-    testWidgets('refreshes when it opens, inside the ten-second throttle', (
-      tester,
-    ) async {
-      await mount(tester);
-      final before = daemon.asked;
-      expect(before, 1);
-      await native(tester, 'modelsOpened');
-      expect(daemon.asked, before + 1);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('opening it refreshes even when the window reads as inactive', (
-      tester,
-    ) async {
-      await mount(tester);
-      final before = daemon.asked;
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      addTearDown(
-        () => tester.binding.handleAppLifecycleStateChanged(
-          AppLifecycleState.resumed,
-        ),
-      );
-      await tester.pump();
-      await native(tester, 'modelsOpened');
-      expect(daemon.asked, before + 1);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('updates when only a node changed', (tester) async {
-      await mount(tester);
-      expect(lastSections().single['models'], [
-        {'id': 'Qwen3.5-4B', 'node': 'macbook'},
-      ]);
-      daemon.reply = _reply(node: 'studio');
-      await native(tester, 'modelsOpened');
-      expect(lastSections().single['models'], [
-        {'id': 'Qwen3.5-4B', 'node': 'studio'},
-      ]);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('updates when only the state changed', (tester) async {
-      await mount(tester);
-      expect(lastSections().single['state'], 'awake');
-      daemon.reply = _reply(state: 'asleep');
-      await native(tester, 'modelsOpened');
-      expect(lastSections().single['state'], 'asleep');
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('a push updates it with no request', (tester) async {
-      await mount(tester);
-      final asked = daemon.asked;
-      await app.handleEventForTest('m', {
-        'type': 'grid_models_changed',
-        'payload': _reply(ids: ['Pushed-Model']),
-      });
-      await tester.pump();
-      expect((lastSections().single['models'] as List).single, {
-        'id': 'Pushed-Model',
-        'node': 'macbook',
-      });
-      expect(daemon.asked, asked);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('an older daemon sends no state, and the menu says none', (
-      tester,
-    ) async {
-      daemon.reply = _reply(withNewFields: false);
-      await mount(tester);
-      expect(lastSections().single.containsKey('state'), isFalse);
-      await tester.pumpWidget(const SizedBox());
     });
   });
 }

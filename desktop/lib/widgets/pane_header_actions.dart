@@ -1,12 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
-import '../shortcuts/keymap.dart';
-import '../shortcuts/app_keymap.dart';
 import 'box_chrome.dart';
-import 'transient_menus.dart';
+import 'pane_menu.dart';
 
 /// Direct pane controls, in a stable order even when an action is unavailable.
 class PaneHeaderActions extends StatelessWidget {
@@ -99,10 +99,13 @@ class PaneHeaderActions extends StatelessWidget {
         );
 
     final visible = _PaneHeaderVisibility.of(context);
+    // The ⋮ menu is always in view: it is one small mark at the edge, not a row of icons that
+    // would crowd the title at rest.
+    final shown = visible || compact;
     final controls = IgnorePointer(
-      ignoring: !visible,
+      ignoring: !shown,
       child: AnimatedOpacity(
-        opacity: visible ? 1 : 0,
+        opacity: shown ? 1 : 0,
         alwaysIncludeSemantics: true,
         duration: MediaQuery.disableAnimationsOf(context)
             ? Duration.zero
@@ -115,12 +118,19 @@ class PaneHeaderActions extends StatelessWidget {
               const SizedBox(width: 2),
             ],
             if (compact)
+              // The row of icons, as a menu: each action keeps the icon it had in the row.
               _CompactPaneActions(
                 items: [
-                  (label: 'Zoom Pane', callback: onZoom),
+                  if (onShare != null)
+                    (
+                      label: 'Share harness',
+                      icon: Icons.person_add_alt_1_outlined,
+                      callback: onShare,
+                    ),
                   if (onToggleViewer != null)
                     (
                       label: viewerVisible ? 'Hide viewer' : 'Show viewer',
+                      icon: LucideIcons.sparkles,
                       callback: onToggleViewer,
                     ),
                   if (onToggleComposer != null)
@@ -128,20 +138,31 @@ class PaneHeaderActions extends StatelessWidget {
                       label: composerVisible
                           ? 'Hide message composer'
                           : 'Show message composer',
+                      icon: LucideIcons.keyboard,
                       callback: onToggleComposer,
                     ),
-                  if (onShare != null)
-                    (label: 'Share harness', callback: onShare),
+                  (
+                    label: 'Zoom Pane',
+                    icon: zoomed ? LucideIcons.minimize : LucideIcons.maximize,
+                    callback: onZoom,
+                  ),
                   (
                     label: terminal ? 'Restart Terminal' : 'Restart Harness',
+                    icon: LucideIcons.refreshCw,
                     callback: onRestart,
                   ),
-                  if (onFork != null) (label: 'Fork Harness', callback: onFork),
-                  (label: 'Close Pane', callback: onClose),
+                  if (onFork != null)
+                    (
+                      label: 'Fork Harness',
+                      icon: LucideIcons.gitFork,
+                      callback: onFork,
+                    ),
                   (
                     label: terminal ? 'Stop Terminal' : 'Stop Harness',
+                    icon: Icons.stop_rounded,
                     callback: onDelete,
                   ),
+                  (label: 'Close Pane', icon: LucideIcons.x, callback: onClose),
                 ],
               )
             else ...[
@@ -223,12 +244,31 @@ class PaneHeaderActions extends StatelessWidget {
             ],
           );
     if (modelPicker == null) return actionArea;
+    // The model, then folder, branch and PR, then the ⋮ menu on the right edge. With the actions
+    // in one menu there is nothing for the details to swap with on hover, so they stay in view.
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         modelPicker!,
-        const SizedBox(width: 4),
-        Flexible(child: actionArea),
+        if (details != null)
+          // The gap shrinks WITH the details: a pane too narrow for them gives the picker and
+          // the menu every pixel rather than overflowing by the width of a gap beside nothing.
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: trailing == null
+                  ? details!
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(child: details!),
+                        trailing!,
+                      ],
+                    ),
+            ),
+          ),
+        const SizedBox(width: 2),
+        controls,
       ],
     );
   }
@@ -238,93 +278,86 @@ class PaneHeaderActions extends StatelessWidget {
 /// room for its title. Native titlebar actions dismiss this menu too.
 class _CompactPaneActions extends StatefulWidget {
   const _CompactPaneActions({required this.items});
-  final List<({String label, VoidCallback? callback})> items;
+  final List<({String label, IconData icon, VoidCallback? callback})> items;
 
   @override
   State<_CompactPaneActions> createState() => _CompactPaneActionsState();
 }
 
 class _CompactPaneActionsState extends State<_CompactPaneActions> {
-  final _controller = MenuController();
-  final _triggerFocus = FocusNode(debugLabel: 'Pane actions');
-  final _firstFocus = FocusNode(debugLabel: 'First pane action');
-  VoidCallback? _unregister;
+  bool _open = false;
 
-  @override
-  void dispose() {
-    _unregister?.call();
-    _triggerFocus.dispose();
-    _firstFocus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  /// The pane menu, the same surface as the model picker beside it: its box, its rows and its
+  /// hover. Each row keeps the icon the action had when it was a row of icons.
+  Future<void> _show() async {
+    if (_open) return;
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
     final enabled = widget.items
         .where((item) => item.callback != null)
         .toList();
-    return MenuAnchor(
-      controller: _controller,
-      childFocusNode: _triggerFocus,
-      onOpen: () {
-        _unregister = registerTransientMenu(_controller.close);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _controller.isOpen) _firstFocus.requestFocus();
-        });
-      },
-      onClose: () {
-        _unregister?.call();
-        _unregister = null;
-      },
-      style: grid.AppMenu.style(maxHeight: double.infinity).copyWith(
-        shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(3),
-            side: BorderSide(color: AppColors.border),
-          ),
-        ),
-        padding: const WidgetStatePropertyAll(EdgeInsets.all(4)),
+    if (enabled.isEmpty) return;
+    final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
+    setState(() => _open = true);
+    final chosen = await showPaneMenu<VoidCallback>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        origin.dx,
+        origin.dy + box.size.height + 6,
+        overlay.size.width - origin.dx - box.size.width,
+        0,
       ),
-      menuChildren: [
-        for (var i = 0; i < enabled.length; i++)
-          KeymapRegion(
-            contextKind: KeymapContext.picker,
-            child: MenuItemButton(
-              focusNode: i == 0 ? _firstFocus : null,
-              onPressed: enabled[i].callback,
-              style: ButtonStyle(
-                textStyle: WidgetStatePropertyAll(grid.AppType.body()),
-                foregroundColor: WidgetStatePropertyAll(AppColors.text),
-                minimumSize: const WidgetStatePropertyAll(Size(180, 30)),
-                shape: const WidgetStatePropertyAll(RoundedRectangleBorder()),
+      minWidth: 200,
+      maxWidth: 340,
+      children: (close) => [
+        for (final item in enabled)
+          paneMenuItem(
+            onTap: () => close(item.callback),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: kPaneMenuRowPadding,
+                vertical: 7,
               ),
-              child: Text(enabled[i].label),
+              child: Row(
+                children: [
+                  Icon(item.icon, size: 15, color: AppColors.mutedStrong),
+                  const SizedBox(width: 10),
+                  // Flexible: a large text setting shortens the label rather than overflowing.
+                  Flexible(
+                    child: Text(
+                      item.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: grid.AppType.body(color: AppColors.text),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
       ],
-      builder: (context, controller, _) => IconButton(
-        focusNode: _triggerFocus,
-        tooltip: 'Pane actions',
-        onPressed: enabled.isEmpty
-            ? null
-            : () {
-                if (controller.isOpen) {
-                  controller.close();
-                } else {
-                  controller.open();
-                }
-              },
-        icon: const Icon(Icons.more_horiz, size: 16),
-        style: IconButton.styleFrom(
-          foregroundColor: AppColors.mutedStrong,
-          fixedSize: const Size(28, 28),
-          minimumSize: const Size(28, 28),
-          padding: EdgeInsets.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      ),
     );
+    if (mounted) setState(() => _open = false);
+    chosen?.call();
   }
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: 'Pane actions',
+    onPressed: widget.items.any((item) => item.callback != null)
+        ? () => unawaited(_show())
+        : null,
+    icon: const Icon(Icons.more_vert, size: 16),
+    style: IconButton.styleFrom(
+      foregroundColor: _open ? AppColors.text : AppColors.mutedStrong,
+      fixedSize: const Size(28, 28),
+      minimumSize: const Size(28, 28),
+      padding: EdgeInsets.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
+  );
 }
 
 /// Only header controls depend on this hover state, so the terminal and title

@@ -718,6 +718,34 @@ static void handle_message(const cJSON *root)
         }
         return;
     }
+    // The WINDOW looked at this agent — its drawer row here is stale. The tap's half of this pair
+    // already goes the other way (cable_client_send_open); without the return leg the pill and the
+    // window's badge stop agreeing the first time somebody switches to the tab a card was about.
+    // The window's whole unread list, replayed because this dial has just attached and its drawer is
+    // empty — see ui_notif_replace.
+    if (strcmp(t, "notif.replace") == 0) {
+        static cable_notif_t rows[8];   // static: too much for the reader task's stack
+        int n = 0;
+        const cJSON *it = NULL;
+        cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(p, "items")) {
+            if (n >= (int)(sizeof(rows) / sizeof(rows[0]))) break;
+            const char *aid = str_of(it, "agentId");
+            if (!aid || !aid[0]) continue;
+            memset(&rows[n], 0, sizeof(rows[n]));
+            snprintf(rows[n].agent_id, sizeof(rows[n].agent_id), "%s", aid);
+            snprintf(rows[n].name, sizeof(rows[n].name), "%s", str_of(it, "name") ? str_of(it, "name") : "");
+            snprintf(rows[n].machine, sizeof(rows[n].machine), "%s", str_of(it, "machine") ? str_of(it, "machine") : "");
+            snprintf(rows[n].summary, sizeof(rows[n].summary), "%s", str_of(it, "summary") ? str_of(it, "summary") : "");
+            rows[n].question = bool_of(it, "question");
+            n++;
+        }
+        ui_notif_replace(rows, n);
+        return;
+    }
+    if (strcmp(t, "notif.seen") == 0) {
+        if (agent_id) ui_notif_seen(agent_id);
+        return;
+    }
     if (strcmp(t, "turn.error") == 0) {
         if (agent_id) ui_project_emit(agent_id, "", "done", "", NULL);
         ui_cable_toast(str_of(p, "message"));

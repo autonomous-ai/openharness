@@ -1144,4 +1144,57 @@ void main() {
       expect(ticked(tester, 'Anthropic'), isFalse);
     },
   );
+
+  // ── the subscription row agrees with the window's Models menu ─────────────────────────────────
+  //
+  // The picker used to own its own usage reader, read at a different moment from the menu's, and
+  // said "Not signed in" beside a menu showing the same Anthropic account with 8% left.
+
+  testWidgets('reads the app\'s shared usage controller and leaves it alive', (
+    tester,
+  ) async {
+    build(
+      models: [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
+    final shared = notifier.modelsMenu;
+    await open(tester);
+    await tester.pumpWidget(const SizedBox());
+
+    expect(notifier.modelsMenu, same(shared));
+    // A controller the picker had disposed would throw here.
+    expect(() => shared.addListener(() {}), returnsNormally);
+  });
+
+  group('which subscription row the picker shows', () {
+    Map<String, Object?> row(String account, {double? percent}) => {
+      'title': 'Anthropic',
+      'engine': 'claude',
+      'account': account,
+      'status': percent == null ? 'Not signed in' : '$percent% remaining',
+      'remainingPercent': percent,
+    };
+
+    test('prefers a live account over this Mac signed out', () {
+      final rows = [row(''), row('ed8a75', percent: 8)];
+      expect(subscriptionRowFor('claude', rows)?['account'], 'ed8a75');
+    });
+
+    test('falls back to the first row when none has a figure', () {
+      final rows = [row(''), row('ed8a75')];
+      expect(subscriptionRowFor('claude', rows)?['account'], '');
+    });
+
+    test('keeps the first live row when several have figures', () {
+      final rows = [row('aaaaaa', percent: 50), row('bbbbbb', percent: 8)];
+      expect(subscriptionRowFor('Claude ', rows)?['account'], 'aaaaaa');
+    });
+
+    test('says nothing for another engine or no engine', () {
+      final rows = [row('ed8a75', percent: 8)];
+      expect(subscriptionRowFor('codex', rows), isNull);
+      expect(subscriptionRowFor(null, rows), isNull);
+    });
+  });
 }

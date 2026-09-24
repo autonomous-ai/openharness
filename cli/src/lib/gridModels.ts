@@ -22,6 +22,7 @@ import { env as config } from '../config/env.js'
 import { gridCredentialsPath } from './gridCredentials.js'
 import { signedInGridEmail } from './gridDerive.js'
 import { gridExec, gridJson } from './gridExec.js'
+import { contextWindowHint } from './gridLaunch.js'
 import { resolveGridMcpUrl } from './gridMcpUrl.js'
 import {
   emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, unspelled, withAsleep,
@@ -61,6 +62,8 @@ export interface GridSection {
 export interface GridInventoryAnswer {
   state: PictureState
   nodes: Record<string, unknown>[]
+  /** The owner status as last read (memoised, never asked per tick); null when it could not be read. */
+  status: string | null
 }
 
 /** How long one read's answer stands before the next is made: the list is live while a grid is awake,
@@ -214,7 +217,11 @@ export class GridModelsService {
     const tracked = await this.track(await this.rowFor(gridName), true)
     if (force) tracked.readAt = null
     if (this.due(tracked)) await this.refresh(tracked)
-    return { state: tracked.picture.state, nodes: tracked.picture.state === 'awake' ? tracked.rawNodes : [] }
+    return {
+      state: tracked.picture.state,
+      nodes: tracked.picture.state === 'awake' ? tracked.rawNodes : [],
+      status: tracked.info?.value?.status ?? null,
+    }
   }
 
   private async rowFor(gridName: string): Promise<GridRow> {
@@ -451,6 +458,34 @@ export function resetGridModels(deps: Partial<GridModelsDeps> = {}): GridModelsS
   return service
 }
 
+/** A row of the relay's `/models`: the id it routes, and the context window it reports for it. */
+interface RelayModel { id: string; contextWindow?: number }
+
+/**
+ * The relay's own catalogue. Empty when it cannot be asked — callers read that as "fall back".
+ *
+ * ⚠️ A SIGNED-IN read, so on a sleeping grid it WAKES it. Asked only by [resolveGridTarget], i.e. when
+ * a person moves an agent onto a model or starts one there — an act that needs the grid anyway. Never
+ * from the model list or any other read made on the app's own schedule (grid-reads-without-waking).
+ */
+async function relayModels(baseUrl: string, apiKey: string): Promise<RelayModel[]> {
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/models`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!response.ok) return []
+    const body = await response.json() as { data?: Array<{ id?: unknown; context_window?: unknown }> }
+    return (body.data ?? []).flatMap((m) => {
+      if (typeof m.id !== 'string' || !m.id) return []
+      const contextWindow = contextWindowHint(m.context_window)
+      return [{ id: m.id, ...(contextWindow ? { contextWindow } : {}) }]
+    })
+  } catch {
+    return []
+  }
+}
+
 
 /** `grid info --env` prints shell exports; these are the two that matter. */
 const ENV_LINE = /^export\s+(OPENAI_BASE_URL|OPENAI_API_KEY)=(.*)$/gm
@@ -466,6 +501,9 @@ export interface GridTarget {
   /** The control plane's web-tools MCP endpoint. Absent when it could not be obtained; the agent
    *  then runs on the grid with no web tools, and the daemon log says why. */
   mcpUrl?: string
+  /** The model's context window as the relay reports it, so the engine can be told to compact
+   *  inside it (`GridLaunchOverride.contextWindow`). Absent when the relay did not say. */
+  contextWindow?: number
 }
 
 /**
@@ -494,9 +532,15 @@ export async function resolveGridTarget(gridName: string | null, model: string):
   const { baseUrl, apiKey } = readEnvExports(info.stdout)
   if (!baseUrl || !apiKey) return null
   // The grid's own id, for the record the launch is written into. Falls back to the name, which is
-  // unique on this account and is all the launch actually needs to be re-derivable.
-  const { value: rows } = await gridJson<Array<{ grid?: unknown; id?: unknown }>>(['--remote', 'ls'])
+  // unique on this account and is all the launch actually needs to be re-derivable. The relay's
+  // catalogue alongside it, not after: it is only for the window, and a click waits on both.
+  const [{ value: rows }, served] = await Promise.all([
+    gridJson<Array<{ grid?: unknown; id?: unknown }>>(['--remote', 'ls']),
+    relayModels(baseUrl, apiKey),
+  ])
   const row = Array.isArray(rows) ? rows.find((r) => r.grid === gridName) : undefined
+  // Exact first: the relay is case-sensitive about ids and the picker sends the relay's spelling.
+  const listed = served.find((m) => m.id === model) ?? served.find((m) => m.id.toLowerCase() === model.toLowerCase())
   return {
     networkId: typeof row?.id === 'string' ? row.id : gridName,
     networkName: gridName,
@@ -504,6 +548,7 @@ export async function resolveGridTarget(gridName: string | null, model: string):
     apiKey,
     model,
     ...(mcpUrl ? { mcpUrl } : {}),
+    ...(listed?.contextWindow ? { contextWindow: listed.contextWindow } : {}),
   }
 }
 

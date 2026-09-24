@@ -401,7 +401,7 @@ void main() {
   });
 
   testWidgets(
-    'the one-time invitation leads to discovery and verified readiness explains selection',
+    'the one-time invitation leads to discovery, and a started model gets no toast',
     (tester) async {
       final app = ModelManagerTestApp(ModelManagerConnection());
       app.stateOf('m')!.agents = [
@@ -432,17 +432,24 @@ void main() {
       await tester.tap(find.byTooltip('Dismiss'));
       await tester.pump();
       expect(find.text('Run AI on this computer'), findsNothing);
+      // A model that has just started gets no toast — its row in the Models
+      // overview is where it is shown.
       app.localInventory = modelInventory(scenario: 'ready');
       await controller.refresh();
       await tester.pump();
-      expect(find.text('Qwen3.8-27B is running'), findsOneWidget);
+      expect(controller.readyModel?.name, 'Qwen3.8-27B');
+      expect(find.text('Qwen3.8-27B is running'), findsNothing);
       expect(
         find.text('Select it from the model picker in a session.'),
-        findsOneWidget,
+        findsNothing,
       );
-      await tester.tap(find.byTooltip('Dismiss'));
-      await tester.pump();
-      expect(find.text('Qwen3.8-27B is running'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(LocalModelInvitation),
+          matching: find.byType(Material),
+        ),
+        findsNothing,
+      );
       expect(app.sent, isEmpty);
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());

@@ -161,6 +161,16 @@ typedef struct {
     int  panes;
 } cable_swarm_t;
 
+// One row of the window's unread list, as `notif.replace` carries it. `summary` is the last recap for
+// a finished turn and empty for a question — the dial kept that question's own text from when it asked.
+typedef struct {
+    char agent_id[ID_MAX];
+    char name[NAME_MAX];
+    char machine[NAME_MAX];
+    char summary[100];
+    bool question;
+} cable_notif_t;
+
 // The user tapped a swarm. Not answered — see above.
 void cable_client_select_swarm(const char *swarm_id);
 // Re-ask for the list (a screen that just opened wants it fresh).

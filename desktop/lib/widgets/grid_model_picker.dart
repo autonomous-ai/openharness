@@ -94,7 +94,10 @@ class GridModelPicker extends StatefulWidget {
 
 class _GridModelPickerState extends State<GridModelPicker> {
   bool _loading = false;
-  ModelsMenuController? _usage;
+
+  /// The window's shared subscription readings — the same controller the Models panel draws,
+  /// so this row and that menu cannot disagree. Owned by the app, never disposed here.
+  late final ModelsMenuController _usage = widget.notifier.modelsMenu;
   GridModels? _last;
 
   /// Set when the control was built while the app was in the background: the warm-up it skipped is
@@ -109,6 +112,9 @@ class _GridModelPickerState extends State<GridModelPicker> {
     _last = widget.notifier.gridPictures[widget.machineId];
     widget.notifier.gridPictures.addListener(_pictureChanged);
     widget.notifier.foreground.addListener(_foregroundChanged);
+    // A reading that lands while the menu is open redraws its Subscription row, rather than
+    // leaving "Checking usage…" there until the next open.
+    _usage.addListener(_redrawOpenMenu);
     // Warm the answer as soon as the control exists, so a click lands on a memo rather than on two
     // subprocess spawns and two network round trips — measured at ~1.4s, which is a person watching
     // a header do nothing. Fire-and-forget: nothing here waits on it, and a failure just means the
@@ -138,14 +144,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
   }
 
   Future<void> _prefetch() async {
-    // Created here, not only on the cold path: a warm open reads `_usage.rows` for the subscription
-    // row's provider name and percentage, and skipping it left that row falling back to the bare
-    // engine label with no status beside it.
-    _usage ??= ModelsMenuController(remote: widget.notifier.readRemoteUsage);
     // Not under `flutter test`: a refresh reads the Keychain and asks the vendors, the same reads the
     // usage rail keeps out of tests (kUnderTest) — here every test that drew a pane header left that
     // work's timers pending after the tree was gone. Opening the menu still refreshes.
-    if (!kUnderTest) unawaited(_usage!.refresh().catchError((_) {}));
+    if (!kUnderTest) unawaited(_usage.refresh().catchError((_) {}));
     _prefetchOwed = false;
     final picture = await widget.notifier.readGridPicture(widget.machineId);
     if (mounted) _last = picture;
@@ -252,7 +254,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
     // A pane can go away under an open menu — closed, moved, or its swarm switched — and an overlay
     // entry outlives the State that inserted it.
     _close?.call();
-    _usage?.dispose();
+    _usage.removeListener(_redrawOpenMenu);
     super.dispose();
   }
 
@@ -269,17 +271,11 @@ class _GridModelPickerState extends State<GridModelPicker> {
 
   /// The subscription reading for THIS agent's engine, or null when there is none to show.
   ///
-  /// Built from the same controller the window's own Models menu uses, so the percentage here and
+  /// Read from the same controller the Models panel uses, so the percentage here and
   /// the percentage up there cannot disagree. Its refresh is capped at once a minute and it answers
   /// from cache in between, which is why opening this menu does not cost a request.
-  Map<String, Object?>? _subscriptionRow() {
-    final engine = widget.engineLabel?.trim().toLowerCase();
-    if (engine == null || engine.isEmpty) return null;
-    for (final row in _usage?.rows ?? const <Map<String, Object?>>[]) {
-      if (row['engine'] == engine) return row;
-    }
-    return null;
-  }
+  Map<String, Object?>? _subscriptionRow() =>
+      subscriptionRowFor(widget.engineLabel, _usage.rows);
 
   Future<void> _open() async {
     if (_loading) return;
@@ -295,13 +291,12 @@ class _GridModelPickerState extends State<GridModelPicker> {
     }
     setState(() => _loading = true);
     try {
-      _usage ??= ModelsMenuController(remote: widget.notifier.readRemoteUsage);
       // ⚠️ The usage read is NOT awaited. It is decoration — a percentage beside the subscription
       // row — while the grid list is the menu's actual content, and a menu that waits on a credential
       // read to draw a list it already has is a menu that feels broken whenever that source is slow.
       // This open uses whatever is cached; the refresh lands for the next one. `refresh()` is itself
       // capped at once a minute, so opening the menu repeatedly costs nothing.
-      unawaited(_usage!.refresh().catchError((_) {}));
+      unawaited(_usage.refresh().catchError((_) {}));
       answer = await widget.notifier.readGridPicture(widget.machineId);
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -329,14 +324,14 @@ class _GridModelPickerState extends State<GridModelPicker> {
       0,
     );
 
-    final subscription = _subscriptionRow();
     final chosen = await _showMenu(
       position: position,
       body: (close) => _ModelPickerPanel(
         answer: _shown!,
         engineLabel: widget.engineLabel,
         currentModel: _effectiveModel,
-        subscription: subscription,
+        // Read on every draw, so a usage refresh that lands under the open menu shows in it.
+        subscription: _subscriptionRow(),
         sections: _sectionsToDraw(_shown!),
         subtitleFor: _subtitleFor,
         emptySentence: (section) => _emptySentence(_shown!, section),
@@ -521,17 +516,22 @@ class _GridModelPickerState extends State<GridModelPicker> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: widget.compact ? 44 : 140,
-                    ),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.monoLabel(
-                        fontWeight: FontWeight.w400,
-                        color: AppColors.textSoft,
+                  // Room for a whole model id ("DeepSeek-V4-Flash-0731") where the header has
+                  // it; Flexible so a header that is short of room shortens the name instead of
+                  // overflowing. The tooltip always says the whole model.
+                  Flexible(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: widget.compact ? 44 : 220,
+                      ),
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.monoLabel(
+                          fontWeight: FontWeight.w400,
+                          color: AppColors.textSoft,
+                        ),
                       ),
                     ),
                   ),
@@ -785,6 +785,23 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
     ),
     child: Text(text, style: AppType.body(color: AppColors.textSoft)),
   );
+}
+
+/// The subscription row for [engine] among the Models menu's [rows], or null when there is none.
+///
+/// One engine can have several rows: this computer's login first, then each other account a
+/// remote machine is signed in to. A row with a figure wins over one without — this Mac signed
+/// out beside a machine whose login is live should show the live one, not "Not signed in".
+@visibleForTesting
+Map<String, Object?>? subscriptionRowFor(
+  String? engine,
+  List<Map<String, Object?>> rows,
+) {
+  final key = engine?.trim().toLowerCase();
+  if (key == null || key.isEmpty) return null;
+  final matching = rows.where((row) => row['engine'] == key);
+  return matching.where((row) => row['remainingPercent'] != null).firstOrNull ??
+      matching.firstOrNull;
 }
 
 class _Choice {
