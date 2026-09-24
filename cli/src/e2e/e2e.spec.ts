@@ -73,6 +73,22 @@ describe('version source (mock first, npm later)', () => {
     expect(sentInit).toBeUndefined()
   })
 
+  it('reads each engine\'s STABLE channel, and never a pre-release', async () => {
+    const asked: string[] = []
+    const answer = (version: string) => (async (url: string) => {
+      asked.push(url)
+      return { ok: true, json: async () => ({ version }) } as unknown as Response
+    }) as typeof fetch
+    expect(await new NpmVersionSource(answer('2.1.273')).latestVersion('claude')).toBe('2.1.273')
+    expect(await new NpmVersionSource(answer('0.156.1')).latestVersion('codex')).toBe('0.156.1')
+    // claude's stable is its own `stable` tag, not `latest` (its fast channel); codex's is `latest`.
+    expect(asked).toEqual(['https://registry.npmjs.org/@anthropic-ai/claude-code/stable', 'https://registry.npmjs.org/@openai/codex/latest'])
+    // Whatever tag it came from, a pre-release is never "the new version".
+    for (const v of ['0.158.0-alpha.8', '2.1.300-beta.1', '1.0.0-rc.2', '0.1.2505172116-nightly']) {
+      expect(await new NpmVersionSource(answer(v)).latestVersion('codex'), v).toBeNull()
+    }
+  })
+
   // A stub cannot catch a registry that refuses our headers, and that exact bug once kept the whole
   // pipeline quiet. This talks to npm for real, so it is opt-in: `RUN_REAL_NPM=1 vitest run src/e2e`.
   it.runIf(process.env.RUN_REAL_NPM === '1')('npm impl really answers for both engines', async () => {

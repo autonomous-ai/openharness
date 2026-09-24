@@ -32,14 +32,27 @@ export class MockVersionSource implements VersionSource {
 }
 
 /**
- * Real source: the npm registry `latest` dist-tag for the package that ships each engine.
- * The engine's own release feed is the source of truth; npm `latest` is the fastest stable signal
- * many of them publish (`@openai/codex`, `@anthropic-ai/claude-code`).
+ * Real source: each engine's STABLE release channel on npm — and only that.
  *
- * This is the piece we "learn how to read from which API" — switched on by
- * `E2E_VERSION_SOURCE=npm` once it is validated.
+ * "Stable" is not the same dist-tag everywhere, which is why this is a table rather than `/latest`
+ * for all (dist-tags read 2026-09-24):
+ *
+ *   @openai/codex              latest 0.156.1  ← stable      alpha 0.158.0-alpha.8 (pre-releases)
+ *   @anthropic-ai/claude-code  stable 2.1.273  ← stable      latest/next 2.1.281 (the fast channel)
+ *
+ * Reading `latest` for claude tested its fast channel, eight releases ahead of what Claude Code
+ * itself calls stable. And a version with a pre-release suffix (`-alpha.8`, `-beta.1`, `-rc.2`) is
+ * refused whatever tag it came from: a pipeline that must never test a nightly should not depend on
+ * a vendor never mis-tagging one.
  */
 import { NPM_PACKAGE } from './npmPackages.js'
+
+export const STABLE_TAG: Partial<Record<AgentEngine, string>> = { codex: 'latest', claude: 'stable' }
+
+/** `0.156.1` yes; `0.158.0-alpha.8`, `2.1.0-beta` no. */
+export function isStableVersion(version: string): boolean {
+  return /^\d+\.\d+\.\d+$/.test(version)
+}
 
 export class NpmVersionSource implements VersionSource {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
@@ -56,10 +69,10 @@ export class NpmVersionSource implements VersionSource {
       //   curl -o /dev/null -w '%{http_code}' -H 'Accept: application/vnd.npm.install-v1+json' \
       //     https://registry.npmjs.org/@openai/codex/latest   -> 406
       //   curl -s https://registry.npmjs.org/@openai/codex/latest | jq .version -> "0.156.1"
-      const res = await this.fetchImpl(`https://registry.npmjs.org/${pkg}/latest`)
+      const res = await this.fetchImpl(`https://registry.npmjs.org/${pkg}/${STABLE_TAG[engine] ?? 'latest'}`)
       if (!res.ok) return null
       const body = (await res.json()) as { version?: string }
-      return body.version ?? null
+      return body.version && isStableVersion(body.version) ? body.version : null
     } catch {
       return null
     }
