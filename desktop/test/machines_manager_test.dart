@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -375,7 +376,7 @@ void main() {
     await mount(tester, app);
     await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('New harness'));
+    await tester.tap(find.byKey(const ValueKey('machine-fresh')));
     await tester.pumpAndSettle();
     final box = tester.widget<NewHarnessForm>(find.byType(NewHarnessForm));
     expect(box.controller.machineId, 'fresh');
@@ -418,7 +419,10 @@ void main() {
         await tester.pumpAndSettle();
         await opened;
         expect(find.text('Machines'), findsOneWidget);
-        await tester.tap(find.byTooltip('Options for Test host'));
+        await tester.tap(
+          find.byKey(const ValueKey('machine-m')),
+          buttons: kSecondaryMouseButton,
+        );
         await tester.pumpAndSettle();
         await tester.tap(find.text('Rename'));
         await tester.pumpAndSettle();

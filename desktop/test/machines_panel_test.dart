@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +22,7 @@ import 'package:harness/state/workspace_onboarding.dart';
 import 'package:harness/widgets/machines_panel.dart';
 import 'package:harness/widgets/toolbar_icon.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'support/password_cli.dart';
@@ -236,14 +238,35 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> capture(WidgetTester tester, String name) async {
+  Future<void> options(WidgetTester tester, String id) async {
+    final row = find.byKey(ValueKey('machine-$id'));
+    await tester.ensureVisible(row);
+    await tester.tap(row, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> changePassword(WidgetTester tester) async {
+    await options(tester, 'local');
+    await tap(tester, find.text('Change password'));
+  }
+
+  Future<void> capture(
+    WidgetTester tester,
+    String name, {
+    bool panelOnly = false,
+  }) async {
     final dir = Platform.environment['HARNESS_MACHINES_CAPTURE_DIR'];
     if (dir == null) return;
     await tester.runAsync(() async {
-      final image =
-          await (captureKey.currentContext!.findRenderObject()
-                  as RenderRepaintBoundary)
-              .toImage(pixelRatio: 2);
+      final boundary =
+          captureKey.currentContext!.findRenderObject()
+              as RenderRepaintBoundary;
+      final image = panelOnly
+          ? await (boundary.debugLayer! as OffsetLayer).toImage(
+              tester.getRect(find.byKey(const ValueKey('machines-panel'))),
+              pixelRatio: 2,
+            )
+          : await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
       Directory(dir).createSync(recursive: true);
       File('$dir/$name.png').writeAsBytesSync(bytes!.buffer.asUint8List());
@@ -254,6 +277,85 @@ void main() {
   final localInput = find.byKey(const ValueKey('make-available-password'));
   final remoteInput = find.byKey(
     const ValueKey('connect-password-remote-input'),
+  );
+
+  testWidgets('a full machine list stays quiet and reveals all setup steps', (
+    tester,
+  ) async {
+    cli.status = const RemotePasswordStatus(hasPassword: true);
+    app.add('rig', '2x 4090 Rig');
+    app.add('empty', '1x 4090 Rig', linked: true);
+    app.add('home', 'iMac – Home', linked: true);
+    app.add('office', 'iMac – Office', linked: true);
+    app.add('laptop', 'MacBook Pro', online: false);
+    app.add('server', 'Build server', online: false);
+    for (final (id, count, cpu, memory) in [
+      ('local', 159, 18.0, 57.0),
+      ('home', 68, 9.0, 54.0),
+      ('office', 67, 11.0, 56.0),
+    ]) {
+      app.stateOf(id)!.agents = [
+        for (var i = 0; i < count; i++) Agent(id: '$id-$i', name: 'Work $i'),
+      ];
+      app.resourceValues[id] = MachineResources(
+        cpuPercent: cpu,
+        memoryUsedBytes: memory * 1024 * 1024 * 1024,
+        memoryTotalBytes: 64 * 1024 * 1024 * 1024,
+      );
+    }
+    await mount(tester, size: const Size(1000, 760));
+    expect(find.text('Change password'), findsNothing);
+    expect(find.text('New harness'), findsNothing);
+    expect(find.textContaining('Available'), findsNothing);
+    expect(find.text('Offline'), findsNothing);
+    expect(find.textContaining('—'), findsNothing);
+    expect(find.byIcon(LucideIcons.ellipsis), findsNothing);
+    expect(find.byIcon(LucideIcons.monitorOff), findsNWidgets(2));
+    expect(find.text('Connect'), findsOneWidget);
+    expect(find.byKey(const ValueKey('machine-stats-rig')), findsNothing);
+    expect(find.text('0 harnesses'), findsOneWidget);
+    await capture(tester, 'machines-clean-list', panelOnly: true);
+
+    await tap(tester, find.byKey(const ValueKey('add-machine')));
+    final panel = find.byKey(const ValueKey('machines-panel'));
+    void visible(Finder target) {
+      expect(target.hitTestable(), findsOneWidget);
+      final bounds = tester.getRect(target);
+      expect(bounds.top, greaterThan(tester.getRect(panel).top + 50));
+      expect(bounds.bottom, lessThan(tester.getRect(panel).bottom));
+    }
+
+    visible(find.text('1. Open Harness on your other computer.'));
+    visible(find.text('Download Harness'));
+    visible(find.text('2. Open Machines and choose Set password.'));
+    visible(find.text('Set up a server…'));
+    await capture(tester, 'machines-clean-setup', panelOnly: true);
+
+    await tap(tester, find.text('Set up a server…'));
+    visible(find.byTooltip('Copy commands'));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'keyboard opens the context menu and the local row opens its harnesses',
+    (tester) async {
+      cli.status = const RemotePasswordStatus(hasPassword: true);
+      await mount(tester);
+      Focus.of(tester.element(find.text('M2'))).requestFocus();
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.f10, shift: true);
+      await tester.pumpAndSettle();
+      expect(find.text('Change password'), findsOneWidget);
+      expect(opened, isNull);
+      await tap(tester, find.text('Change password'));
+      expect(tester.widget<TextField>(localInput).focusNode!.hasFocus, isTrue);
+      await tap(tester, find.text('Cancel'));
+      await tap(tester, find.text('M2'));
+      expect(opened, 'local');
+      expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
   );
 
   testWidgets(
@@ -405,10 +507,11 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(cli.passwords, ['fixture reusable password']);
-      expect(find.textContaining('This computer · Available'), findsOneWidget);
+      expect(cli.status.hasPassword, isTrue);
+      expect(find.textContaining('Available'), findsNothing);
       expect(localInput, findsNothing);
       await capture(tester, 'available-machine');
-      await tap(tester, find.text('Change password'));
+      await changePassword(tester);
       expect(tester.widget<TextField>(localInput).controller!.text, isEmpty);
       await tester.pumpWidget(const SizedBox());
     },
@@ -457,7 +560,7 @@ void main() {
         tester
             .widget<Text>(find.byKey(const ValueKey('machine-stats-remote')))
             .data,
-        '0 harnesses · CPU — · RAM —',
+        '0 harnesses',
       );
       expect(cli.connections, [
         ('remote', 'fixture wrong password'),
@@ -469,7 +572,7 @@ void main() {
         reason: 'Connecting out never requires setting a local password',
       );
       await capture(tester, 'connected-machine');
-      await tap(tester, find.text('New harness'));
+      await tap(tester, find.byKey(const ValueKey('machine-remote')));
       expect(opened, 'remote');
       expect(find.text('Machines'), findsNothing);
       await tester.pumpWidget(const SizedBox());
@@ -492,7 +595,8 @@ void main() {
       expect(find.text('Saving password…'), findsOneWidget);
       cli.setReply!.complete(const RemotePasswordSetResult());
       await tester.pumpAndSettle();
-      expect(find.textContaining('This computer · Available'), findsOneWidget);
+      expect(cli.status.hasPassword, isTrue);
+      expect(find.textContaining('Available'), findsNothing);
       expect(cli.passwords, hasLength(1));
       await tester.pumpWidget(const SizedBox());
     },
@@ -550,7 +654,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(const ValueKey('machine-stats-remote')))
           .data,
-      '0 harnesses · CPU — · RAM —',
+      '0 harnesses',
     );
     expect(cli.connections, hasLength(1));
     await tester.pumpWidget(const SizedBox());
@@ -592,7 +696,8 @@ void main() {
     (tester) async {
       app.add('remote', 'Mac mini', online: false);
       await mount(tester);
-      expect(find.textContaining('Offline'), findsOneWidget);
+      expect(find.textContaining('Offline'), findsNothing);
+      expect(find.byIcon(LucideIcons.monitorOff), findsOneWidget);
       expect(
         find.byTooltip('Open Harness on Mac mini to bring it online.'),
         findsOneWidget,
@@ -694,12 +799,14 @@ void main() {
           .complete(const MachineResources(cpuPercent: 92));
       await tester.pumpAndSettle();
       final stats = find.byKey(const ValueKey('machine-stats-remote'));
-      expect(tester.widget<Text>(stats).data, '— harnesses · CPU — · RAM —');
+      expect(stats, findsNothing);
+      expect(find.byIcon(LucideIcons.monitorOff), findsOneWidget);
+      expect(find.text('Offline'), findsNothing);
       app.resourceValues['remote'] = const MachineResources(cpuPercent: 7);
       app.stateOf('remote')!.nodeOnline = true;
       app.notifyListeners();
       await tester.pumpAndSettle();
-      expect(tester.widget<Text>(stats).data, '0 harnesses · CPU 7% · RAM —');
+      expect(tester.widget<Text>(stats).data, '0 harnesses · CPU 7%');
       final reads = app.resourceReadIds.length;
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -717,7 +824,7 @@ void main() {
     (tester) async {
       await mount(tester);
       final reads = app.resourceReadIds.length;
-      await tap(tester, find.byTooltip('Options for M2'));
+      await options(tester, 'local');
       await tap(tester, find.text('Connection settings…'));
       await tester.pump(const Duration(minutes: 1));
       expect(app.resourceReadIds, hasLength(reads));
@@ -743,7 +850,7 @@ void main() {
       oldReply.complete(const MachineResources(cpuPercent: 99));
       await tester.pumpAndSettle();
       final stats = find.byKey(const ValueKey('machine-stats-remote'));
-      expect(tester.widget<Text>(stats).data, '0 harnesses · CPU 7% · RAM —');
+      expect(tester.widget<Text>(stats).data, '0 harnesses · CPU 7%');
       expect(app.resourceReadIds.where((id) => id == 'remote'), hasLength(2));
       await tester.pumpWidget(const SizedBox());
     },
@@ -809,12 +916,11 @@ void main() {
   testWidgets('the row menu opens OVER the list, never instead of it', (
     tester,
   ) async {
-    // The menu used to be a Navigator route, which an overlay panel sits above,
-    // so the panel hid itself to let three items show — and a person saw their
-    // machines vanish the moment they clicked "…".
+    // A secondary click opens the context menu above the anchored panel.
+    // It must not navigate to the machine or hide the rest of the list.
     app.add('remote', 'Mac mini');
     await mount(tester);
-    await tap(tester, find.byTooltip('Options for Mac mini'));
+    await options(tester, 'remote');
     expect(find.text('Rename'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('machines-panel')),
@@ -841,16 +947,16 @@ void main() {
     (tester) async {
       app.add('remote', 'Mac mini');
       await mount(tester);
-      await tap(tester, find.byTooltip('Options for Mac mini'));
+      await options(tester, 'remote');
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.text('Mac mini'), findsOneWidget);
-      await tap(tester, find.byTooltip('Options for Mac mini'));
+      await options(tester, 'remote');
       await tap(tester, find.text('Remove from account…'));
       expect(app.deletes, isEmpty);
       await tap(tester, find.text('Cancel'));
       expect(find.text('Mac mini'), findsOneWidget);
-      await tap(tester, find.byTooltip('Options for Mac mini'));
+      await options(tester, 'remote');
       await tap(tester, find.text('Remove from account…'));
       await tap(tester, find.byKey(const Key('machine-delete-confirm')));
       expect(app.deletes, ['remote']);
@@ -865,7 +971,7 @@ void main() {
     (tester) async {
       cli.status = const RemotePasswordStatus(hasPassword: true);
       await mount(tester);
-      await tap(tester, find.text('Change password'));
+      await changePassword(tester);
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(find.text('Enter a password.'), findsOneWidget);
@@ -899,7 +1005,7 @@ void main() {
       expect(find.text('Use a password on one line.'), findsNothing);
       await tap(tester, find.text('Cancel'));
       expect(localInput, findsNothing);
-      await tap(tester, find.text('Change password'));
+      await changePassword(tester);
       expect(tester.widget<TextField>(localInput).controller!.text, isEmpty);
       // The platform's Done action uses the same validation and submission.
       await tester.enterText(localInput, 'fixture replacement');
@@ -918,7 +1024,7 @@ void main() {
       expect(find.text('Status unavailable'), findsOneWidget);
       cli.status = const RemotePasswordStatus(hasPassword: true);
       await tap(tester, find.text('Try again'));
-      await tap(tester, find.text('Change password'));
+      await changePassword(tester);
       cli.setReply = Completer<RemotePasswordSetResult>();
       await tester.enterText(localInput, 'fixture replacement');
       await tap(tester, find.text('Save'));
@@ -933,6 +1039,8 @@ void main() {
       expect(find.text('Save unavailable'), findsOneWidget);
       expect(localInput, findsOneWidget);
       await tap(tester, find.text('Cancel'));
+      expect(find.text('Change password'), findsNothing);
+      await options(tester, 'local');
       expect(find.text('Change password'), findsOneWidget);
       expect(cli.passwords, ['fixture replacement']);
       await tester.pumpWidget(const SizedBox());
@@ -1070,7 +1178,7 @@ void main() {
       app.resourceValues.clear();
       await tester.pump(const Duration(seconds: 5));
       await tester.pump();
-      expect(find.text('0 harnesses · CPU — · RAM —'), findsOneWidget);
+      expect(find.text('0 harnesses'), findsOneWidget);
       final reads = app.resourceReadIds.length;
       for (var i = 0; i < 5; i++) {
         await tester.pump(const Duration(seconds: 5));
