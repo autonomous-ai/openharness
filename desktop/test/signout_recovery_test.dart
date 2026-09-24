@@ -58,7 +58,30 @@ Widget signOutHost(
   );
 }
 
-AppNotifier signOutApp(SignOutFixture cli, {bool local = false}) => AppNotifier(
+/// A window that never reaches for a real daemon: a desktop sign-out now sits
+/// the desk back down as a guest, which waits for the signed-out daemon, and a
+/// unit test must not shell out for one.
+class SignOutApp extends AppNotifier {
+  SignOutApp({
+    required super.config,
+    required super.authSession,
+    super.configStore,
+    super.cliLogin,
+    super.localManualFixture,
+  });
+
+  var daemonGates = 0;
+
+  @override
+  Future<void> ensureCliDaemonReady() async {
+    daemonGates++;
+  }
+
+  @override
+  Future<bool> refreshMachines() async => true;
+}
+
+SignOutApp signOutApp(SignOutFixture cli, {bool local = false}) => SignOutApp(
   config: AppConfig.dev,
   configStore: null,
   authSession: AuthSession(storage: MemoryStore()),
@@ -97,7 +120,10 @@ void main() {
       cli.attempts.single.complete();
       await first;
       await second;
-      expect(app.status, AppStatus.unauthenticated);
+      // Signing out leaves the account, not this computer: a desktop window
+      // stays on the desk as a guest while the daemon comes back signed out.
+      expect(app.status, AppStatus.authenticated);
+      expect(app.isGuest, isTrue);
       await app.login();
       expect(cli.logins, 1);
     },
@@ -110,7 +136,11 @@ void main() {
       final app = signOutApp(cli, local: true);
       addTearDown(app.dispose);
       await app.logout();
+      await Future<void>.delayed(Duration.zero);
       expect(cli.attempts, isEmpty);
+      // The fixture has no daemon of its own, so it goes back to its login
+      // screen rather than becoming a guest served by the real CLI.
+      expect(app.daemonGates, 0);
       expect(app.status, AppStatus.unauthenticated);
     },
   );

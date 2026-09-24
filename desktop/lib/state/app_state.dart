@@ -3874,7 +3874,10 @@ class AppNotifier extends ChangeNotifier {
     // and becomes a guest — the daemon comes back signed out and keeps serving
     // this computer, so signing out of the account is not a reason to take the
     // agents off the screen. The rebind at the end sits the desk back down.
-    if (viewer != null) status = AppStatus.unauthenticated;
+    // The local-manual dev fixture goes back to the login screen too: it has
+    // no daemon of its own, and a guest desk would be served by the REAL CLI.
+    final becomesGuest = viewer == null && localManualFixture == null;
+    if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
     analyticsAccount.clear();
     notifyListeners();
@@ -3904,7 +3907,7 @@ class AppNotifier extends ChangeNotifier {
     // The CLI restarts its daemon signed out (`harness logout` does it itself),
     // so this window waits for that one and sits its desk back down on the id it
     // serves. In the background: the person asked to sign out, and that is done.
-    if (viewer == null && didClear) {
+    if (becomesGuest && didClear) {
       unawaited(_becomeGuest(revision: revision));
     }
   }
