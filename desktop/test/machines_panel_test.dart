@@ -805,6 +805,36 @@ void main() {
     },
   );
 
+  testWidgets('the row menu opens OVER the list, never instead of it', (
+    tester,
+  ) async {
+    // The menu used to be a Navigator route, which an overlay panel sits above,
+    // so the panel hid itself to let three items show — and a person saw their
+    // machines vanish the moment they clicked "…".
+    app.add('remote', 'Mac mini');
+    await mount(tester);
+    await tap(tester, find.byTooltip('Options for Mac mini'));
+    expect(find.text('Rename'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('machines-panel')),
+      findsOneWidget,
+      reason: 'the panel stays on screen behind its own menu',
+    );
+    expect(find.text('Mac mini'), findsWidgets);
+    expect(find.text('M2'), findsWidgets, reason: 'the other rows stay too');
+    await capture(tester, 'machines-row-menu');
+
+    // Escape closes the menu first, and only then the panel.
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Rename'), findsNothing);
+    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'removing a machine requires the existing confirmation and returns to the list',
     (tester) async {

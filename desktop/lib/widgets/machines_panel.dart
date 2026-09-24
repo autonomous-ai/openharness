@@ -10,6 +10,7 @@ import '../core/models.dart';
 import '../core/machine_resources.dart';
 import '../screens/login_screen.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_menu.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
 import '../state/workspace_onboarding.dart';
@@ -337,19 +338,60 @@ class _MachinesPanelState extends State<_MachinesPanel>
     if (!app.isGuest) unawaited(app.retryMachines());
   }
 
+  /// Something that covers the panel is on screen. The row menu is NOT one of
+  /// these — it is anchored inside the panel — and the flag is what keeps a
+  /// menu closing into an action from pulling focus off the sheet it opened.
+  bool _modalOpen = false;
+
+  /// One controller per row, kept across rebuilds (the rows rebuild on every
+  /// resource reading), and which one is open — Escape has to reach the MENU
+  /// before it reaches the panel, or dismissing three items closes the list.
+  /// Entries for machines that have left the account are dropped as the list
+  /// is built, so an account churning machines does not grow this for ever.
+  final _rowMenus = <String, MenuController>{};
+  MenuController? _openRowMenu;
+
+  MenuController _rowMenu(String machineId) =>
+      _rowMenus.putIfAbsent(machineId, MenuController.new);
+
+  void _pruneRowMenus(Iterable<MachineState> shown) {
+    if (_rowMenus.length <= shown.length) return;
+    final live = {for (final machine in shown) machine.machine.machineId};
+    _rowMenus.removeWhere((id, _) => !live.contains(id));
+  }
+
   Future<T> _modal<T>(Future<T> Function() show) async {
+    _modalOpen = true;
     widget.onModalChanged(true);
     try {
       return await show();
     } finally {
+      _modalOpen = false;
       if (mounted) _reveal();
     }
   }
 
+  /// Escape closes the innermost thing first: an open row menu, then the panel.
+  void _cancel() {
+    if (_openRowMenu case final menu? when menu.isOpen) {
+      menu.close();
+      return;
+    }
+    widget.onClose();
+  }
+
   void _reveal() {
     widget.onModalChanged(false);
+    _restoreFocus();
+  }
+
+  /// Put the keyboard back on the list once something it opened is gone, so the
+  /// arrows and Escape work again without a click. A menu that closed BY
+  /// choosing an action leaves a sheet behind it; that sheet keeps the
+  /// keyboard.
+  void _restoreFocus() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _panelFocus.requestFocus();
+      if (mounted && !_modalOpen) _panelFocus.requestFocus();
     });
   }
 
@@ -475,37 +517,70 @@ class _MachinesPanelState extends State<_MachinesPanel>
     );
   }
 
-  Widget _actions(MachineState machine) => SizedBox(
-    width: 32,
-    height: 32,
-    child: PopupMenuButton<String>(
-      tooltip: 'Options for ${machine.machine.displayName}',
-      padding: EdgeInsets.zero,
-      icon: Icon(
-        LucideIcons.ellipsis,
-        semanticLabel: 'Options for ${machine.machine.displayName}',
-        size: 16,
-        color: grid.AppPalette.textFaint,
+  Widget _actions(MachineState machine) {
+    final label = 'Options for ${machine.machine.displayName}';
+    final controller = _rowMenu(machine.machine.machineId);
+    // `AppMenuItem` does not dismiss its anchor (the other menus in the app
+    // close theirs by hand too), and a menu left open would swallow the Escape
+    // that should close the panel.
+    void choose(String action) {
+      controller.close();
+      unawaited(_modal(() => _machineAction(action, machine)));
+    }
+
+    return SizedBox(
+      width: 32,
+      height: 32,
+      // ⚠️ A `MenuAnchor`, not a `PopupMenuButton`. A popup menu is a Navigator
+      // ROUTE, and this panel is an overlay entry the app inserted on top of
+      // the navigator — so the menu opened UNDER the list, which is why it used
+      // to hide the whole panel to show three items. Hiding is what a person
+      // saw as their machines vanishing the moment they clicked "…". A
+      // MenuAnchor renders through an `OverlayPortal` above its own anchor, so
+      // the list stays where it is and the menu sits over it, styled like every
+      // other menu in the app.
+      child: MenuAnchor(
+        controller: controller,
+        // Clear of the button it hangs from; Flutter keeps the rest on screen.
+        alignmentOffset: const Offset(0, 4),
+        onOpen: () => _openRowMenu = controller,
+        onClose: () {
+          if (identical(_openRowMenu, controller)) _openRowMenu = null;
+          _restoreFocus();
+        },
+        menuChildren: [
+          AppMenuItem(label: 'Rename', onPressed: () => choose('rename')),
+          if (!machine.isLocalMachine)
+            AppMenuItem(
+              label: 'Remove from account…',
+              onPressed: () => choose('delete'),
+            ),
+          if (machine.isLocalMachine)
+            AppMenuItem(
+              label: 'Connection settings…',
+              onPressed: () => choose('advanced'),
+            ),
+        ],
+        builder: (context, _, _) => Tooltip(
+          message: label,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            // An IconButton asks for a 48px tap target by default, which this
+            // 32px row slot would silently shrink; state the box it has.
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            onPressed: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+            icon: Icon(
+              LucideIcons.ellipsis,
+              semanticLabel: label,
+              size: 16,
+              color: grid.AppPalette.textFaint,
+            ),
+          ),
+        ),
       ),
-      onOpened: () => widget.onModalChanged(true),
-      onCanceled: _reveal,
-      onSelected: (action) =>
-          unawaited(_modal(() => _machineAction(action, machine))),
-      itemBuilder: (_) => [
-        const PopupMenuItem(value: 'rename', child: Text('Rename')),
-        if (!machine.isLocalMachine)
-          const PopupMenuItem(
-            value: 'delete',
-            child: Text('Remove from account…'),
-          ),
-        if (machine.isLocalMachine)
-          const PopupMenuItem(
-            value: 'advanced',
-            child: Text('Connection settings…'),
-          ),
-      ],
-    ),
-  );
+    );
+  }
 
   Widget _setup() {
     final email = app.currentUser?.email;
@@ -754,6 +829,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
       builder: (context, _) {
         final local = app.localMachineState;
         final remotes = _remotes;
+        _pruneRowMenus([?local, ...remotes]);
         // New arrivals must not replace a password someone is already typing.
         if (!remotes.any((m) => m.machine.machineId == _expandedMachine)) {
           _expandedMachine = null;
@@ -762,7 +838,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         return FocusScope(
           child: TerminalPromptKeys(
             focusNode: _panelFocus,
-            cancel: widget.onClose,
+            cancel: _cancel,
             refresh: app.isGuest ? null : () => unawaited(app.retryMachines()),
             child: DecoratedBox(
               decoration: BoxDecoration(
