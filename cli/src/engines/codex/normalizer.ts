@@ -321,7 +321,8 @@ export class CodexNormalizer implements EngineNormalizer {
       if (!message) return []
       if (this.mode === 'replay') return [{ type: 'user_message', payload: { content: message } }]
       const events: LiveEvent[] = []
-      if (this.open) events.push({ type: 'turn_ended', payload: {} })
+      // Native steering adds user messages inside an open task. Only task_complete/
+      // turn_aborted can end it; an input boundary is not completion evidence.
       this.pendingTask = false
       this.open = true
       events.push({ type: 'turn_started', payload: { userMessage: message } })

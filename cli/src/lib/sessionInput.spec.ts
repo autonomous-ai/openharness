@@ -111,16 +111,16 @@ describe('SessionInputController', () => {
     const inject = vi.fn(async () => true)
     const sendKey = vi.fn(async () => true)
     const controller = new SessionInputController({
-      getSession: () => session(), validateRuntime: async () => true, inject, sendKey, onError: vi.fn(),
+      getSession: () => session('commandcode'), validateRuntime: async () => true, inject, sendKey, onError: vi.fn(),
     })
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(3_100)
+    await vi.advanceTimersByTimeAsync(12_100)
     expect(inject).toHaveBeenCalledTimes(1)
     expect(sendKey).toHaveBeenCalledTimes(2)
     controller.forget('s1')
   })
 
-  it('waits longer before retrying Claude submit verification', async () => {
+  it('never blindly retries a native Claude submission', async () => {
     vi.useFakeTimers()
     const inject = vi.fn(async () => true)
     const sendKey = vi.fn(async () => true)
@@ -131,7 +131,7 @@ describe('SessionInputController', () => {
     await vi.advanceTimersByTimeAsync(2_900)
     expect(sendKey).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(200)
-    expect(sendKey).toHaveBeenCalledTimes(1)
+    expect(sendKey).not.toHaveBeenCalled()
     controller.forget('s1')
   })
 
@@ -247,7 +247,7 @@ describe('SessionInputController', () => {
     controller.forget('s1')
   })
 
-  it('retries Enter then errors for Claude while the prompt stays in the composer', async () => {
+  it('retries only the confirmed Claude draft, then reports uncertainty while the prompt stays in the composer', async () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
@@ -261,10 +261,10 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(3_100 * 3)
+    await vi.advanceTimersByTimeAsync(3_100 * 5)
 
     expect(sendKey).toHaveBeenCalledTimes(2)
-    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
     controller.forget('s1')
   })
 
@@ -289,7 +289,7 @@ describe('SessionInputController', () => {
     controller.forget('s1')
   })
 
-  it('retries Enter then errors for Codex while the prompt stays in the composer', async () => {
+  it('retries only the confirmed Codex draft, then reports uncertainty while the prompt stays in the composer', async () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
@@ -303,14 +303,14 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(1_600 * 3)
+    await vi.advanceTimersByTimeAsync(1_600 * 9)
 
     expect(sendKey).toHaveBeenCalledTimes(2)
-    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
     controller.forget('s1')
   })
 
-  it('falls back to blind retry/error when no pane capture is available', async () => {
+  it('does not retry a legacy boolean submission without capture', async () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const onError = vi.fn()
@@ -323,10 +323,10 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(1_600 * 3)
+    await vi.advanceTimersByTimeAsync(1_600 * 6)
 
-    expect(sendKey).toHaveBeenCalledTimes(2)
-    expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
     controller.forget('s1')
   })
 
@@ -353,7 +353,7 @@ describe('SessionInputController', () => {
     controller.forget('s1')
   })
 
-  it('allows one evidence-backed Enter after an ambiguous submission leaves the exact draft in the composer', async () => {
+  it('does not retry an ambiguous native submission even when the draft remains', async () => {
     vi.useFakeTimers()
     const sendKey = vi.fn(async () => true)
     const ambiguous: TerminalActionResult = {
@@ -371,7 +371,7 @@ describe('SessionInputController', () => {
     controller.submit('s1', 'hello')
     await vi.advanceTimersByTimeAsync(1_600)
 
-    expect(sendKey).toHaveBeenCalledTimes(1)
+    expect(sendKey).not.toHaveBeenCalled()
     controller.forget('s1')
   })
 
@@ -399,7 +399,7 @@ describe('SessionInputController', () => {
     controller.forget('s1')
   })
 
-  it('requires fresh draft evidence before retrying an ambiguously completed Enter', async () => {
+  it('does not retry when fresh native draft evidence is unavailable', async () => {
     vi.useFakeTimers()
     const captures = ['› hello', null]
     const sendKey = vi.fn(async (_target: string, _key: string): Promise<TerminalActionResult> => ({
@@ -416,9 +416,9 @@ describe('SessionInputController', () => {
     })
 
     controller.submit('s1', 'hello')
-    await vi.advanceTimersByTimeAsync(1_600 * 2)
+    await vi.advanceTimersByTimeAsync(1_600 * 6)
 
-    expect(sendKey).toHaveBeenCalledTimes(1)
+    expect(sendKey).not.toHaveBeenCalled()
     expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
     controller.forget('s1')
   })
@@ -498,7 +498,7 @@ describe('delivery correlation', () => {
     const onDelivery = vi.fn()
     const inject = vi.fn(async () => true)
     const controller = new SessionInputController({
-      getSession: () => session(), validateRuntime: async () => true,
+      getSession: () => session('commandcode'), validateRuntime: async () => true,
       inject, sendKey: async () => true, onError: vi.fn(), onDelivery, ...overrides,
     })
     return { controller, onDelivery, inject }
@@ -585,7 +585,7 @@ describe('delivery correlation', () => {
     const inject = vi.fn(async (): Promise<TerminalActionResult> => ({ state: 'unknown', dispatch: 'possibly_executed', reason: 'timeout' }))
     const { controller, onDelivery } = setup({ inject })
     controller.submit('s1', 'hello', 'delivery-1')
-    await vi.advanceTimersByTimeAsync(1_600)
+    await vi.advanceTimersByTimeAsync(6_100)
     expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId: 'delivery-1', state: 'unknown', reason: 'dispatch_ambiguous' })
     expect(inject).toHaveBeenCalledTimes(1)
     controller.forget('s1')
@@ -595,7 +595,7 @@ describe('delivery correlation', () => {
     vi.useFakeTimers()
     const { controller, onDelivery } = setup()
     controller.submit('s1', 'hello', 'delivery-1')
-    await vi.advanceTimersByTimeAsync(4_600)
+    await vi.advanceTimersByTimeAsync(18_100)
     expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId: 'delivery-1', state: 'unknown', reason: 'not_submitted' })
     controller.forget('s1')
   })
@@ -605,7 +605,7 @@ describe('delivery correlation', () => {
     const validateRuntime = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false)
     const { controller, onDelivery } = setup({ validateRuntime })
     controller.submit('s1', 'hello', 'delivery-1')
-    await vi.advanceTimersByTimeAsync(1_600)
+    await vi.advanceTimersByTimeAsync(6_100)
     expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId: 'delivery-1', state: 'unknown', reason: 'runtime_gone_post_paste' })
     controller.forget('s1')
   })
@@ -614,7 +614,7 @@ describe('delivery correlation', () => {
 describe('optional lamp delivery preserves legacy behavior', () => {
   afterEach(() => vi.useRealTimers())
 
-  it('keeps concurrent untracked Claude submits out of the new lamp queue', async () => {
+  it('serializes untracked Claude writes without waiting for turn end', async () => {
     const validations: Array<(valid: boolean) => void> = []
     const inject = vi.fn(async () => true)
     const controller = new SessionInputController({
@@ -625,13 +625,15 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.setTurnOpen('s1', true)
     controller.submit('s1', 'first local prompt')
     controller.submit('s1', 'second local prompt')
-    expect(validations).toHaveLength(2)
-    validations.forEach(resolve => resolve(true))
+    expect(validations).toHaveLength(1)
+    validations[0](true)
+    await vi.waitFor(() => expect(validations).toHaveLength(2))
+    validations[1](true)
     await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(2))
     controller.forget('s1')
   })
 
-  it('keeps native control available during untracked runtime validation', async () => {
+  it('holds the writer lock during untracked runtime validation', async () => {
     let resolve!: (valid: boolean) => void
     const controller = new SessionInputController({
       getSession: () => session('claude'),
@@ -640,8 +642,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     })
     controller.submit('s1', 'local prompt')
     const release = controller.acquireControl('s1')
-    expect(release).not.toBeNull()
-    release?.()
+    expect(release).toBeNull()
     resolve(false)
     await Promise.resolve()
     controller.forget('s1')

@@ -53,14 +53,17 @@ const SUBMIT_MAX_RETRIES = 2
 // Non-cursor engines re-observe the pane (instead of erroring) while an accepted-but-not-yet-started
 // prompt is in flight. Bounded so a truly wedged session eventually reverts to the retry/error path.
 const SUBMIT_MAX_OBSERVES = 5
-// Engines whose own TUI queues a message typed while a turn is running, and runs it when the turn ends.
-// For these the daemon types immediately — the follow-up appears in the pane the moment it is spoken,
-// and the TUI's queue is the one the user can see and edit. Every other engine gets this file's FIFO,
-// pasted only once the pane is idle. Codex joined claude here on 2026-09-15 (owner: a voice command
-// spoken while a Codex task ran sat invisible until the task ended); Codex has queued composer input
-// since 0.36, and the retry path below already knows a prompt that left the composer without a
-// turn_started is "queued by the TUI as a follow-up", not lost.
+// Native Enter is a non-interrupting input path for Claude and modern Codex.
+// Claude owns its visible queue; Codex >= 0.106 always steers on Enter.
+// The daemon serializes terminal writes, never the engine's reasoning/tool work.
 const TYPES_WHILE_BUSY: ReadonlySet<string> = new Set(['claude', 'codex'])
+
+export interface SessionInputStatus {
+  deliveryId: string
+  sessionId: string
+  mode: 'direct' | 'steering' | 'native_queue' | 'native_input' | 'daemon_queue'
+  phase: 'waiting_for_writer' | 'waiting_for_user' | 'waiting_for_turn' | 'submitted' | 'accepted' | 'unconfirmed'
+}
 
 export interface SessionInputDelivery {
   deliveryId: string
@@ -76,7 +79,21 @@ interface QueuedInput {
   expiresAt: number
 }
 
+interface NativeInput {
+  deliveryId?: string
+  fingerprint: string
+  content: string
+  started: boolean
+  mode: SessionInputStatus['mode']
+  canRetrySubmit: boolean
+  retries: number
+}
+
 interface InputState {
+  nativePending: NativeInput[]
+  nativeWriting?: NativeInput
+  userAction: boolean
+  userActionTimer?: NodeJS.Timeout
   deliveryId?: string
   deliveryFingerprint?: string
   dispatching?: boolean
@@ -97,6 +114,9 @@ interface InputState {
 }
 
 export interface SessionInputDeps {
+  onForget?: (sessionId: string) => void
+  isAwaitingUser?: (session: RegisteredSession) => Promise<boolean>
+  onInputStatus?: (event: SessionInputStatus) => void
   onDelivery?: (event: SessionInputDelivery) => void
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
@@ -132,6 +152,8 @@ export class SessionInputController {
     let value = this.states.get(sessionId)
     if (!value) {
       value = {
+        nativePending: [],
+        userAction: false,
         turnOpen: false,
         awaitingFingerprint: null,
         awaitingContent: null,
@@ -149,12 +171,54 @@ export class SessionInputController {
     return value
   }
 
+  setUserAction(sessionId: string, open: boolean): void {
+    const state = this.state(sessionId)
+    state.userAction = open
+    if (!open) this.drainOne(sessionId, state)
+    else this.watchUserAction(sessionId, state)
+  }
+
+  private watchUserAction(sessionId: string, state: InputState): void {
+    if (this.states.get(sessionId) !== state || !this.deps.isAwaitingUser || state.userActionTimer || !state.queue.length) return
+    state.userActionTimer = setTimeout(() => {
+      state.userActionTimer = undefined
+      const session = this.controlSession(sessionId)
+      if (this.states.get(sessionId) !== state) return
+      if (!session) { this.forget(sessionId); return }
+      void this.deps.isAwaitingUser!(session).then(blocked => {
+        if (this.states.get(sessionId) !== state) return
+        this.dropExpired(sessionId, state)
+        state.userAction = blocked
+        if (blocked) this.watchUserAction(sessionId, state)
+        else this.drainOne(sessionId, state)
+      }).catch(() => {
+        this.dropExpired(sessionId, state)
+        this.watchUserAction(sessionId, state)
+      })
+    }, SUBMIT_VERIFY_MS)
+  }
+
   setTurnOpen(sessionId: string, open: boolean): void {
     this.state(sessionId).turnOpen = open
   }
 
   private delivery(sessionId: string, deliveryId: string | undefined, state: SessionInputDelivery['state'], reason?: string): void {
     if (deliveryId) this.deps.onDelivery?.({ sessionId, deliveryId, state, ...(reason ? { reason } : {}) })
+  }
+
+  private inputMode(sessionId: string, phase: SessionInputStatus['phase']): SessionInputStatus['mode'] {
+    const session = this.controlSession(sessionId)
+    const state = this.state(sessionId)
+    const version = session?.cliVersion?.match(/(\d+)\.(\d+)\.(\d+)/)
+    const codexSteers = session?.engine === 'codex' && version && (Number(version[1]) > 0 || Number(version[2]) >= 106)
+    return phase === 'waiting_for_turn' || phase === 'waiting_for_user' ? 'daemon_queue'
+      : !state.turnOpen ? 'direct' : codexSteers ? 'steering'
+      : session?.engine === 'claude' ? 'native_queue' : session?.engine === 'codex' ? 'native_input' : 'daemon_queue'
+  }
+
+  private inputStatus(sessionId: string, deliveryId: string | undefined, phase: SessionInputStatus['phase'], mode = this.inputMode(sessionId, phase)): void {
+    if (!deliveryId) return
+    this.deps.onInputStatus?.({ sessionId, deliveryId, mode, phase })
   }
 
   private finishDelivery(sessionId: string, state: InputState, outcome: SessionInputDelivery['state'], reason?: string): void {
@@ -187,9 +251,12 @@ export class SessionInputController {
     if (!session) { this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone'); this.deps.onError(sessionId, 'This agent is no longer available.'); return }
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
-    if (state.controlLocked
-      || (deliveryId && (state.deliveryId || state.dispatching || state.turnOpen || state.awaitingFingerprint || state.settling))
-      || (!TYPES_WHILE_BUSY.has(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
+    if (state.nativePending.length >= 64) {
+      this.delivery(sessionId, deliveryId, 'rejected', 'unresolved_input_capacity')
+      return
+    }
+    if (state.controlLocked || state.userAction || state.dispatching || state.nativeWriting
+      || (!TYPES_WHILE_BUSY.has(session.engine) && (state.deliveryId || state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
       this.enqueue(sessionId, state, content, deliveryId)
       return
@@ -208,8 +275,8 @@ export class SessionInputController {
    * during a turn. Measured on both claude and agy: the device's answer arrived, was refused here, and
    * the pane sat on the dialog looking like a hung agent, with nothing logged.
    *
-   * Every other guard still applies: another writer holding the lock, a submit awaiting confirmation, a
-   * settling turn, or queued messages all still refuse.
+   * Writer/acceptance/settling guards still apply. Queued prompts may wait behind an explicit answer;
+   * otherwise the queue would prevent the very action needed to unblock those prompts.
    */
   acquireControl(sessionId: string, opts?: { forAnswer?: boolean }): (() => void) | null {
     const session = this.controlSession(sessionId)
@@ -217,7 +284,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    if (state.controlLocked || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
+    if (state.controlLocked || state.dispatching || state.nativeWriting || turnBlocks || state.awaitingFingerprint || state.settling || (!opts?.forAnswer && state.queue.length > 0)) return null
     state.controlLocked = true
     let released = false
     return () => {
@@ -232,6 +299,18 @@ export class SessionInputController {
 
   onTurnStarted(sessionId: string, userMessage: string): void {
     const state = this.state(sessionId)
+    const native = state.nativePending.find(item => item.fingerprint === fingerprint(userMessage))
+    if (native) {
+      native.started = true
+      state.nativePending.splice(state.nativePending.indexOf(native), 1)
+      this.inputStatus(sessionId, native.deliveryId, 'accepted', native.mode)
+      this.delivery(sessionId, native.deliveryId, 'started')
+      if (state.nativeWriting === native && !state.dispatching) {
+        if (state.timer) clearTimeout(state.timer)
+        state.timer = null
+        state.nativeWriting = undefined
+      }
+    }
     if (state.deliveryId && state.writing) state.observedStart = userMessage
     else if (state.deliveryId && state.deliveryFingerprint) this.finishDelivery(sessionId, state,
       state.deliveryFingerprint === fingerprint(userMessage) ? 'started' : 'unknown',
@@ -257,6 +336,7 @@ export class SessionInputController {
       if (state.timer) clearTimeout(state.timer)
       state.timer = null
     }
+    this.drainOne(sessionId, state)
   }
 
   /**
@@ -283,6 +363,11 @@ export class SessionInputController {
     const state = this.state(sessionId)
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
     state.turnOpen = false
+    if (TYPES_WHILE_BUSY.has(this.controlSession(sessionId)?.engine ?? '')) {
+      if (state.nativeWriting && !state.dispatching) this.scheduleNativeCheck(sessionId, this.controlSession(sessionId)!, state, state.nativeWriting)
+      this.drainOne(sessionId, state)
+      return
+    }
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.retries = 0
@@ -344,12 +429,15 @@ export class SessionInputController {
     const state = this.states.get(sessionId)
     if (state?.timer) clearTimeout(state.timer)
     if (state?.settleTimer) clearTimeout(state.settleTimer)
+    if (state?.userActionTimer) clearTimeout(state.userActionTimer)
     if (state) {
       this.finishDelivery(sessionId, state, state.writing || state.awaitingFingerprint || state.deliveryFingerprint ? 'unknown' : 'rejected', 'agent_gone')
       for (const item of state.queue) this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
+      for (const item of state.nativePending) this.delivery(sessionId, item.deliveryId, 'unknown', 'agent_gone')
       state.cancelled = true
     }
     this.states.delete(sessionId)
+    this.deps.onForget?.(sessionId)
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
@@ -398,11 +486,15 @@ export class SessionInputController {
 
   private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string): Promise<void> {
     const state = this.state(sessionId)
+    if (TYPES_WHILE_BUSY.has(session.engine)) return this.injectNative(sessionId, session, state, content, deliveryId)
     if (!deliveryId) {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      return this.injectLegacy(sessionId, session, content)
+      state.dispatching = true
+      try { await this.injectLegacy(sessionId, session, content) }
+      finally { state.dispatching = false; this.drainOne(sessionId, state) }
+      return
     }
     state.deliveryId = deliveryId
     state.deliveryFingerprint = undefined
@@ -456,6 +548,7 @@ export class SessionInputController {
       state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
       state.dispatching = false
       this.delivery(sessionId, state.deliveryId, 'delivered')
+      this.inputStatus(sessionId, state.deliveryId, 'submitted')
       if (state.observedStart !== undefined) {
         const observed = state.observedStart
         state.observedStart = undefined
@@ -470,6 +563,126 @@ export class SessionInputController {
       state.writing = false
       state.dispatching = false
       if (!state.awaitingFingerprint && !state.turnOpen) this.drainOne(sessionId, state)
+    }
+  }
+
+  /** The write lock ends at acceptance, not at the end of the model's work.
+   * Each native input retains its own transcript fingerprint until it is observed.
+   * Retry Enter only with a confirmed write and the exact draft still visible.
+   * A lost acknowledgment never permits retrying the key or prompt body.
+   */
+  private async injectNative(sessionId: string, session: RegisteredSession, state: InputState, content: string, deliveryId?: string): Promise<void> {
+    state.dispatching = true
+    state.deliveryId = deliveryId // cancellable only during pre-paste validation
+    state.cancelled = false
+    let item: NativeInput | undefined
+    try {
+      if (!await this.deps.validateRuntime(session)) {
+        this.finishDelivery(sessionId, state, 'rejected', 'runtime_gone_pre_paste')
+        return
+      }
+      if (state.cancelled || this.states.get(sessionId) !== state) return
+      // A question may have appeared while runtime validation was in progress.
+      if (state.userAction || await this.deps.isAwaitingUser?.(session)) {
+        if (state.cancelled || this.states.get(sessionId) !== state) return
+        state.userAction = true
+        state.deliveryId = undefined
+        this.enqueue(sessionId, state, content, deliveryId, true)
+        return
+      }
+      if (state.cancelled || this.states.get(sessionId) !== state) return
+      item = { deliveryId, content, fingerprint: fingerprint(content), started: false, mode: this.inputMode(sessionId, 'submitted'), canRetrySubmit: false, retries: 0 }
+      state.nativePending.push(item)
+      state.nativeWriting = item
+      state.observes = 0
+      state.deliveryId = undefined
+      const result = await this.deps.inject(session.agentId, content)
+      if (this.states.get(sessionId) !== state) return
+      if (!item.started && (result === false || (typeof result !== 'boolean' && (result.dispatch === 'not_started' || result.dispatch === 'rejected')))) {
+        state.nativePending = state.nativePending.filter(candidate => candidate !== item)
+        state.nativeWriting = undefined
+        this.delivery(sessionId, deliveryId, 'rejected', 'paste_failed')
+        return
+      }
+      item.canRetrySubmit = result === true || (typeof result !== 'boolean' && result.dispatch === 'executed')
+      if (!item.started) this.inputStatus(sessionId, deliveryId, 'submitted', item.mode)
+      if (!item.started) this.delivery(sessionId, deliveryId,
+        typeof result !== 'boolean' && result.dispatch === 'possibly_executed' ? 'unknown' : 'delivered',
+        typeof result !== 'boolean' && result.dispatch === 'possibly_executed' ? 'dispatch_ambiguous' : undefined)
+      if (typeof result !== 'boolean' && result.dispatch === 'possibly_executed') this.deps.onError(sessionId, 'The message delivery could not be confirmed. Check the agent before trying again.')
+      // Boolean dependencies are legacy embedders which promise a completed submission.
+      // Production requires a transcript match or a clear composer before the next writer.
+      if (item.started || (typeof result === 'boolean' && result && !this.deps.capture)) {
+        state.nativeWriting = undefined
+        this.inputStatus(sessionId, deliveryId, 'accepted', item.mode)
+      }
+      else await this.checkNativeWrite(sessionId, session, state, item, false)
+    } catch {
+      if (this.states.get(sessionId) !== state) return
+      if (item?.started) state.nativeWriting = undefined
+      else {
+        this.delivery(sessionId, deliveryId, item ? 'unknown' : 'rejected', item ? 'dispatch_ambiguous' : 'runtime_gone_pre_paste')
+        if (item) this.scheduleNativeCheck(sessionId, session, state, item)
+      }
+    } finally {
+      state.deliveryId = undefined
+      state.dispatching = false
+      this.drainOne(sessionId, state)
+    }
+  }
+
+  private scheduleNativeCheck(sessionId: string, session: RegisteredSession, state: InputState, item: NativeInput): void {
+    if (this.states.get(sessionId) !== state || state.nativeWriting !== item) return
+    if (state.timer) clearTimeout(state.timer)
+    state.timer = setTimeout(() => {
+      state.timer = null
+      void this.checkNativeWrite(sessionId, session, state, item).catch(() => {
+        if (this.states.get(sessionId) === state && !item.started) {
+          this.delivery(sessionId, item.deliveryId, 'unknown', 'dispatch_ambiguous')
+          if (++state.observes <= SUBMIT_MAX_OBSERVES) this.scheduleNativeCheck(sessionId, session, state, item)
+          else this.inputStatus(sessionId, item.deliveryId, 'unconfirmed', item.mode)
+        }
+      })
+    }, SUBMIT_VERIFY_MS)
+  }
+
+  private async checkNativeWrite(sessionId: string, session: RegisteredSession, state: InputState, item: NativeInput, allowRetry = true): Promise<void> {
+    const capture = await this.deps.capture?.(session.agentId)
+    if (this.states.get(sessionId) !== state || state.nativeWriting !== item) return
+    if (item.started || (capture && /[›❯]/u.test(visibleTerminal(capture)) && !terminalComposerContains(capture, item.content))) {
+      state.nativeWriting = undefined
+      state.observes = 0
+      this.inputStatus(sessionId, item.deliveryId, 'accepted', item.mode)
+      this.drainOne(sessionId, state)
+    } else if (allowRetry && capture && /[›❯]/u.test(visibleTerminal(capture)) && terminalComposerContains(capture, item.content)
+      && item.canRetrySubmit && item.retries < SUBMIT_MAX_RETRIES && !state.userAction && !state.dispatching) {
+      state.dispatching = true
+      try {
+        if (!await this.deps.validateRuntime(session)) {
+          this.delivery(sessionId, item.deliveryId, 'unknown', 'runtime_gone_post_paste')
+          return
+        }
+        if (await this.deps.isAwaitingUser?.(session)) {
+          this.scheduleNativeCheck(sessionId, session, state, item)
+          return
+        }
+        if (this.states.get(sessionId) !== state || state.nativeWriting !== item || item.started || state.userAction) return
+        item.retries++
+        item.canRetrySubmit = false // thrown/lost acknowledgments cannot authorize another key
+        const result = await this.deps.sendKey(session.agentId, 'Enter')
+        item.canRetrySubmit = result === true || (typeof result !== 'boolean' && result.dispatch === 'executed')
+        this.scheduleNativeCheck(sessionId, session, state, item)
+      } finally {
+        state.dispatching = false
+        this.drainOne(sessionId, state)
+      }
+    } else if (++state.observes <= SUBMIT_MAX_OBSERVES) {
+      this.scheduleNativeCheck(sessionId, session, state, item)
+    } else {
+      // Keep the write barrier: pasting another message could concatenate with this draft.
+      this.delivery(sessionId, item.deliveryId, 'unknown', 'input_acceptance_unconfirmed')
+      this.inputStatus(sessionId, item.deliveryId, 'unconfirmed', item.mode)
+      this.deps.onError(sessionId, 'The message delivery could not be confirmed. Check the agent before trying again.')
     }
   }
 
@@ -547,7 +760,7 @@ export class SessionInputController {
         return
       }
     } else {
-      // claude/codex/commandcode: verify against the terminal before pressing Enter again or declaring failure.
+      // Remaining composer-based engines: verify before retrying Enter or declaring failure.
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
       // Command Code writes the user line to its transcript only once the model has finished THINKING, so
@@ -628,8 +841,12 @@ export class SessionInputController {
 
   private drainOne(sessionId: string, state: InputState): void {
     this.dropExpired(sessionId, state)
-    if (state.controlLocked || state.turnOpen || state.awaitingFingerprint || state.settling) return
-    if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
+    if (this.states.get(sessionId) !== state) return
+    if (!this.controlSession(sessionId)) { this.forget(sessionId); return }
+    const native = TYPES_WHILE_BUSY.has(this.controlSession(sessionId)?.engine ?? '')
+    if (state.controlLocked || state.userAction || state.dispatching || state.nativeWriting) return
+    if (native && state.nativePending.length >= 64) return
+    if (!native && (state.turnOpen || state.awaitingFingerprint || state.settling || state.deliveryId)) return
     const next = state.queue.shift()
     if (!next) return
     const session = this.controlSession(sessionId)
@@ -637,16 +854,21 @@ export class SessionInputController {
     void this.inject(sessionId, session, next.content, next.deliveryId)
   }
 
-  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string): void {
+  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, returnActive = false): void {
     const bytes = Buffer.byteLength(content, 'utf8')
     const queuedBytes = state.queue.reduce((sum, item) => sum + item.bytes, 0)
-    if (state.queue.length >= MAX_QUEUE_ITEMS || queuedBytes + bytes > MAX_QUEUE_BYTES) {
+    if (!returnActive && (state.queue.length >= MAX_QUEUE_ITEMS || queuedBytes + bytes > MAX_QUEUE_BYTES)) {
       this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
       this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
       return
     }
-    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId })
+    const item = { content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId }
+    // The active write owns a separate slot; returning it must preserve its place before later input.
+    if (returnActive) state.queue.unshift(item)
+    else state.queue.push(item)
     this.delivery(sessionId, deliveryId, 'queued')
+    this.inputStatus(sessionId, deliveryId, state.userAction ? 'waiting_for_user' : state.dispatching || state.nativeWriting || state.controlLocked ? 'waiting_for_writer' : 'waiting_for_turn')
+    if (state.userAction) this.watchUserAction(sessionId, state)
   }
 
   private dropExpired(sessionId: string, state: InputState): void {

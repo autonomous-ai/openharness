@@ -161,7 +161,7 @@ import { createWindowRouter } from './cable/windowRoute.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
-import { AskQuestionController, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
+import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import {
   setSummaryPoolDeviceConnected,
@@ -2316,6 +2316,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   ): Promise<boolean> =>
     attaches.attach(session, reset, () => attachSessionNow(session, reset, replayCursorFromStart, replayFromStart))
   const input = new SessionInputController({
+    onForget: agentId => autonomousDeviceService?.agentGone(agentId),
+    isAwaitingUser: async session => {
+      const pane = await captureTerminal(session.agentId)
+      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
+    },
+    onInputStatus: event => autonomousDeviceService?.inputStatus(event),
     getSession: (id) => registry.resolve(id),
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
@@ -2441,6 +2447,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hasDevice: () => someoneCanAnswer(),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped) => {
+      input.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
       showAwaitingAnswer(sessionId)
       const asked = {
@@ -2468,6 +2475,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
+      input.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
         agentId: agentIdFor(sessionId),
