@@ -303,3 +303,4 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | versionCode | When | Where it went |
 | --- | --- | --- |
 | `16` (1.0.0) | 2026-09-18 | Internal testing — the first Play upload |
+| `41` (1.0.0) | 2026-09-24 | Built for resubmission after Play rejected the build under the broken-functionality policy (its browser sign-in redirected to `127.0.0.1`, which timed out on the reviewer's device). Signs in with an emailed code instead; also carries the notices and tab marks of iOS 39–40 |
