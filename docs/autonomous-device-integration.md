@@ -338,3 +338,12 @@ nothing to retry — a lost `move` is a shorter scroll. Success is an empty `scr
 terminal Desktop has focused scrolls; a viewer pane does not. Errors: `FOCUS_UNAVAILABLE` when no
 Desktop window is connected; `INVALID_REQUEST` for a bad phase, a non-integer or out-of-range value,
 or any other field. Older CLIs do not list `scroll` in hello capabilities.
+
+## Input during a running task
+
+Claude/Codex `turn.send` now uses native input while the agent is working, with a serialized
+terminal writer and independent delivery tracking. `input.status.v1` advertises optional
+`receipt.input` scheduling/acceptance details. Existing receipt states retain their meanings;
+acceptance is not completion. Overlapping starts without engine correlation remain unknown.
+See [engine behavior, tests, and required OS coordination](in-flight-agent-input.md), especially
+the prohibition on assigning an uncorrelated session summary/latest recap to a pending message.
