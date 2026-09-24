@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/notify/agent_notice.dart';
+import 'package:harness_mobile/notify/unread_marks.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'desk_groups.dart';
@@ -43,6 +45,7 @@ class DeskTabStrip extends StatefulWidget {
     required this.onPick,
     this.onAddTab,
     this.onRename,
+    this.unreadFor,
   });
 
   /// Every tab, in the desk's own order — see [deskGroups]. Never empty.
@@ -62,6 +65,13 @@ class DeskTabStrip extends StatefulWidget {
   /// A name double-tapped. Called only for the groups that are real tabs on a
   /// desk this phone may write to.
   final void Function(DeskGroup group)? onRename;
+
+  /// The news the agents of a tab carry that nobody has gone to yet — see
+  /// `AgentUnread.mostUrgentOf`. Drawn as the rows' own [UnreadDot] before the
+  /// tab's name: an agent finishing in a tab you are not reading has to say
+  /// which tab it is in, or the dot is only found by opening every one of them.
+  /// Null draws no marks.
+  final NoticeKind? Function(DeskGroup group)? unreadFor;
 
   /// The row's height: a 32pt pill with 6pt either side of it, which a tap
   /// still lands in — a pill is short for a thumb, the row around it is not.
@@ -170,6 +180,7 @@ class _DeskTabStripState extends State<DeskTabStrip> {
                   name: group.name,
                   selected: selected,
                   reachable: !group.isEmpty,
+                  unread: widget.unreadFor?.call(group),
                   onTap: () => onPick(group),
                   // ⚠️ **Only the tab being SHOWN can be double-tapped, and
                   // that is a decision about the other tabs rather than about
@@ -263,12 +274,16 @@ class _DeskTabPill extends StatelessWidget {
     required this.name,
     required this.selected,
     required this.reachable,
+    required this.unread,
     required this.onTap,
     required this.onRename,
   });
 
   final String name;
   final bool selected;
+
+  /// What its agents are carrying — see [DeskTabStrip.unreadFor].
+  final NoticeKind? unread;
 
   /// False for a tab whose agents are all out of reach — drawn dim, and still
   /// pickable. See [DeskTabStrip].
@@ -329,21 +344,30 @@ class _DeskTabPill extends StatelessWidget {
               borderRadius: BorderRadius.circular(height / 2),
               border: Border.all(color: selected ? fill : AppGlass.hair),
             ),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: _maxLabelWidth),
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: ink,
-                  fontSize: 14.5,
-                  // The tab being shown is a weight heavier as well as filled,
-                  // which is what carries it to someone who cannot see the
-                  // fill — the same pairing [PhoneTabBar] uses below.
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Before the name, as on the agent rows below it: the same
+                // mark in the same place, one level up.
+                if (unread case final kind?) UnreadDot(kind: kind),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _maxLabelWidth),
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: ink,
+                      fontSize: 14.5,
+                      // The tab being shown is a weight heavier as well as
+                      // filled, which is what carries it to someone who cannot
+                      // see the fill — the same pairing [PhoneTabBar] uses
+                      // below.
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
         ),

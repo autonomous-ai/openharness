@@ -315,6 +315,9 @@ class _DeskTabsPanelState extends State<DeskTabsPanel> {
           // [AppNotifier.deskWritable].
           onAddTab: widget.notifier.deskWritable ? _addTab : null,
           onRename: widget.notifier.deskWritable ? _rename : null,
+          unreadFor: (tab) => widget.notifier.agentNotices.unread.mostUrgentOf(
+            tab.entries.map(_refOf),
+          ),
         ),
         SheetCaption(
           label: group.name,

@@ -29,6 +29,19 @@ class AgentUnread extends ChangeNotifier {
   /// What this agent's mark says, or null when it has none.
   NoticeKind? kindFor(AgentRef ref) => _unread[_key(ref)];
 
+  /// The most urgent news among [refs] — a question over a finished turn — or
+  /// null when none of them carries any. What a desk tab's pill says about the
+  /// agents in it, so a person can see WHICH tab to open before opening it.
+  NoticeKind? mostUrgentOf(Iterable<AgentRef> refs) {
+    NoticeKind? found;
+    for (final ref in refs) {
+      final kind = kindFor(ref);
+      if (kind == NoticeKind.question) return kind;
+      found ??= kind;
+    }
+    return found;
+  }
+
   /// The NEWEST kind wins — see [NoticeKind].
   void mark(AgentRef ref, NoticeKind kind) {
     final key = _key(ref);
