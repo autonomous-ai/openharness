@@ -279,7 +279,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       },
       onHide: app.announceWindowForeground,
       onInactive: app.announceWindowForeground,
+      // Whether the app is in front of anyone decides whether the model surfaces refresh at all
+      // (`AppNotifier.foreground`): a minimised or background window asks no daemon anything.
+      onStateChange: app.appLifecycleChanged,
     );
+    app.appLifecycleChanged(WidgetsBinding.instance.lifecycleState);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);

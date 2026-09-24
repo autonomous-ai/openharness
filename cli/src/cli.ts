@@ -185,7 +185,7 @@ import {
   type Poller, type UpdateEntry,
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
-import { ensureLauncher, ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
+import { ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
@@ -1323,6 +1323,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // pinned binary before it hands a token over.
   const managedGridReady = ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
   void managedGridReady
+  // …and keeps following it while this daemon runs: a pin moved after the start reaches it within ten
+  // minutes rather than at the next restart (`startGridPinRecheck`).
+  startGridPinRecheck()
 
   registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
