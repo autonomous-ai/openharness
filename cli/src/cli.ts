@@ -1900,6 +1900,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // and skipping the recap here would leave them permanently blank.
   /** Agents with a tile open in the desktop window right now. Empty when no window is attached. */
   let openPaneAgents = new Set<string>()
+  /** Whether the window those tiles belong to is actually in front. See onAppPanes. */
+  let appWindowForeground = true
+  /**
+   * Is this agent already in front of somebody at this desk?
+   *
+   * Both halves are needed and neither alone is enough: a tile on the tab says WHERE it is, the window
+   * being in front says whether anyone can see it. The dial used to be told the first half only, so it
+   * stayed quiet about a turn that finished while the window sat behind a browser — which is the one
+   * case a notification exists for — and the window, which checks both (`_visibleOnTab`), spoke up.
+   * Two screens, two answers, from one tab.
+   */
+  const alreadyOnScreen = (agentId: string): boolean =>
+    appWindowForeground && openPaneAgents.has(agentId)
   const cableWatchingLocal = (): boolean => cableRef?.isConnected === true
 
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || backend.autonomousDeviceConnected()
@@ -2528,6 +2541,25 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           return summarizeTurnText(text, signal, userMessage, session?.engine ?? 'claude', gateway, previousRecap)
         },
       }
+  /**
+   * A turn that belongs to a SUB-AGENT: an Orchestrator specialist, or its Director while specialists
+   * are still out.
+   *
+   * Hoisted out of the commander's options because the dial is no longer the only screen that has to
+   * know. The cable learns it as `silent` on the summary card; the window learns it as `subagent` on
+   * `turn_ended` (see emitSessionEvents). One rule, asked twice — the two surfaces used to disagree
+   * here, and a four-specialist project put ONE row on the dial and FIVE marks in the window.
+   *
+   * ⚠️ The commander ORs this with its own `abandoned` state — a held turn released because a
+   * sub-agent went silent — which lives inside it and is not reachable from here. That case is rare
+   * (a killed or crashed sub-agent) and costs the window one extra mark, not five.
+   */
+  const isSubagentSession = (sessionId: string): boolean => {
+    const agentId = registry.bySession(sessionId)?.agentId
+    if (!agentId) return false
+    const role = backend.orchestratorRoleOf(agentId)
+    return role?.role === 'worker' || (role?.role === 'director' && role.busy)
+  }
   const mirror = new CommanderMirror({
     send: (frame) => backend.sendCommander(frame),
     sendWeb: (frame) => backend.send(frame), // turn_summary_pending / turn_summary → web indicator
@@ -2540,12 +2572,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     agentIdFor: (sessionId) => registry.bySession(sessionId)?.agentId,
     // An Orchestrator specialist's turn end, or the Director's while specialists are still out, is not
     // announced: the person asked to hear from the main agent once, not from every sub-agent.
-    isSubagent: (sessionId) => {
-      const agentId = registry.bySession(sessionId)?.agentId
-      if (!agentId) return false
-      const role = backend.orchestratorRoleOf(agentId)
-      return role?.role === 'worker' || (role?.role === 'director' && role.busy)
-    },
+    isSubagent: isSubagentSession,
     // A claude sub-agent still at work is one whose transcript is still growing:
     // `<session>/subagents/agent-<id>.jsonl` beside the parent's (the same file enrichSubagentStats
     // reads). Written in the last SUBAGENT_IDLE_MS = alive; the held turn end waits for it.
@@ -2687,6 +2714,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // skips these; every other consumer ignores an unknown field. Measured before this existed: one
       // agent credited with 42 turns in a single second, all re-reads.
       if (event.type === 'turn_started' && (opts?.resumed || opts?.replay)) frame.replay = true
+      // WHOSE turn ended, in the clear beside `agentId`, for the same reason `replay` is: the payload
+      // is E2EE and the window has to read this without opening it.
+      //
+      // The dial has always been told (`silent` on the summary card) and the window never was, so the
+      // two screens counted different things: an Orchestrator project of four specialists put ONE row
+      // on the dial and FIVE marks in the window. Same predicate for both now — see isSubagentSession.
+      // An older client ignores an unknown field, which is the behaviour it has today.
+      if (event.type === 'turn_ended' && isSubagentSession(sessionId)) frame.subagent = true
       backend.send(frame)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())
@@ -3856,6 +3891,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       autonomousDeviceService?.appFocus(machineId, agentId, connId)
     },
     onAppFocus: (machineId, agentId) => { void cableRef?.followApp(machineId, agentId) },
+    // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
+    // cable attaches, which is the one moment its own drawer is known to be empty.
+    onAppUnread: (items) => { cableHostRef?.setUnread(items); void cableRef?.replaceNotifications(items) },
+    // The window looked at a harness, so the dial's drawer row for it is stale.
+    // The dial's own tap already reaches the window (`agent.open`); this is the
+    // return leg, and the pair is what keeps the badge and the pill equal.
+    onAgentSeen: (agentId) => { void cableRef?.agentSeen(agentId) },
     // Agents the window has a tile for. A finished turn on one of these is
     // already in front of the person, so the dial updates its tile in silence
     // rather than beeping about something being looked at.
@@ -3871,7 +3913,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void cableRef?.syncSwarms()
       void cableRef?.syncAgents()
     },
-    onAppPanes: (agentIds) => {
+    onAppPanes: (agentIds, foreground) => {
       // ORDER matters here, not just membership. The dial's carousel is built
       // around these — tiles first, in tile order — so the thumb walks the same
       // grid the eyes are on. `openPaneAgents` below only ever asks "is this
@@ -3885,6 +3927,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const deskChanged = agentIds.length !== appPaneAgents.length
         || agentIds.some((id, at) => id !== appPaneAgents[at])
       appPaneAgents = agentIds
+      // A tile behind a browser is not a tile anybody is looking at. The roster
+      // does not change when the window loses focus, so without this the dial
+      // went quiet about work nobody could see — the one case the notification
+      // is for — while the window, which does check, spoke up. `openPaneAgents`
+      // below is what `quiet` is read from, so emptying it is how both screens
+      // come to the same answer.
+      appWindowForeground = foreground
       cableHostRef?.setDesk(agentIds)
       const next = new Set(agentIds)
       // Logged on CHANGE only. It fires on every pane add, close and reconnect,
@@ -5822,7 +5871,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Quiet when the window already has this agent on screen; silent when the
       // turn was a sub-agent's. The tile still updates — the recap is what it
       // draws — only the beep and the drawer entry are withheld.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent)
+      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent)
     }
     else void cable.turnError(event.agentId, event.text)
   }
@@ -5849,7 +5898,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // turn was a sub-agent's (decided on its own machine). The tile still
       // updates — the recap is what it draws — only the beep and the drawer
       // entry are withheld.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, openPaneAgents.has(event.agentId), event.subagent === true)
+      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent === true)
     }
     else void cable.turnError(event.agentId, event.text)
   })

@@ -208,7 +208,11 @@ static uint32_t s_voice_route_ms;   // lv_tick when the upload finished (routing
 #define NOTIF_DEBUG_SEED 0   // set 1 to seed fake notifications at boot for testing the drawer redesign
 // `machine` is the DISPLAY name (kept even if the machine is renamed later); `machine_id` is what a tap needs
 // to switch back to the machine the notification came from.
-typedef struct { char proj_id[48]; char name[44]; char summary[100]; char machine[40]; char machine_id[40]; uint32_t ms; bool unread, used; } notif_t;
+// `question` separates the two kinds of news a row can be, because they are taken away by different
+// things: a finished turn goes when somebody looks at it, a question goes when it is ANSWERED. One row
+// per agent either way, newest wins — so a question that arrives over a finished turn replaces it, and
+// answering that question must not also throw away a finish that has since replaced IT.
+typedef struct { char proj_id[48]; char name[44]; char summary[100]; char machine[40]; char machine_id[40]; uint32_t ms; bool unread, used, question; } notif_t;
 static EXT_RAM_BSS_ATTR notif_t s_notif[NOTIF_MAX];   // newest at index 0; opening marks read, tapping a row removes that one
 static lv_obj_t *s_notif_pill;            // top-mid "🔔 N" count badge (projects screen, when N>0)
 static lv_obj_t *s_notif_pill_lbl;        // the "N" label inside the pill
@@ -404,6 +408,13 @@ static void agent_actions_apply(void);   // show/hide the per-agent Voice cluste
 static void machine_toast(const char *msg);   // a short centred line over the face (defined with the machine picker)
 static void build_agent_actions(void);   // build that cluster once on scr_projects (defined below)
 static void notif_badge_apply(void);     // show/hide the top unread pill (defined below)
+// Give the face back when the window moves to a DIFFERENT agent — see ui_focus_project. Defined with
+// the question screen, which owns the state it reads.
+static void q_leave_if_other_agent(const char *project_id);
+// Put an unanswered question back on the face — what tapping its notification should land on.
+static bool q_reopen(const char *project_id);
+// Does this agent have an unanswered question waiting? Its notification row is what remembers.
+static bool notif_is_question(const char *proj_id);
 static void notif_bg_tap(lv_event_t *e); // tap the drawer's empty area → close (defined below)
 static void machine_switch_to(int i);      // select machine i + enter its carousel (defined with the picker)
 static int  utf8_clip(const char *s, int max); // clip to <=max bytes on a codepoint boundary (defined below)
@@ -1050,6 +1061,21 @@ static void busy_compose(proj_t *p)
     int64_t sec = (esp_timer_get_time() - p->busy_since) / 1000000LL;
     if (sec < 0) sec = 0;
     char el[24]; fmt_elapsed(sec, el, sizeof(el));
+    // AN AGENT WITH AN UNANSWERED QUESTION IS NOT WORKING. Its turn is open — which is why the tile is
+    // in the busy state at all — but it is open BECAUSE it is waiting on a person, and "Cooking… 4m"
+    // over a question nobody has answered reads as progress that is not happening (owner, 2026-09-24).
+    //
+    // Read off the notification row rather than off `s_q`: that row is this agent's question whether or
+    // not the question screen is the one on the face right now, and it goes when the question is
+    // answered — which is exactly when this line should go back to a verb.
+    if (notif_is_question(p->id)) {
+        // NO ELAPSED HERE. `busy_since` is stamped when a `processing` frame says the turn (re)started,
+        // and an agent that leaves this tab is removed from the model and re-added when it comes back —
+        // so the clock restarts on a turn that has been standing still, which is the opposite of what a
+        // number beside "waiting" would be read as.
+        lv_label_set_text(p->busy_verb, "Waiting for you");
+        return;
+    }
     lv_label_set_text_fmt(p->busy_verb, "%s\xE2\x80\xA6 %s", GERUNDS[(sec / 6) % N_GERUNDS], el);   // Cooking… 34s
 }
 
@@ -5787,6 +5813,17 @@ void ui_focus_project(const char *project_id)
         return;
     }
     pending_focus_clear();   // this one landed; nothing older can still be wanted
+    // A question the person has not answered must not pin the face here — see the helper.
+    q_leave_if_other_agent(project_id);
+    // …and the other direction: coming BACK to an agent that is still waiting on an answer shows the
+    // answer screen, not the tile behind it. "Waiting for you" on a tile says what the state is; the
+    // question says what to do about it, and being asked to go there and then shown the waiting room
+    // is a step nobody asked for (owner, 2026-09-24).
+    //
+    // A FOCUS ONLY, never a swipe. `tile_changed` is the dial's own gesture and it deliberately does
+    // not do this: a blocked agent you could not swipe past without being handed its question is a
+    // carousel with a hole in it.
+    if (notif_is_question(project_id)) q_reopen(project_id);   // takes the lock itself; recursive
     if (i >= 0) {
         carousel_goto(col_for_ring_near(carousel_col(), ring_of_agent(i)), LV_ANIM_OFF);   // nearest column showing agent i
         s_active_idx = i;
@@ -5921,6 +5958,19 @@ static void notif_badge_apply(void)
 {
     if (!s_notif_pill) return;
     int n = notif_count();
+    // THE NUMBER, IN THE LOG, WHENEVER IT MOVES.
+    //
+    // This count has to equal the window's badge, and for as long as it lived only on the glass the
+    // only way to check that was to hold the two side by side — which is how a question row being
+    // dropped by a carousel settle went unnoticed through four attempts at the wrong fix. Printed on
+    // CHANGE only: this runs on every settle, every screen change and every wake.
+    static int last = -1;
+    if (n != last) {
+        last = n;
+        int q = 0;
+        for (int k = 0; k < NOTIF_MAX; k++) if (s_notif[k].used && s_notif[k].unread && s_notif[k].question) q++;
+        ESP_LOGI(TAG, "notif: %d unread (%d question, %d done)", n, q, n - q);
+    }
     // The Overview has its own bell on the lower arc, with the count as a badge; the top-edge pill is
     // for the agent tiles, which have no seat for one.
     bool show = n > 0 && !display_is_asleep() && lv_screen_active() == scr_projects
@@ -5936,8 +5986,17 @@ static void notif_badge_apply(void)
 static void notif_ud_free(lv_event_t *e) { free(lv_obj_get_user_data(lv_event_get_target(e))); }
 // What a drawer row needs on tap: which agent. The daemon routes the `open` to its machine.
 typedef struct { char proj[48]; } notif_ref_t;
-// Remove ONE project's notification from the queue (compact the tail up). Caller holds the lock.
-static void notif_remove(const char *proj_id)
+// Remove ONE project's notification from the queue (compact the tail up).
+// Remove this project's row only when it is the KIND the caller means — a question, or a finished turn.
+//
+// One row per agent, newest wins, so the two kinds share a slot and each is taken away by a different
+// thing: a finish goes when somebody looks at it, a question goes when it is answered. An agent that
+// asked and then finished carries the finish, and answering that old question must not throw it away.
+// Caller holds the lock.
+// EVERY row this agent has, whatever kind. Exactly one caller — the close, which means somebody just
+// answered this agent — and named so it cannot be reached for by accident: an any-kind remove is what
+// let a carousel settle throw away an unanswered question, four fixes running. Caller holds the lock.
+static void notif_forget_agent(const char *proj_id)
 {
     for (int k = 0; k < NOTIF_MAX; k++) {
         if (s_notif[k].used && strcmp(s_notif[k].proj_id, proj_id) == 0) {
@@ -5946,6 +6005,26 @@ static void notif_remove(const char *proj_id)
             return;
         }
     }
+}
+
+static void notif_remove_matching(const char *proj_id, bool question)
+{
+    for (int k = 0; k < NOTIF_MAX; k++) {
+        if (s_notif[k].used && strcmp(s_notif[k].proj_id, proj_id) == 0) {
+            if (s_notif[k].question != question) return;
+            for (int j = k; j < NOTIF_MAX - 1; j++) s_notif[j] = s_notif[j + 1];
+            s_notif[NOTIF_MAX - 1].used = false;
+            return;
+        }
+    }
+}
+// Is the row this project has a question? False when it has none.
+static bool notif_is_question(const char *proj_id)
+{
+    for (int k = 0; k < NOTIF_MAX; k++) {
+        if (s_notif[k].used && strcmp(s_notif[k].proj_id, proj_id) == 0) return s_notif[k].question;
+    }
+    return false;
 }
 // Tap a row → remove ONLY that notification (Model B: the rest are kept), then ask the window to open that
 // agent — see notif_row_tap.
@@ -5979,7 +6058,12 @@ static void notif_row_tap(lv_event_t *e)
     const notif_ref_t *ref = (const notif_ref_t *)lv_obj_get_user_data(lv_event_get_target(e));
     char id[48];                                                    // copy before close frees the rows
     snprintf(id, sizeof id, "%s", ref ? ref->proj : "");
-    if (id[0]) notif_remove(id);
+    // A QUESTION'S ROW SURVIVES ITS OWN TAP. Tapping is how you go and answer it, and going is not
+    // answering — the row goes on `question.close` and nowhere else (owner, 2026-09-24). Removing it
+    // here took the pill down by one while the window still counted it, and landed the person on a
+    // tile reading "Working…", which is what an agent waiting on an answer honestly is.
+    const bool question = id[0] && notif_is_question(id);
+    if (id[0] && !question) notif_remove_matching(id, false);
     ui_notif_close();
 
     // THE OPEN NAMES THE NOTIFICATION'S AGENT, whether or not the dial holds it. The dial has the window's
@@ -5991,6 +6075,10 @@ static void notif_row_tap(lv_event_t *e)
     if (id[0]) {
         s_notif_open_pending = false;
         cable_client_send_open(id, NULL);
+        // The question itself, not the tile behind it: that tile says "Working…", because the turn is
+        // still open — it is the answer it is waiting on. Falls through when the dial no longer holds
+        // the question (a reboot, or another one took its place), and then the tile is all there is.
+        if (question && q_reopen(id)) return;
         open_agent_detail(id);   // held until the list arrives when the agent is off this tab
         return;
     }
@@ -6087,7 +6175,12 @@ static void notif_rebuild(void)
         lv_obj_set_width(sm, lv_pct(100));
         lv_label_set_long_mode(sm, LV_LABEL_LONG_WRAP);
         // Recap is already ≤15 words from the backend; clip generously as a safety net + "…".
-        const char *full = n->summary[0] ? n->summary : "done";
+        //
+        // THE FALLBACK IS PER KIND. It was the bare word "done" for every row, which is true of a
+        // finished turn and a lie about a question — and a question row restored after a reboot has no
+        // text of its own to show, so the lie is exactly what you got (owner, 2026-09-24). The window
+        // sends the question's own words now; this is what stands in if even those are missing.
+        const char *full = n->summary[0] ? n->summary : n->question ? "Waiting for you" : "done";
         char snip[128]; int plen = utf8_clip(full, 100);
         if (plen > (int)sizeof(snip) - 4) plen = (int)sizeof(snip) - 4;
         memcpy(snip, full, plen);
@@ -6329,9 +6422,11 @@ void ui_notif_swipe_up(void)
 // Push a done notification for project i (dedupe by id → refresh + move to top). Caller holds the lock.
 // `i` is the agent's tile, or -1 when the dial does not hold it — then the frame's `name`, `machine` and
 // `recap` are all the row has, and they are enough.
-static void notif_push(const char *proj_id, int i, const char *name, const char *machine, const char *recap)
+static void notif_push(const char *proj_id, int i, const char *name, const char *machine, const char *recap,
+                       bool question)
 {
     notif_t rec = {0};
+    rec.question = question;
     snprintf(rec.proj_id, sizeof rec.proj_id, "%s", proj_id);
     const char *nm = (i >= 0 && s_proj[i].name[0]) ? s_proj[i].name : (name && name[0]) ? name : proj_id;   // MODEL, not the widget
     snprintf(rec.name, sizeof rec.name, "%s", nm);
@@ -6373,7 +6468,7 @@ void ui_notify_task_done(const char *project_id, const char *name, const char *m
     bool viewing = i >= 0 && !display_is_asleep() && !s_settings_active && !s_machines_active && !s_overview_active && !s_notif_open && s_active_idx == i;
     if (!viewing) {
         bool was_asleep = display_is_asleep();
-        notif_push(project_id, i, name, machine, recap);   // record it so the drawer/badge has the entry
+        notif_push(project_id, i, name, machine, recap, false);   // record it so the drawer/badge has the entry
         if (was_asleep) {
             // Woke from an off screen → open the notification list directly. ui_notif_open only opens
             // over the projects carousel, so land there first.
@@ -6385,6 +6480,49 @@ void ui_notify_task_done(const char *project_id, const char *name, const char *m
             notif_badge_apply();
         }
     }
+    display_unlock();
+}
+
+void ui_notif_replace(const cable_notif_t *rows, int count)
+{
+    display_lock();
+    if (count < 0) count = 0;
+    if (count > NOTIF_MAX) count = NOTIF_MAX;
+    memset(s_notif, 0, sizeof(s_notif));
+    for (int k = 0; k < count; k++) {
+        notif_t *r = &s_notif[k];
+        snprintf(r->proj_id, sizeof r->proj_id, "%s", rows[k].agent_id);
+        // The tile's OWN name when it has one: the carousel is built by the time this lands, and a row
+        // naming the agent differently from the tile beside it reads as two different agents.
+        int i = find_proj(rows[k].agent_id);
+        const char *nm = (i >= 0 && s_proj[i].name[0]) ? s_proj[i].name : rows[k].name;
+        snprintf(r->name, sizeof r->name, "%s", nm);
+        snprintf(r->summary, sizeof r->summary, "%s", rows[k].summary);
+        snprintf(r->machine, sizeof r->machine, "%s", rows[k].machine);
+        if (i >= 0 && s_proj[i].machine_id[0]) snprintf(r->machine_id, sizeof r->machine_id, "%s", s_proj[i].machine_id);
+        // NOT the time it was raised — the window sends no clock and this device's ticks mean nothing
+        // to it. "now" is the honest reading of a row whose age this dial never saw.
+        r->ms = lv_tick_get();
+        r->question = rows[k].question;
+        r->unread = true;
+        r->used = true;
+    }
+    notif_badge_apply();
+    if (s_notif_open) notif_rebuild();
+    display_unlock();
+}
+
+void ui_notif_seen(const char *project_id)
+{
+    if (!project_id || !project_id[0]) return;
+    display_lock();
+    // FINISHES ONLY. The window sends this when a harness it had marked comes into view, and looking
+    // at a blocked agent is not answering it — so a question's row stays until `question.close`.
+    notif_remove_matching(project_id, false);
+    notif_badge_apply();
+    // The drawer may be open on the very row that just went. Rebuilt rather than left holding a
+    // widget whose record is gone — notif_rebuild reads s_notif, and it is the only thing that does.
+    if (s_notif_open) notif_rebuild();
     display_unlock();
 }
 
@@ -7300,6 +7438,43 @@ static void q_leave(const char *why)
 // The user backed out. The agent's turn stays waiting; they can answer later or stop it with BOOT.
 static void q_cancel(void) { q_leave("dismissed"); }
 
+// THE QUESTION SCREEN IS NOT A TRAP. It owns the whole face, and ui_focus_project only ever moved the
+// carousel UNDERNEATH it — so somebody who switched tab or agent in the window watched the dial sit on
+// a question they had not answered, with no way out but answering it or the BOOT button.
+//
+// A focus naming ANOTHER agent is the window saying the person is looking elsewhere, so the face
+// follows. Not an answer and not a dismissal: the question keeps its row behind the bell, and that row
+// goes when it is ANSWERED (owner, 2026-09-24) — see ui_question_close.
+//
+// A focus naming the question's OWN agent is left alone, and that is not a rare case: showing a
+// question asks the window to bring that agent forward (the `open` at the end of ui_question_show), and
+// the focus coming back would otherwise close the question a beat after it appeared.
+// Put a question the person walked away from back on the face.
+//
+// `q_leave` only lowers `active` — the shaped questions and their options stay in `s_q` — so an
+// unanswered one can be returned to exactly as it was. False when this dial no longer holds THAT
+// question: a reboot cleared it, or another agent's took the slot.
+static bool q_reopen(const char *project_id)
+{
+    if (!project_id || !project_id[0]) return false;
+    bool ok = false;
+    display_lock();
+    if (s_q.n_q > 0 && strcmp(s_q.project, project_id) == 0) {
+        if (!s_q.active) { s_q.active = true; s_q.idx = 0; q_render(); }
+        lv_screen_load(scr_question);
+        ok = true;
+    }
+    display_unlock();
+    return ok;
+}
+
+static void q_leave_if_other_agent(const char *project_id)
+{
+    if (!s_q.active || !project_id) return;
+    if (strcmp(s_q.project, project_id) == 0) return;
+    q_leave("the window moved on");
+}
+
 void ui_question_close(const char *project_id, const char *request_id)
 {
     display_lock();
@@ -7310,6 +7485,21 @@ void ui_question_close(const char *project_id, const char *request_id)
         && (!request_id || !request_id[0] || strcmp(s_q.request_id, request_id) == 0)) {
         q_leave("answered elsewhere");
     }
+    // THE AGENT'S ROW GOES, whatever kind it is, and whether or not that question was still the one on
+    // the face.
+    //
+    // Answering ENDS THE TURN for these engines — measured, a millisecond apart and the turn first:
+    //
+    //   18:04:58.534 [turn] 395050e8 ended · 65175ms
+    //   18:04:58.535 [question] 395050e8 answered elsewhere · closing
+    //
+    // so the finish lands on top of the question's row and the pill never goes down. A turn that ended
+    // in the same breath as the answer is not something that happened while anybody was away: a close
+    // means somebody just dealt with this agent, and anything unread for it then is the work they were
+    // standing over. The window follows the same rule (see `commander_question_close` there).
+    notif_forget_agent(project_id);
+    notif_badge_apply();
+    if (s_notif_open) notif_rebuild();
     display_unlock();
 }
 
@@ -7325,8 +7515,22 @@ static void clear_removed_project_transients_locked(const char *project_id, bool
         update_stop_btn();
     }
     if (s_q.active && strcmp(s_q.project, project_id) == 0) {
-        memset(&s_q, 0, sizeof(s_q));
+        // GIVE THE FACE BACK, BUT KEEP THE QUESTION.
+        //
+        // "Removed" here is not "deleted". The dial holds ONE TAB, and this runs from the reconcile in
+        // refresh_projects for every agent that is not on the tab the window just pushed — which is
+        // routine, and happens the moment somebody switches tabs. This used to `memset` the whole of
+        // `s_q`, so a question that was merely off-tab for a second became unanswerable and its
+        // notification could no longer be returned to: tapping the row fell through to the tile, which
+        // says "Waiting for you" now but said "Cooking…" then (owner, 2026-09-24).
+        //
+        // The content stays, so q_reopen can put it back; the row behind the bell stays, because the
+        // question is still unanswered. Only the face is handed over.
+        s_q.active = false;
         if (lv_screen_active() == scr_question) lv_screen_load(scr_projects);
+        // SAID OUT LOUD. This was the one way off the question screen that left no line at all, and
+        // from a capture it was indistinguishable from the screen vanishing on its own.
+        ESP_LOGI(TAG, "question set aside — %s left this tab (req=%s)", project_id, s_q.request_id);
     }
 }
 
@@ -7404,6 +7608,16 @@ void ui_question_show(const char *project_id, const char *agent_name, const char
     if (s_q.n_q == 0) { display_unlock(); return; }
     s_q.active = true;
     s_q.idx = 0;
+    // A BLOCKED AGENT IS ALWAYS COUNTED, and stays counted until the question is ANSWERED — not until
+    // somebody looks at it (owner, 2026-09-24). The face is taken over either way; this is the row
+    // behind the bell, so the pill here and the badge in the window say the same number.
+    //
+    // Unconditional, unlike a summary's `quiet`. It was gated on that for a day and the gate never
+    // opened: showing a question asks the window to bring its agent forward, so the agent was on screen
+    // by construction, every question came through quiet, and no row was ever written. Looking away
+    // afterwards then left nothing at all — a question owed and nothing anywhere saying so.
+    notif_push(project_id, find_proj(project_id), agent_name, machine, s_q.q[0].text, true);
+    notif_badge_apply();
     ESP_LOGI(TAG, "question shown (req=%s n=%d multi=%d opts=%d)", s_q.request_id, s_q.n_q, s_q.q[0].multi, s_q.q[0].n_options);
     if (display_is_asleep()) display_wake();
     q_render();
@@ -8190,10 +8404,17 @@ static void tile_changed(lv_event_t *e)
     apply_active_from_col();   // active/settings from the centered ring position
     update_content_window();   // materialize the newly-active tile ± window, free the rest
     rebuild_page_dots();       // move the green sparkle to the newly-centered page
-    // Swiping onto an agent's tile = the user saw it → drop that agent's notification (if any).
+    // Landing on an agent's tile = the user saw it → drop that agent's FINISHED-turn notification.
+    //
+    // NOT ITS QUESTION. A question is owed until it is answered, and arriving at the agent is not
+    // answering it (owner, 2026-09-24) — the same rule the window's sweep follows and the same one
+    // ui_notif_seen follows. This line took any row at all, and because every route back to an agent
+    // ends in a carousel settle it was the thing undoing all of it: focus away and back and the
+    // question was gone from the pill, gone from busy_compose, and the tile said "Cooking…" over a
+    // turn that was standing still waiting for an answer.
     if (!s_settings_active && !s_machines_active && !s_overview_active &&
         s_active_idx >= 0 && s_active_idx < s_proj_count && s_proj[s_active_idx].id[0]) {
-        notif_remove(s_proj[s_active_idx].id);
+        notif_remove_matching(s_proj[s_active_idx].id, false);
     }
     update_stop_btn();    // STOP follows the newly-visible tile's processing state (hidden on settings)
     voice_btn_apply_visibility();

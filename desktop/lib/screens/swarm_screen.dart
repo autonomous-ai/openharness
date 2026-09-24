@@ -266,7 +266,20 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.agentUnread.addListener(_unreadChanged);
     // Coming back to the window puts the tab in front of the person again, and
     // nothing in the app necessarily changes when that happens — so it is told.
-    _lifecycle = AppLifecycleListener(onResume: app.seeWatchedAgents);
+    //
+    // The daemon is told too, on the way out as well as the way back: it decides
+    // from `app_panes` whether a finished turn is already on screen, and that
+    // roster does not change when the window slips behind a browser. Without
+    // the second half the dial went quiet the first time this window lost focus
+    // and stayed quiet until a pane happened to change.
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        app.seeWatchedAgents();
+        app.announceWindowForeground();
+      },
+      onHide: app.announceWindowForeground,
+      onInactive: app.announceWindowForeground,
+    );
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);
