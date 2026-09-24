@@ -71,6 +71,11 @@ export const STARTUP_DIALOGS: ReadonlyArray<{ id: string; match: RegExp; keys: s
   { id: 'codex-model-retire', match: /retires on [^\n]*\n?[^\n]*Switch to|1\. Try new model/, keys: ['2', 'Enter'] },
   // claude: "Do you trust the files in this folder?" — Enter accepts the highlighted "Yes, proceed"
   { id: 'claude-trust', match: /Do you trust the files in this folder/, keys: ['Enter'] },
+  // claude 2.1.281's rewording — "Quick safety check: Is this a project you created or one you
+  // trust?" — and its default moved to **"No, exit"**: the old Enter would now quit the engine.
+  // Down to "Yes, I trust this folder", then Enter. (The run pre-trusts its own folder, so this is
+  // the fallback for when that does not take.)
+  { id: 'claude-trust-v2', match: /Yes, I trust this folder/, keys: ['Down', 'Enter'] },
   // claude: a project .mcp.json must be approved — Enter accepts the highlighted "Use this and all future MCP servers"
   { id: 'claude-mcp-approve', match: /MCP server[s]? (found|configured) in \.mcp\.json|Use this and all future MCP servers|Use this MCP server/, keys: ['Enter'] },
   // claude, on `--dangerously-skip-permissions` (permission mode `full`): a full-screen Bypass
@@ -204,6 +209,20 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
   const start = tmux.now()
   const ref = checkRef(start)
   await tmux.type(pane, `${check.prompt} (${ref})`)
+  // Make sure it landed. A tool that has only just started can drop input while it is still
+  // loading — measured on grid-dev: claude's first question of a run never reached it (its own
+  // transcript has every later question and not that one), so every step after it failed as
+  // "cannot recall" for a conversation that had never begun. The tag is on screen within a second
+  // when the text arrived, in the composer or in the transcript; if it is nowhere, type it again.
+  for (let retry = 0; retry < 2; retry++) {
+    let landed = false
+    for (let waited = 0; waited < 5_000 && !landed; waited += o.pollMs) {
+      await tmux.sleep(o.pollMs)
+      landed = (await tmux.capture(pane, o.tailLines)).includes(ref)
+    }
+    if (landed) break
+    await tmux.type(pane, `${check.prompt} (${ref})`)
+  }
   let tail = before
   const dialogs: string[] = []
   while (tmux.now() - start < o.checkTimeoutMs) {

@@ -321,6 +321,27 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect(pane.typed).toHaveLength(1)
   })
 
+  it('types the question again when a tool that is still loading dropped it', async () => {
+    const logs = fakeLogs()
+    const pane = fakePane((p) => { if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' } return null })
+    // The first paste vanishes, the way claude's first question did on grid-dev; the second lands.
+    const realType = pane.type.bind(pane)
+    let dropped = false
+    pane.type = async (id, text) => { if (!dropped) { dropped = true; pane.typed.push(text); return } await realType(id, text) }
+    const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 100, readLog: logs.readLog })
+    expect(out.status).toBe('ok')
+    expect(pane.typed).toHaveLength(2) // typed, not seen, typed again
+    expect(pane.typed[0]).toBe(pane.typed[1]) // the same question with the same tag
+  })
+
+  it('answers claude 2.1.281\'s reworded folder trust by moving off its "No, exit" default', async () => {
+    const pane = fakePane(() => null)
+    await pane.type('%1', 'Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder')
+    pane.typed.length = 0
+    expect(await dismissStartupDialogs(pane, '%1', { settleMs: 1, pollMs: 1 })).toEqual(['claude-trust-v2'])
+    expect(pane.typed).toEqual(['<Down>', '<Enter>'])
+  })
+
   it('marks a step stuck when the pane never shows the marker, and stops the leg there', async () => {
     const logs = fakeLogs()
     const pane = fakePane((p) => {
