@@ -14,6 +14,49 @@ import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  test('Open Harness picks up changed branch metadata without fetching Git', () {
+    final app = createApp();
+    var gitReads = 0;
+    app.gitProjectReaderForTest = (_, _) async {
+      gitReads++;
+      return {'isGit': false};
+    };
+    final machine = app.machineStates['m']!;
+    machine.agents = const [
+      Agent(
+        id: 'work',
+        name: 'Review work',
+        engine: 'codex',
+        terminalAvailable: true,
+        project: AgentProject(name: 'app', cwd: '/work/app', branch: 'main'),
+      ),
+    ];
+    final search = SwarmSearchController(app, []);
+    addTearDown(app.dispose);
+    addTearDown(search.dispose);
+    search.setQuery('toolbar');
+    expect(search.rows.where((row) => row.agentId == 'work'), isEmpty);
+    machine.agents = const [
+      Agent(
+        id: 'work',
+        name: 'Review work',
+        engine: 'codex',
+        terminalAvailable: true,
+        project: AgentProject(
+          name: 'app',
+          cwd: '/work/app',
+          branch: 'feat/toolbar-onboarding',
+        ),
+      ),
+    ];
+    // Simulate the same inventory notification delivered by the remote machine.
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    app.notifyListeners();
+    expect(search.query, 'toolbar');
+    expect(search.rows.where((row) => row.agentId == 'work'), hasLength(1));
+    expect(gitReads, 0);
+  });
+
   test(
     'single-harness tabs collapse by identity and keep their names searchable',
     () async {

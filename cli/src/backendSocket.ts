@@ -2435,7 +2435,7 @@ export class BackendSocket {
 
         case 'git_project_info': {
           const path = typeof payload.path === 'string' ? payload.path : ''
-          void readGitProject(path)
+          void readGitProject(path, { refresh: payload.refresh === true })
             .then(result => reply(type, requestId, result))
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return

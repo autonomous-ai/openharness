@@ -452,6 +452,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     // Candidate navigation and confirmation belong to the input method. Keep
     // these keys out of both the picker and ancestor focus-traversal shortcuts.
     if (_isComposing()) return KeyEventResult.skipRemainingHandlers;
+    if (event.logicalKey == LogicalKeyboardKey.keyR &&
+        (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed) &&
+        box.canRefreshChoices) {
+      if (event is KeyDownEvent) box.refreshChoices();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.keyV &&
         (HardwareKeyboard.instance.isMetaPressed ||
             HardwareKeyboard.instance.isControlPressed)) {
@@ -742,6 +749,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             ),
           if (_hasChoices) ...[
             _searchBar(),
+            if (box.choicesStatus case final status?)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(status, style: _ink(kBoxFaint)),
+                ),
+              ),
             const SizedBox(height: 24),
             Flexible(child: SingleChildScrollView(child: _matchPane())),
           ],
@@ -778,7 +793,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (shown.isEmpty && !_prompts.contains(box.field))
+        if (shown.isEmpty &&
+            !_prompts.contains(box.field) &&
+            !box.refreshingChoices)
           Text('No matches', style: _ink(kBoxFaint)),
         for (var i = 0; i < shown.length; i++) ...[
           _matchRow(shown[i]),
@@ -864,6 +881,17 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           ),
+          if (box.canRefreshChoices)
+            IconButton(
+              key: const ValueKey('new-harness-refresh'),
+              tooltip: 'Refresh results',
+              onPressed: box.refreshingChoices ? null : box.refreshChoices,
+              icon: Icon(
+                LucideIcons.refreshCw300,
+                size: terminalFontStore.size,
+                color: kBoxFaint,
+              ),
+            ),
         ],
       ),
     );
