@@ -39,6 +39,7 @@ import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
 import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
+import 'swarm_menu_bus.dart';
 import '../state/pane_arrangement.dart';
 import '../terminal/terminal_viewport.dart';
 import '../terminal/terminal_text.dart';
@@ -148,13 +149,25 @@ TextStyle get _boxCaption =>
     grid.AppType.monoLabel(color: kBoxFaint, fontWeight: FontWeight.w400);
 
 class _SwarmScreenState extends State<SwarmScreen> {
-  static const _channel = MethodChannel('harness/swarm_tabs');
+  /// The title bar's seam: the `harness/swarm_tabs` channel on macOS — and
+  /// in anything forced onto the native-tabs path, so a test can still mock
+  /// the channel — and the Linux menu bar's bus here. One set of payloads
+  /// out, one switch of actions back.
+  late final SwarmMenuBus _menuBus = widget.nativeTabs == true
+      ? SwarmMenuBus.forChannel()
+      : swarmMenuBus;
 
   /// The tab the middle button went down on, so an up that slid onto another
   /// tab closes nothing. Null between presses.
   String? _middleDownTab;
   late final bool _native =
       widget.nativeTabs ?? (Platform.isMacOS && !kUnderTest);
+
+  /// A menu bar is listening: AppKit's on macOS, the in-window bar on Linux.
+  /// Not the same as [_native], which is whether AppKit also draws the tab
+  /// strip and the title-bar buttons. On Linux Flutter still draws those, so
+  /// the strip stays and only the menu state and actions cross the bus.
+  late final bool _menuHost = _native || (Platform.isLinux && !kUnderTest);
   late final SwarmProjectStore _projects =
       widget.projectStore ??
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);
@@ -352,8 +365,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _modelsMenu!.start();
       });
     }
-    if (_native) {
-      _channel.setMethodCallHandler(_onNative);
+    if (_menuHost) {
+      _menuBus.setHandler(_onNative);
       app.addListener(_syncNative);
       _syncNative();
     }
@@ -386,7 +399,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         }
       });
     }
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
   }
 
   @override
@@ -441,13 +454,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
     app.systemNotifications.onTap = null;
-    if (_native) {
-      unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
+    if (_menuHost) {
+      unawaited(_menuBus.send('machinesState', {'machines': []}));
       app.removeListener(_syncNative);
-      _channel.setMethodCallHandler(null);
-      unawaited(
-        _channel.invokeMethod<void>('update', {'tabs': [], 'enabled': false}),
-      );
+      _menuBus.setHandler(null);
+      unawaited(_menuBus.send('update', {'tabs': [], 'enabled': false}));
     }
     if (widget.projectStore == null) _projects.dispose();
     super.dispose();
@@ -456,14 +467,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
   AppKeymap? _sentKeymap;
   int? _sentKeymapVersion;
   void _syncKeymap() {
-    if (!_native ||
+    if (!_menuHost ||
         (_sentKeymap == _keymap && _sentKeymapVersion == _keymap.version)) {
       return;
     }
     _sentKeymap = _keymap;
     _sentKeymapVersion = _keymap.version;
     unawaited(
-      _channel.invokeMethod<void>(
+      _menuBus.send(
         'keymapState',
         nativeKeymapSnapshot(
           _keymap,
@@ -482,16 +493,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _syncKeyContext() {
-    if (!_native) return;
+    if (!_menuHost) return;
     final focus = FocusManager.instance.primaryFocus?.context;
     final kind = focus == null
         ? KeymapContext.workspace
         : KeymapRegion.of(focus)?.contextKind ?? KeymapContext.workspace;
     if (_nativeKeyContext == kind.name) return;
     _nativeKeyContext = kind.name;
-    unawaited(
-      _channel.invokeMethod<void>('keymapContext', {'context': kind.name}),
-    );
+    unawaited(_menuBus.send('keymapContext', {'context': kind.name}));
   }
 
   bool get _modelsVisible =>
@@ -711,7 +720,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _machinesPanel?.rebuild();
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
   }
 
@@ -751,7 +760,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _toolbarNoticesChanged() {
     if (!mounted) return;
     _modelsOverlay?.markNeedsBuild();
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
   }
 
@@ -764,7 +773,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // `_syncNative` — which is subscribed to the APP, not to this notifier. A
     // mark that only called setState redrew a tab strip the native window does
     // not use, and the badge a person can actually see never moved.
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
   }
 
   void _restoreEmptyFocus() {
@@ -795,7 +804,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _statusPrefsChanged() {
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     if (mounted) setState(() {});
   }
 
@@ -895,7 +904,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
     _searchOverlay?.markNeedsBuild();
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
   }
 
   /// The agents a tab holds, once each: a harness's viewer belongs to the agent beside it, so an
@@ -1098,7 +1107,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final encoded = jsonEncode(payload);
     if (encoded == _nativeState) return;
     _nativeState = encoded;
-    unawaited(_channel.invokeMethod<void>('update', payload));
+    unawaited(_menuBus.send('update', payload));
   }
 
   void _syncMachines() {
@@ -1141,7 +1150,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (listEquals(presentation, _machinesPresentation)) return;
     _machinesPresentation = presentation;
     unawaited(
-      _channel.invokeMethod<void>('machinesState', {
+      _menuBus.send('machinesState', {
         'machines': [
           for (final machine in machines)
             {
@@ -1563,7 +1572,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // The route must not restore an old terminal while the destination changes
     // behind a dialog. Return input explicitly when that dialog finishes.
     _canvasFocus.descendantsAreFocusable = false;
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     try {
       await action();
     } finally {
@@ -1575,7 +1584,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
             app.focusedPane?.session?.focusInput() != true) {
           _shellFocus.requestFocus();
         }
-        if (_native) _syncNative();
+        if (_menuHost) _syncNative();
       }
     }
     if (restoreEntry) await _ensureEmptyEntry();
@@ -1747,13 +1756,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
     _machinesPanel = panel;
     _syncToolbarNotices();
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
     final destination = await panel.closed;
     if (!mounted || !identical(_machinesPanel, panel)) return;
     _machinesPanel = null;
     _syncToolbarNotices();
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
     // Let the removed panel release its focus before opening work.
     await WidgetsBinding.instance.endOfFrame;
@@ -2535,7 +2544,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _modelManagerChanged() {
     _syncToolbarNotices();
-    if (_native && mounted) _syncNative();
+    if (_menuHost && mounted) _syncNative();
   }
 
   Future<void> _openModelManager() async {
@@ -2631,7 +2640,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterModels = registerTransientMenu(
       () => _closeModelsControls(restoreFocus: false),
     );
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
   }
 
@@ -2645,7 +2654,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _syncToolbarNotices();
     app.modelManager.setPanelVisible(false);
     if (!mounted) return;
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
     if (restoreFocus) {
       _shellFocus.requestFocus();
@@ -2821,7 +2830,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterHarnesses = registerTransientMenu(
       () => _closeHarnessControls(restoreFocus: false),
     );
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
   }
 
@@ -2833,7 +2842,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _harnessesOverlay?.dispose();
     _harnessesOverlay = null;
     if (!mounted) return;
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     setState(() {});
     if (restoreFocus) {
       _shellFocus.requestFocus();
@@ -3049,7 +3058,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       if (search.isCommandMode) _learning.commandSearchOpened();
       _searchOverlay?.markNeedsBuild();
       _syncToolbarNotices();
-      if (_native) _syncNative();
+      if (_menuHost) _syncNative();
     }
   }
 
@@ -3073,7 +3082,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _searchHeaderState = null;
     _searchText.clear();
     _syncToolbarNotices();
-    if (_native && mounted) _syncNative();
+    if (_menuHost && mounted) _syncNative();
     _searchFocus.unfocus();
     final previous = _searchReturnFocus;
     _searchReturnFocus = null;
@@ -3575,7 +3584,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch();
     _spokenPaletteOpen = true;
     _closeCommandBar(restoreFocus: false);
-    if (_native) _syncNative();
+    if (_menuHost) _syncNative();
     try {
       await revealWindow();
       if (!mounted) {
@@ -3585,7 +3594,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       await showTaskPalette(context, app, spoken: spoken);
     } finally {
       _spokenPaletteOpen = false;
-      if (_native && mounted) _syncNative();
+      if (_menuHost && mounted) _syncNative();
       spoken.cancelled();
     }
   }

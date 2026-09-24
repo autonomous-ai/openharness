@@ -1,3 +1,5 @@
+import 'core/app_version.dart';
+
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
@@ -21,6 +23,7 @@ import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
 import 'widgets/flash_firmware_dialog.dart';
+import 'widgets/linux_menu_bar.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
@@ -192,8 +195,17 @@ class _RootShellState extends ConsumerState<RootShell>
   }
 
   Future<void> _onAppMenu(MethodCall call) async {
+    await runAppMenuAction(call.method);
+  }
+
+  /// Runs one app-menu action.
+  ///
+  /// The macOS native menu reports over `harness/app_menu`; the Linux menu bar
+  /// ([LinuxMenuBar]) fires the same strings directly, so one switch serves
+  /// both platforms.
+  Future<void> runAppMenuAction(String action) async {
     if (!mounted) return;
-    switch (call.method) {
+    switch (action) {
       case 'checkForUpdates':
         final app = ref.read(appStateProvider);
         await _menuDialog(() => checkForUpdatesAndShowResult(context, app));
@@ -210,6 +222,18 @@ class _RootShellState extends ConsumerState<RootShell>
         await _menuDialog(() => showShortcutsSheet(context));
       case 'keyboardPractice':
         await _menuDialog(() => showKeyboardPractice(context));
+      case 'showAbout':
+        // macOS shows AppKit's standard About panel; the Linux bar's row lands
+        // here, with the version the Linux release stamps beside the binary.
+        final version = await runningAppVersion();
+        if (!mounted) return;
+        await _menuDialog(
+          () async => showAboutDialog(
+            context: context,
+            applicationName: 'Harness',
+            applicationVersion: version,
+          ),
+        );
       case 'increaseTerminalFontSize':
         await terminalFontStore.increaseSize();
       case 'decreaseTerminalFontSize':
@@ -280,6 +304,9 @@ class _RootShellState extends ConsumerState<RootShell>
         // must stay reachable.
         return Column(
           children: [
+            // The app's commands as a menu strip (Linux only; macOS carries
+            // them in its native menu bar, and this renders nothing there).
+            LinuxMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 app.status != AppStatus.bootstrapping &&
                 app.status != AppStatus.checkingEnvironment &&
