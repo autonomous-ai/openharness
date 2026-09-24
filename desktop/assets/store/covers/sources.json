@@ -10,7 +10,7 @@
     "harness": "autonomous/blender"
   },
   {
-    "asset": "kicad.png",
+    "asset": "kicad.jpg",
     "credit": "KiCad contributors",
     "license": "CC BY 3.0",
     "licenseFile": "LICENSE-kicad-CC-BY-3.0",
@@ -30,7 +30,7 @@
     "harness": "autonomous/freecad"
   },
   {
-    "asset": "mujoco.png",
+    "asset": "mujoco.jpg",
     "credit": "MuJoCo Menagerie · Unitree Robotics",
     "license": "BSD 3-Clause",
     "licenseFile": "LICENSE-mujoco-unitree-BSD-3-Clause",
@@ -40,7 +40,7 @@
     "harness": "autonomous/mujoco"
   },
   {
-    "asset": "marimo.png",
+    "asset": "marimo.jpg",
     "credit": "marimo contributors",
     "license": "Apache 2.0",
     "licenseFile": "LICENSE-marimo-Apache-2.0",
@@ -64,7 +64,7 @@
     "harness": "autonomous/creative-direction"
   },
   {
-    "asset": "generative-art.png",
+    "asset": "generative-art.jpg",
     "source": "store/showcase/generative-art/canopy.png",
     "credit": "OpenHarness example",
     "sha256": "a95b23319b1b40156fc0ba2466bac02a8882dca2166875cbb30fdf89350a6c9c",
@@ -78,7 +78,7 @@
     "harness": "autonomous/voxel-worlds"
   },
   {
-    "asset": "music-studio.png",
+    "asset": "music-studio.jpg",
     "source": "store/showcase/music-studio/keepsake.png",
     "credit": "OpenHarness example",
     "sha256": "e5deb68411dfe552283cf3ef3ea06745de56e4f6d55edcde9e730f9f8bfbfefa",
@@ -190,7 +190,7 @@
     "harness": "autonomous/rdkit"
   },
   {
-    "asset": "ableton-ai.png",
+    "asset": "ableton-ai.jpg",
     "source": "https://www.ableton.com/en/press/",
     "download": "https://cdn-resources.ableton.com/resources/press/press-releases/ableton-live12-release__presskit-en.zip",
     "credit": "© Ableton AG",
@@ -201,7 +201,7 @@
     "harness": "autonomous/ableton-ai"
   },
   {
-    "asset": "bonsai-mcp.png",
+    "asset": "bonsai-mcp.jpg",
     "source": "https://docs.bonsaibim.org/quickstart/explore_model.html",
     "download": "https://raw.githubusercontent.com/IfcOpenShell/IfcOpenShell/v0.8.0/src/bonsai/docs/quickstart/images/example-project.png",
     "credit": "IfcOpenShell contributors",
@@ -211,7 +211,7 @@
     "harness": "autonomous/bonsai-mcp"
   },
   {
-    "asset": "comfy-mcp.png",
+    "asset": "comfy-mcp.jpg",
     "source": "https://comfyanonymous.github.io/ComfyUI_examples/area_composition/",
     "download": "https://raw.githubusercontent.com/comfyanonymous/ComfyUI_examples/master/area_composition/morning_day_evening_night.png",
     "credit": "ComfyUI examples contributors",
@@ -221,7 +221,7 @@
     "harness": "autonomous/comfy-mcp"
   },
   {
-    "asset": "dimos.png",
+    "asset": "dimos.jpg",
     "source": "https://github.com/dimensionalOS/dimos",
     "download": "https://media.githubusercontent.com/media/dimensionalOS/dimos/main/assets/readme/navigation.png",
     "credit": "Dimensional Inc.",
@@ -241,7 +241,7 @@
     "harness": "autonomous/simskill"
   },
   {
-    "asset": "text-to-cad.png",
+    "asset": "text-to-cad.jpg",
     "source": "https://github.com/earthtojake/text-to-cad",
     "download": "https://raw.githubusercontent.com/earthtojake/text-to-cad/main/apps/docs/public/social-preview-gear.png",
     "credit": "Jake Adair · text-to-cad contributors",
@@ -251,7 +251,7 @@
     "harness": "autonomous/text-to-cad"
   },
   {
-    "asset": "home-assistant.png",
+    "asset": "home-assistant.jpg",
     "source": "https://demo.home-assistant.io/",
     "download": "https://demo.home-assistant.io/",
     "credit": "Home Assistant contributors",
@@ -272,21 +272,21 @@
     "harness": "autonomous/openscad"
   },
   {
-    "asset": "autonomous-circuit.png",
+    "asset": "autonomous-circuit.jpg",
     "source": "desktop/assets/store/copper-board.png",
     "credit": "OpenHarness example",
     "sha256": "675e6ec025c659a589b814a56ed39a389f6edcad753fe3a59b03e860d08ddb83",
     "harness": "autonomous/autonomous-circuit"
   },
   {
-    "asset": "autonomous-grid.png",
+    "asset": "autonomous-grid.jpg",
     "source": "store/agents/autonomous-grid/screenshots/grid-topology.png",
     "credit": "OpenHarness example",
     "sha256": "6e36d862360ef66fa097dee09283bf813b9da8683e85503695a8c0bdf3eba9d0",
     "harness": "autonomous/autonomous-grid"
   },
   {
-    "asset": "autoresearch-mlx.png",
+    "asset": "autoresearch-mlx.jpg",
     "source": "store/agents/autoresearch-mlx/screenshots/studio.png",
     "credit": "OpenHarness example",
     "sha256": "b3dc6660952a2169d68886e0e3c3fff964a878b9af0a5cfeb469c835f57c6ae1",
@@ -301,7 +301,7 @@
     "harness": "autonomous/circuitjs"
   },
   {
-    "asset": "foam-agent.png",
+    "asset": "foam-agent.jpg",
     "source": "store/agents/foam-agent/screenshots/studio.png",
     "credit": "OpenHarness example",
     "sha256": "5bb928b7b4c7dca0e9ec47c84d5b39c042f0fde3bf81ba44b99070584517c691",
@@ -317,7 +317,7 @@
     "harness": "autonomous/godogen"
   },
   {
-    "asset": "juce-agent-toolkit.png",
+    "asset": "juce-agent-toolkit.jpg",
     "source": "store/agents/juce-agent-toolkit/screenshots/studio.png",
     "credit": "OpenHarness example",
     "sha256": "c89979f4ca19e7e53d27dc5f834739be2572050b9d397bf3c55ee1cc7d1cf4ba",
@@ -325,7 +325,7 @@
     "harness": "autonomous/juce-agent-toolkit"
   },
   {
-    "asset": "harness-monitor.png",
+    "asset": "harness-monitor.jpg",
     "source": "desktop/tool/store_artwork/capture-covers.mjs harness-monitor",
     "credit": "OpenHarness example",
     "sha256": "613e9a46e2150df2767faa0e8d185c858d39cf0fb30c3b5ba205eba6a14f17f5",
@@ -333,7 +333,7 @@
     "harness": "autonomous/harness-monitor"
   },
   {
-    "asset": "machine-monitor.png",
+    "asset": "machine-monitor.jpg",
     "source": "desktop/tool/store_artwork/capture-covers.mjs machine-monitor",
     "credit": "OpenHarness example",
     "sha256": "2280bb4665f289059cebae89340576a0521a61140d3d97e7c5b717a78d07694e",

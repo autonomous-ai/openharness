@@ -240,7 +240,7 @@ void main() {
     // A pane-level notice (offline, unlinked) already explains itself.
     await pump(
       tester,
-      notice: (
+      notice: terminalNotice(
         label: 'Offline',
         icon: Icons.cloud_off,
         detail: 'Test host is offline.',
@@ -631,7 +631,7 @@ void main() {
     app.stateOf('m')!.nodeOnline = false;
     await pump(
       tester,
-      notice: (
+      notice: terminalNotice(
         label: 'Offline',
         icon: Icons.cloud_off,
         detail: 'Test host is offline.',

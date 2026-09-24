@@ -214,6 +214,15 @@ class _SwarmScreenState extends State<SwarmScreen>
   (String, bool)? _lastWorkspace;
   bool _spokenPaletteOpen = false;
   bool _dialogOpen = false;
+
+  /// A folder chooser opened from the new-harness box is still waiting.
+  ///
+  /// The box keeps its keyboard focus while the chooser is up, so Enter on the
+  /// Browse… row — or a second click — arrives here again. AppKit answers a
+  /// second `beginSheetModal` by QUEUEING it behind the first, which looks
+  /// exactly like a picker that refused to open.
+  bool _pickingFolder = false;
+  bool _newHarnessHidden = false;
   bool _routeIsCurrent = true;
   String? _linkDialogMachineId;
   String? _nativeState;
@@ -252,6 +261,9 @@ class _SwarmScreenState extends State<SwarmScreen>
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
+    // Coming back to the window puts the tab in front of the person again, and
+    // nothing in the app necessarily changes when that happens — so it is told.
+    _lifecycle = AppLifecycleListener(onResume: app.seeWatchedAgents);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);
@@ -351,6 +363,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
     app.agentUnread.removeListener(_unreadChanged);
+    _lifecycle?.dispose();
     if (widget.learning == null) _learning.dispose();
     FocusManager.instance.removeListener(_restoreEmptyFocus);
     FocusManager.instance.removeListener(_syncKeyContext);
@@ -669,6 +682,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (_native) _syncNative();
     setState(() {});
   }
+
+  AppLifecycleListener? _lifecycle;
 
   void _unreadChanged() {
     if (!mounted) return;
@@ -1835,59 +1850,65 @@ class _SwarmScreenState extends State<SwarmScreen>
       },
     );
     _newHarnessOverlay = OverlayEntry(
-      builder: (context) => KeymapProvider(
-        keymap: _keymap,
-        child: ListenableBuilder(
-          listenable: box,
-          builder: (context, child) => LayoutBuilder(
-            builder: (context, constraints) {
-              final setupScale = terminalTextScaleOf(context).clamp(1.0, 1.25);
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: BlockSemantics(
-                      child: GestureDetector(
-                        key: const ValueKey('new-harness-dismiss'),
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          if (box.requestDismiss()) {
-                            final target = box.swarmId ?? app.activeSwarmId;
-                            _closeNewHarness();
-                            app.cancelSwarmDraft(target);
-                          }
-                        },
-                        // The popup is the terminal's own colour, so the
-                        // screen behind it is dimmed rather than competed
-                        // with — that, and the light shadow, are what carry
-                        // the separation a different fill used to.
-                        child: ColoredBox(
-                          color: Colors.black.withValues(alpha: .94),
+      // Hidden, not removed, while a dialog ROUTE is up — see
+      // [_withNewHarnessHidden]. The form keeps its State and its draft.
+      builder: (context) => Offstage(
+        offstage: _newHarnessHidden,
+        child: KeymapProvider(
+          keymap: _keymap,
+          child: ListenableBuilder(
+            listenable: box,
+            builder: (context, child) => LayoutBuilder(
+              builder: (context, constraints) {
+                final setupScale = terminalTextScaleOf(context)
+                    .clamp(1.0, 1.25);
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: GestureDetector(
+                          key: const ValueKey('new-harness-dismiss'),
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            if (box.requestDismiss()) {
+                              final target = box.swarmId ?? app.activeSwarmId;
+                              _closeNewHarness();
+                              app.cancelSwarmDraft(target);
+                            }
+                          },
+                          // The popup is the terminal's own colour, so the
+                          // screen behind it is dimmed rather than competed
+                          // with — that, and the light shadow, are what carry
+                          // the separation a different fill used to.
+                          child: ColoredBox(
+                            color: Colors.black.withValues(alpha: .94),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Positioned.fill(
-                    top: _native ? 0 : _tabBarHeight,
-                    child: Align(
-                      alignment: const Alignment(0, -0.12),
-                      // Sized for the setup fields rather than the session
-                      // catalog, with some extra room for larger terminal text.
-                      child: SizedBox(
-                        width: math.min(
-                          960 * setupScale,
-                          constraints.maxWidth - 48,
+                    Positioned.fill(
+                      top: _native ? 0 : _tabBarHeight,
+                      child: Align(
+                        alignment: const Alignment(0, -0.12),
+                        // Sized for the setup fields rather than the session
+                        // catalog, with some extra room for larger terminal text.
+                        child: SizedBox(
+                          width: math.min(
+                            960 * setupScale,
+                            constraints.maxWidth - 48,
+                          ),
+                          height: math.min(
+                            480 * setupScale,
+                            constraints.maxHeight - 88,
+                          ),
+                          child: content,
                         ),
-                        height: math.min(
-                          480 * setupScale,
-                          constraints.maxHeight - 88,
-                        ),
-                        child: content,
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -1916,22 +1937,61 @@ class _SwarmScreenState extends State<SwarmScreen>
     FocusManager.instance.applyFocusChangesIfNeeded();
   }
 
+  /// Runs [show] — a dialog ROUTE — with the new-harness box out of the way.
+  ///
+  /// The box is an [OverlayEntry] this screen inserts itself, so it sits above
+  /// every route pushed AFTERWARDS: the navigator inserts a new route directly
+  /// above the previous ROUTE's entries, which is still below ours. The remote
+  /// folder browser is such a route, and it opened underneath the box — nothing
+  /// appeared until the box was dismissed, and then the chooser was sitting
+  /// there. The chooser on this computer is an AppKit sheet in its own window
+  /// and needs none of this.
+  ///
+  /// Hidden rather than removed: re-inserting the entry would build a second
+  /// [NewHarnessForm] and lose the row, the query and the focus the person left
+  /// behind.
+  Future<T?> _withNewHarnessHidden<T>(Future<T?> Function() show) async {
+    final entry = _newHarnessOverlay;
+    if (entry == null) return show();
+    _newHarnessHidden = true;
+    entry.markNeedsBuild();
+    try {
+      return await show();
+    } finally {
+      _newHarnessHidden = false;
+      // The box may have been closed under the dialog; the flag is reset
+      // either way so the next one does not open invisible.
+      _newHarnessOverlay?.markNeedsBuild();
+    }
+  }
+
   /// The Browse… row: the system's folder chooser on this computer, the
   /// folder browser on another. The box stays open behind it and takes the
   /// answer when it comes back.
   Future<void> _browseForNewHarness(NewHarnessController box) async {
+    if (_pickingFolder) return;
     final previousFocus = FocusManager.instance.primaryFocus;
     final machineId = box.machineId;
     final machine = app.stateOf(machineId);
-    final path = machine?.isLocalMachine == true
-        ? await getDirectoryPath(initialDirectory: box.project.folder)
-        : await showRemoteFolderPicker(
-            context,
-            notifier: app,
-            machineId: machineId,
-            initialPath: box.project.folder,
-            terminal: true,
-          );
+    _pickingFolder = true;
+    final String? path;
+    try {
+      path = machine?.isLocalMachine == true
+          ? await whileNativePicker(
+              () => getDirectoryPath(initialDirectory: box.project.folder),
+            )
+          : await _withNewHarnessHidden(
+              () => showRemoteFolderPicker(
+                context,
+                notifier: app,
+                machineId: machineId,
+                initialPath: box.project.folder,
+                terminal: true,
+              ),
+            );
+    } finally {
+      _pickingFolder = false;
+    }
     if (mounted && identical(_newHarness, box) && box.machineId == machineId) {
       if (path != null) box.setFolder(path);
       if (previousFocus?.context?.mounted == true &&
@@ -1942,23 +2002,33 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   Future<void> _linkProfileForNewHarness(NewHarnessController box) async {
-    if (box.locked || !box.supportsProfiles) return;
+    if (box.locked || !box.supportsProfiles || _pickingFolder) return;
     final previousFocus = FocusManager.instance.primaryFocus;
     final machineId = box.machineId;
     final engine = box.engine;
     final initialPath = box.draft.profile?.path;
     final machine = app.stateOf(machineId);
-    final path = machine?.isLocalMachine == true
-        ? await getDirectoryPath(
-            initialDirectory: initialPath,
-            confirmButtonText: 'Link profile',
-          )
-        : await showRemoteFolderPicker(
-            context,
-            notifier: app,
-            machineId: machineId,
-            initialPath: initialPath,
-          );
+    _pickingFolder = true;
+    final String? path;
+    try {
+      path = machine?.isLocalMachine == true
+          ? await whileNativePicker(
+              () => getDirectoryPath(
+                initialDirectory: initialPath,
+                confirmButtonText: 'Link profile',
+              ),
+            )
+          : await _withNewHarnessHidden(
+              () => showRemoteFolderPicker(
+                context,
+                notifier: app,
+                machineId: machineId,
+                initialPath: initialPath,
+              ),
+            );
+    } finally {
+      _pickingFolder = false;
+    }
     if (!mounted ||
         !identical(_newHarness, box) ||
         box.machineId != machineId ||
@@ -2973,7 +3043,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       report: (voiceId, state, agentId) =>
           app.reportVoiceRoute(request.machineId, voiceId, state, agentId),
     );
-    if (_spokenPaletteOpen || _dialogOpen || !mounted) {
+    // A native chooser is modal to this window, so the palette would open
+    // behind it and take neither a key nor a click. Reporting the task back as
+    // cancelled is the honest answer — the dial drops its sending overlay
+    // instead of leaving the words in a box nobody can reach.
+    if (_spokenPaletteOpen || _dialogOpen || nativePickerOpen || !mounted) {
       spoken.cancelled();
       return;
     }

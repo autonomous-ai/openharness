@@ -236,7 +236,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
               fit: StackFit.expand,
               children: [
                 Image.asset(
-                  'assets/harness_store_card.png',
+                  'assets/harness_store_card.jpg',
                   fit: BoxFit.cover,
                   excludeFromSemantics: true,
                 ),
@@ -289,7 +289,7 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
               fit: StackFit.expand,
               children: [
                 Image.asset(
-                  'assets/harness_device_studio.png',
+                  'assets/harness_device_studio.jpg',
                   fit: BoxFit.cover,
                   excludeFromSemantics: true,
                 ),

@@ -362,6 +362,12 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
         child: AlertDialog(
           title: const Text('Choose a folder'),
           scrollable: true,
+          // Material's 20 here left MORE air between the title and the
+          // machine line below it (16) than between that line and the next
+          // section (12), so the one line that belongs to the title floated
+          // between the two blocks instead of sitting under it. 10 groups it
+          // with its title and the section below starts a clear 16 later.
+          contentPadding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
           content: SizedBox(
             width: 520,
             child: Column(
@@ -372,11 +378,14 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
                   'On ${machine ?? 'the remote machine'}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 if (widget.terminal)
                   Text('Folder path', style: terminalTextStyle())
                 else
                   const FieldLabel('Folder path'),
+                // The label was flush against its field, while the Folders
+                // header gets ~8 from the icon buttons beside it centring.
+                const SizedBox(height: 6),
                 Focus(
                   onKeyEvent: (node, event) {
                     if (event is KeyDownEvent &&

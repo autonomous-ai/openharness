@@ -1033,7 +1033,19 @@ class AppNotifier extends ChangeNotifier {
     if (attachPending) {
       for (final machine in machineStates.values) {
         // ⌘] / a tab clicked: a person is arriving at these tiles.
-        _attachPendingPanes(machine, retryExisting: false, intent: AttachIntent.person);
+        _attachPendingPanes(
+          machine,
+          retryExisting: false,
+          intent: AttachIntent.person,
+        );
+      }
+      // A tile that was only WATCHING while this tab sat behind: arriving is
+      // asking for its terminal, and the sweep above cannot do it — a watcher
+      // is a live stream, so `_paneNeedsAttach` leaves it alone on purpose.
+      for (final pane in panes) {
+        if (pane.session?.watching != true) continue;
+        if (!_canAttachPane(pane)) continue;
+        unawaited(_reattachPane(pane, intent: AttachIntent.person));
       }
     }
     notifyListeners();
@@ -1657,6 +1669,10 @@ class AppNotifier extends ChangeNotifier {
     // before the colours the panes actually use have moved.
     grid.AppTheme.palette.addListener(_announceTerminalThemeEverywhere);
     terminalThemeStore.addListener(_announceTerminalThemeEverywhere);
+    // The active tab is set from a dozen places — a tab click, a number key,
+    // closing a tab, a restored layout, a reveal. Listening here catches all of
+    // them, and a clear that finds nothing to clear notifies nobody.
+    addListener(seeWatchedAgents);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -6177,46 +6193,54 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Put one agent's news on screen, named the way the window names it.
-  /// The agent the person is looking at RIGHT NOW, or null.
+  /// Every harness the person can see RIGHT NOW: each one with a pane on the tab
+  /// in front of them, while the window itself is in front.
   ///
-  /// Both halves matter. The pane has to be the focused one, and the window has
-  /// to be the front one — a pane keeps its focus while the app sits behind a
-  /// browser, and treating that as "being watched" would swallow exactly the
-  /// news this feature exists for.
+  /// The TAB, not the focused pane. A tab of three harnesses is three terminals
+  /// on screen at once, and the one holding the cursor is not the only one being
+  /// watched — a turn finishing in the pane beside it is visible the moment it
+  /// happens. The harnesses on other tabs are the ones nobody can see, and those
+  /// are what a notification is for.
   ///
-  /// A seam, because the alternative is not testable: reaching it through real
-  /// panes means `focusPane`, which announces the focus to the machine, which
-  /// dials it — and a test without a live connection hangs rather than fails.
-  late ({String machineId, String agentId})? Function() watchedAgent =
-      _watchedFromFocus;
+  /// The window has to be in front as well. Every pane keeps its place on the
+  /// tab while the app sits behind a browser, and treating that as "being
+  /// watched" would swallow exactly the news this feature exists for.
+  ///
+  /// A seam, because reaching it through real panes means `focusPane`, which
+  /// announces the focus to the machine, which dials it — and a test with no
+  /// live connection hangs rather than fails.
+  late Iterable<({String machineId, String agentId})> Function()
+  watchedAgents = _visibleOnTab;
 
   /// The real answer, reachable from a test without going through `focusPane`.
   @visibleForTesting
-  ({String machineId, String agentId})? watchedAgentFromFocusForTest() =>
-      _watchedFromFocus();
+  Iterable<({String machineId, String agentId})> visibleOnTabForTest() =>
+      _visibleOnTab();
 
-  ({String machineId, String agentId})? _watchedFromFocus() {
-    if (lifecycle() != AppLifecycleState.resumed) return null;
-    final pane = focusedPane;
-    final agentId = pane?.agentId;
-    if (pane == null || agentId == null) return null;
-    return (machineId: pane.machineId, agentId: agentId);
+  Iterable<({String machineId, String agentId})> _visibleOnTab() {
+    if (lifecycle() != AppLifecycleState.resumed) return const [];
+    return [
+      for (final pane in activeSwarm.panes)
+        if (pane.agentId case final agentId?)
+          (machineId: pane.machineId, agentId: agentId),
+    ];
   }
 
-  bool _isBeingWatched(String machineId, String agentId) {
-    final watched = watchedAgent();
-    return watched != null &&
-        watched.machineId == machineId &&
-        watched.agentId == agentId;
-  }
+  bool _isBeingWatched(String machineId, String agentId) => watchedAgents().any(
+    (w) => w.machineId == machineId && w.agentId == agentId,
+  );
 
-  /// Clear whatever the person is currently looking at. Every route into a
-  /// harness ends here, so none of them has to remember to.
-  @visibleForTesting
-  void seeWatchedAgent() {
-    final watched = watchedAgent();
-    if (watched != null) agentUnread.clear(watched.machineId, watched.agentId);
+  /// Clear the mark of every harness now on screen.
+  ///
+  /// The mark means "something happened on a harness you cannot see". Once it
+  /// is on screen that stops being true, however it got there — a tab switched
+  /// to, a pane opened onto this tab, the window brought back to the front. So
+  /// this runs on every change to the window rather than on each of those
+  /// routes, which are many and would each have to remember.
+  void seeWatchedAgents() {
+    for (final w in watchedAgents()) {
+      agentUnread.clear(w.machineId, w.agentId);
+    }
   }
 
   /// Where the app is. Injected so a test can say so without a real lifecycle.
@@ -6296,7 +6320,7 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Reads the focused pane rather than taking an id, so every route into a
   /// harness clears it without each one having to remember to.
-  void _seeFocusedAgent() => seeWatchedAgent();
+  void _seeFocusedAgent() => seeWatchedAgents();
 
   String? _eventAgentId(
     MachineState machine,
@@ -8710,11 +8734,12 @@ class AppNotifier extends ChangeNotifier {
   /// It has to be a tile like any other — the alternative of letting a machine
   /// take over the whole content area would blank three working terminals
   /// belonging to two other machines. The one exception is a machine that
-  /// already needs linking: that state now surfaces as a blocking popup
-  /// (showLinkMachineScreenDialog, from SwarmScreen) rather
-  /// than a tile, so opening one here too would just be a redundant "not
-  /// linked" pane sitting behind it. Selecting is still worth doing — it's
-  /// what makes the popup's gate notice this machine — the tile is not.
+  /// already needs linking: selecting it brings up the Machines panel
+  /// (`SwarmScreen._maybeLink`), so opening a tile here too would just be a
+  /// redundant "not linked" pane sitting behind it. Selecting is still worth
+  /// doing — it's what makes that gate notice this machine — the tile is not.
+  /// A tile that ALREADY shows such a machine is a different case and keeps
+  /// its own way out: its "Link…" button (`pane_grid.dart`).
   void showMachinePane(String machineId) {
     final machine = machineStates[machineId];
     if (machine == null) return;
@@ -10255,12 +10280,18 @@ class AppNotifier extends ChangeNotifier {
       // or discard its output while the machine is unavailable.
       if (!retryExisting && pane.session != null) continue;
       if (!_paneNeedsAttach(pane)) continue;
-      // A tile the app restored when it opened carries the gesture that opened
-      // it, once. Everything else attaching here is [AttachIntent.automatic]
-      // however this sweep was reached.
-      final paneIntent = pane.claimOnFirstAttach
+      // A gesture reaches only the tab it was made in. A person opening the
+      // app, switching to a tab or clicking a tile is asking about what is in
+      // front of them; the tabs behind it are somebody else's business, and
+      // two Macs sitting on two different tabs have to be able to work at the
+      // same time. A tile the app restored carries the gesture that opened it
+      // (once), but only once it is the tab being looked at — until then it
+      // keeps the claim and watches.
+      final inFocusedTab = panes.contains(pane);
+      final asked = pane.claimOnFirstAttach || intent == AttachIntent.person;
+      final paneIntent = asked && inFocusedTab
           ? AttachIntent.person
-          : intent;
+          : AttachIntent.automatic;
       // Nobody asked for this one, and this machine's CLI cannot open a
       // terminal without taking it from whoever has it: leave the tile as
       // intent (`pane_grid.dart` offers to open it) rather than pulling the
@@ -10274,9 +10305,10 @@ class AppNotifier extends ChangeNotifier {
       // that refusal would leave the tile watching the terminal it was opened
       // to take, once the agent does come ready.
       if (!_canAttachPane(pane)) continue;
-      // Spent on the attach it pays for; a retry of that open is already the
-      // ordinary rule, and the session carries the claim from here.
-      pane.claimOnFirstAttach = false;
+      // Spent on the attach it pays for, and only when it was used: a tile in
+      // a tab nobody has opened yet keeps its claim for the switch that brings
+      // it forward.
+      if (paneIntent == AttachIntent.person) pane.claimOnFirstAttach = false;
       // Covers a tile that never attached AND one holding a stream the machine
       // lost. Only the first used to be covered, and the second is why a
       // reconnect left every tile but one frozen on "restoring terminal…":
@@ -10323,9 +10355,16 @@ class AppNotifier extends ChangeNotifier {
 
   /// A person acted on this app — clicked a tile, brought the window forward
   /// — so every stream another client took from it comes back, not only the
-  /// tile they touched: being at this app is a fact about the app, not about
-  /// one pane. Every tab, since a tile parked behind another tab is this
-  /// app's too. Only ever from a user gesture — see
+  /// tile they touched: being at this tab is a fact about the tab, not about
+  /// one pane.
+  ///
+  /// THIS tab only. A tile parked behind another tab is not what the person
+  /// is looking at, and taking its terminal too is how two Macs sitting on two
+  /// different tabs ended up fighting over terminals neither of them had on
+  /// screen. Switching to that tab is its own gesture, and brings its tiles
+  /// back then.
+  ///
+  /// Only ever from a user gesture — see
   /// `_TerminalPanelState._autoTakeControl` for why a session or focus
   /// callback must never call this.
   ///
@@ -10335,7 +10374,7 @@ class AppNotifier extends ChangeNotifier {
   /// not moved — the tile the person is on stays the one they are on.
   Future<void> retakeTakenOverPanes() async {
     final reopening = <Future<void>>[];
-    for (final pane in allPanes) {
+    for (final pane in panes) {
       final session = pane.session;
       if (session == null || session.readOnly) continue;
       // A watcher is the same thing from the other side: this window has the
