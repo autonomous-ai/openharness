@@ -2303,7 +2303,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
   }
 
-  void _toggleModels({ModelsTab initialTab = ModelsTab.subscriptions}) {
+  void _toggleModels({ModelsTab initialTab = ModelsTab.all}) {
     if (_modelsOverlay != null) {
       _closeModels();
       return;

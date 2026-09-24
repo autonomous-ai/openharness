@@ -13,7 +13,7 @@ import 'model_mark.dart';
 import '../widgets/onboarding_card.dart';
 import 'api_connections_panel.dart';
 
-enum ModelsTab { subscriptions, local, shared, apis }
+enum ModelsTab { all, subscriptions, local, shared, apis }
 
 class ModelsPanel extends StatefulWidget {
   const ModelsPanel({
@@ -25,7 +25,7 @@ class ModelsPanel extends StatefulWidget {
     this.newModelIds = const {},
     this.showOnboarding = false,
     this.onDismissOnboarding,
-    this.initialTab = ModelsTab.subscriptions,
+    this.initialTab = ModelsTab.all,
   });
   final ModelManagerController controller;
   final ModelsMenuController subscriptions;
@@ -64,6 +64,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
     listenable: Listenable.merge([controller, subscriptions, controller.apis]),
     builder: (context, _) {
       final query = _search.text.trim().toLowerCase();
+      final all = _selectedTab == ModelsTab.all;
       final subscriptionRows = subscriptions.rows;
       final matchingSubscriptions = subscriptionRows.where(
         (row) => [
@@ -99,6 +100,17 @@ class _ModelsPanelState extends State<ModelsPanel> {
                 m.id.toLowerCase().contains(query),
           )
           .toList();
+      final hasShared = matchingShared.any(
+        (section) => section.models.isNotEmpty,
+      );
+      final hasApis = controller.apis.connections.any(
+        (row) => row.matches(query),
+      );
+      final noMatches =
+          matchingSubscriptions.isEmpty &&
+          models.isEmpty &&
+          !hasShared &&
+          !hasApis;
       int rank(LocalModel m) => controller.operationFor(m)?.active == true
           ? 0
           : m.running
@@ -222,6 +234,14 @@ class _ModelsPanelState extends State<ModelsPanel> {
                       child: Row(
                         children: [
                           _tab(
+                            ModelsTab.all,
+                            'All',
+                            subscriptionRows.length +
+                                controller.localModels.length +
+                                sharedCount +
+                                controller.apis.connections.length,
+                          ),
+                          _tab(
                             ModelsTab.subscriptions,
                             'Subscriptions',
                             subscriptionRows.length,
@@ -256,14 +276,16 @@ class _ModelsPanelState extends State<ModelsPanel> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (_selectedTab == ModelsTab.apis)
-                          ApiConnectionsPanel(
-                            controller: controller.apis,
-                            query: query,
-                            onEditingChanged: (editing) =>
-                                setState(() => _editingApi = editing),
-                          ),
-                        if (_selectedTab == ModelsTab.subscriptions) ...[
+                        if (all &&
+                            !_editingApi &&
+                            query.isNotEmpty &&
+                            noMatches)
+                          _empty('No matches'),
+                        if (_selectedTab == ModelsTab.subscriptions ||
+                            (all &&
+                                !_editingApi &&
+                                matchingSubscriptions.isNotEmpty)) ...[
+                          if (all) _heading('Subscriptions'),
                           if (matchingSubscriptions.isEmpty)
                             _empty(
                               query.isEmpty
@@ -273,7 +295,10 @@ class _ModelsPanelState extends State<ModelsPanel> {
                           for (final row in matchingSubscriptions)
                             _subscription(row),
                         ],
-                        if (_selectedTab == ModelsTab.local) ...[
+                        if (_selectedTab == ModelsTab.local ||
+                            (all &&
+                                !_editingApi &&
+                                (query.isEmpty || models.isNotEmpty))) ...[
                           Padding(
                             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                             child: Text(
@@ -299,7 +324,8 @@ class _ModelsPanelState extends State<ModelsPanel> {
                             ),
                           for (final model in models) _model(model),
                         ],
-                        if (_selectedTab == ModelsTab.shared) ...[
+                        if (_selectedTab == ModelsTab.shared ||
+                            (all && !_editingApi && hasShared)) ...[
                           if (controller.models?.reachable == false)
                             _retry('Shared models are unavailable.')
                           else if (controller.models == null &&
@@ -317,7 +343,9 @@ class _ModelsPanelState extends State<ModelsPanel> {
                             ),
                           for (final section in matchingShared)
                             if (section.models.isNotEmpty) ...[
-                              _heading(section.name),
+                              _heading(
+                                all ? 'Shared · ${section.name}' : section.name,
+                              ),
                               for (final model in section.models)
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
@@ -362,6 +390,16 @@ class _ModelsPanelState extends State<ModelsPanel> {
                                 ),
                             ],
                         ],
+                        if (_selectedTab == ModelsTab.apis ||
+                            (all && (hasApis || _editingApi)))
+                          ApiConnectionsPanel(
+                            key: const ValueKey('models-api-connections'),
+                            controller: controller.apis,
+                            query: query,
+                            showPresets: !all,
+                            onEditingChanged: (editing) =>
+                                setState(() => _editingApi = editing),
+                          ),
                       ],
                     ),
                   ),
@@ -378,7 +416,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                         if (constraints.maxWidth >= 440)
                           Expanded(
                             child: Text(
-                              _selectedTab == ModelsTab.apis
+                              _selectedTab == ModelsTab.apis || _editingApi
                                   ? 'Available to harness tools on this computer.'
                                   : 'Select models in a session’s model picker.',
                               style: AppType.monoMeta(
@@ -388,7 +426,7 @@ class _ModelsPanelState extends State<ModelsPanel> {
                           )
                         else
                           const Spacer(),
-                        if (_selectedTab != ModelsTab.apis)
+                        if (_selectedTab != ModelsTab.apis && !_editingApi)
                           TextButton(
                             onPressed: controller.opening
                                 ? null
@@ -417,10 +455,13 @@ class _ModelsPanelState extends State<ModelsPanel> {
       selected: _selectedTab == tab,
       child: TextButton(
         key: ValueKey('models-tab-${tab.name}'),
-        onPressed: () => setState(() {
-          _selectedTab = tab;
-          _editingApi = false;
-        }),
+        onPressed: () {
+          if (_selectedTab == tab) return;
+          setState(() {
+            _selectedTab = tab;
+            _editingApi = false;
+          });
+        },
         style: TextButton.styleFrom(
           backgroundColor: _selectedTab == tab
               ? AppPalette.textPrimary.withValues(alpha: .08)

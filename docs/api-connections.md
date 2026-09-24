@@ -1,5 +1,10 @@
 # Saved APIs
 
+Models opens on **All**, with subscriptions, local models, shared models, and saved
+APIs grouped in one searchable view. The source tabs narrow the list.
+
+![All models](images/models-all.png)
+
 Open **Models → APIs**, choose a provider, paste its key, and select **Save**.
 The clipboard icon pastes the key directly; it remains hidden until you reveal it.
 OpenRouter, fal.ai, OpenAI, Anthropic, and Replicate have presets. **Custom API**

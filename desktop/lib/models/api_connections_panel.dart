@@ -15,10 +15,12 @@ class ApiConnectionsPanel extends StatefulWidget {
     required this.controller,
     required this.query,
     required this.onEditingChanged,
+    this.showPresets = true,
   });
   final ApiConnectionsController controller;
   final String query;
   final ValueChanged<bool> onEditingChanged;
+  final bool showPresets;
   @override
   State<ApiConnectionsPanel> createState() => _ApiConnectionsPanelState();
 }
@@ -66,14 +68,17 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
           key: ValueKey('${editing.id}:${editing.provider}'),
           connection: editing,
           controller: controller,
+          backLabel: widget.showPresets ? 'Back to APIs' : 'Back to all models',
           onClose: () => _edit(null),
         );
       }
       final query = widget.query.toLowerCase();
-      bool matches(ApiConnection row) =>
-          '${row.name} ${row.baseUrl}'.toLowerCase().contains(query);
-      final connections = controller.connections.where(matches).toList();
-      final presets = controller.presets.where(matches).toList();
+      final connections = controller.connections
+          .where((row) => row.matches(query))
+          .toList();
+      final presets = controller.presets
+          .where((row) => row.matches(query))
+          .toList();
       final customMatches = 'custom api'.contains(query);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -98,10 +103,10 @@ class _ApiConnectionsPanelState extends State<ApiConnectionsPanel> {
             ),
           if (!controller.loaded && controller.loading) _note('Loading APIs…'),
           if (connections.isNotEmpty) ...[
-            _note('Saved'),
+            _note(widget.showPresets ? 'Saved' : 'APIs'),
             for (final connection in connections) _row(connection, saved: true),
           ],
-          if (controller.loaded) ...[
+          if (controller.loaded && widget.showPresets) ...[
             _note('Add API'),
             for (final preset in presets) _row(preset),
             if (customMatches)
@@ -214,10 +219,12 @@ class _ApiEditor extends StatefulWidget {
     required this.connection,
     required this.controller,
     required this.onClose,
+    required this.backLabel,
   });
   final ApiConnection connection;
   final ApiConnectionsController controller;
   final VoidCallback onClose;
+  final String backLabel;
   @override
   State<_ApiEditor> createState() => _ApiEditorState();
 }
@@ -333,7 +340,7 @@ class _ApiEditorState extends State<_ApiEditor> {
                   children: [
                     IconButton(
                       onPressed: widget.onClose,
-                      tooltip: 'Back to APIs',
+                      tooltip: widget.backLabel,
                       icon: const Icon(LucideIcons.arrowLeft, size: 18),
                     ),
                     const SizedBox(width: 4),

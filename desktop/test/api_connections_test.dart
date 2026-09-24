@@ -242,6 +242,7 @@ void main() {
     WidgetTester tester, {
     double width = 640,
     double height = 820,
+    ModelsTab initialTab = ModelsTab.apis,
   }) async {
     tester.view.resetPhysicalSize();
     tester.view.physicalSize = const Size(1280, 1100);
@@ -266,7 +267,7 @@ void main() {
               child: ModelsPanel(
                 controller: controller,
                 subscriptions: subscriptions,
-                initialTab: ModelsTab.apis,
+                initialTab: initialTab,
                 onClose: () {},
                 onManage: () {},
               ),
@@ -280,6 +281,111 @@ void main() {
   }
 
   Finder field(String label) => find.byKey(ValueKey('api-field-$label'));
+
+  testWidgets('All groups and searches every source with stable total counts', (
+    tester,
+  ) async {
+    final (app, controller) = await mount(tester, initialTab: ModelsTab.all);
+    app.rows = [
+      {...preset, 'id': 'openrouter'},
+    ];
+    app.inventory = const GridModels(
+      gridName: 'home',
+      models: [],
+      grids: [
+        GridSection(
+          name: 'Team',
+          own: false,
+          models: [GridModel(id: 'Shared DeepSeek', node: 'Team computer')],
+        ),
+      ],
+    );
+    await controller.refresh();
+    await controller.apis.refresh();
+    await tester.pumpAndSettle();
+    expect(find.text('All 9'), findsOneWidget);
+    expect(find.text('Subscriptions'), findsOneWidget);
+    expect(find.text('Shared · Team'), findsOneWidget);
+    expect(find.text('Shared DeepSeek'), findsOneWidget);
+    expect(find.text('Qwen3.8-27B'), findsOneWidget);
+    expect(find.text('APIs'), findsOneWidget);
+    expect(find.byTooltip('Edit OpenRouter'), findsOneWidget);
+    expect(find.text('Add API'), findsNothing);
+    expect(find.byTooltip('Add OpenRouter'), findsNothing);
+    final search = find.byKey(const ValueKey('models-search'));
+    for (final (query, match) in [
+      ('anthropic', 'Anthropic'),
+      ('qwen3.8-27b', 'Qwen3.8-27B'),
+      ('TEAM COMPUTER', 'Shared DeepSeek'),
+      ('openrouter.ai', 'OpenRouter'),
+    ]) {
+      await tester.enterText(search, query);
+      await tester.pumpAndSettle();
+      expect(find.text(match), findsOneWidget);
+      expect(find.text('All 9'), findsOneWidget);
+      expect(find.text('No matches'), findsNothing);
+      expect(find.text('No matching models'), findsNothing);
+    }
+    await tester.enterText(search, 'no-such-model-or-api');
+    await tester.pumpAndSettle();
+    expect(find.text('No matches'), findsOneWidget);
+    await tester.tap(find.byTooltip('Clear search'));
+    await tester.pumpAndSettle();
+    final action = find.byKey(const ValueKey('model-action-qwen'));
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pump();
+    expect(app.actions.single.start, isTrue);
+    expect(find.text('Downloading · 42%'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('models-tab-local')));
+    await tester.pump();
+    expect(find.text('Downloading · 42%'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('models-tab-all')));
+    await tester.pump();
+    expect(app.actions, hasLength(1));
+    expect(find.text('Downloading · 42%'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('All edits and removes saved APIs without exposing presets', (
+    tester,
+  ) async {
+    final (app, controller) = await mount(tester, initialTab: ModelsTab.all);
+    app.rows = [
+      {...preset, 'id': 'openrouter'},
+    ];
+    await controller.refresh();
+    await controller.apis.refresh();
+    await tester.pumpAndSettle();
+    final edit = find.byTooltip('Edit OpenRouter');
+    await tester.ensureVisible(edit);
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    expect(field('API key'), findsOneWidget);
+    expect(find.text('Qwen3.8-27B'), findsNothing);
+    expect(find.text('Subscriptions'), findsNothing);
+    expect(find.text('Manage models'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('models-tab-all')));
+    await tester.pump();
+    expect(field('API key'), findsOneWidget);
+    expect(find.byKey(const ValueKey('models-search')), findsNothing);
+    await tester.tap(find.byTooltip('Back to all models'));
+    await tester.pumpAndSettle();
+    expect(find.text('Qwen3.8-27B'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('models-search')),
+      'openrouter',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Remove OpenRouter'));
+    await tester.pump();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+    expect(find.text('All 7'), findsOneWidget);
+    expect(find.text('No matches'), findsOneWidget);
+    expect(find.text('Add API'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('paste button masks the key and recovers from clipboard errors', (
     tester,
@@ -655,6 +761,11 @@ void main() {
     await tester.enterText(field('Base URL'), 'https://api.example.com/v1');
     await tester.pumpAndSettle();
     await capture('apis-custom');
+    await tester.tap(find.byKey(const ValueKey('models-tab-all')));
+    app.localInventory = modelInventory(scenario: 'ready');
+    await controller.refresh();
+    await tester.pumpAndSettle();
+    await capture('models-all');
     expect(tester.takeException(), isNull);
   });
 

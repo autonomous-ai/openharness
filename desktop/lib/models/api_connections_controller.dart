@@ -20,6 +20,8 @@ class ApiConnection {
   String get authHeader => data['authHeader'] as String? ?? 'Authorization';
   String get authPrefix => data['authPrefix'] as String? ?? 'Bearer';
   String? get keyUrl => data['keyUrl'] as String?;
+  bool matches(String query) =>
+      '$name $baseUrl'.toLowerCase().contains(query.toLowerCase());
 
   factory ApiConnection.fromJson(Map<String, dynamic> json) => ApiConnection({
     for (final key in [
