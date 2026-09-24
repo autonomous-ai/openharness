@@ -1,5 +1,5 @@
-// The pane header's model picker: two sections, the way back always offered, and a tick that says
-// where the agent actually is.
+// The pane header's model picker: two sections, the way back always offered, and a marked row that
+// says where the agent actually is.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/widgets/box_chrome.dart';
@@ -211,25 +211,24 @@ void main() {
     expect(manage, 0);
   });
 
-  testWidgets(
-    'rows can be reached and activated from the keyboard',
-    (tester) async {
-      // Start on a local model: choosing an already selected subscription intentionally does
-      // nothing. Down must leave search and Enter must switch to the subscription row.
-      var ownLogin = 0;
-      build(
-        models: const [
-          {'id': 'Qwen-Test', 'node': 'macbook'},
-        ],
-      );
-      await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => ownLogin++);
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(ownLogin, 1);
-    },
-  );
+  testWidgets('rows can be reached and activated from the keyboard', (
+    tester,
+  ) async {
+    // Start on a local model: choosing an already selected subscription intentionally does
+    // nothing. Down must leave search and Enter must switch to the subscription row.
+    var ownLogin = 0;
+    build(
+      models: const [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
+    await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => ownLogin++);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(ownLogin, 1);
+  });
 
   // THREE situations, two sentences and one silence, one test each — a single test cannot cover
   // them, because re-pumping the same widget reuses the State and the picker answers from the memo
@@ -730,13 +729,13 @@ void main() {
       build(models: served);
       await open(tester, currentModel: 'Qwen-Test');
 
-      // It is not a ModelPickerRow at all, so it cannot wear the fill or the tick that says
-      // where the agent is.
-      final titles = tester
-          .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
-          .map((r) => r.title);
-      expect(titles, isNot(contains('Local models')));
-      expect(find.byIcon(Icons.check), findsOneWidget);
+      // It is not a ModelPickerRow at all, so it cannot wear the fill that says where the agent
+      // is.
+      final rows = tester.widgetList<ModelPickerRow>(
+        find.byType(ModelPickerRow),
+      );
+      expect(rows.map((r) => r.title), isNot(contains('Local models')));
+      expect(rows.where((r) => r.selected).map((r) => r.title), ['Qwen-Test']);
     });
 
     testWidgets('fires onRunLocalModel and nothing else', (tester) async {
@@ -914,15 +913,16 @@ void main() {
 
   // ── which row is the current one ─────────────────────────────────────────────────────────────
   //
-  // The panel says it twice, deliberately: a fill on the row and a tick at its end. A fill alone
-  // could not carry it — hover paints one too, and the pointer decides where that lands. The
-  // row's own colours are `pane_menu_row_test`; what is asked here is which ROW gets them.
+  // The mark is the fill and its accent border, and nothing else: the tick it used to carry sat
+  // beside the quota figure and crowded it, and was taken out on request. Hover paints a fill too,
+  // but never the border, which is what keeps the two apart. What is asked here is which ROW gets
+  // the mark, and that a screen reader is told which one it is.
 
   ModelPickerRow rowFor(WidgetTester tester, String title) => tester
       .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
       .firstWhere((r) => r.title == title);
 
-  testWidgets('exactly one row is marked, and it carries the tick', (
+  testWidgets('exactly one row is marked, with no tick beside it', (
     tester,
   ) async {
     build(
@@ -936,7 +936,16 @@ void main() {
     expect(rowFor(tester, 'Qwen-Test').selected, isTrue);
     expect(rowFor(tester, 'DeepSeek-Test').selected, isFalse);
     expect(rowFor(tester, 'Anthropic').selected, isFalse);
-    expect(find.byIcon(Icons.check), findsOneWidget);
+    expect(find.byIcon(Icons.check), findsNothing);
+    expect(
+      // `.last`: the header control names the current model too.
+      tester.getSemantics(find.text('Qwen-Test').last),
+      containsSemantics(isSelected: true),
+    );
+    expect(
+      tester.getSemantics(find.text('DeepSeek-Test')),
+      isNot(containsSemantics(isSelected: true)),
+    );
   });
 
   testWidgets('the subscription row is the marked one when no model is set', (
@@ -951,7 +960,7 @@ void main() {
 
     expect(rowFor(tester, 'Anthropic').selected, isTrue);
     expect(rowFor(tester, 'Qwen-Test').selected, isFalse);
-    expect(find.byIcon(Icons.check), findsOneWidget);
+    expect(find.byIcon(Icons.check), findsNothing);
   });
 
   // ── the selection has to land before the machine confirms it ──────────────────────────────────

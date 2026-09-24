@@ -713,6 +713,9 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
               children: [
                 Text(
                   percent is double ? '${percent.floor()}% left' : status,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
                   style: AppType.body(
                     color: low ? AppColors.warning : AppColors.textSoft,
                   ).copyWith(fontSize: 12.5, fontWeight: FontWeight.w600),
@@ -721,6 +724,9 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
                   const SizedBox(height: 2),
                   Text(
                     low ? 'Running low' : 'Healthy',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
                     style: AppType.body(color: AppColors.muted)
                         .copyWith(fontSize: 11),
                   ),
@@ -734,7 +740,12 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
   }
 
   Widget _panelSentence(String text) => Padding(
-    padding: const EdgeInsets.fromLTRB(9, 4, 9, 8),
+    padding: const EdgeInsets.fromLTRB(
+      kModelPickerInset,
+      4,
+      kModelPickerInset,
+      8,
+    ),
     child: Text(text, style: AppType.body(color: AppColors.textSoft)),
   );
 }
