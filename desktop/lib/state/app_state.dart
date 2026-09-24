@@ -9982,13 +9982,9 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  /// Rebuild the grid from disk as INTENT only — the tiles appear immediately,
-  /// each saying which machine it is waiting for, and attach themselves as
-  /// their machines answer.
-  ///
-  /// The tiles cannot wait for the machines: machines answer in an order this
-  /// side does not decide, a restored grid commonly spans two of them, and one
-  /// being slow or offline must not hold the others blank.
+  /// Closes the window in which a restored tile may still claim its terminal,
+  /// so a machine that only answers hours later is met by the ordinary rule
+  /// rather than by the gesture that opened the app.
   void _armLaunchClaimExpiry() {
     _launchClaimTimer?.cancel();
     _launchClaimTimer = Timer(launchClaimWindow, () {
@@ -9998,6 +9994,14 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  /// Rebuild the grid from disk as INTENT only — the tiles appear immediately,
+  /// each saying which machine it is waiting for, and attach themselves as
+  /// their machines answer.
+  ///
+  /// The tiles cannot wait for the machines: machines answer in an order this
+  /// side does not decide, a restored grid commonly spans two of them, and one
+  /// being slow or offline must not hold the others blank.
+  ///
   /// [claimOnAttach]: this restore is the app opening, so the tiles it brings
   /// back may take their terminals on their first attach — see
   /// [TerminalPane.claimOnFirstAttach]. False for a restore that is merely
@@ -10229,8 +10233,13 @@ class AppNotifier extends ChangeNotifier {
           !machine.terminalNoTakeoverAvailable) {
         continue;
       }
-      // Spent here, not when the open is answered: the claim belongs to this
-      // one attach, and a retry of it is already the ordinary rule.
+      // Asked before the claim is spent: a machine that is up but has not
+      // verified this agent's terminal yet refuses here, and a claim spent on
+      // that refusal would leave the tile watching the terminal it was opened
+      // to take, once the agent does come ready.
+      if (!_canAttachPane(pane)) continue;
+      // Spent on the attach it pays for; a retry of that open is already the
+      // ordinary rule, and the session carries the claim from here.
       pane.claimOnFirstAttach = false;
       // Covers a tile that never attached AND one holding a stream the machine
       // lost. Only the first used to be covered, and the second is why a

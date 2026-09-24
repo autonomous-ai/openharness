@@ -342,13 +342,16 @@ void main() {
 
     /// The machine answering — the sweep that actually attaches a restored
     /// tile, and the same one a reconnect runs later.
-    Future<void> machineAnswers(WidgetTester tester) async {
+    Future<void> machineAnswers(
+      WidgetTester tester, {
+      String about = 'a0',
+    }) async {
       await app.handleEventForTest('m', {
         'type': 'agent_synced',
         'payload': {
           'agent': {
-            'id': 'a0',
-            'name': 'A0',
+            'id': about,
+            'name': about.toUpperCase(),
             'terminal': {'available': true},
           },
         },
@@ -391,6 +394,45 @@ void main() {
         conn.opens,
         hasLength(2),
         reason: 'a person opened the app; the polite path is not needed',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('an agent that is not ready yet keeps its tile\'s claim', (
+      tester,
+    ) async {
+      final storage = await savedLayout();
+      app.dispose();
+      app = await opened(storage: storage);
+      // The machine is up, but has not verified this agent's terminal yet:
+      // every sweep meanwhile refuses the tile.
+      app.stateOf('m')!.agents = [
+        const Agent(id: 'a0', name: 'A0'),
+        const Agent(id: 'a1', name: 'A1', terminalAvailable: true),
+      ];
+      await mount(tester);
+      conn.opens.clear();
+      // A sweep about the OTHER agent, so a0 is still unverified.
+      await machineAnswers(tester, about: 'a1');
+      expect(
+        conn.opens.any((o) => o['agentId'] == 'a0'),
+        isFalse,
+        reason: 'nothing to attach to yet',
+      );
+
+      // It comes ready: the tile still carries the gesture that opened the app.
+      app.stateOf('m')!.agents = [
+        const Agent(id: 'a0', name: 'A0', terminalAvailable: true),
+        const Agent(id: 'a1', name: 'A1', terminalAvailable: true),
+      ];
+      await machineAnswers(tester);
+
+      final opened0 = conn.opens.where((o) => o['agentId'] == 'a0');
+      expect(opened0, hasLength(1));
+      expect(
+        opened0.single.containsKey('takeover'),
+        isFalse,
+        reason: 'a refusal must not spend the claim',
       );
       await finish(tester);
     });
