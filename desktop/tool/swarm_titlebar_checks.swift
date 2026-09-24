@@ -112,16 +112,14 @@ private extension SwarmTabStrip {
       if let engine { row["engine"] = engine }
       update(["tabs": [row], "activeId": "agent-tab", "enabled": true])
     }
+    func marks() -> Bool { tabs[0].subviews.contains { $0 is NSImageView } }
     show(1, engine: "claude")
     let tab = tabs[0]
-    let engineIcon = tab.icon
-    try checkTitlebar(engineIcon != nil && engineIcon?.isTemplate == false, "A single-agent tab shows its engine mark")
+    try checkTitlebar(!marks(), "A tab of one harness is its name alone, without the engine's mark")
     show(2)
-    try checkTitlebar(tabs[0] === tab && tab.icon == nil, "A tab of several harnesses carries its name alone, and keeps the tab control")
+    try checkTitlebar(tabs[0] === tab && !marks(), "A tab of several harnesses is its name alone, and keeps the tab control")
     show(0)
-    try checkTitlebar(tabs[0] === tab && tab.icon == nil, "An empty tab carries its name alone")
-    show(1, engine: "claude")
-    try checkTitlebar(tabs[0] === tab && tab.icon === engineIcon, "Closing back to one agent restores the cached engine icon")
+    try checkTitlebar(tabs[0] === tab && !marks(), "An empty tab is its name alone")
   }
 
   func checkSharedTypography() throws {

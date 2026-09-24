@@ -1507,18 +1507,6 @@ private final class SwarmTabStrip: NSView {
       let tab = previous[id] ?? SwarmTabButton(id: id)
       tab.palette = palette
       tab.name = row["name"] as? String ?? "New Tab"
-      let count = row["agentCount"] as? Int ?? 0
-      // The Harness Store tab holds no agents; without its own mark it would wear New Tab's plus.
-      let store = row["kind"] as? String == "store"
-      // Only a mark that says something: the engine of a tab's one harness, or
-      // the Store's own. The grid a tab of several wore and the plus of an
-      // empty one said "tab" on a tab (owner, 2026-09-24), so those tabs carry
-      // their name alone.
-      tab.icon = store
-        ? icons.image(engine: "store", asset: row["iconAsset"] as? String)
-        : count == 1
-        ? icons.image(engine: row["engine"] as? String, asset: row["iconAsset"] as? String)
-        : nil
       tab.selected = id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
@@ -1722,11 +1710,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private let selectButton = SwarmSelectButton()
   /// Whether the middle button went down on THIS tab — see otherMouseUp.
   private var middleDown = false
-  private let iconView = NSImageView()
-  var icon: NSImage? {
-    get { iconView.image }
-    set { iconView.image = newValue }
-  }
   /// A tab is named in the system face, like every other Mac window's tabs —
   /// Safari's, Ghostty's, Finder's. The terminal's face belongs to the terminal
   /// and to the chrome drawn around it inside the window (owner, 2026-09-23).
@@ -1756,10 +1739,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     super.init(frame: .zero)
     setAccessibilityElement(true)
     setAccessibilityRole(.group)
-    iconView.imageScaling = .scaleProportionallyDown
-    iconView.contentTintColor = NSColor(white: 0.85, alpha: 1)
-    iconView.setAccessibilityElement(false)
-    addSubview(iconView)
     selectButton.owner = self
     closeButton.owner = self
     selectButton.title = ""
@@ -1792,9 +1771,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   override func layout() {
     super.layout()
     let compact = self.compact
-    iconView.frame = compact
-      ? NSRect(x: ((bounds.width - 16) / 2).rounded(), y: contentCenterY - 8, width: 16, height: 16)
-      : NSRect(x: 22, y: contentCenterY - 8, width: 16, height: 16)
     closeButton.isHidden = compact
     selectButton.frame = NSRect(x: 0, y: 0, width: max(0, compact ? bounds.width : bounds.width - 36), height: bounds.height)
     closeButton.frame = NSRect(x: bounds.width - 36, y: contentCenterY - 12, width: 24, height: 24)
@@ -1884,22 +1860,25 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       let trailing = shortcut.map { value in
         max(42, ceil(("⌘\(value)" as NSString).size(withAttributes: [.font: badgeFont]).width) + 22)
       } ?? 42
-      // Without a mark the name takes the mark's place rather than leaving a hole.
-      let x: CGFloat = icon == nil ? 22 : 46
-      label.draw(in: NSRect(x: x, y: contentCenterY - labelHeight / 2,
-        width: max(0, bounds.width - x - trailing), height: labelHeight))
-    } else if icon == nil, label.length > 0 {
-      // Too narrow for the name and no mark to stand in: its first letter.
+      // A tab is its name: no mark, not even the engine's or the Store's —
+      // the pane header says what runs there (owner, 2026-09-24).
+      label.draw(in: NSRect(x: 22, y: contentCenterY - labelHeight / 2,
+        width: max(0, bounds.width - 22 - trailing), height: labelHeight))
+    }
+    // Too narrow for the name: its first letter, centred.
+    var initialFrame = NSRect(x: bounds.midX, y: contentCenterY, width: 0, height: 0)
+    if compact, label.length > 0 {
       let initial = NSAttributedString(string: String(name.prefix(1)),
         attributes: label.attributes(at: 0, effectiveRange: nil))
       let size = initial.size()
-      initial.draw(at: NSPoint(x: ((bounds.width - size.width) / 2).rounded(),
-        y: contentCenterY - size.height / 2))
+      initialFrame = NSRect(x: ((bounds.width - size.width) / 2).rounded(),
+        y: contentCenterY - size.height / 2, width: size.width, height: size.height)
+      initial.draw(at: initialFrame.origin)
     }
     if attention {
       NSColor.systemOrange.setFill()
       let dot = compact
-        ? NSRect(x: iconView.frame.maxX - 1, y: iconView.frame.maxY - 3, width: 5, height: 5)
+        ? NSRect(x: initialFrame.maxX + 1, y: initialFrame.maxY - 6, width: 5, height: 5)
         : NSRect(x: 13, y: contentCenterY - 2, width: 4, height: 4)
       NSBezierPath(ovalIn: dot).fill()
     }
