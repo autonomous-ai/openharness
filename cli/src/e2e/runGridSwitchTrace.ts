@@ -121,6 +121,22 @@ const startedAt = new Date()
 try {
   await driver.machineSelect()
 
+  // Which grid and model — settled BEFORE the agent exists, and asked of the daemon only when the
+  // run did not pin them. `grid_models_list` starts one Python `grid` per grid the account can see,
+  // all at once (~125 MB each); on grid-dev that was ten of them, 1.2 GB, landing while claude
+  // started, and the 1.5 GB container OOM-killed claude. Pinned (HARNESS_GRID_NAME +
+  // HARNESS_GRID_MODEL, or a relay under test), the list is never needed; unpinned, it is asked
+  // while nothing else is running.
+  // A relay under test (E2E_GRID_HOME + E2E_GRID_NAME) replaces the daemon's own grid; the model
+  // then has to be pinned (HARNESS_GRID_MODEL), since that grid's list is not in `grid_models_list`.
+  const local = await gridOverrideFromEnv()
+  const pinned = !!process.env.HARNESS_GRID_MODEL && (!!process.env.HARNESS_GRID_NAME || !!local)
+  const models = pinned ? null : await driver.gridModels()
+  const picked = local || !models ? null : pickGridModel(models)
+  gridModel = process.env.HARNESS_GRID_MODEL ?? picked?.model ?? null
+  const gridName = local ? local.name : (process.env.HARNESS_GRID_NAME ?? (process.env.HARNESS_GRID_MODEL ? undefined : picked?.gridName))
+  console.error(`[grid-e2e] grid model: ${gridModel ?? '(none)'}${gridName ? ` on ${gridName}` : ''}${local ? ` (relay under test: ${local.override.baseUrl})` : ''}${pinned ? ' (pinned — no model list asked)' : ''}`)
+
   if (created) {
     // realpath: $TMPDIR is a symlink on macOS (`/var/…` → `/private/var/…`) and the engine keys its
     // trust on the resolved path — a trust written for the symlink is never matched.
@@ -165,14 +181,6 @@ try {
     if (pane) await waitForPaneSettle(realTmux, pane, { settleMs: 3_000, settleTimeoutMs: 90_000 })
   }
 
-  const models = await driver.gridModels()
-  // A relay under test (E2E_GRID_HOME + E2E_GRID_NAME) replaces the daemon's own grid; the model
-  // then has to be pinned (HARNESS_GRID_MODEL), since that grid's list is not in `grid_models_list`.
-  const local = await gridOverrideFromEnv()
-  const picked = local ? null : pickGridModel(models)
-  gridModel = process.env.HARNESS_GRID_MODEL ?? picked?.model ?? null
-  const gridName = local ? local.name : (process.env.HARNESS_GRID_NAME ?? (process.env.HARNESS_GRID_MODEL ? undefined : picked?.gridName))
-  console.error(`[grid-e2e] grid model: ${gridModel ?? '(none)'}${gridName ? ` on ${gridName}` : ''}${local ? ` (relay under test: ${local.override.baseUrl})` : ''}`)
 
   // Out of usage ends the journey where it happened: an account that cannot answer on its own login
   // tells us nothing about a switch, and switching it anyway only spends the grid's time too.
