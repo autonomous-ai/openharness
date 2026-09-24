@@ -1981,7 +1981,8 @@ class _TerminalHeader extends StatelessWidget {
     // Reserve space for the visible model name and the pane controls.
     // Engines without a picker keep their existing header width.
     final showModelPicker = !readOnly && modelPickerSupports(session.engineId);
-    final pickerWidth = showModelPicker ? 170.0 : 0.0;
+    // The picker's name runs to 200px with its padding, and no arrow beside it.
+    final pickerWidth = showModelPicker ? 212.0 : 0.0;
     final actionsWidth =
         (remoteComposer == null ? 148.0 : 178.0) +
         pickerWidth +
@@ -1992,7 +1993,9 @@ class _TerminalHeader extends StatelessWidget {
     final forkedFrom = agent?.forkedFrom;
     final strip = PaneHeaderHover(
       child: SizedBox(
-        height: compact ? 38 : 46,
+        // The usual height at the default text size; a larger text setting grows it so the name
+        // and the folder line under it both still fit.
+        height: (compact ? 38 : 46) * math.max(1, grid.appTextScaleOf(context)),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: _stripPadding),
           child: LayoutBuilder(
@@ -2005,16 +2008,11 @@ class _TerminalHeader extends StatelessWidget {
                   agent != null &&
                   project?.shownBranch != null &&
                   constraints.maxWidth >= 360 * math.max(1, scale);
-              final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
-              final rightWidth = narrow
-                  ? math.max(
-                      (showModelPicker ? 100.0 : 28.0) + badgeWidth,
-                      constraints.maxWidth * .36,
-                    )
-                  : math.max(
-                      actionsWidth + badgeWidth,
-                      constraints.maxWidth * .55,
-                    );
+              // The right side holds only the ⋮ menu and the model: folder, branch and PR sit
+              // under the name.
+              final rightWidth = showModelPicker
+                  ? (narrow ? 100.0 : pickerWidth + 36)
+                  : 28.0;
               return Row(
                 children: [
                   if (agent != null)
@@ -2026,114 +2024,199 @@ class _TerminalHeader extends StatelessWidget {
                   // engine it runs on is the dialog's and the tooltip's to say.
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Row(
+                    // The name, and under it where it works (folder, branch, PR): two short
+                    // lines about as tall as the mark beside them. They used to share the
+                    // controls' space on the right and fade on hover.
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Flexible(
-                          child: Tooltip(
-                            message: identityDetail,
-                            waitDuration: const Duration(milliseconds: 700),
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onDoubleTap: () => unawaited(
-                                showAgentRenameDialog(
-                                  context,
-                                  notifier,
-                                  session.machineId,
-                                  session.agentId,
-                                  session.agentName,
-                                ),
-                              ),
-                              child: Text(
-                                session.agentName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: grid.AppType.monoLabel(
-                                  color: AppColors.text,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (status != null || !compact)
-                          const SizedBox(width: 8),
-                        if (status != null && narrow)
-                          Tooltip(
-                            message: '${status.label}: ${status.detail}',
-                            child: IconButton(
-                              tooltip: status.actionLabel ?? status.label,
-                              onPressed: statusAction,
-                              icon: Icon(status.icon, size: 14),
-                              style: IconButton.styleFrom(
-                                foregroundColor: color,
-                                disabledForegroundColor: color,
-                                fixedSize: const Size(28, 28),
-                                minimumSize: const Size(28, 28),
-                                padding: EdgeInsets.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                            ),
-                          )
-                        else if (status != null)
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: math.max(
-                                0,
-                                math.min(
-                                  constraints.maxWidth * .22,
-                                  constraints.maxWidth - actionsWidth - 110,
-                                ),
-                              ),
-                            ),
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: Tooltip(
-                                message: status.detail,
-                                child: TextButton(
-                                  onPressed: statusAction,
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: color,
-                                    disabledForegroundColor: AppColors.textSoft,
-                                    minimumSize: Size.zero,
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 4,
+                        // A fixed name line: a status chip appearing beside the name must not
+                        // nudge the folder line under it.
+                        SizedBox(
+                          height: 14 * math.max(1, scale),
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Tooltip(
+                                  message: identityDetail,
+                                  waitDuration: const Duration(
+                                    milliseconds: 700,
+                                  ),
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onDoubleTap: () => unawaited(
+                                      showAgentRenameDialog(
+                                        context,
+                                        notifier,
+                                        session.machineId,
+                                        session.agentId,
+                                        session.agentName,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      session.agentName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: grid.AppType.monoLabel(
+                                        color: AppColors.text,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.2,
+                                      ).copyWith(fontSize: 11),
                                     ),
                                   ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(status.icon, size: 14),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: Text(
-                                          // The chip names the STATE; what
-                                          // pressing it does is in the tooltip
-                                          // and in `actionLabel`. "Link
-                                          // required" that can be pressed reads
-                                          // better than a bare verb where every
-                                          // neighbour is a status.
-                                          status.label,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: grid.AppType.monoLabel(
-                                            fontWeight: FontWeight.w400,
+                                ),
+                              ),
+                              if (status != null || !compact)
+                                const SizedBox(width: 8),
+                              if (status != null && narrow)
+                                Tooltip(
+                                  message: '${status.label}: ${status.detail}',
+                                  child: IconButton(
+                                    tooltip: status.actionLabel ?? status.label,
+                                    onPressed: statusAction,
+                                    icon: Icon(status.icon, size: 12),
+                                    style: IconButton.styleFrom(
+                                      foregroundColor: color,
+                                      disabledForegroundColor: color,
+                                      // The name's line height: the folder line sits under it.
+                                      fixedSize: const Size(16, 16),
+                                      minimumSize: const Size(16, 16),
+                                      padding: EdgeInsets.zero,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                  ),
+                                )
+                              else if (status != null)
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: math.max(
+                                      0,
+                                      math.min(
+                                        constraints.maxWidth * .22,
+                                        constraints.maxWidth -
+                                            actionsWidth -
+                                            110,
+                                      ),
+                                    ),
+                                  ),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Tooltip(
+                                      message: status.detail,
+                                      child: TextButton(
+                                        onPressed: statusAction,
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: color,
+                                          disabledForegroundColor:
+                                              AppColors.textSoft,
+                                          minimumSize: Size.zero,
+                                          tapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          // The name's line height: the folder line sits under it.
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
                                           ),
                                         ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(status.icon, size: 12),
+                                            const SizedBox(width: 6),
+                                            Flexible(
+                                              child: Text(
+                                                // The chip names the STATE; what
+                                                // pressing it does is in the tooltip
+                                                // and in `actionLabel`. "Link
+                                                // required" that can be pressed reads
+                                                // better than a bare verb where every
+                                                // neighbour is a status.
+                                                status.label,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: grid.AppType.monoLabel(
+                                                  fontWeight: FontWeight.w400,
+                                                  height: 1,
+                                                ).copyWith(fontSize: 11),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                    ],
+                                    ),
+                                  ),
+                                )
+                              else if (!compact)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                  ),
+                                  child: Icon(
+                                    Icons.circle,
+                                    size: 8,
+                                    color: color,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Tooltip(
+                                message: [
+                                  if (forkedFrom != null)
+                                    'Forked from ${forkedFrom.name}',
+                                  if (project != null) project.cwd,
+                                  ?project?.branchDetail,
+                                  machineName,
+                                ].join('\n'),
+                                child: PromptContextView(
+                                  // Small, so the two lines stay about the mark's height. The
+                                  // line height leaves room for descenders: at 1.0 the tails of
+                                  // g, p and y were cut off.
+                                  textStyle: grid.AppType.monoLabel(
+                                    color: AppColors.textSoft,
+                                    height: 1.3,
+                                  ).copyWith(fontSize: 10),
+                                  contextData: PromptContext(
+                                    // This computer goes without saying.
+                                    machine: machine?.isLocalMachine == true
+                                        ? null
+                                        : machineName,
+                                    // The folder as it was chosen and its repository's branch;
+                                    // the full working folder is in the tooltip.
+                                    project: project?.label,
+                                    // Not a branch Harness made up that waits for the
+                                    // session's name, nor a commit an agent checked out.
+                                    branch: project?.shownBranch,
+                                    leading: forkedFrom != null
+                                        ? 'forked from ${forkedFrom.name}'
+                                        : null,
                                   ),
                                 ),
                               ),
                             ),
-                          )
-                        else if (!compact)
-                          Padding(
-                            padding: const EdgeInsets.all(4),
-                            child: Icon(Icons.circle, size: 8, color: color),
-                          ),
+                            if (showPr) ...[
+                              const SizedBox(width: 6),
+                              PullRequestBadge(
+                                compact: narrow,
+                                identity: (
+                                  session.machineId,
+                                  agent.id,
+                                  project?.cwd,
+                                  project?.shownBranch,
+                                ),
+                                read: () => notifier.readAgentPullRequest(
+                                  session.machineId,
+                                  agent.id,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -2153,25 +2236,8 @@ class _TerminalHeader extends StatelessWidget {
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: rightWidth),
                     child: PaneHeaderActions(
-                      trailing: showPr
-                          ? ConstrainedBox(
-                              constraints: BoxConstraints(maxWidth: badgeWidth),
-                              child: PullRequestBadge(
-                                compact: narrow,
-                                identity: (
-                                  session.machineId,
-                                  agent.id,
-                                  project?.cwd,
-                                  project?.shownBranch,
-                                ),
-                                read: () => notifier.readAgentPullRequest(
-                                  session.machineId,
-                                  agent.id,
-                                ),
-                              ),
-                            )
-                          : null,
-                      compact: narrow,
+                      // One ⋮ menu for the pane's actions at every width, not a row of icons.
+                      compact: true,
                       // Keep the current model visible, including while the
                       // terminal reconnects, without shifting the other controls.
                       modelPicker: showModelPicker
@@ -2245,32 +2311,6 @@ class _TerminalHeader extends StatelessWidget {
                       viewerColor: agent == null
                           ? null
                           : agentIdentity(agent).color,
-                      details: Tooltip(
-                        message: [
-                          if (forkedFrom != null)
-                            'Forked from ${forkedFrom.name}',
-                          if (project != null) project.cwd,
-                          ?project?.branchDetail,
-                          machineName,
-                        ].join('\n'),
-                        child: PromptContextView(
-                          contextData: PromptContext(
-                            // This computer goes without saying.
-                            machine: machine?.isLocalMachine == true
-                                ? null
-                                : machineName,
-                            // The folder as it was chosen and its repository's branch;
-                            // the full working folder is in the tooltip.
-                            project: narrow ? null : project?.label,
-                            // Not a branch Harness made up that waits for the
-                            // session's name, nor a commit an agent checked out.
-                            branch: narrow ? null : project?.shownBranch,
-                            leading: !narrow && forkedFrom != null
-                                ? 'forked from ${forkedFrom.name}'
-                                : null,
-                          ),
-                        ),
-                      ),
                     ),
                   ),
                 ],

@@ -476,38 +476,27 @@ class _GridModelPickerState extends State<GridModelPicker> {
                 horizontal: widget.compact ? 3 : 6,
                 vertical: 3,
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: widget.compact ? 44 : 140,
-                    ),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.monoLabel(
-                        fontWeight: FontWeight.w400,
-                        color: AppColors.textSoft,
-                      ),
+              // The model's name alone, no dropdown arrow: the room goes to the name, which is
+              // what a person reads here. A read in flight dims it rather than adding a spinner,
+              // so nothing beside it moves.
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  // Compact: the old label plus the arrow's 14px, so a narrow header keeps its fit.
+                  maxWidth: widget.compact ? 58 : 200,
+                ),
+                child: AnimatedOpacity(
+                  opacity: _loading ? .45 : 1,
+                  duration: const Duration(milliseconds: 120),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.monoLabel(
+                      fontWeight: FontWeight.w400,
+                      color: AppColors.textSoft,
                     ),
                   ),
-                  // Replace the arrow while loading so a read cannot squeeze
-                  // the session name or move the pane's other controls.
-                  if (_loading)
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 1.5),
-                    )
-                  else
-                    Icon(
-                      Icons.arrow_drop_down,
-                      size: 14,
-                      color: AppColors.mutedStrong,
-                    ),
-                ],
+                ),
               ),
             ),
           ),
