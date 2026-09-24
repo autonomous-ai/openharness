@@ -10,7 +10,7 @@
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { SCENARIO, type CheckOutcome, type Leg, type LegOutcome, type LogKind, type SmokeCheck } from './smokeChecks.js'
+import { scenarioFor, type CheckOutcome, type Leg, type LegOutcome, type LogKind, type SmokeCheck } from './smokeChecks.js'
 
 const execFileP = promisify(execFile)
 let typeSequence = 0
@@ -155,6 +155,10 @@ export interface ProbeOptions {
   checkTimeoutMs?: number
   /** The tool / MCP log lines right now (`workspace.ts readLog`); a step with a `log` needs one new matching line. */
   readLog?: (kind: LogKind) => string[]
+  /** A workspace file's content right now, or null when it does not exist (`workspace.ts readWorkspaceFile`). */
+  readFile?: (relPath: string) => string | null
+  /** Whose wording the requests use (smokeChecks.ts scenarioFor): each names that engine's tool. */
+  engine?: string
   /** The pane is "ready" once its screen stops changing for this long. A resumed TUI needs it. */
   settleMs?: number
   /** Give up waiting for the pane to settle after this long (the TUI itself may be stuck). */
@@ -166,6 +170,8 @@ export interface ProbeOptions {
 const DEFAULTS: Required<ProbeOptions> = {
   checkTimeoutMs: 90_000,
   readLog: () => [],
+  readFile: () => null,
+  engine: 'claude',
   settleMs: 2_000,
   settleTimeoutMs: 60_000,
   pollMs: 1_000,
@@ -202,17 +208,19 @@ export function checkRef(now: number): string {
  */
 export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts: ProbeOptions = {}): Promise<CheckOutcome> {
   const o = { ...DEFAULTS, ...opts }
-  const marker = new RegExp(check.marker)
   const before = await tmux.capture(pane, o.tailLines)
-  const baselineHits = (before.match(new RegExp(check.marker, 'g')) ?? []).length
   const logBefore = check.log ? o.readLog(check.log).length : 0
+  // read: the file's token, made fresh for this run and written nowhere else (workspace.ts).
+  const token = check.answerFromFile ? (o.readFile(check.answerFromFile) ?? '').trim() : ''
+  if (check.answerFromFile && !token) {
+    return { id: check.id, status: 'stuck', elapsedMs: 0, tail: before.trimEnd(), note: `the workspace has no ${check.answerFromFile} — the run's setup, not the tool` }
+  }
   const start = tmux.now()
   const ref = checkRef(start)
   await tmux.type(pane, `${check.prompt} (${ref})`)
   // Make sure it landed. A tool that has only just started can drop input while it is still
   // loading — measured on grid-dev: claude's first question of a run never reached it (its own
-  // transcript has every later question and not that one), so every step after it failed as
-  // "cannot recall" for a conversation that had never begun. The tag is on screen within a second
+  // transcript has every later question and not that one). The tag is on screen within a second
   // when the text arrived, in the composer or in the transcript; if it is nowhere, type it again.
   for (let retry = 0; retry < 2; retry++) {
     let landed = false
@@ -223,6 +231,27 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
     if (landed) break
     await tmux.type(pane, `${check.prompt} (${ref})`)
   }
+
+  // The proof, never the reply: a log line for exactly these numbers, the file on disk as asked, or
+  // the read file's token on the pane after this prompt (nobody guesses `kiwi-4821-tulip`).
+  const proven = (afterEcho: string | null, tail: string): { logLines?: string[] } | null => {
+    if (check.log) {
+      const logLines = o.readLog(check.log).slice(logBefore)
+      return logLines.some((l) => l.includes(check.logPattern!)) ? { logLines } : null
+    }
+    if (check.file) {
+      const content = o.readFile(check.file.path)
+      if (content === null) return null
+      const f = check.file
+      if (f.equals !== undefined && content.trim() !== f.equals) return null
+      if (f.contains !== undefined && !content.includes(f.contains)) return null
+      if (f.lacks !== undefined && content.includes(f.lacks)) return null
+      return {}
+    }
+    if (token) return (afterEcho ?? (before.includes(token) ? '' : tail)).includes(token) ? {} : null
+    return null
+  }
+
   let tail = before
   const dialogs: string[] = []
   while (tmux.now() - start < o.checkTimeoutMs) {
@@ -244,23 +273,26 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
     const answer = afterEcho ?? (QUOTA_EXHAUSTED.test(before) ? '' : tail)
     if (QUOTA_EXHAUSTED.test(answer)) {
       const resets = quotaResets(answer)
-      return { id: check.id, status: 'no-quota', elapsedMs: tmux.now() - start, tail: tail.trimEnd(), ...(resets ? { resets } : {}), ...(dialogs.length ? { dialogs } : {}) }
+      return { id: check.id, ref, status: 'no-quota', elapsedMs: tmux.now() - start, tail: tail.trimEnd(), ...(resets ? { resets } : {}), ...(dialogs.length ? { dialogs } : {}) }
     }
-    const hits = (tail.match(new RegExp(check.marker, 'g')) ?? []).length
-    if ((afterEcho !== null && marker.test(afterEcho)) || (afterEcho === null && hits > baselineHits)) {
+    const proof = proven(afterEcho, tail)
+    if (proof) {
       const elapsedMs = tmux.now() - start
-      const seen = dialogs.length ? { dialogs } : {}
-      if (!check.log) return { id: check.id, status: 'ok', elapsedMs, tail: tail.trimEnd(), ...seen }
-      // The marker is on screen; now the proof it went through the tool: a new log line for this step.
-      const logLines = o.readLog(check.log).slice(logBefore)
-      const used = check.logPattern ? logLines.some((l) => l.includes(check.logPattern!)) : logLines.length > 0
-      return used
-        ? { id: check.id, status: 'ok', elapsedMs, tail: tail.trimEnd(), logLines, ...seen }
-        : { id: check.id, status: 'stuck', elapsedMs, tail: tail.trimEnd(), logLines, note: `marker shown but ${check.log} log gained no line matching "${check.logPattern}" — answered without using it`, ...seen }
+      // Proven — but the turn may still be running (the model reporting what it did). Let the pane
+      // go quiet before the next request, the way a person waits for an answer before typing.
+      await waitForPaneSettle(tmux, pane, { ...opts, settleTimeoutMs: 30_000 })
+      return { id: check.id, ref, status: 'ok', elapsedMs, tail: (await tmux.capture(pane, o.tailLines)).trimEnd(), ...proof, ...(dialogs.length ? { dialogs } : {}) }
     }
   }
+  // Not proven in time: say what was missing, with what was actually there.
   const logLines = check.log ? o.readLog(check.log).slice(logBefore) : undefined
-  return { id: check.id, status: 'stuck', elapsedMs: tmux.now() - start, tail: tail.trimEnd(), ...(logLines ? { logLines } : {}), ...(dialogs.length ? { dialogs } : {}) }
+  let note: string
+  if (check.log) note = `no ${check.log} log line for "${check.logPattern}"${logLines && logLines.length ? ` (got: ${logLines.join(' | ')})` : ''}`
+  else if (check.file) {
+    const content = o.readFile(check.file.path)
+    note = content === null ? `${check.file.path} does not exist` : `${check.file.path} is ${JSON.stringify(content.trim().slice(0, 120))}`
+  } else note = `${check.answerFromFile}'s token never appeared after the question`
+  return { id: check.id, ref, status: 'stuck', elapsedMs: tmux.now() - start, tail: tail.trimEnd(), note, ...(logLines ? { logLines } : {}), ...(dialogs.length ? { dialogs } : {}) }
 }
 
 /**
@@ -268,7 +300,7 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
  * not answering will not answer the next prompt either, and the queued text would only muddy the evidence.
  */
 export async function probeLeg(tmux: Tmux, pane: string, leg: Leg, opts: ProbeOptions = {}): Promise<LegOutcome> {
-  const steps = SCENARIO[leg]
+  const steps = scenarioFor(opts.engine ?? 'claude')[leg]
   const checks: CheckOutcome[] = []
   const settled = await waitForPaneSettle(tmux, pane, opts)
   if (!settled) {

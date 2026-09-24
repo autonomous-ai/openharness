@@ -25,6 +25,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, realpathSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { randomInt } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { LogKind } from './smokeChecks.js'
@@ -174,6 +175,16 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
   chmodSync(tool, 0o755)
   for (const kind of ['tool', 'mcp'] as const) writeFileSync(logPath(cwd, kind), '', { flag: 'a' })
 
+  // read / write / edit (smokeChecks.ts): one set of files per side, so the grid side can never pass
+  // on what the first side left. The secret is made HERE, fresh for every run, and written nowhere
+  // but its file — not in a prompt, not in a log — so the only way to name it is to read it.
+  mkdirSync(join(cwd, 'notes'), { recursive: true })
+  mkdirSync(join(cwd, 'out'), { recursive: true })
+  for (const n of [1, 2]) {
+    writeFileSync(join(cwd, 'notes', `secret-${n}.txt`), `${freshToken()}\n`)
+    writeFileSync(join(cwd, 'notes', `todo-${n}.txt`), `# todo ${n}\nstatus: pending\n`)
+  }
+
   // The MCP server runs from the workspace too, so the engine's config points at a path that exists
   // on every machine the e2e runs on.
   const mcpServer = join(cwd, 'tools', 'calc-mcp.mjs')
@@ -272,6 +283,22 @@ export function preAcceptClaudeBypassMode(home = homedir()): 'accepted' | 'alrea
   writeFileSync(tmp, JSON.stringify(conf, null, 2), { mode: 0o600 })
   renameSync(tmp, target)
   return 'accepted'
+}
+
+const WORDS = ['kiwi', 'tulip', 'cobalt', 'maple', 'otter', 'saffron', 'glacier', 'lantern', 'pepper', 'quartz', 'harbor', 'violet', 'ember', 'falcon', 'juniper', 'meadow']
+
+/** `kiwi-4821-tulip`: two words and four digits, ~2.5 million combinations, new every run. */
+export function freshToken(): string {
+  return `${WORDS[randomInt(WORDS.length)]}-${randomInt(1000, 10000)}-${WORDS[randomInt(WORDS.length)]}`
+}
+
+/** A workspace file's content, or null when it does not exist — what the probe checks write/edit/read against. */
+export function readWorkspaceFile(cwd: string, relPath: string): string | null {
+  try {
+    return readFileSync(join(cwd, relPath), 'utf8')
+  } catch {
+    return null
+  }
 }
 
 /** The log's lines right now (empty when it does not exist yet). */

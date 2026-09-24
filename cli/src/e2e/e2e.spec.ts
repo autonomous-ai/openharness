@@ -5,12 +5,13 @@ import { compareVersions, planMatrixRuns } from './trigger.js'
 import { sessionName } from './sessionName.js'
 import { buildMatrixEntry } from './matrix.js'
 import type { AgentEngine } from '../engines/types.js'
-import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit } from './smokeChecks.js'
+import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit, scenarioFor, verifyTools, type CheckId, type LegOutcome } from './smokeChecks.js'
 import { pickGridModel } from './gridSwitchDriver.js'
-import { prepareWorkspace, readLog, logPath, preAcceptClaudeBypassMode, CALC_SH, CALC_MCP_MJS } from './workspace.js'
+import { prepareWorkspace, readLog, logPath, readWorkspaceFile, preAcceptClaudeBypassMode, CALC_SH, CALC_MCP_MJS } from './workspace.js'
+import { useByRef } from './sessionTools.js'
 import { execFileSync } from 'node:child_process'
 import { probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, type Tmux } from './paneProbe.js'
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -181,22 +182,54 @@ describe('matrix entry (dry run)', () => {
   })
 })
 
-describe('scenario (one conversation carried across the switch)', () => {
-  it('uses the script tool and the MCP server on every leg, and recalls the start after each switch', () => {
-    // The same three questions on each side of the switch; nothing re-asked on a leg that proved it.
+describe('scenario (what a person does, on each side of the switch)', () => {
+  it('the same five plain requests on each side — bash, read, write, edit, MCP — with nothing shared', () => {
     expect(LEGS).toEqual(['subscription', 'grid'])
-    expect(SCENARIO.subscription.map((c) => c.id).sort()).toEqual(['mcp', 'recall', 'tool'])
-    expect(SCENARIO.grid.map((c) => c.id).sort()).toEqual(['mcp', 'recall', 'tool'])
-    const recallOn = (leg: 'subscription' | 'grid') => SCENARIO[leg].find((c) => c.id === 'recall')!.prompt
-    expect(recallOn('grid')).toBe(recallOn('subscription'))
+    for (const leg of LEGS) expect(SCENARIO[leg].map((c) => c.id)).toEqual(['bash', 'read', 'write', 'edit', 'mcp'])
+    // Nothing the first side leaves behind can pass the second: its own numbers and its own files.
     const patterns = SMOKE_CHECKS.filter((c) => c.logPattern).map((c) => c.logPattern)
-    expect(new Set(patterns).size).toBe(patterns.length) // an old log line can never pass a new step
-    for (const c of SMOKE_CHECKS) if (c.id !== 'recall') expect(c.log && c.logPattern).toBeTruthy()
+    expect(new Set(patterns).size).toBe(patterns.length)
+    const files = SMOKE_CHECKS.map((c) => c.answerFromFile ?? c.file?.path).filter(Boolean)
+    expect(new Set(files).size).toBe(files.length)
     expect(plannedLegs().flatMap((l) => l.checks).every((c) => c.status === 'not-run')).toBe(true)
   })
 
-  it('no prompt can satisfy its own marker (echo of the typed line is not a pass)', () => {
-    for (const c of SMOKE_CHECKS) expect(new RegExp(c.marker).test(c.prompt)).toBe(false)
+  it('every prompt is a plain request, and never contains its own proof', () => {
+    for (const c of SMOKE_CHECKS) {
+      expect(c.prompt).not.toMatch(/reply with exactly|<result>|RECALL_|TOOL_|MCP_/i)
+      if (c.logPattern) expect(c.prompt).not.toContain(c.logPattern) // "add 40 2" is asked; "= 42" is only the log's
+      expect(!!c.log || !!c.answerFromFile || !!c.file).toBe(true) // proven by the machine, never by the reply
+    }
+  })
+
+  it('each engine is asked for its own tool by name, with the same steps and the same proofs', () => {
+    const claude = scenarioFor('claude'), codex = scenarioFor('codex')
+    for (const leg of LEGS) {
+      expect(codex[leg].map((c) => [c.id, c.logPattern, c.answerFromFile, c.file])).toEqual(claude[leg].map((c) => [c.id, c.logPattern, c.answerFromFile, c.file]))
+    }
+    expect(claude.subscription.map((c) => c.prompt.match(/^Use the (\w+)/)?.[1])).toEqual(['Bash', 'Read', 'Write', 'Edit', 'MCP'])
+    expect(codex.subscription.filter((c) => /apply_patch/.test(c.prompt)).map((c) => c.id)).toEqual(['write', 'edit'])
+  })
+
+  it('the right file made the wrong way is not a pass: verifyTools fails the step and names the tool used', () => {
+    const legs = (tools: Partial<Record<CheckId, string[]>>): LegOutcome[] => [{
+      leg: 'subscription',
+      checks: (['bash', 'read', 'write', 'edit', 'mcp'] as CheckId[]).map((id) => ({ id, status: 'ok' as const, ...(tools[id] ? { tools: tools[id] } : {}) })),
+    }]
+    // claude doing everything through Bash — what the first real run did.
+    const viaBash = verifyTools('claude', legs({ bash: ['Bash'], read: ['Bash'], write: ['Bash'], edit: ['Bash'], mcp: ['ToolSearch', 'mcp__e2e_calc__add'] }))
+    expect(viaBash[0].checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=stuck', 'write=stuck', 'edit=stuck', 'mcp=ok'])
+    expect(viaBash[0].checks[2].note).toBe('done with Bash, not Write — the Write tool was not exercised')
+    // claude with its own tools passes.
+    const right = verifyTools('claude', legs({ bash: ['Bash'], read: ['Read'], write: ['Write'], edit: ['Edit'], mcp: ['mcp__e2e_calc__add'] }))
+    expect(right[0].checks.every((c) => c.status === 'ok')).toBe(true)
+    // codex: apply_patch from code mode's exec counts; its read has no tool of its own to demand.
+    const codex = verifyTools('codex', legs({ bash: ['exec→exec_command'], read: ['exec→exec_command'], write: ['exec→apply_patch'], edit: ['apply_patch'], mcp: ['mcp__e2e_calc__sub'] }))
+    expect(codex[0].checks.every((c) => c.status === 'ok')).toBe(true)
+    // Tools that could not be read at all are not "verified".
+    const unknown = verifyTools('claude', legs({ bash: ['Bash'], read: ['Read'], write: ['Write'], edit: ['Edit'] }))
+    expect(unknown[0].checks[4].status).toBe('stuck')
+    expect(unknown[0].checks[4].note).toMatch(/could not be verified/)
   })
 
   it('firstStuck names the first leg/step that did not pass', () => {
@@ -204,7 +237,7 @@ describe('scenario (one conversation carried across the switch)', () => {
     legs[0].checks.forEach((c) => (c.status = 'ok'))
     legs[1].checks[0].status = 'ok'
     legs[1].checks[1].status = 'stuck'
-    expect(firstStuck(legs)).toEqual({ leg: 'grid', check: 'tool', status: 'stuck' })
+    expect(firstStuck(legs)).toEqual({ leg: 'grid', check: 'read', status: 'stuck' })
     legs.forEach((l) => l.checks.forEach((c) => (c.status = 'ok')))
     expect(firstStuck(legs)).toBeNull()
   })
@@ -244,114 +277,162 @@ function fakeLogs() {
   return { lines, readLog: (k: 'tool' | 'mcp') => [...lines[k]] }
 }
 
-const TOOL_STEP = SCENARIO.subscription[0]
-const MCP_STEP = SCENARIO.subscription[1]
+/**
+ * A fake coding tool on a fake machine: it does what each of the five requests asks — runs the
+ * script (a log line), reads the file, writes it, edits it, calls the MCP server (a log line). With
+ * `lie`, it only SAYS it did those steps, which is the case the proofs exist for.
+ */
+function fakeAgent(opts: { lie?: CheckId[] } = {}) {
+  const files: Record<string, string> = {
+    'notes/secret-1.txt': 'kiwi-4821-tulip\n', 'notes/secret-2.txt': 'otter-1234-ember\n',
+    'notes/todo-1.txt': '# todo 1\nstatus: pending\n', 'notes/todo-2.txt': '# todo 2\nstatus: pending\n',
+  }
+  const logs = fakeLogs()
+  const lie = new Set(opts.lie ?? [])
+  const reply = (p: string): string | null => {
+    let m: RegExpMatchArray | null
+    if ((m = p.match(/tools\/calc\.sh add (\d+) (\d+)/))) {
+      if (!lie.has('bash')) logs.lines.tool.push(`t add ${m[1]} ${m[2]} = ${+m[1] + +m[2]}`)
+      return `The result is ${+m[1] + +m[2]}.`
+    }
+    if ((m = p.match(/read (notes\/secret-\d\.txt)/i))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
+    if ((m = p.match(/create (\S+) with this text: (.*) \(ref-/i))) {
+      if (!lie.has('write')) files[m[1]] = `${m[2]}\n`
+      return 'Done.'
+    }
+    if ((m = p.match(/change pending to done in (\S+?)\.? \(ref-/))) {
+      if (!lie.has('edit')) files[m[1]] = files[m[1]].replace('pending', 'done')
+      return 'Updated.'
+    }
+    if ((m = p.match(/e2e_calc to add (\d+) and (\d+)/))) {
+      if (!lie.has('mcp')) logs.lines.mcp.push(`t add ${m[1]} ${m[2]} = ${+m[1] + +m[2]}`)
+      return `${+m[1] + +m[2]}`
+    }
+    return null
+  }
+  const pane = fakePane(reply)
+  const probe = { settleMs: 1, pollMs: 1, checkTimeoutMs: 5_000, readLog: logs.readLog, readFile: (f: string) => files[f] ?? null }
+  return { pane, files, logs, probe }
+}
+
+const BASH_STEP = SCENARIO.subscription[0]
+const READ_STEP = SCENARIO.subscription[1]
 
 describe('pane probe (live steps on a tmux pane)', () => {
-  it('passes a step when the marker shows up after the prompt AND the tool log gained the line', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane((p) => {
-      if (p.includes('calc.sh')) logs.lines.tool.push('2026-09-22T06:00:00Z add 40 2 = 42')
-      return 'TOOL_42'
-    })
-    const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })
-    expect(out.status).toBe('ok')
-    expect(out.logLines).toEqual(['2026-09-22T06:00:00Z add 40 2 = 42'])
-    expect(pane.typed[0]).toMatch(new RegExp(`^${TOOL_STEP.prompt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(ref-[0-9a-z]{6}\\)$`))
+  it('a tool that really does the five requests passes both sides, and each proof is recorded', async () => {
+    const { pane, probe, files } = fakeAgent()
+    const own = await probeLeg(pane, '%1', 'subscription', probe)
+    const grid = await probeLeg(pane, '%1', 'grid', probe)
+    expect(own.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=ok', 'write=ok', 'edit=ok', 'mcp=ok'])
+    expect(grid.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=ok', 'write=ok', 'edit=ok', 'mcp=ok'])
+    expect(own.checks[0].logLines).toEqual(['t add 40 2 = 42'])
+    expect(grid.checks[4].logLines).toEqual(['t add 60 18 = 78'])
+    expect(files['out/hello-2.txt']).toBe('hello from step 2\n')
+    expect(files['notes/todo-1.txt']).toContain('status: done')
+    // Every step carries the tag its prompt was typed with — how its tools are found afterwards.
+    expect([...own.checks, ...grid.checks].every((c) => /^ref-[0-9a-z]{6}$/.test(c.ref ?? ''))).toBe(true)
   })
 
-  it('a marker WITHOUT a new log line is stuck: it answered from memory instead of using the MCP', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane(() => 'MCP_42')
-    const out = await runCheck(pane, '%1', MCP_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })
+  it('saying is not doing: each step fails when the tool only claims it, with what was missing', async () => {
+    const notes: Record<CheckId, RegExp> = {
+      bash: /no tool log line for "add 40 2 = 42"/,
+      read: /notes\/secret-1\.txt's token never appeared/,
+      write: /out\/hello-1\.txt does not exist/,
+      edit: /notes\/todo-1\.txt is "# todo 1\\nstatus: pending"/,
+      mcp: /no mcp log line for "add 30 12 = 42"/,
+    }
+    for (const step of SCENARIO.subscription) {
+      const { pane, probe } = fakeAgent({ lie: [step.id] })
+      const out = await runCheck(pane, '%1', step, probe)
+      expect(out.status, step.id).toBe('stuck')
+      expect(out.note, step.id).toMatch(notes[step.id])
+    }
+  })
+
+  it('read: the token must come after THIS question — one already on screen is no proof', async () => {
+    const { pane, probe } = fakeAgent({ lie: ['read'] })
+    await pane.type('%1', 'kiwi-4821-tulip') // on screen before the question was asked
+    expect((await runCheck(pane, '%1', READ_STEP, probe)).status).toBe('stuck')
+  })
+
+  it('write: the exact text, not merely a file', async () => {
+    const { pane, probe, files } = fakeAgent({ lie: ['write'] })
+    files['out/hello-1.txt'] = 'hello from step one\n'
+    const out = await runCheck(pane, '%1', SCENARIO.subscription[2], probe)
     expect(out.status).toBe('stuck')
-    expect(out.note).toContain('mcp log gained no line')
-    expect(out.logLines).toEqual([])
+    expect(out.note).toBe('out/hello-1.txt is "hello from step one"')
   })
 
-  it('after a resume redraws the previous leg\'s answer, only a marker after THIS prompt\'s echo counts', async () => {
-    const recall = SCENARIO.grid[0]
-    // Screen after a resume: an old turn with the same marker is back on screen; the new prompt gets no reply.
-    const pane = fakePane(() => null)
-    await pane.type('%1', 'What was the very first calculation … (ref-old000)')
-    await pane.type('%1', 'RECALL_40+2')
-    pane.typed.length = 0
-    const stuck = await runCheck(pane, '%1', recall, { settleMs: 1, pollMs: 1, checkTimeoutMs: 5 })
-    expect(stuck.status).toBe('stuck')
-    // Same screen, but the tool answers the new prompt: passes.
-    const answering = fakePane((p) => (p.includes('ref-') ? 'RECALL_40+2' : null))
-    await answering.type('%1', 'What was the very first calculation … (ref-old000)')
-    await answering.type('%1', 'RECALL_40+2')
-    const ok = await runCheck(answering, '%1', recall, { settleMs: 1, pollMs: 1, checkTimeoutMs: 5 })
-    expect(ok.status).toBe('ok')
+  it('read with no secret file in the workspace is the run\'s setup failing, said as such', async () => {
+    const { pane, probe } = fakeAgent()
+    const out = await runCheck(pane, '%1', READ_STEP, { ...probe, readFile: () => null })
+    expect(out.status).toBe('stuck')
+    expect(out.note).toMatch(/the run's setup, not the tool/)
+    expect(pane.typed).toHaveLength(0) // nothing typed for a step that cannot be proven
   })
 
-  it('out of usage is recognised at once, with its reset time, instead of waiting 90s to be called stuck', async () => {
+  it('out of usage is recognised at once, with its reset time, instead of waiting out the step', async () => {
     // What each tool really prints — codex and claude, from their own binaries.
     const cases: Array<[string, string | null]> = [
       ["■ You've hit your usage limit. Upgrade to Pro, or try again at Sep 24th, 2026 6:02 PM.", 'try again at Sep 24th, 2026 6:02 PM'],
-      ["You've hit your session limit \u00b7 resets 6pm", 'resets 6pm'],
-      ["You\u2019ve hit your weekly limit \u00b7 resets Mon 9am", 'resets Mon 9am'],
+      ["You've hit your session limit · resets 6pm", 'resets 6pm'],
+      ["You’ve hit your weekly limit · resets Mon 9am", 'resets Mon 9am'],
       ["You're out of usage credits. /model to switch models.", null],
     ]
     for (const [said, resets] of cases) {
       const pane = fakePane(() => said)
-      const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, checkTimeoutMs: 90_000 })
+      const out = await runCheck(pane, '%1', BASH_STEP, { settleMs: 1, pollMs: 1, checkTimeoutMs: 120_000 })
       expect(out.status, said).toBe('no-quota')
       expect(out.resets ?? null, said).toBe(resets)
-      expect(out.elapsedMs!, said).toBeLessThan(10) // one poll, not the 90s budget
+      expect(out.elapsedMs!, said).toBeLessThan(10) // one poll, not the whole budget
     }
     // Claude's early warning is not the limit: the step carries on and passes.
     const logs = fakeLogs()
-    const warned = fakePane(() => { logs.lines.tool.push('t add 40 2 = 42'); return 'Approaching usage limit \u00b7 resets 6pm\nTOOL_42' })
-    expect((await runCheck(warned, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
+    const warned = fakePane(() => { logs.lines.tool.push('t add 40 2 = 42'); return 'Approaching usage limit · resets 6pm\n42' })
+    expect((await runCheck(warned, '%1', BASH_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
   })
 
-  it('an old limit message already on screen does not count against a new prompt', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane((p) => { if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' } return null })
-    await pane.type('%1', "You've hit your session limit \u00b7 resets 6pm") // yesterday's, still in the scrollback
+  it('an old limit message already on screen does not count against a new request', async () => {
+    const { pane, probe } = fakeAgent()
+    await pane.type('%1', "You've hit your session limit · resets 6pm") // yesterday's, still in the scrollback
     pane.typed.length = 0
-    expect((await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })).status).toBe('ok')
+    expect((await runCheck(pane, '%1', BASH_STEP, probe)).status).toBe('ok')
   })
 
   it('out of usage ends the leg: nothing more is typed into an account that cannot answer', async () => {
     const pane = fakePane(() => "You've hit your usage limit. try again at 6:02 PM.")
     const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1 })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=no-quota', 'mcp=not-run', 'recall=not-run'])
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=no-quota', 'read=not-run', 'write=not-run', 'edit=not-run', 'mcp=not-run'])
     expect(pane.typed).toHaveLength(1)
-    expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'tool', resets: 'try again at 6:02 PM' })
+    expect(quotaHit([leg])).toEqual({ leg: 'subscription', check: 'bash', resets: 'try again at 6:02 PM' })
   })
 
   it('answers codex 0.156\'s stacked startup screens — the one on top first, each once', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane((p) => { if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' } return null })
+    const { pane, probe } = fakeAgent()
     // What the pane held on grid-dev: the hooks review, and the model notice drawn under it.
     await pane.type('%1', 'Hooks need review\n  2 hooks are new or changed.\n›    Review hooks\n     Trust all and continue')
     await pane.type('%1', 'GPT-5.5 retires on October 14, 2026. Switch to GPT-5.6 Sol to continue working in Codex.\n› 1. Try new model\n  2. Use existing model')
     pane.typed.length = 0
     const answered = await dismissStartupDialogs(pane, '%1', { settleMs: 1, pollMs: 1 })
-    // Bottom one first (the model notice keeps the configured model), then the hooks (trust them).
     expect(answered).toEqual(['codex-model-retire', 'codex-hooks-trust'])
     expect(pane.typed).toEqual(['<2>', '<Enter>', '<Down>', '<Enter>'])
     // And the step typed after them is not disturbed by their text still being in the scrollback.
     pane.typed.length = 0
-    const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 1, readLog: logs.readLog })
-    expect(out.status).toBe('ok')
+    expect((await runCheck(pane, '%1', BASH_STEP, probe)).status).toBe('ok')
     expect(pane.typed).toHaveLength(1)
   })
 
-  it('types the question again when a tool that is still loading dropped it', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane((p) => { if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' } return null })
+  it('types the request again when a tool that is still loading dropped it', async () => {
+    const { pane, probe } = fakeAgent()
     // The first paste vanishes, the way claude's first question did on grid-dev; the second lands.
     const realType = pane.type.bind(pane)
     let dropped = false
     pane.type = async (id, text) => { if (!dropped) { dropped = true; pane.typed.push(text); return } await realType(id, text) }
-    const out = await runCheck(pane, '%1', TOOL_STEP, { settleMs: 1, pollMs: 100, readLog: logs.readLog })
+    // The real per-step budget: the 5s spent seeing whether the first paste landed comes out of it.
+    const out = await runCheck(pane, '%1', BASH_STEP, { ...probe, pollMs: 100, checkTimeoutMs: 120_000 })
     expect(out.status).toBe('ok')
     expect(pane.typed).toHaveLength(2) // typed, not seen, typed again
-    expect(pane.typed[0]).toBe(pane.typed[1]) // the same question with the same tag
+    expect(pane.typed[0]).toBe(pane.typed[1]) // the same request with the same tag
   })
 
   it('answers claude 2.1.281\'s reworded folder trust by moving off its "No, exit" default', async () => {
@@ -362,35 +443,80 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect(pane.typed).toEqual(['<Down>', '<Enter>'])
   })
 
-  it('marks a step stuck when the pane never shows the marker, and stops the leg there', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane((p) => {
-      if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' }
-      return 'I do not see an MCP server named e2e_calc.'
-    })
-    const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1, checkTimeoutMs: 5, readLog: logs.readLog })
-    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['tool=ok', 'mcp=stuck', 'recall=not-run'])
-    expect(leg.checks[1].tail).toContain('I do not see an MCP server named e2e_calc.')
-    expect(pane.typed).toHaveLength(2)
+  it('a step that is not proven stops the leg there: nothing more is typed after it', async () => {
+    const { pane, probe } = fakeAgent({ lie: ['write'] })
+    const leg = await probeLeg(pane, '%1', 'subscription', { ...probe, checkTimeoutMs: 5 })
+    expect(leg.checks.map((c) => `${c.id}=${c.status}`)).toEqual(['bash=ok', 'read=ok', 'write=stuck', 'edit=not-run', 'mcp=not-run'])
+    expect(pane.typed).toHaveLength(3)
   })
 
-  it('answers a startup dialog (codex update → Skip) before typing the first step, and records it', async () => {
-    const logs = fakeLogs()
-    const pane = fakePane((p) => {
-      if (p.includes('calc.sh')) { logs.lines.tool.push('t add 40 2 = 42'); return 'TOOL_42' }
-      if (p.includes('e2e_calc')) { logs.lines.mcp.push('t add 30 12 = 42'); return 'MCP_42' }
-      if (p.includes('very first calculation')) return 'RECALL_40+2'
-      return null
-    })
-    // What a fresh codex shows before its prompt; a step typed here would pick "1. Update now".
+  it('answers a startup dialog (codex update → Skip) before typing the first request, and records it', async () => {
+    const { pane, probe } = fakeAgent()
+    // What a fresh codex shows before its prompt; a request typed here would pick "1. Update now".
     await pane.type('%1', 'Update available! 0.155.0 -> 0.155.1  › 1. Update now  2. Skip  Press enter to continue')
     pane.typed.length = 0
-    const leg = await probeLeg(pane, '%1', 'subscription', { settleMs: 1, pollMs: 1, readLog: logs.readLog })
+    const leg = await probeLeg(pane, '%1', 'subscription', probe)
     expect(pane.typed.slice(0, 2)).toEqual(['<2>', '<Enter>'])
-    expect(pane.typed[2]).toContain(TOOL_STEP.prompt)
+    expect(pane.typed[2]).toContain(BASH_STEP.prompt)
     expect(leg.dialogs).toEqual(['codex-update'])
     expect(leg.checks.every((c) => c.status === 'ok')).toBe(true)
     expect(await dismissStartupDialogs(pane, '%1', { settleMs: 1 })).toEqual([]) // nothing left on screen
+  })
+})
+
+describe('session tools and models (read from the engine\'s own session file)', () => {
+  // Records shaped exactly like the real ones — a codex 0.156.1 rollout and a claude 2.1.273
+  // session from grid-dev, 2026-09-24 — trimmed to the fields that matter.
+  it('codex: code-mode exec calls, classic calls, a namespaced MCP call, and each turn\'s model', () => {
+    const home = mkdtempSync(join(tmpdir(), 'wd-sess-'))
+    try {
+      const dir = join(home, '.codex', 'sessions', '2026', '09', '24')
+      mkdirSync(dir, { recursive: true })
+      const rec = (o: object) => JSON.stringify(o)
+      const user = (t: string) => rec({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] } })
+      writeFileSync(join(dir, 'rollout-x.jsonl'), [
+        rec({ type: 'turn_context', payload: { model: 'gpt-6-luna' } }), // written BEFORE the turn's message
+        user('Run tools/calc.sh add 40 2 and tell me the result. (ref-aaaaaa)'),
+        rec({ type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', input: 'const r = await tools.exec_command({cmd:"tools/calc.sh add 40 2"})' } }),
+        rec({ type: 'turn_context', payload: { model: 'DeepSeek-V4-Flash-0731' } }),
+        user('Use the MCP server e2e_calc to add 60 and 18. (ref-bbbbbb)'),
+        rec({ type: 'response_item', payload: { type: 'function_call', name: 'sub', namespace: 'mcp__e2e_calc', arguments: '{}' } }),
+        rec({ type: 'response_item', payload: { type: 'function_call', name: 'apply_patch', arguments: '{}' } }),
+      ].join('\n'))
+      expect(useByRef('codex', '/unused', ['ref-aaaaaa', 'ref-bbbbbb'], home)).toEqual({
+        'ref-aaaaaa': { tools: ['exec→exec_command'], models: ['gpt-6-luna'] },
+        'ref-bbbbbb': { tools: ['mcp__e2e_calc__sub', 'apply_patch'], models: ['DeepSeek-V4-Flash-0731'] },
+      })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('claude: tool_use names per step, ToolSearch included, and the model of every reply', () => {
+    const home = mkdtempSync(join(tmpdir(), 'wd-sess-'))
+    try {
+      const cwd = '/tmp/grid-matrix-out/agents/claude@2.1.273->grid-switch@none--20260924T081321Z'
+      const dir = join(home, '.claude', 'projects', '-tmp-grid-matrix-out-agents-claude-2-1-273--grid-switch-none--20260924T081321Z')
+      mkdirSync(dir, { recursive: true })
+      const rec = (o: object) => JSON.stringify(o)
+      const reply = (model: string, ...tools: string[]) => rec({ type: 'assistant', message: { model, content: tools.map((name) => ({ type: 'tool_use', name, input: {} })) } })
+      writeFileSync(join(dir, 's.jsonl'), [
+        rec({ type: 'user', message: { role: 'user', content: 'Read notes/secret-1.txt and tell me what it says. (ref-cccccc)' } }),
+        reply('claude-haiku-4-5-20251001', 'Read'),
+        rec({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'kiwi-4821-tulip' }] } }),
+        reply('claude-haiku-4-5-20251001'),
+        rec({ type: 'user', message: { role: 'user', content: 'Use the MCP server e2e_calc to add 30 and 12. (ref-dddddd)' } }),
+        reply('DeepSeek-V4-Flash-0731', 'ToolSearch'),
+        reply('DeepSeek-V4-Flash-0731', 'mcp__e2e_calc__add'),
+        reply('<synthetic>'),
+      ].join('\n'))
+      expect(useByRef('claude', cwd, ['ref-cccccc', 'ref-dddddd'], home)).toEqual({
+        'ref-cccccc': { tools: ['Read'], models: ['claude-haiku-4-5-20251001'] },
+        'ref-dddddd': { tools: ['ToolSearch', 'mcp__e2e_calc__add'], models: ['DeepSeek-V4-Flash-0731'] },
+      })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
 
@@ -426,6 +552,18 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       writeFileSync(codexBin, `#!/bin/sh\necho "$@" >> ${JSON.stringify(argvLog)}\n[ "$2" = list ] && echo "e2e_calc node /x/calc-mcp.mjs"\nexit 0\n`)
       chmodSync(codexBin, 0o755)
       const laid = prepareWorkspace(cwd, 'codex', { codexBin })
+      // The read / write / edit steps' files: a fresh unguessable secret per side, a todo to edit.
+      const secrets = [1, 2].map((n) => readWorkspaceFile(cwd, `notes/secret-${n}.txt`)?.trim() ?? '')
+      for (const t of secrets) expect(t).toMatch(/^[a-z]+-\d{4}-[a-z]+$/)
+      expect(secrets[0]).not.toBe(secrets[1])
+      expect(readWorkspaceFile(cwd, 'notes/todo-1.txt')).toContain('status: pending')
+      expect(existsSync(join(cwd, 'out'))).toBe(true)
+      expect(readWorkspaceFile(cwd, 'out/hello-1.txt')).toBeNull() // written by the step, never by us
+      // Fresh per run: two workspaces never share a secret.
+      const other = mkdtempSync(join(tmpdir(), 'wd-ws-'))
+      prepareWorkspace(other, 'claude')
+      expect(readWorkspaceFile(other, 'notes/secret-1.txt')).not.toBe(readWorkspaceFile(cwd, 'notes/secret-1.txt'))
+      rmSync(other, { recursive: true, force: true })
       // The registration is codex's own command, with the server and its log as argv — and a stale
       // entry is removed before the add, so an interrupted run cannot leave one behind.
       const calls = readFileSync(argvLog, 'utf8').trim().split('\n')

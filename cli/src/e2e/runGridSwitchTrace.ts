@@ -31,10 +31,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { GridSwitchDriver, pickGridModel, type GridSwitchTraceStep } from './gridSwitchDriver.js'
 import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
-import { firstStuck, plannedLegs, quotaHit, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
+import { firstStuck, plannedLegs, quotaHit, verifyTools, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
 
 const LAST_LEG = LEGS[LEGS.length - 1]
-import { prepareWorkspace, readLog, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
+import { prepareWorkspace, readLog, readWorkspaceFile, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
 import { sessionName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
 import { outDir, runDir } from './artifacts.js'
@@ -42,6 +42,7 @@ import { env } from '../config/env.js'
 import { daemonUrl, machineId, waitForPane, gridOverrideFromEnv } from './harnessLocal.js'
 import { parseVersionLine } from './currentVersion.js'
 import { preTrustClaudeProject, preTrustCodexProject } from '../lib/claudeTrust.js'
+import { useByRef } from './sessionTools.js'
 
 const execFileP = promisify(execFile)
 
@@ -87,8 +88,9 @@ const CHECK_TIMEOUT_MS: Record<LegOutcome['leg'], number> = { subscription: 120_
 
 async function checks(leg: LegOutcome['leg']): Promise<void> {
   const readLogs = workspace ? (kind: LogKind) => readLog(workspace!, kind) : undefined
+  const readFile = workspace ? (rel: string) => readWorkspaceFile(workspace!, rel) : undefined
   const outcome = pane
-    ? await probeLeg(realTmux, pane, leg, { checkTimeoutMs: CHECK_TIMEOUT_MS[leg], ...(readLogs ? { readLog: readLogs } : {}) })
+    ? await probeLeg(realTmux, pane, leg, { engine, checkTimeoutMs: CHECK_TIMEOUT_MS[leg], ...(readLogs ? { readLog: readLogs } : {}), ...(readFile ? { readFile } : {}) })
     : planned.find((l) => l.leg === leg)!
   legs.push(outcome)
   console.error(`[grid-e2e] ${leg}: ${outcome.checks.map((c) => `${c.id}=${c.status}`).join(' ')}${outcome.dialogs ? ` (answered: ${outcome.dialogs.join(', ')})` : ''}`)
@@ -197,6 +199,19 @@ try {
   console.error(`[grid-e2e] stopped: ${error}`)
 } finally {
   trace = [...driver.trace]
+}
+
+// How each step got done, and by which model: read from the engine's own session file now that the
+// run is over. Evidence, not a verdict — a step's pass/fail is its proof on disk (smokeChecks.ts).
+if (workspace) {
+  const refs = legs.flatMap((l) => l.checks.map((c) => c.ref).filter((r): r is string => !!r))
+  const used = useByRef(engine, workspace, refs)
+  for (const l of legs) for (const c of l.checks) {
+    const u = c.ref ? used[c.ref] : undefined
+    if (u) { c.tools = u.tools; c.models = u.models }
+  }
+  // The right file made the wrong way is not a pass (smokeChecks.ts verifyTools).
+  verifyTools(engine, legs)
 }
 
 const session = sessionName({ engine, version, testcase: TESTCASE, gridModel: gridModel ?? undefined, at: startedAt })
