@@ -24,6 +24,17 @@ const double kModelPickerWidth = 376;
 /// The avatar's side, and the gutter its column occupies on every row.
 const double kModelAvatarSize = 34;
 
+/// The one inset every row's CONTENT sits at, from the edge of the box it is in: the search icon,
+/// the section headings, the avatars and the footer's summary all start on this line, and the
+/// counts, the quota figures and the meter all end on it. They used to sit at 16, 21, 24 and 14,
+/// and a column of left edges that close together reads as a mistake rather than as a design.
+const double kModelPickerInset = 12;
+
+/// The widest a row's right-hand column may be. Stated rather than flexed: a Flexible beside the
+/// Expanded title split the row in half and parked the column in the middle of it, away from the
+/// edge the eye looks for a figure at.
+const double kModelPickerTrailingMax = 120;
+
 /// The same model artwork used in Models, with a brain fallback for unknown names.
 class ModelAvatar extends StatelessWidget {
   const ModelAvatar({super.key, required this.label, this.child});
@@ -59,7 +70,7 @@ class ModelPickerSearch extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     height: 44,
-    padding: const EdgeInsets.symmetric(horizontal: 12),
+    padding: const EdgeInsets.symmetric(horizontal: kModelPickerInset),
     decoration: BoxDecoration(
       color: AppColors.surface,
       borderRadius: BorderRadius.circular(10),
@@ -149,7 +160,12 @@ class ModelPickerSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
+    padding: const EdgeInsets.fromLTRB(
+      kModelPickerInset,
+      14,
+      kModelPickerInset,
+      8,
+    ),
     child: Row(
       children: [
         Expanded(
@@ -253,66 +269,66 @@ class ModelPickerRow extends StatelessWidget {
           ),
         ),
         if (trailing != null) ...[
-          const SizedBox(width: 10),
-          // Flexible: a quota column that insisted on its full width overflowed the row at a
-          // large text size in a small window.
-          Flexible(child: trailing!),
+          const SizedBox(width: 12),
+          // Capped, not flexed — see [kModelPickerTrailingMax]. The cap is also what keeps a quota
+          // column from overflowing the row at a large text size in a small window.
+          ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: kModelPickerTrailingMax,
+            ),
+            child: trailing!,
+          ),
         ],
-        // The tick's gutter, reserved on every row so a row becoming the chosen one does not
-        // shuffle the column beside it.
-        SizedBox(
-          width: 20,
-          child: selected
-              ? Icon(
-                  Icons.check,
-                  size: 16,
-                  color: AppColors.accent,
-                  semanticLabel: 'Selected',
-                )
-              : null,
-        ),
       ],
     );
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: InkWell(
-        onTap: onTap,
-        mouseCursor: SystemMouseCursors.click,
-        borderRadius: BorderRadius.circular(11),
-        hoverColor: AppColors.rowHover,
-        // Focus is a keyboard position, not a decision, and the panel focuses something the moment
-        // it opens; painting it would light a row the person never pointed at.
-        focusColor: Colors.transparent,
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(9, 9, 9, 9),
-          decoration: BoxDecoration(
-            color: selected ? AppColors.selected : null,
-            borderRadius: BorderRadius.circular(11),
-            border: selected
-                ? Border.all(color: AppColors.accent.withValues(alpha: 0.45))
-                : null,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              row,
-              if (meter != null) ...[
-                const SizedBox(height: 9),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(3),
-                  child: LinearProgressIndicator(
-                    value: meter!.clamp(0, 1),
-                    minHeight: 5,
-                    backgroundColor: AppColors.border,
-                    valueColor: AlwaysStoppedAnimation(
-                      note ?? AppColors.accent,
+    // No tick. The fill and its border are the mark, and a tick beside a quota figure crowded the
+    // one thing on the row worth reading. A screen reader is told in words instead.
+    return Semantics(
+      selected: selected,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: InkWell(
+          onTap: onTap,
+          mouseCursor: SystemMouseCursors.click,
+          borderRadius: BorderRadius.circular(11),
+          hoverColor: AppColors.rowHover,
+          // Focus is a keyboard position, not a decision, and the panel focuses something the moment
+          // it opens; painting it would light a row the person never pointed at.
+          focusColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: kModelPickerInset,
+              vertical: 9,
+            ),
+            decoration: BoxDecoration(
+              color: selected ? AppColors.selected : null,
+              borderRadius: BorderRadius.circular(11),
+              border: selected
+                  ? Border.all(color: AppColors.accent.withValues(alpha: 0.45))
+                  : null,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                row,
+                if (meter != null) ...[
+                  const SizedBox(height: 9),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: meter!.clamp(0, 1),
+                      minHeight: 5,
+                      backgroundColor: AppColors.border,
+                      valueColor: AlwaysStoppedAnimation(
+                        note ?? AppColors.accent,
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -336,13 +352,20 @@ class ModelPickerFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(14, 10, 12, 12),
+    // The summary starts on the content line the rows above it use; the button's box ends on the
+    // line their boxes end on, and sits as far from the panel's bottom as from its side.
+    padding: const EdgeInsets.fromLTRB(12 + kModelPickerInset, 12, 12, 12),
     decoration: BoxDecoration(
       border: Border(top: BorderSide(color: AppColors.border)),
     ),
     child: Row(
+      // ⚠️ Both halves Flexible and pushed apart, never Expanded + Flexible. That pair splits the
+      // row down the middle and leaves the button at the START of its half, stranded short of
+      // the right edge. Flexible still gives each half a fair share when a large text size means
+      // they cannot both have everything they want.
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Expanded(
+        Flexible(
           child: Text(
             summary,
             maxLines: 1,
@@ -350,6 +373,7 @@ class ModelPickerFooter extends StatelessWidget {
             style: AppType.body(color: AppColors.muted).copyWith(fontSize: 12),
           ),
         ),
+        const SizedBox(width: 12),
         Flexible(
           child: MouseRegion(
             cursor: SystemMouseCursors.click,
