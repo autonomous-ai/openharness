@@ -30,6 +30,13 @@ import 'phone_sheet.dart';
 ///
 /// Every key stays in the same place every time; this strip is used while
 /// looking at the TERMINAL, not at the strip.
+///
+/// ⚠️ **One exception: `/` becomes `⏎` while an agent is asking something.**
+/// A question dialog is driven by the arrows and Enter, and Enter is the one
+/// the strip did not have — the keyboard's own `return` sends it, but nothing
+/// on screen says so, and on a dialog that reads "enter to submit answer" a
+/// strip of every other key it names reads as "Enter is missing". `/` is the
+/// slot to give up: a dialog has no prompt to start a command in.
 class TerminalKeyBar extends StatelessWidget {
   const TerminalKeyBar({
     super.key,
@@ -40,9 +47,14 @@ class TerminalKeyBar extends StatelessWidget {
     this.onPromptEdited,
     this.onPickImage,
     this.onTakePhoto,
+    this.questionOpen = false,
   });
 
   final Terminal terminal;
+
+  /// An agent's question dialog is on the pane: `/` gives its slot to `⏎` —
+  /// see the class docblock.
+  final bool questionOpen;
 
   /// The `clear` key: empties the prompt being typed into. Null leaves the key
   /// out.
@@ -147,14 +159,25 @@ class TerminalKeyBar extends StatelessWidget {
         onTap: () => terminal.keyInput(TerminalKey.arrowRight),
       ),
       // Last before the rule, beside the image key: how a slash command
-      // starts, and a phone keyboard buries `/` a layer down.
-      _key(
-        label: '/',
-        onTap: () {
-          terminal.textInput('/');
-          onPromptEdited?.call();
-        },
-      ),
+      // starts, and a phone keyboard buries `/` a layer down. Enter in its
+      // place while a question is open — after the arrows, which is the order
+      // a dialog is answered in.
+      if (questionOpen)
+        _key(
+          icon: LucideIcons.cornerDownLeft300,
+          semanticLabel: 'Enter',
+          // Sent as the key, not as text: the keyboard's buffer holds nothing
+          // a dialog cares about, and Return is `\r` to every TUI here.
+          onTap: () => terminal.keyInput(TerminalKey.enter),
+        )
+      else
+        _key(
+          label: '/',
+          onTap: () {
+            terminal.textInput('/');
+            onPromptEdited?.call();
+          },
+        ),
     ];
     // ⚠️ **Neither of these sends a byte anywhere**, and that is why they sit
     // apart from the grid rather than in it. Every key to the left of the rule

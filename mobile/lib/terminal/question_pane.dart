@@ -22,6 +22,8 @@ library;
 
 import 'package:xterm/xterm.dart';
 
+import 'key_chord.dart';
+
 /// Which CLI painted the dialog — the two this parser is verified against.
 ///
 /// The engine matters for more than the frame: Codex highlights on a digit and
@@ -77,8 +79,8 @@ class QuestionPaneView {
   final bool multi;
 
   /// The footer says a digit only highlights and Enter commits — Codex's
-  /// `request_user_input`. False where one digit selects and submits, which is
-  /// every Claude dialog.
+  /// `request_user_input`. False where one digit selects and submits: every
+  /// Claude dialog, and Codex's async question (see [_asyncFooter]).
   final bool enterSubmits;
 
   /// The dialog is on screen but its top — the question and its first rows — is
@@ -128,6 +130,29 @@ final RegExp _enterSubmitsFooter = RegExp(
   caseSensitive: false,
 );
 
+/// The footer of a Codex ASYNC question once it has been opened out of the
+/// queue (`request_user_input_async`, see [parseQueuedQuestions]):
+/// `enter submit   ctrl+] skip   ⌥+↓ main prompt`.
+///
+/// ⚠️ **Not the synchronous dialog, and it does not behave like one.**
+/// Measured on Codex 0.156.1: a digit here selects AND submits — `2` answered
+/// "Green" on the spot — where the synchronous dialog's digit only moves the
+/// highlight. And the UI appends a free-text `Other` row of its own (the tool
+/// tells the model never to include one), which is an editor, not an answer.
+///
+/// Matched on the words, not the keys: `skip` and `main prompt` are what the
+/// hints do, and the keys in front of them are the person's to remap.
+final RegExp _asyncFooter = RegExp(
+  r'enter\s+submit\b.*\b(skip|main prompt)\b',
+  caseSensitive: false,
+);
+
+/// The free-text row an async question's UI adds under the model's options.
+final RegExp _asyncOtherRow = RegExp(
+  r'^other( \(write an answer\))?$',
+  caseSensitive: false,
+);
+
 /// `❯ 1. Label` — with the caret optional and any checkbox peeled off.
 final RegExp _row = RegExp(r'^\s*[❯›>]?\s*(\d+)\.\s+(.+?)\s*$');
 
@@ -155,13 +180,14 @@ final RegExp _ruleTop = RegExp(r'^[─━-]{6,}$');
 final RegExp _codexDescription = RegExp(r'^(.+?)\s{2,}\S');
 
 /// Codex's own chrome, drawn directly above a question with no blank line to
-/// separate it: the prompt caret, an event bullet, or the status line under the
-/// composer. Each marks the top of the dialog's frame.
+/// separate it: the prompt caret, an event bullet, the status line under the
+/// composer, or an async question's `1 of 2` counter. Each marks the top of the
+/// dialog's frame.
 ///
 /// ⚠️ Without this the wrap walk had nothing to stop it — Codex paints no rule
 /// and no tab bar — and it swallowed the whole transcript into the question.
 final RegExp _codexChrome = RegExp(
-  r'^\s*[›•❯>]|^\s*(Question \d+/\d+|Working \(|Ask Codex)',
+  r'^\s*[›•❯>]|^\s*(Question \d+/\d+|\d+ of \d+\s*$|Working \(|Ask Codex)',
 );
 
 /// Lines that may sit under a live dialog's footer without meaning the engine
@@ -216,8 +242,17 @@ final RegExp _outputGlyph = RegExp(
 
 /// What a footer's continuation looks like: a `·` separator, or a phrase
 /// naming a key and what it does.
+///
+/// ⚠️ **Every modifier a footer writes, glyphs included, and outside the word
+/// boundaries.** Codex's async question wraps its footer on a phone pane and,
+/// on its last question, the second line is `⌥+↓ prev question` alone — no
+/// `shift+`, no `ctrl+`, nothing this used to know. That line read as output
+/// under a dead dialog, the dialog was dropped, and the keyboard never came up
+/// for it. Measured on Codex 0.156.1, question 2 of 2. The modifiers sit before
+/// the `\b` group because a `\b` cannot follow `+` into `↓` or `]`: neither
+/// side is a word character.
 final RegExp _footerHint = RegExp(
-  r'\u00b7|\b(to (select|cancel|confirm|submit|toggle|navigate|edit|add|interrupt|view|expand)|esc|enter|tab|ctrl\+|shift\+|\u2191/\u2193|\u2190/\u2192)\b',
+  r'\u00b7|[⌥⌃⇧]\s*\+|\b(?:ctrl|shift|alt|option|opt|meta)\s*\+|\b(to (select|cancel|confirm|submit|toggle|navigate|edit|add|interrupt|view|expand)|esc|enter|tab|\u2191/\u2193|\u2190/\u2192)\b',
   caseSensitive: false,
 );
 
@@ -254,17 +289,20 @@ const int _maxWrapLines = 4;
 /// lowest one. Reading upward from the bottom is what keeps an answered
 /// question in the scrollback from being shown as an open one.
 QuestionPaneView? readQuestionPane(Terminal terminal, QuestionEngine engine) {
-  final lines = _visibleLines(terminal);
+  final lines = questionPaneLines(terminal);
   if (lines.isEmpty) return null;
   return parseQuestionLines(lines, engine);
 }
 
-/// The buffer as plain text, oldest line first.
+/// The buffer as plain text, oldest line first — what every parser here reads.
+///
+/// Public so one read of the buffer can serve both [parseQuestionLines] and
+/// [parseQueuedQuestions] rather than each copying it out again.
 ///
 /// ⚠️ **Reads the buffer, not the viewport.** Someone scrolled up to read
 /// history is still being asked the question, and a pad that vanished when they
 /// scrolled would be a pad that leaves exactly when it is being read about.
-List<String> _visibleLines(Terminal terminal) {
+List<String> questionPaneLines(Terminal terminal) {
   final buffer = terminal.buffer;
   final lines = buffer.lines;
   final total = lines.length;
@@ -331,15 +369,26 @@ QuestionPaneView? parseQuestionLines(
     }
   }
 
-  final enterSubmits = _enterSubmitsFooter.hasMatch(lines[footer]);
+  final asyncQuestion =
+      engine == QuestionEngine.codex && _asyncFooter.hasMatch(lines[footer]);
+  final enterSubmits =
+      !asyncQuestion && _enterSubmitsFooter.hasMatch(lines[footer]);
+  // The UI's own free-text row, always last — see [_asyncFooter]. Dropped here
+  // rather than folded into [_typeRow]: a Claude dialog's option CAN be called
+  // "Other", and there it is an answer.
+  if (asyncQuestion &&
+      rows.isNotEmpty &&
+      _asyncOtherRow.hasMatch(rows.last.label)) {
+    rows.removeLast();
+  }
   // Rows in view but no "1." above them: the dialog's top is out of the buffer.
   // Only Codex does this, and only its footer proves the dialog is still there.
-  if (rows.isNotEmpty && start < 0 && enterSubmits) {
+  if (rows.isNotEmpty && start < 0 && (enterSubmits || asyncQuestion)) {
     return QuestionPaneView(
       question: '',
       rows: rows,
       multi: checkbox,
-      enterSubmits: true,
+      enterSubmits: enterSubmits,
       partial: true,
     );
   }
@@ -508,4 +557,126 @@ QuestionPaneRow? _parseRow(String line, QuestionEngine engine) {
     label: label,
     checked: box != null && box.group(1)!.trim().isNotEmpty,
   );
+}
+
+/// Codex's async questions, waiting in its queue rather than open on screen.
+///
+/// ```
+/// • Queued follow-up inputs
+///   ? 1 question
+///     shift+← to answer
+///
+/// › Ask Codex to do anything
+/// ```
+///
+/// ⚠️ **Why a dialog parser cannot see this.** `request_user_input_async` asks
+/// and lets the agent carry on working: nothing is open, nothing has a footer
+/// or rows, and the composer stays live under it. The question only becomes a
+/// dialog once [answerKey] is pressed — and on a phone that key is one the
+/// keyboard does not have.
+class QueuedQuestions {
+  const QueuedQuestions({required this.count, required this.answerKey});
+
+  /// How many are waiting — `? 2 questions`.
+  final int count;
+
+  /// The key the hint says opens the first of them, as Codex names it — see
+  /// [KeyChord] for why it is read rather than assumed.
+  final KeyChord answerKey;
+
+  @override
+  bool operator ==(Object other) =>
+      other is QueuedQuestions &&
+      other.count == count &&
+      other.answerKey == answerKey;
+
+  @override
+  int get hashCode => Object.hash(count, answerKey);
+}
+
+/// `? 1 question` — the count line. Its wording varies with the count and, per
+/// the strings Codex 0.156.1 carries, may say `unanswered`.
+final RegExp _queuedCount = RegExp(
+  r'^\s*\?\s+(\d+)\s+(?:unanswered\s+)?questions?\s*$',
+  caseSensitive: false,
+);
+
+/// `shift+← to answer` — and `shift + ← to answer`, which is how the same hint
+/// was captured from another install: the key's spacing is not fixed.
+final RegExp _queuedHint = RegExp(
+  r'^\s*(\S(?:.*\S)?)\s+to answer\s*$',
+  caseSensitive: false,
+);
+
+/// Codex's composer line — `› Ask Codex to do anything`, or `›` over a draft.
+final RegExp _composer = RegExp(r'^\s*\u203a(\s|$)');
+
+/// How far above its hint the count line may sit. They are adjacent in every
+/// capture; one line of slack covers a repaint caught mid-way.
+const int _maxQueuedCountGap = 2;
+
+/// How far under the hint Codex's composer must be.
+///
+/// ⚠️ **The composer is what says the queue is live.** The block is part of
+/// Codex's bottom pane, always drawn right above the composer; one read with
+/// the hint and no composer under it is scrollback, or a Codex that has exited,
+/// and a button pressing a key into either would type into whatever is there
+/// now. The slack is for queued follow-up messages, which the same block can
+/// list under the question.
+const int _maxQueuedComposerScan = 10;
+
+/// Read Codex's queued async questions off the buffer, or null if none wait.
+///
+/// ⚠️ **Codex only, and only its live bottom pane.** Anchored to the LAST hint
+/// in the buffer, for the reason [readQuestionPane] anchors to the last
+/// footer, and only when Codex's composer is still drawn under it.
+QueuedQuestions? parseQueuedQuestions(List<String> lines) {
+  // ⚠️ **Every candidate from the bottom up, not just the last one.** A hint's
+  // shape — words, then `to answer` — is also the shape of a sentence, and the
+  // lowest such line can be the person's own draft in the composer. Each is
+  // checked in turn, and the first that is a real hint wins.
+  for (var at = lines.length - 1; at >= 0; at--) {
+    final match = _queuedHint.firstMatch(lines[at]);
+    if (match == null) continue;
+    final found = _queuedAt(lines, at, match.group(1)!);
+    if (found != null) return found;
+  }
+  return null;
+}
+
+/// The queue whose hint is on line [hintAt], naming [keyText] — or null when
+/// that line is not one.
+QueuedQuestions? _queuedAt(List<String> lines, int hintAt, String keyText) {
+  var count = 0;
+  for (var i = hintAt - 1; i >= 0 && hintAt - i <= _maxQueuedCountGap; i--) {
+    final match = _queuedCount.firstMatch(lines[i]);
+    if (match != null) {
+      count = int.parse(match.group(1)!);
+      break;
+    }
+    // Only blanks may stand between the two; anything else means this hint
+    // belongs to something other than a question count.
+    if (lines[i].trim().isNotEmpty) return null;
+  }
+  if (count <= 0) return null;
+
+  var live = false;
+  for (
+    var i = hintAt + 1;
+    i < lines.length && i - hintAt <= _maxQueuedComposerScan;
+    i++
+  ) {
+    if (_composer.hasMatch(lines[i])) {
+      live = true;
+      break;
+    }
+    // A dialog under the hint means the question has already been opened.
+    if (_footer.hasMatch(lines[i])) return null;
+  }
+  if (!live) return null;
+
+  final key = KeyChord.parse(keyText);
+  // A key this cannot press is no key at all — see [KeyChord].
+  if (key == null) return null;
+  return QueuedQuestions(count: count, answerKey: key);
 }

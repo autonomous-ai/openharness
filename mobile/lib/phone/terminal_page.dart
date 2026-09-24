@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+// `TerminalStyle` — the key-hint chips wear the terminal's own face.
+import 'package:xterm/xterm.dart' show TerminalStyle;
 
 import 'package:harness_mobile/core/models.dart' show Agent, AgentProject;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -18,6 +20,7 @@ import 'package:harness_mobile/terminal/image_transcode.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
+import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/question_pane.dart';
 import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
@@ -459,6 +462,12 @@ class _TerminalPageState extends State<TerminalPage>
   /// is new only when its text or its options differ.
   String? _questionRaisedFor;
 
+  /// The queue of Codex async questions the keyboard was last raised for — see
+  /// [_onQuestionPane]. Once per change of the queue, for the reason
+  /// [_questionRaisedFor] is once per question: a keyboard put away while the
+  /// same questions wait stays away.
+  QueuedQuestions? _queueRaisedFor;
+
   /// Point the question watcher at this page's current terminal.
   ///
   /// Called from `build`, where both the engine and the session are known, and
@@ -497,6 +506,25 @@ class _TerminalPageState extends State<TerminalPage>
       // again even if it words itself identically.
       if (!open) _questionRaisedFor = null;
     });
+    // A queued question — Codex's async kind — raises the keyboard too, once
+    // per change of the queue, by the same rule as a dialog below: the answer
+    // is typed, and the band's key and the chip are pressed, with it up. The
+    // header comes back with it, so the band is seen.
+    //
+    // ⚠️ **Marked only once the keyboard could actually be raised.** A queue
+    // read before the session takes input — a page opened onto an agent that
+    // already has one waiting — would otherwise be recorded as raised for, and
+    // nothing would try again until the queue changed.
+    final queued = _questionWatcher?.queued;
+    if (queued == null) {
+      _queueRaisedFor = null;
+    } else if (!open &&
+        queued != _queueRaisedFor &&
+        (_readFacts().session?.acceptsInput ?? false)) {
+      _queueRaisedFor = queued;
+      _chrome.reveal();
+      _raiseKeyboardForQuestion();
+    }
     if (!open) return;
     final key = view.fingerprint;
     if (_questionRaisedFor == key) return;
@@ -532,6 +560,29 @@ class _TerminalPageState extends State<TerminalPage>
     // The keyboard is on its way and the key bar opens with it — see
     // [_raiseKeyboard], which holds the resize the same way.
     _armSettle();
+  }
+
+  /// The band's Answer: press the key Codex named for opening its queued
+  /// question, and bring the keyboard up for the answer.
+  ///
+  /// ⚠️ **The key the hint showed, not a Shift+Left of this page's own** — see
+  /// `KeyChord`. Once Codex opens the question it is an ordinary dialog on the
+  /// pane, and [_onQuestionPane] takes it from there.
+  void _answerQueuedQuestion() {
+    final queued = _questionWatcher?.queued;
+    final session = _readFacts().session;
+    if (queued == null || session == null || !session.acceptsInput) return;
+    if (!queued.answerKey.send(session.terminal)) return;
+    _raiseKeyboardForQuestion();
+  }
+
+  /// A key-hint chip: press the chord the pane's chrome named. Nothing else —
+  /// what the key does is the CLI's, and it redraws the screen to say so.
+  void _pressHint(KeyHint hint) {
+    final session = _readFacts().session;
+    if (session == null || !session.acceptsInput) return;
+    HapticFeedback.selectionClick();
+    hint.chord.send(session.terminal);
   }
 
   _PageFacts _readFacts() {
@@ -1146,6 +1197,29 @@ class _TerminalPageState extends State<TerminalPage>
         !agentGone &&
         session != null &&
         (session.watching || session.status == TerminalSessionStatus.takenOver);
+    // Codex's queued async questions, for the band under the header. Only where
+    // the key can be pressed — not on a pane that cannot type, whose own band
+    // is up instead — and not once a question is open, when the dialog itself
+    // is what is on screen.
+    final queued = _questionWatcher?.queued;
+    final queuedBanner =
+        queued != null &&
+            !blocked &&
+            _reclaiming == null &&
+            (session?.acceptsInput ?? false) &&
+            _questionWatcher?.view == null
+        ? queued
+        : null;
+    // The keys the pane's chrome offers and a phone cannot press — see
+    // [parseKeyHints]. Not on a pane that cannot type.
+    //
+    // ⚠️ **The queued question's own key included, band or no band.** It was
+    // left out while the band was up, as the same press twice — and the chip
+    // is where the eye goes: beside `shift+← to answer` at the foot of the
+    // pane, where the band's button, up under the header, was not looked for.
+    final keyHints = agentGone || blocked || !(session?.acceptsInput ?? false)
+        ? const <KeyHint>[]
+        : _questionWatcher?.hints ?? const <KeyHint>[];
     final takerName = phoneTakerName(
       session,
       (id) => widget.notifier.stateOf(id)?.machine.displayName,
@@ -1384,6 +1458,23 @@ class _TerminalPageState extends State<TerminalPage>
                                 // says, the key bar is already under the thumb, and
                                 // a column floating over the prompt being typed into
                                 // would be in the way of both.
+                                // The chrome's own keys as buttons — see
+                                // [_KeyHintChips]. Laid OVER the pane, like the
+                                // column below, so they come and go without
+                                // resizing the terminal; and down at its foot,
+                                // under the column, where the hints they stand
+                                // for are drawn.
+                                if (keyHints.isNotEmpty &&
+                                    session != null &&
+                                    session.hasRenderedFrame)
+                                  Positioned(
+                                    right: 8,
+                                    bottom: 6,
+                                    child: _KeyHintChips(
+                                      hints: keyHints,
+                                      onPress: _pressHint,
+                                    ),
+                                  ),
                                 if (!_ownsInput)
                                   Positioned(
                                     right: TerminalActionColumn.inset,
@@ -1408,6 +1499,10 @@ class _TerminalPageState extends State<TerminalPage>
                               session: session,
                               keyboardUp: _keyBarUp,
                               onDismiss: _dismissInput,
+                              // A dialog the watcher can read is open: the
+                              // strip offers Enter for it. See
+                              // [TerminalKeyBar.questionOpen].
+                              questionOpen: _questionWatcher?.view != null,
                               // Only where the far side can actually take one: an
                               // older CLI never advertises the binary kind, so the
                               // upload would go nowhere silently. Null leaves the
@@ -1543,6 +1638,15 @@ class _TerminalPageState extends State<TerminalPage>
                                   takeoverNotice: takeoverNotice,
                                   holderName: holderName,
                                   onTakeControl: _takeControl,
+                                ),
+                              // In the same place as that band, and for the same
+                              // reason: it rides the header's slide rather than
+                              // sitting on the output. Never both — see
+                              // `queuedBanner`.
+                              if (queuedBanner != null)
+                                _QueuedQuestionBanner(
+                                  count: queuedBanner.count,
+                                  onAnswer: _answerQueuedQuestion,
                                 ),
                             ],
                           ),
@@ -1936,6 +2040,212 @@ class _AgentGone extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Buttons for the keys the pane's chrome offers and a phone cannot press —
+/// `shift+tab cycle`, `ctrl+] skip`, `⌥+↓ main prompt` — each the key and the
+/// CLI's own word for what it does, both as the pane printed them and in the
+/// terminal's own face, so a chip reads as the hint it stands beside. See
+/// [parseKeyHints].
+///
+/// ⚠️ **Stacked in one column at the right edge, never side by side.** Laid in a
+/// row they ran across the pane's foot and covered the very lines they were
+/// read off — a wrapped footer's second line included. A column keeps to a
+/// strip at the edge, where a line of terminal text is usually shortest.
+///
+/// Nothing but the chips takes a touch: the column is as wide as its widest
+/// chip, and a Column hit-tests only its children, so the gaps between them
+/// let a tap through to the terminal.
+class _KeyHintChips extends StatelessWidget {
+  const _KeyHintChips({required this.hints, required this.onPress});
+
+  final List<KeyHint> hints;
+  final ValueChanged<KeyHint> onPress;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    // ⚠️ Out of the focus chain, as the key strip is: a chip that took focus on
+    // a tap would close the terminal's input connection, and the keyboard with
+    // it.
+    return ExcludeFocus(
+      child: MediaQuery.withNoTextScaling(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            for (var i = 0; i < hints.length; i++) ...[
+              if (i > 0) const SizedBox(height: 6),
+              _KeyHintChip(hint: hints[i], onTap: () => onPress(hints[i])),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _KeyHintChip extends StatelessWidget {
+  const _KeyHintChip({required this.hint, required this.onTap});
+
+  final KeyHint hint;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: '${hint.action}, ${hint.keyText}',
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        height: 28,
+        constraints: const BoxConstraints(maxWidth: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          // Nearly opaque: it sits on terminal text, and a chip the output
+          // showed through would be read as more of the output.
+          color: AppPalette.panelBg.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppGlass.lift),
+        ),
+        // The terminal's face, followed live: Settings ▸ Terminal can change it
+        // while the chips are up.
+        child: ValueListenableBuilder<TerminalStyle>(
+          valueListenable: terminalFontStore,
+          builder: (context, face, _) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                hint.keyText,
+                style: TextStyle(
+                  fontFamily: face.fontFamily,
+                  fontFamilyFallback: face.fontFamilyFallback,
+                  color: AppPalette.textPrimary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  height: 1,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  hint.action,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: face.fontFamily,
+                    fontFamilyFallback: face.fontFamilyFallback,
+                    color: AppPalette.textSecondary,
+                    fontSize: 12,
+                    height: 1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Codex has asked something without stopping to wait — its async kind, queued
+/// under its composer as `? 1 question · shift+← to answer`.
+///
+/// ⚠️ **A band with a button, because the phone has no way to press the key
+/// the hint names.** The keyboard has no Shift or arrows, and the key strip has
+/// arrows without Shift, so the question sat there unanswerable until the agent
+/// gave up on it — Codex resolves an unanswered one on its own after a while.
+///
+/// Drawn like [_ControlBanner], in the same place, so the two read as one kind
+/// of thing: something about this terminal that needs a tap.
+class _QueuedQuestionBanner extends StatelessWidget {
+  const _QueuedQuestionBanner({required this.count, required this.onAnswer});
+
+  final int count;
+  final VoidCallback onAnswer;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final ink = phoneToneColor(PhoneTone.attention);
+    return Semantics(
+      key: const ValueKey('phone-queued-question-strip'),
+      container: true,
+      liveRegion: true,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          // Composited over the page's ground, as [_ControlBanner] is and for
+          // its reason: the terminal theme behind may be any colour.
+          color: Color.alphaBlend(
+            ink.withValues(alpha: 0.12),
+            AppPalette.windowBg,
+          ),
+          border: Border(
+            bottom: BorderSide(color: ink.withValues(alpha: 0.55)),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+          child: Row(
+            children: [
+              Icon(LucideIcons.messageCircleQuestion300, size: 15, color: ink),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      count == 1
+                          ? 'Codex is asking a question'
+                          : 'Codex is asking $count questions',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppPalette.textPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'It keeps working while it waits for you.',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppPalette.textSecondary,
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              TextButton(
+                onPressed: onAnswer,
+                style: TextButton.styleFrom(
+                  foregroundColor: ink,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Answer',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The band over the output saying this pane cannot be typed into, and offering the way in.

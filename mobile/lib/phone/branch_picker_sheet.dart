@@ -129,141 +129,161 @@ class _BranchPickerState extends State<_BranchPicker> {
     return note == null ? null : SheetRowNote(note);
   }
 
+  /// Puts the keyboard away and takes the caret out of the field — see the note on the project
+  /// picker's own [_dismissKeyboard], which had the same fault: the sheet closed and the keyboard
+  /// stayed, over the form underneath.
+  void _dismissKeyboard() => FocusManager.instance.primaryFocus?.unfocus();
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final matches = _matches;
     final typed = widget.typedName;
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(kSheetInset, 0, kSheetInset, 10),
-            child: PhoneSearchField(
-              controller: _controller,
-              focus: _focus,
-              // ⚠️ Not autofocused. The list is worth reading first — most
-              // repositories have a handful of branches and the answer is on
-              // screen already; the keyboard would bury it.
-              autofocus: false,
-              hintText: 'Search branches',
-              onChanged: (value) => setState(() => _query = value),
-              onClear: () => setState(() {
-                _controller.clear();
-                _query = '';
-              }),
-            ),
-          ),
-          Flexible(
-            child: ListView.builder(
-              padding: EdgeInsets.fromLTRB(
+    return GestureDetector(
+      // Any tap that is not a row puts the keyboard away. A row's own detector is nearer the tap
+      // and still wins.
+      behavior: HitTestBehavior.opaque,
+      onTap: _dismissKeyboard,
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
                 kSheetInset,
                 0,
                 kSheetInset,
-                MediaQuery.paddingOf(context).bottom + 16,
+                10,
               ),
-              itemCount: matches.length + 1,
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  // First, because a branch nobody has yet is what most new
-                  // work starts on and it cannot be found by searching.
+              child: PhoneSearchField(
+                controller: _controller,
+                focus: _focus,
+                // ⚠️ Not autofocused. The list is worth reading first — most
+                // repositories have a handful of branches and the answer is on
+                // screen already; the keyboard would bury it.
+                autofocus: false,
+                hintText: 'Search branches',
+                onChanged: (value) => setState(() => _query = value),
+                onClear: () => setState(() {
+                  _controller.clear();
+                  _query = '';
+                }),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: EdgeInsets.fromLTRB(
+                  kSheetInset,
+                  0,
+                  kSheetInset,
+                  MediaQuery.paddingOf(context).bottom + 16,
+                ),
+                itemCount: matches.length + 1,
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    // First, because a branch nobody has yet is what most new
+                    // work starts on and it cannot be found by searching.
+                    return SheetRow(
+                      first: true,
+                      last: matches.isEmpty,
+                      leading: SheetTile(
+                        child: Icon(
+                          LucideIcons.plus,
+                          size: 18,
+                          color: AppPalette.accentOnSurface,
+                        ),
+                      ),
+                      title: Text(
+                        typed == null ? 'New branch…' : 'New branch: $typed',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: sheetRowTitleStyle().copyWith(
+                          color: AppPalette.accentOnSurface,
+                        ),
+                      ),
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        _dismissKeyboard();
+                        Navigator.of(context).pop(const BranchChoice.name(''));
+                      },
+                    );
+                  }
+                  final branch = matches[index - 1];
+                  final chosen =
+                      widget.typedName == null &&
+                      branch.ref == widget.selectedRef;
                   return SheetRow(
-                    first: true,
-                    last: matches.isEmpty,
+                    first: false,
+                    last: index == matches.length,
                     leading: SheetTile(
                       child: Icon(
-                        LucideIcons.plus,
+                        LucideIcons.gitBranch,
                         size: 18,
-                        color: AppPalette.accentOnSurface,
+                        color: chosen
+                            ? AppPalette.accentOnSurface
+                            : AppPalette.textSecondary,
                       ),
                     ),
                     title: Text(
-                      typed == null ? 'New branch…' : 'New branch: $typed',
+                      branch.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: sheetRowTitleStyle().copyWith(
-                        color: AppPalette.accentOnSurface,
-                      ),
+                      style: sheetRowTitleStyle(),
+                    ),
+                    chevron: false,
+                    selected: chosen,
+                    // The note goes where a status would: `default · current` is
+                    // what this branch IS, the same kind of fact.
+                    // ⚠️ **The note and the tick sit side by side, and the note
+                    // is never given up for it.** They were one slot, so the
+                    // branch most likely to carry `default · current` — the one
+                    // the form starts on — was also the one wearing the tick,
+                    // and the two facts a person needs to tell those words apart
+                    // were exactly the ones never shown.
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ?_noteRow(branch),
+                        if (chosen) ...[
+                          const SizedBox(width: 8),
+                          Icon(
+                            LucideIcons.check300,
+                            size: 18,
+                            color: AppPalette.accent,
+                          ),
+                        ],
+                      ],
                     ),
                     onTap: () {
                       HapticFeedback.selectionClick();
-                      Navigator.of(context).pop(const BranchChoice.name(''));
+                      _dismissKeyboard();
+                      Navigator.of(context).pop(BranchChoice.ref(branch.ref));
                     },
                   );
-                }
-                final branch = matches[index - 1];
-                final chosen =
-                    widget.typedName == null &&
-                    branch.ref == widget.selectedRef;
-                return SheetRow(
-                  first: false,
-                  last: index == matches.length,
-                  leading: SheetTile(
-                    child: Icon(
-                      LucideIcons.gitBranch,
-                      size: 18,
-                      color: chosen
-                          ? AppPalette.accentOnSurface
-                          : AppPalette.textSecondary,
-                    ),
-                  ),
-                  title: Text(
-                    branch.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: sheetRowTitleStyle(),
-                  ),
-                  chevron: false,
-                  selected: chosen,
-                  // The note goes where a status would: `default · current` is
-                  // what this branch IS, the same kind of fact.
-                  // ⚠️ **The note and the tick sit side by side, and the note
-                  // is never given up for it.** They were one slot, so the
-                  // branch most likely to carry `default · current` — the one
-                  // the form starts on — was also the one wearing the tick,
-                  // and the two facts a person needs to tell those words apart
-                  // were exactly the ones never shown.
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ?_noteRow(branch),
-                      if (chosen) ...[
-                        const SizedBox(width: 8),
-                        Icon(
-                          LucideIcons.check300,
-                          size: 18,
-                          color: AppPalette.accent,
-                        ),
-                      ],
-                    ],
-                  ),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    Navigator.of(context).pop(BranchChoice.ref(branch.ref));
-                  },
-                );
-              },
-            ),
-          ),
-          if (matches.isEmpty && _query.trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                kSheetCaptionInset,
-                0,
-                kSheetInset,
-                12,
+                },
               ),
-              child: Text(
-                'No branch matches “${_query.trim()}”. New branch… makes one.',
-                style: TextStyle(
-                  color: AppPalette.textSecondary,
-                  fontSize: 13.5,
+            ),
+            if (matches.isEmpty && _query.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  kSheetCaptionInset,
+                  0,
+                  kSheetInset,
+                  12,
+                ),
+                child: Text(
+                  'No branch matches “${_query.trim()}”. New branch… makes one.',
+                  style: TextStyle(
+                    color: AppPalette.textSecondary,
+                    fontSize: 13.5,
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
