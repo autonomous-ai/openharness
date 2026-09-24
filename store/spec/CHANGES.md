@@ -223,7 +223,8 @@ Initial contract. Lifted from the `.board.json` (Circuit) and `.episode.json` (T
   relevant subscription/default login plus running owned and shared models supported by the engine.
   The model's serving machine is independent of the machine running the agent and its project.
 - **Why:** model selection belongs beside Agent, and remote execution belongs beside Project.
-  Advanced contains Branch, Worktree, Approvals and subscription Profile; Machine stays visible.
+  Branch sits under Project, where it belongs; Advanced contains Worktree, Approvals and
+  subscription Profile; Machine stays visible.
 - **Backward compatible:** `grid_models_list.supportsModelLaunch` gates the new semantic
   `agent_create.gridModel` / `gridName` pair. Ordinary launches and existing raw grid routes retain
   their wire contracts. Older daemons explain the required update for explicit model launches.

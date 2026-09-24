@@ -5,15 +5,21 @@ Escape leaves that tab open. The command dock opens only after an explicit
 Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
 opening or cancelling the dock never starts a harness.
 
-The launch form starts on Harness, followed by Agent and Model, then Machine
-and Project. Machine always stays visible. Advanced expands Branch, Worktree,
-Approvals, and Profile for Codex subscription sessions. Its expanded state is
-remembered. The **+ New Harness** action stays pinned below the scrolling fields
-and submits the draft. There is no heading,
+The launch form starts on Harness, followed by Agent and Model, then Machine,
+Project and Branch; a blank row separates each group and Advanced. Machine
+always stays visible. Advanced expands Worktree, Approvals, and Profile for
+Codex subscription sessions. Its expanded state is remembered. The
+`[ New Harness ]` action stays pinned below the scrolling fields, prints the
+key bound to `picker.start` (⇧⏎ by default), and submits the draft; that key
+starts from any field, taking a value highlighted in an open list first. Plain
+Return on a value row never starts. The machine list puts this computer first,
+then usable machines, then unlinked or offline ones in dark grey. There is no heading,
 Task row, or Open In row. Cmd-O and Cmd-P also omit headings and counts.
 Tasks carried from search or Store examples remain part of the draft.
 
-Values and search use the terminal's selected font, size, and line height.
+Values and search use the terminal's selected font, size, and line height, on a
+character grid: one cell wide and one row tall, with every margin, column and
+gap a whole number of them, and text whose line height is the row.
 The right pane previews choices without a selection highlight while the left
 has focus. Right arrow, Return, or typing activates the list, and Left arrow
 gives the keys back to the rows once the search is empty; accepting a value

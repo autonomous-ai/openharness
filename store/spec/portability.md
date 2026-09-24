@@ -52,9 +52,9 @@ way to infer where an edited legacy section ends.
 `dsh_list.engines` reflects the daemon's adapters, for installed and uninstalled packages alike.
 The desktop trusts the selected machine's answer; old daemons without the field offer the manifest
 default. The same Harness → Agent → Model → Machine → Project form handles Coding and store packages.
-Agent/Model and Machine/Project are adjacent pairs. Advanced hides branch, worktree, approvals and
+Agent/Model and Machine/Project/Branch are adjacent groups. Advanced hides worktree, approvals and
 profile (Codex subscription launches only); Machine stays visible and Start stays pinned below
-the scrolling fields. Preferences stay in the existing app data folder;
+the scrolling fields, reachable from any field with ⇧⏎. Preferences stay in the existing app data folder;
 `new_harness_preferences_v1` separates agent and harness recents and remembers the last engine for
 each harness. Legacy preference keys are read without being deleted.
 
