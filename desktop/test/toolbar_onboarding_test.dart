@@ -16,6 +16,7 @@ import 'package:harness/widgets/onboarding_card.dart';
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'support/model_manager.dart';
 import 'swarm_screen_test.dart' show terminal;
+import 'swarm_state_test.dart' show MemoryStore;
 
 class _App extends ModelManagerTestApp {
   _App() : super(ModelManagerConnection()) {
@@ -74,8 +75,9 @@ void main() {
     WidgetTester tester, {
     AppKeymap? keymap,
     bool native = false,
+    MemoryStore? storage,
   }) async {
-    journey = WorkspaceOnboarding();
+    journey = WorkspaceOnboarding(storage: storage);
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1280, 800);
     addTearDown(tester.view.reset);
@@ -110,6 +112,129 @@ void main() {
       ),
     ];
     app.adoptSessionForTest(terminal('work', []));
+  }
+
+  for (var completed = 1; completed <= 3; completed++) {
+    testWidgets(
+      'returning welcome restores $completed completed steps with working actions',
+      (tester) async {
+        final storage = MemoryStore();
+        final previous = WorkspaceOnboarding(storage: storage);
+        previous.sync(
+          scope: 'account:review@example.test',
+          observed: OnboardingStep.values.take(completed).toSet(),
+          otherComputer: false,
+          modelsAvailable: true,
+        );
+        await tester.pump();
+        expect(previous.loaded, isTrue);
+        await previous.flush();
+        previous.dispose();
+
+        // A new tracker and screen restore only saved history; no harnesses
+        // are open to supply these milestones again.
+        await mount(tester, storage: storage);
+        expect(app.allPanes, isEmpty);
+        expect(journey.scope, 'account:review@example.test');
+        expect(
+          OnboardingStep.values.where(journey.completed),
+          OnboardingStep.values.take(completed),
+        );
+        if (completed < 3) {
+          expect(find.text('Harness like a boss.'), findsOneWidget);
+          for (final (index, step) in OnboardingStep.values.indexed) {
+            expect(
+              tester
+                  .widget<Text>(
+                    find.byKey(ValueKey('welcome-progress-${step.name}')),
+                  )
+                  .data,
+              index < completed ? '✓' : '○',
+            );
+          }
+        } else {
+          expect(find.text('Follow your curiosity.'), findsOneWidget);
+          expect(find.text('○'), findsNothing);
+          expect(find.text('✓'), findsNothing);
+        }
+
+        final destinations = completed < 3
+            ? ['agent.new', 'machines.list', 'models.list']
+            : ['agent.new', 'agent.open', 'app.store'];
+        for (final command in destinations) {
+          await tap(tester, find.byKey(ValueKey('welcome-$command')));
+          switch (command) {
+            case 'agent.new':
+              expect(find.byType(NewHarnessForm), findsOneWidget);
+            case 'machines.list':
+              expect(
+                find.byKey(const ValueKey('machines-panel')),
+                findsOneWidget,
+              );
+            case 'models.list':
+              expect(find.byType(ModelsPanel), findsOneWidget);
+            case 'agent.open':
+              expect(
+                find.byKey(const ValueKey('swarm-search-input')),
+                findsOneWidget,
+              );
+            case 'app.store':
+              expect(app.activeSwarm.isStore, isTrue);
+          }
+          if (command == 'app.store') {
+            await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+          } else {
+            await key(tester, LogicalKeyboardKey.escape);
+          }
+          await tester.pumpAndSettle();
+        }
+        for (final shortcut in [
+          LogicalKeyboardKey.keyN,
+          if (completed == 3) ...[
+            LogicalKeyboardKey.keyO,
+            LogicalKeyboardKey.keyS,
+          ],
+          LogicalKeyboardKey.keyM,
+          LogicalKeyboardKey.keyI,
+        ]) {
+          await key(tester, shortcut, cmd: true);
+          await tester.pumpAndSettle();
+          if (shortcut == LogicalKeyboardKey.keyN) {
+            expect(find.byType(NewHarnessForm), findsOneWidget);
+          } else if (shortcut == LogicalKeyboardKey.keyO) {
+            expect(
+              find.byKey(const ValueKey('swarm-search-input')),
+              findsOneWidget,
+            );
+          } else if (shortcut == LogicalKeyboardKey.keyS) {
+            expect(app.activeSwarm.isStore, isTrue);
+          } else if (shortcut == LogicalKeyboardKey.keyM) {
+            expect(
+              find.byKey(const ValueKey('machines-panel')),
+              findsOneWidget,
+            );
+          } else {
+            expect(find.byType(ModelsPanel), findsOneWidget);
+          }
+          await key(
+            tester,
+            shortcut == LogicalKeyboardKey.keyS
+                ? LogicalKeyboardKey.keyT
+                : LogicalKeyboardKey.escape,
+            cmd: shortcut == LogicalKeyboardKey.keyS,
+          );
+          await tester.pumpAndSettle();
+        }
+        expect(
+          OnboardingStep.values.where(journey.completed),
+          OnboardingStep.values.take(completed),
+          reason:
+              'Opening or cancelling actions must not change saved progress.',
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
   }
 
   for (final native in [false, true]) {
