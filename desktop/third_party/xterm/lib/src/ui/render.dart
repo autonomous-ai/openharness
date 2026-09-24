@@ -118,6 +118,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (!value) {
       _outputRepaintTimer?.cancel();
       _outputRepaintTimer = null;
+      // A hidden tile draws nothing, so it holds no recorded lines either.
+      _painter.clearLineCache();
     }
     if (attached) {
       if (value) {
@@ -282,6 +284,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void detach() {
     _outputRepaintTimer?.cancel();
     _outputRepaintTimer = null;
+    _painter.clearLineCache();
     super.detach();
     _offset.removeListener(_onScroll);
     _terminal.removeListener(_onTerminalChange);
@@ -577,13 +580,17 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectFirstLine = firstLine.clamp(0, lines.length - 1);
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
+    // Unchanged lines replay their recorded drawing; only lines written since
+    // the last frame are drawn cell by cell (see LinePictureCache).
+    _painter.beginFrame();
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
-      _painter.paintLine(
+      _painter.paintLineCached(
         canvas,
         offset.translate(0, (i * charHeight + _lineOffset).truncateToDouble()),
         lines[i],
       );
     }
+    _painter.endFrame();
 
     if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
         _terminal.buffer.absoluteCursorY <= effectLastLine) {
