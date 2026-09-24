@@ -66,23 +66,25 @@ See [picker-verification.md](picker-verification.md) for scenario coverage,
 measured line coverage, native observations, artifacts and remaining limits.
 The user has requested PR creation and merge after verification.
 
-Integrated current main `461ff2bf` and checked the resulting branch:
+Integrated current main `306cbfdd` and checked the resulting branch:
 
-- Full desktop suite: **3,062 passed, 12 skipped, 17 failed**. All 17 failures
+- Full desktop suite: **3,116 passed, 12 skipped, 17 failed**. All 17 failures
   reproduce on main (48 passing cases in those same six files); no loader
   failures or additional failed test names.
 - Affected randomized runs: **260 passed** at each of seeds 924 and 925,
-  **51 Cmd-P checks passed** at seed 926, and **284 passed** after integration
-  at seed 927.
-- **Seven native macOS fixtures passed** after integration, using an isolated
+  **51 Cmd-P checks passed** at seed 926, **284 passed** at seed 927, and
+  **295 passed** after final integration at seed 928.
+- **Nine native macOS fixtures passed** after integration, using an isolated
   test bundle with fake transports. Models now opens its overview without
   launching the pending product, matching current main.
 - Full analysis matches main's 15 existing findings. Final fixture analysis
   reports no issues; changed Dart files are formatted.
-- The optional render walkthrough passed and generated 135 synthetic images.
+- The optional render walkthrough passed and generated 133 synthetic images.
 - New Harness form coverage is **97.6%**; controller coverage is **93.7%**.
   This is not 100% coverage or a zero-bug guarantee.
-- Normal macOS build 8 succeeded (`harness-picker-review-build-8.log`).
+- On-demand CLI CI failures also reproduce on main; this branch has no CLI or
+  workflow changes. Details and run links are in the verification record.
+- Normal macOS build 9 succeeded (`harness-picker-review-build-9.log`).
 
 The repeat audit added 37 regressions covering composition, native command
 routing, folder-browser failures, first-key editing, delayed clipboard replies,
@@ -100,7 +102,7 @@ profile actions were blocked by review and are covered only by fake fixtures.
 
 The latest quit/restart was blocked by approval review because an active
 conversation had unconfirmed saved state. The existing review process remains
-open, and build 8 is ready for its next restart. Native fixtures instead ran
+open, and build 9 is ready for its next restart. Native fixtures instead ran
 as Harness Picker Verification in an isolated copy; that process has exited.
 Earlier cleanup also closed an existing Office Untitled Tab. Its requested
 restoration remains incomplete after review blocked identifying/reopening the

@@ -7,29 +7,32 @@ been tested. Line coverage is measured separately from native UI testing.
 
 ## Automated checks
 
-- Final full desktop suite: **3,062 passed, 12 skipped, 17 failed**. The failures
+- Final full desktop suite: **3,116 passed, 12 skipped, 17 failed**. The failures
   match the pre-existing CLI/auth/setup baseline; no new picker failure.
 - Cmd-P-focused shuffled run (seed 926): **51 passed**, including eight added
   tests for pointer/keyboard handoff, unmatched queries, and native composition.
-- Final integrated affected run (seed 927): **284 passed**. Earlier repeat
+- Final integrated affected run (seed 928): **295 passed**, including machine
+  entry into New Harness. Seed 927 passed 284. Earlier repeat
   runs (seeds 924 and 925) each passed **260**.
   Covers
   creation, draft ownership, Git/worktrees, accessibility, keyboard routing,
   mouse selection, both picker layouts, typography, previews and activity order.
-- Native macOS creation fixture: **7 passed**. First workspace, Cmd-T/Cmd-O
+- Native macOS integration fixtures: **9 passed**. First workspace, Cmd-T/Cmd-O
   creation, Store Open/Try, Models cancelling pending creation without a launch,
   edited defaults and destination, and
-  immediate terminal input after creation. Fake transport and in-memory state;
+  immediate terminal input after creation, search/shared-view ownership, and
+  Machines pending edits. Fake transport and in-memory state;
   these tests do not launch real agents or establish physical AppKit/IME input.
 - Full analysis matches current main exactly: **15 existing findings**, with no
   new errors or warnings. Final changed integration/rendering fixtures report
-  no issues; all 52 changed Dart files passed the format check.
-- Normal macOS review build 8 succeeded after integration. The running review
+  no issues; all 53 changed Dart files passed the format check.
+- Normal macOS review build 9 succeeded after integration. The running review
   app was left open because approval review blocked quitting an unconfirmed
   conversation. Native tests ran in a separate test-only bundle, which exited.
-- The opt-in screenshot walkthrough passed and rendered **135 fixture images**.
+- The opt-in screenshot walkthrough passed and rendered **133 fixture images**.
   It now uses the current fields, opens the advanced form for task editing,
-  follows immediate choice acceptance, and selects main's current model label.
+  follows immediate choice acceptance, and uses main's current Models and
+  Machines surfaces, including the Connection settings submenu.
   PR images are synthetic: [New Harness](../../.github/assets/pickers/new-harness.png)
   and [Open Harness](../../.github/assets/pickers/open-harness.png).
 - The branch-width follow-up passes **39 affected rendering/customization
@@ -43,10 +46,10 @@ Coverage from the full suite (`flutter test --coverage`):
 | terminal/terminal_text.dart | 15 / 15 | 100.0% |
 | widgets/new_harness_form.dart | 526 / 539 | 97.6% |
 | state/new_harness.dart | 1,347 / 1,438 | 93.7% |
-| state/swarm_navigation.dart | 716 / 755 | 94.8% |
+| state/swarm_navigation.dart | 715 / 755 | 94.7% |
 | state/swarm_search.dart | 391 / 406 | 96.3% |
 | widgets/swarm_search_input.dart | 79 / 80 | 98.8% |
-| widgets/swarm_switcher.dart | 568 / 663 | 85.7% |
+| widgets/swarm_switcher.dart | 573 / 663 | 86.4% |
 | widgets/swarm_search_preview.dart | 284 / 303 | 93.7% |
 | widgets/prompt_context.dart | 170 / 172 | 98.8% |
 
@@ -84,7 +87,7 @@ oversized carried tasks. Installation and creation tests use fake transports;
 they do not install products on the user's machines.
 
 The two pre-integration shuffled runs pass the same 260 tests, and the final
-integrated run passes 284. The final full run has exactly the
+integrated run passes 295. The final full run has exactly the
 same 17 failed test names as `harness-audit-final-tests-v3.jsonl`, with no added
 or resolved failures. Native creation fixtures also passed again. This is
 measured regression evidence, not a zero-bug or 100%-coverage claim.
@@ -107,10 +110,10 @@ measured regression evidence, not a zero-bug or 100%-coverage claim.
 
 ## Baseline failures
 
-All 17 failures reproduce on current main (`461ff2bf`) in a detached checkout.
+All 17 failures reproduce on current main (`306cbfdd`) in a detached checkout.
 The six affected files produce **48 passed and the same 17 failures**; no
 credentials or production connections are used. Artifact:
-`harness-picker-main-baseline.jsonl`. The failures are:
+`harness-picker-main-final-baseline.jsonl`. The failures are:
 
 - `workspace_account_lifecycle_test.dart`: 8 (sign-out, expiry, stale layout
   replies and sign-in during cleanup).
@@ -122,6 +125,14 @@ credentials or production connections are used. Artifact:
 
 They concern the local daemon/auth setup path, not picker selection or creation.
 The whole suite therefore remains red; this audit does not hide or relabel them.
+
+The on-demand Linux CLI CI is also red on main. The branch run
+[35938893689](https://github.com/autonomous-ai/openharness/actions/runs/35938893689)
+had five failures, all reproduced by the independent current-main run
+[35939411173](https://github.com/autonomous-ai/openharness/actions/runs/35939411173),
+which had seven failures (4,245 passed, 63 skipped). They concern shell job-control
+output, a file-watcher event, Grid process timeout, and Grid CLI discovery.
+The picker branch changes no CLI or workflow files relative to this main commit.
 
 ## Reproduction
 
@@ -138,22 +149,22 @@ flutter build macos --debug --no-pub --target lib/main.dart
 Detailed run artifacts are under `/private/tmp/harness-audit-*` on the review
 machine. Always rebuild `main.dart` after the native fixture replaces the app.
 
-Final integrated artifacts:
+Final integrated artifacts (main `306cbfdd`):
 
-- `harness-picker-merged-full.jsonl`: 3,062 passed, 12 skipped, 17 failures;
+- `harness-picker-final-full-fixed.jsonl`: 3,116 passed, 12 skipped, 17 failures;
   no loader errors. Failure names match the main checkout exactly.
-- `harness-picker-merged-shuffled.jsonl`: 284 passing affected tests, seed 927.
+- `harness-picker-final-shuffled.jsonl`: 295 passing affected tests, seed 928.
 - `harness-picker-cmdp-final.jsonl`: 51 passing command/focus checks, seed 926.
-- `harness-picker-main-baseline.jsonl`: 48 passed and the same 17 failures on
-  main `461ff2bf` in a detached worktree.
-- `harness-picker-native-merged.jsonl`: seven native checks in the copied
+- `harness-picker-main-final-baseline.jsonl`: 48 passed and the same 17 failures
+  on main in a detached worktree.
+- `harness-picker-native-final.jsonl`: nine native checks in the copied
   Harness Picker Verification app with a unique bundle ID and fake transports.
-- `harness-picker-merged-analysis-final.txt` and
-  `harness-picker-main-analysis.txt`: the same 15 findings on both trees.
-- `harness-picker-integration-analysis.txt`: no issues in the last three edits.
-- `harness-picker-pr-render-6.jsonl`: the passing optional render walkthrough;
-  images are in `/private/tmp/harness-picker-pr-images`.
-- `harness-picker-review-build-8.log`: successful normal macOS build.
+- `harness-picker-final-analysis.txt` and
+  `harness-picker-main-final-analysis.txt`: the same 15 findings on both trees.
+- `harness-picker-final-fixture-analysis.txt`: no issues in the last two edits.
+- `harness-picker-pr-render-final-4.jsonl`: passing optional render walkthrough;
+  133 images in `/private/tmp/harness-picker-pr-images-final-4`.
+- `harness-picker-review-build-9.log`: successful normal macOS build.
 
 Earlier repeat artifacts:
 
@@ -248,7 +259,7 @@ Limitations and cleanup:
 
 - The latest review app restart was blocked by automatic approval review
   because an active conversation had unconfirmed saved state. The app remains
-  open; build 8 is ready for the next restart. The separately identified native
+  open; build 9 is ready for the next restart. The separately identified native
   fixture app exited after its successful tests.
 - Live profile selection/refresh/link actions were blocked by automatic
   approval review because they may access credential files. Isolated profile
