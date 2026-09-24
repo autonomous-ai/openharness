@@ -132,7 +132,10 @@ void main() {
     expect(box.field, NewHarnessField.projectMenu);
   });
 
-  testWidgets('right walks every agent instead of bouncing between two', (
+  // Page Up/Down are where stepping a value in place lives — the arrows are
+  // the two columns' own keys. `-` and `+` cannot serve: folder and branch
+  // names are full of hyphens.
+  testWidgets('page down walks every agent instead of bouncing between two', (
     tester,
   ) async {
     final box = await mount(tester);
@@ -140,36 +143,97 @@ void main() {
     expect(box.field, NewHarnessField.agent);
     final seen = <String>{box.engine};
     for (var i = 0; i < 6; i++) {
-      await press(tester, LogicalKeyboardKey.arrowRight);
+      await press(tester, LogicalKeyboardKey.pageDown);
       seen.add(box.engine);
     }
     expect(
       seen.length,
       greaterThan(2),
-      reason: 'Stepping from the cursor made the arrows flip between a pair.',
+      reason: 'Stepping from the cursor made the keys flip between a pair.',
     );
   });
 
-  testWidgets('left and right step opposite ways and return', (tester) async {
+  testWidgets('the page keys step opposite ways and return', (tester) async {
     final box = await mount(tester);
     await press(tester, LogicalKeyboardKey.arrowDown);
     final first = box.engine;
-    await press(tester, LogicalKeyboardKey.arrowRight);
+    await press(tester, LogicalKeyboardKey.pageDown);
     expect(box.engine, isNot(first));
-    await press(tester, LogicalKeyboardKey.arrowLeft);
-    expect(box.engine, first, reason: 'Left must undo right.');
+    await press(tester, LogicalKeyboardKey.pageUp);
+    expect(box.engine, first, reason: 'Page up must undo page down.');
   });
 
-  testWidgets('right walks the projects', (tester) async {
+  testWidgets('page down walks the projects', (tester) async {
     final box = await mount(tester);
     final seen = <String>{box.projectLabel};
     for (var i = 0; i < 4; i++) {
-      await press(tester, LogicalKeyboardKey.arrowRight);
+      await press(tester, LogicalKeyboardKey.pageDown);
       seen.add(box.projectLabel);
     }
     expect(seen.length, greaterThan(2));
   });
 
+  // What the arrows do instead, and the whole point of the change: the right
+  // column is a place you GO, not a value the left column edits under you.
+  testWidgets('right hands the keys to the choices without taking a value', (
+    tester,
+  ) async {
+    final box = await mount(tester);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.agent);
+    final engine = box.engine;
+    expect(harnessChoicesActive(tester), isFalse);
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(harnessChoicesActive(tester), isTrue);
+    expect(box.engine, engine, reason: 'Arriving is not choosing.');
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(
+      box.field,
+      NewHarnessField.agent,
+      reason: 'The list owns the arrows now; the rows must not move.',
+    );
+  });
+
+  testWidgets('left gives the keys back to the rows', (tester) async {
+    final box = await mount(tester);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await press(tester, LogicalKeyboardKey.arrowRight);
+    expect(harnessChoicesActive(tester), isTrue);
+    final engine = box.engine;
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(harnessChoicesActive(tester), isFalse);
+    expect(box.engine, engine, reason: 'Leaving is not choosing either.');
+    expect(
+      find.byKey(const ValueKey('new-harness-choices')),
+      findsOneWidget,
+      reason: 'The choices stay on screen, they just stop holding the keys.',
+    );
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.machine, reason: 'Rows move again.');
+  });
+
+  testWidgets('left edits the search text before it leaves it', (tester) async {
+    final box = await mount(tester);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    await type(tester, 'cod');
+    expect(harnessChoicesActive(tester), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(box.query, 'cod', reason: 'The caret moved; the search stands.');
+    expect(harnessChoicesActive(tester), isTrue);
+  });
+
+  testWidgets('left on the rows changes nothing', (tester) async {
+    final box = await mount(tester);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    final engine = box.engine;
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(box.engine, engine);
+    expect(box.field, NewHarnessField.agent);
+    expect(harnessChoicesActive(tester), isFalse);
+  });
+
+  // The exception, and the reason it is one: two values and nothing to
+  // browse, so there is no column to go to.
   testWidgets('worktree flips on its own row, without a list', (tester) async {
     final box = await mount(tester);
     for (var i = 0; i < 4; i++) {
@@ -381,6 +445,42 @@ void main() {
     // And Escape backs out of the door to the list it came from.
     await press(tester, LogicalKeyboardKey.escape);
     expect(box.field, NewHarnessField.projectMenu);
+  });
+
+  // A door's prompt is picking with nothing typed, which is the one place ←
+  // could have walked further than intended: out of the door is right, out of
+  // the box is not.
+  testWidgets('left backs out of a door without closing the setup', (
+    tester,
+  ) async {
+    final box = await mount(tester);
+    await type(tester, 'harness');
+    var guard = 0;
+    while (box.selected?.id != NewHarnessController.newProjectId &&
+        guard++ < 60) {
+      await press(tester, LogicalKeyboardKey.arrowDown);
+    }
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.field, NewHarnessField.projectName);
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(box.field, NewHarnessField.projectMenu);
+    expect(
+      find.byType(NewHarnessForm),
+      findsOneWidget,
+      reason: 'One step back, not out.',
+    );
+    // Typed text is the caret's, not a way out.
+    await type(tester, 'harness');
+    while (box.selected?.id != NewHarnessController.newProjectId &&
+        guard++ < 120) {
+      await press(tester, LogicalKeyboardKey.arrowDown);
+    }
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(box.field, NewHarnessField.projectName);
+    await type(tester, 'blog');
+    await press(tester, LogicalKeyboardKey.arrowLeft);
+    expect(box.query, 'blog');
+    expect(box.field, NewHarnessField.projectName);
   });
 
   testWidgets('the doors are still listed', (tester) async {

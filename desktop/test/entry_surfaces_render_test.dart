@@ -131,7 +131,7 @@ void main() {
             for (final asset in [
               'assets/engine-icons/codex.png',
               'assets/engine-icons/cursor.png',
-              'assets/harness_device_studio.png',
+              'assets/harness_device_studio.jpg',
             ]) {
               await precacheImage(
                 AssetImage(asset),

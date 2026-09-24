@@ -346,6 +346,16 @@ class RailRow {
 /// this app pairs as `'web'`, so it is honoured here.
 const kAgentsListPayload = {'includeStopped': true};
 
+/// Who asked for a terminal to be opened.
+///
+/// A terminal has ONE controller and an ordinary `terminal_open` wins it, so
+/// every attach has to say whether a person on THIS phone asked for it.
+/// [person] may take the terminal from whoever holds it; [automatic] never may
+/// — it opens as a watcher where the daemon supports that (`noTakeover`), and
+/// does not open at all where it does not. The dial turning, a reconnect, a
+/// desk another screen wrote, a push: all automatic.
+enum AttachIntent { person, automatic }
+
 class AppNotifier extends ChangeNotifier {
   final AuthSession session;
   AppConfig config;
@@ -753,7 +763,12 @@ class AppNotifier extends ChangeNotifier {
     _announceAppFocus();
     if (attachPending) {
       for (final machine in machineStates.values) {
-        _attachPendingPanes(machine, retryExisting: false);
+        // A tab the person switched to.
+        _attachPendingPanes(
+          machine,
+          retryExisting: false,
+          intent: AttachIntent.person,
+        );
       }
     }
     notifyListeners();
@@ -901,7 +916,8 @@ class AppNotifier extends ChangeNotifier {
     selectedMachineId = focusedPane?.machineId;
     _announceAppFocus();
     for (final machine in machineStates.values) {
-      _attachPendingPanes(machine);
+      // A tab closed here; the tiles behind it are theirs.
+      _attachPendingPanes(machine, intent: AttachIntent.person);
     }
     for (final pane in removed.panes) {
       if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
@@ -4012,7 +4028,8 @@ class AppNotifier extends ChangeNotifier {
       // Publish discovery immediately. The capability loader attaches waiting
       // panes when its reply arrives; either response may finish first.
       if (machine.terminalCapabilityLoadInFlight == null) {
-        _attachPendingPanes(machine);
+        // The machine answered its agent list; nobody asked.
+        _attachPendingPanes(machine, intent: AttachIntent.automatic);
         _autoPickFirstAgent();
       }
       notifyListeners();
@@ -4058,7 +4075,8 @@ class AppNotifier extends ChangeNotifier {
     if (!_machineWorkCurrent(machine, revision)) return;
     // Order matters: a restored tile for THIS machine claims its agent before
     // the first-run convenience gets to look, so the two can never both open.
-    _attachPendingPanes(machine);
+    // Same list, the other branch of its reply.
+    _attachPendingPanes(machine, intent: AttachIntent.automatic);
     _autoPickFirstAgent();
     notifyListeners();
   }
@@ -4262,7 +4280,8 @@ class AppNotifier extends ChangeNotifier {
     if (!_machineWorkCurrent(machine, revision)) return;
     if (machine.agentLoadStatus != AgentLoadStatus.loading &&
         !machine.agentsRefreshing) {
-      _attachPendingPanes(machine);
+      // Terminal capabilities landed; nobody asked.
+      _attachPendingPanes(machine, intent: AttachIntent.automatic);
       _autoPickFirstAgent();
       notifyListeners();
     }
@@ -5610,7 +5629,13 @@ class AppNotifier extends ChangeNotifier {
           // here would yank their focus back to what they were looking at before, mid-navigation.
           // The recovered agent still shows normally in the rail; they can click it themselves.
           if (selectedMachineId == machineId) {
-            await selectAgent(machineId, agentId);
+            // A machine coming back is not somebody picking the phone up: the
+            // agent shows again, its terminal stays with whoever holds it.
+            await selectAgent(
+              machineId,
+              agentId,
+              intent: AttachIntent.automatic,
+            );
           } else {
             notifyListeners();
           }
@@ -5668,7 +5693,8 @@ class AppNotifier extends ChangeNotifier {
     late Future<void> selection;
     _deviceFocusRevision = focusRevision;
     try {
-      selection = selectAgent(machineId, agentId);
+      // The WiFi device asked, not a hand on this phone — see [AttachIntent].
+      selection = _showAgentFromDevice(machineId, agentId);
     } finally {
       _deviceFocusRevision = null;
     }
@@ -5682,7 +5708,27 @@ class AppNotifier extends ChangeNotifier {
   /// which tile it had walked off. The carousel walks only open panes now, so there is no off-desk
   /// landing left to place and nothing to replace.
   Future<void> selectAgentFromDial(String machineId, String agentId) async {
-    await selectAgent(machineId, agentId);
+    // ⚠️ Not `selectAgent`: arriving is a claim, and the dial turning is
+    // not a person arriving at THIS phone. The agent comes on screen; its
+    // terminal stays with whoever types in it, and the band offers it back.
+    await _showAgentFromDevice(machineId, agentId);
+  }
+
+  /// Put an agent on screen because a device asked — the dial, the WiFi
+  /// device — without taking its terminal. See [AttachIntent].
+  Future<void> _showAgentFromDevice(String machineId, String agentId) async {
+    final existing = paneOfAgent(machineId, agentId);
+    if (existing == null) {
+      await selectAgent(machineId, agentId, intent: AttachIntent.automatic);
+      return;
+    }
+
+    selectedMachineId = machineId;
+    machineStates[machineId]?.activeAgentId = agentId;
+    focusPane(existing.id);
+    if (existing.session == null) {
+      await _attachSession(existing, takeControl: false);
+    }
   }
 
   /// Open [agentId] on this phone, taking its terminal.
@@ -5698,7 +5744,14 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// The one open that stays polite is [warmAgentPane]'s guess about the next swipe, which is
   /// nobody arriving anywhere. See [_attachSession].
-  Future<void> selectAgent(String machineId, String agentId) async {
+  Future<void> selectAgent(
+    String machineId,
+    String agentId, {
+    /// [AttachIntent.automatic] shows the agent without claiming its
+    /// terminal — the road `_showAgentFromDevice` and recovery take.
+    AttachIntent intent = AttachIntent.person,
+  }) async {
+    final person = intent == AttachIntent.person;
     final existing = paneOfAgent(machineId, agentId);
     if (existing != null) {
       selectedMachineId = machineId;
@@ -5718,14 +5771,14 @@ class AppNotifier extends ChangeNotifier {
         // armed is answered (see the `terminal_ready` branch of `TerminalSession`), so a claim
         // cannot outlive the arrival that made it and come back as a reconnect hours later. Coming
         // back to the agent raises it again, because that is another arrival.
-        terminal.takeover = true;
+        terminal.takeover = person;
       }
       if (terminal == null) {
         // The pane wanted this agent before `_attachSession` could actually attach it (the agent's
         // terminal wasn't verified yet, the machine was briefly offline, ...). Nothing else retries a
         // null session on its own — see `_attachPendingPanes` — so a click here has to.
-        await _attachSession(existing);
-      } else if (terminal.watching) {
+        await _attachSession(existing, takeControl: person);
+      } else if (terminal.watching && person) {
         // ⚠️ **The one reopen that replaces a perfectly live stream.** A watcher renders the
         // terminal without holding it (see [TerminalSession.watching]), so by every other measure
         // here it is healthy — `controlling`, with a stream id — and the branches below would
@@ -5748,7 +5801,7 @@ class AppNotifier extends ChangeNotifier {
       }
       return;
     }
-    await addAgentToSwarm(machineId, agentId, takeControl: true);
+    await addAgentToSwarm(machineId, agentId, takeControl: person);
   }
 
   /// Opens [agentId]'s stream for a tile nobody is looking at yet — the phone's
@@ -6656,7 +6709,17 @@ class AppNotifier extends ChangeNotifier {
   /// and the machine's terminal protocol has been negotiated — become true at
   /// different moments, and a machine that goes away and returns has to be able
   /// to re-arrive at them.
-  void _attachPendingPanes(MachineState machine, {bool retryExisting = true}) {
+  void _attachPendingPanes(
+    MachineState machine, {
+    bool retryExisting = true,
+    required AttachIntent intent,
+  }) {
+    // Nobody asked on this phone, and this machine's CLI cannot open a terminal
+    // without taking it from whoever has it — so it opens nothing.
+    if (intent == AttachIntent.automatic &&
+        !machine.terminalNoTakeoverAvailable) {
+      return;
+    }
     final machineId = machine.machine.machineId;
     for (final pane in allPanes.toList()) {
       if (!panes.contains(pane) && pane.session == null) continue;
@@ -6670,7 +6733,7 @@ class AppNotifier extends ChangeNotifier {
       // reconnect left every tile but one frozen on "restoring terminal…":
       // recovery ran off pendingOfflineAgentId, which is a single slot, so it
       // could only ever promise restoration to one of them.
-      unawaited(_reattachPane(pane));
+      unawaited(_reattachPane(pane, intent: intent));
     }
   }
 
@@ -6693,12 +6756,19 @@ class AppNotifier extends ChangeNotifier {
 
   /// Reopen a dead stream in its existing session, keeping its rendered output.
   /// An already-lost stream needs no close addressed to its previous owner.
-  Future<void> _reattachPane(TerminalPane pane) async {
+  Future<void> _reattachPane(
+    TerminalPane pane, {
+    AttachIntent intent = AttachIntent.person,
+  }) async {
     if (!_canAttachPane(pane)) return;
     final session = pane.session;
     if (session == null) {
-      await _attachSession(pane);
+      await _attachSession(
+        pane,
+        takeControl: intent == AttachIntent.person,
+      );
     } else {
+      if (intent == AttachIntent.person) session.takeover = true;
       await session.reopen();
     }
   }
@@ -6888,7 +6958,8 @@ class AppNotifier extends ChangeNotifier {
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
               // already `loaded`, so this push is the only signal that it can attach now.
-              _attachPendingPanes(machine);
+              // A push about an agent synced elsewhere.
+              _attachPendingPanes(machine, intent: AttachIntent.automatic);
             } else {
               // ⚠️ **Kept, not removed — the desktop's rule.** This is how a STOP arrives
               // (`publishStoppedAgent` pushes the agent with `status: 'stopped'`), and also how an
@@ -6916,7 +6987,8 @@ class AppNotifier extends ChangeNotifier {
             _upsertAgent(machine, agent);
             // Same reattach as `agent_synced` above — a pane can be waiting on this exact agent
             // (e.g. one this window's own New Agent dialog just opened) with no session yet.
-            _attachPendingPanes(machine);
+            // A push about an agent created elsewhere.
+            _attachPendingPanes(machine, intent: AttachIntent.automatic);
           } catch (_) {
             unawaited(_loadMachineData(machine, force: true));
           }

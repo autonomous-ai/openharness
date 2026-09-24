@@ -1,5 +1,8 @@
 # Voxel Worlds rebuild acceptance — 2026-09-20
 
+For the subsequent installed-engine night-market brief, edit-preservation fixes and stair-check
+regressions, see the [2026-09-23 playtest](PLAYTEST-2026-09-23.md). Its visual review is pending.
+
 The new studio authors editable named objects and reusable 3D assets. Its three scenes are
 original authored fixtures, not customer commissions or installed-agent prompt trials.
 

@@ -88,7 +88,6 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
-import { awaitsResumeHook } from './lib/resumeCapability.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -112,6 +111,9 @@ import { DshViewerManager } from './dsh/viewer.js'
 import { ViewerLedger } from './dsh/viewerLedger.js'
 import { DshVerdictWatcher, type DshVerdict } from './dsh/verdict.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
+import { ApiConnections } from './lib/apiConnections.js'
+import { apiCommand, apiUsage } from './lib/apiCommand.js'
+import { prepareApiInstructions } from './lib/apiInstructions.js'
 import type { AgentDshContext } from './lib/agentFrame.js'
 import { basename } from 'node:path'
 import {
@@ -159,7 +161,7 @@ import { createWindowRouter } from './cable/windowRoute.js'
 import { RemoteRelayPool } from './lib/remoteRelay.js'
 import { TERMINAL_BINARY_VERSION } from './lib/terminalBinary.js'
 import { foldTranscript, lastTurnTextFromRawLines, lineToEvents, newTurnState, type LiveEvent, type TurnState } from './lib/normalize.js'
-import { AskQuestionController, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
+import { AskQuestionController, parseEngineQuestionPane, pollsQuestions, QuestionWatcher } from './lib/askQuestion.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './lib/commander.js'
 import {
   setSummaryPoolDeviceConnected,
@@ -221,6 +223,7 @@ import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js
 import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
+import { AutonomousDeviceInput, isDeviceInputBoundary } from './lib/autonomous-device/input.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
 import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
 import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
@@ -382,6 +385,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
                                --force signs out over a serve child it could not confirm stopped
 
 ${dshUsage()}
+
+${apiUsage}
 
 Browser end-to-end encryption:
   harness browser-link         print a reusable 7-day setup link for browsers
@@ -1284,6 +1289,12 @@ async function statBirthMs(path: string): Promise<number> {
 /** The daemon body: hooks + watcher + process discovery + backend socket. */
 async function runForeground(session: AuthSession | null): Promise<void> {
   installTimestampedConsole() // daemon-only: every harness.log line gets a wall-clock timestamp
+  const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
+  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
+    if (!cwd) return
+    try { prepareApiInstructions(savedApis, cwd, engine) }
+    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
+  }
   const startedAt = Date.now()
   let discoveryReady = false
   let discoveryError: string | null = null
@@ -2305,15 +2316,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     replayFromStart = false,
   ): Promise<boolean> =>
     attaches.attach(session, reset, () => attachSessionNow(session, reset, replayCursorFromStart, replayFromStart))
-  const input = new SessionInputController({
+  const input: SessionInputController = new SessionInputController({
     getSession: (id) => registry.resolve(id),
     onDelivery: (event) => {
       autonomousDeviceService?.delivery(event)
       backend.orchestratorDelivery(event)
     },
     validateRuntime: validateTerminal,
-    inject: submitTerminalAction,
-    sendKey: keyTerminalAction,
+    inject: (id, text) => deviceInput.legacyWrite(id, () => submitTerminalAction(id, text)),
+    sendKey: (id, key) => deviceInput.legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
     onError: (sessionId, message) => {
       backend.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
@@ -2334,6 +2345,24 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       emitSessionEvents(session.sessionId, normalizer.openTurn(content))
     },
   })
+  const deviceInput: AutonomousDeviceInput = new AutonomousDeviceInput({
+    getSession: id => registry.resolve(id),
+    validateRuntime: validateTerminal,
+    inject: submitTerminalAction,
+    sendKey: keyTerminalAction,
+    capture: captureTerminal,
+    isAwaitingUser: async session => {
+      const pane = await captureTerminal(session.agentId)
+      return pane === null || parseEngineQuestionPane(session.engine, pane) !== null
+    },
+    acquireControl: id => input.acquireControl(id, { forAnswer: true }),
+    legacySubmit: (id, text, deliveryId) => input.submit(id, text, deliveryId),
+    legacyCancel: id => input.cancelDelivery(id),
+    onDelivery: event => autonomousDeviceService?.delivery(event),
+    onInputStatus: event => autonomousDeviceService?.inputStatus(event),
+    onForget: id => autonomousDeviceService?.agentGone(id),
+  })
+
   /**
    * agy only: close a turn whose final `Stop` never came.
    *
@@ -2431,6 +2460,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hasDevice: () => someoneCanAnswer(),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped) => {
+      deviceInput.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
       showAwaitingAnswer(sessionId)
       const asked = {
@@ -2458,6 +2488,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
+      deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
         agentId: agentIdFor(sessionId),
@@ -2647,7 +2678,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!events.length || !registry.bySession(sessionId)?.active) return
     const usageSession = registry.bySession(sessionId)
     if (usageSession?.engine === 'opencode') agentTokenUsage.changed(usageSession)
-    for (const event of events) {
+    for (const [eventIndex, event] of events.entries()) {
       const agentId = agentIdFor(sessionId)
       const frame = correlateAgentEvent(event, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
@@ -2669,6 +2700,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
+        deviceInput.onTurnStarted(agentId, event.payload.userMessage)
         autonomousDeviceService?.turnStarted(agentId)
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
@@ -2685,7 +2717,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           `[turn] ${sid(sessionId)} ended${event.payload.aborted ? ' · aborted (interrupted)' : ''}` +
             `${startedAt ? ` · ${Date.now() - startedAt}ms` : ''}`,
         )
-        autonomousDeviceService?.turnEnded(agentId, event.payload.aborted === true)
+        // Filter only the Device receipt view; shared normalizers, mirror, and local input stay unchanged.
+        if (!isDeviceInputBoundary(usageSession?.engine ?? '', events, eventIndex)) {
+          autonomousDeviceService?.turnEnded(agentId, event.payload.aborted === true)
+          deviceInput.onTurnEnded(agentId)
+        }
         input.onTurnEnded(agentIdFor(sessionId))
         // Command Code asks AFTER the turn: `ask_user_question` ends the turn (its Stop hook fires), the
         // dialog goes up, and the answer opens a NEW turn. Stopping the watcher here is what left the
@@ -2776,6 +2812,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)
     input.forget(doomed?.agentId ?? sessionId)
+    deviceInput.forget(doomed?.agentId ?? sessionId)
     if (!opts.keepAgent) detachDsh(announceId)
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
@@ -2792,7 +2829,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => input.forget(agentId),
+    forgetInput: agentId => { input.forget(agentId); deviceInput.forget(agentId) },
     detachDsh,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -3033,6 +3070,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
       input.forget(previousOwner.agentId)
+      deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)
     }
     lastRepairAttempt.delete(agent.agentId)
@@ -3129,14 +3167,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
       const withDsh = registry.byAgent(current.agentId)
       if (withDsh?.dsh) attachDsh(withDsh)
-      // A strict-resume row waits for the hook that proves the engine reopened THAT conversation —
-      // but only where such a hook is coming. For every other engine this live process, in this
-      // row's own pane, IS the proof (`resumeCapability.ts`), and refusing to say so left an
-      // opencode harness restored after a reboot reading "Starting" while it was working. The Open
-      // path already marks those ready itself (`resumeAgentService.ts`); this is the same rule on
-      // the door restore comes through.
-      const waitingForResumeHook = !!current.resumeOnly && awaitsResumeHook(current.engine, current.sessionId)
-      if (wasLaunching && !waitingForResumeHook) registry.setLaunch(current.agentId, { state: 'ready' })
+      // This live process, in this row's own pane, is what "started" means — for a resumed row as
+      // much as any other. A resume used to be held back here until its `SessionStart` hook landed,
+      // on the grounds that only the hook proves WHICH conversation reopened. Two things were wrong
+      // with that. The hook does not always come: measured on machine-remote-1, both resume-only
+      // codex rows carried `lastHookAt: 0` while every fresh launch beside them had hooked, and one
+      // of them sat at "Starting" for 19 hours over a pane its owner could type in — re-attached and
+      // re-announced every 5s for the whole time, because `wasLaunching` stays true for a row that
+      // nothing will ever mark ready (openharness#189). And nothing was actually protected by the
+      // wait: the wrong-conversation guard in `registry.register` keys on `lastHookAt`, not on this
+      // launch state, so it stays armed until the first hook whatever is written here.
+      if (wasLaunching) registry.setLaunch(current.agentId, { state: 'ready' })
       await bindObservedAgent(observed)
       if (wasDormant || wasLaunching || adopted) {
         const active = registry.byAgent(current.agentId)
@@ -3175,6 +3216,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!agent.active) return
       invalidateTerminalControl(agent.agentId)
       input.forget(agent.agentId)
+      deviceInput.forget(agent.agentId)
       if (agent.sessionId) {
         questionWatcher.stop(agent.sessionId)
         stopHeartbeat(agent.sessionId)
@@ -4194,8 +4236,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace and named agent come from the row: a retarget must not silently drop the harness the
   // agent is, or bring a pane opened as `harness-compute` back as a general session.
-  const relaunchOverrides = (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> =>
-    buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
+  const relaunchOverrides = (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+    prepareApiTools(session.cwd, session.engine)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source }, session.agentId)
+  }
 
   /**
    * A restart or a post-reboot restore rebuilds the ROW's own launch, and the machine may decide
@@ -4689,6 +4733,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // answered and refused (`SPAWN_FAILED`) — see createAgentPane.ts. Registration itself is retried
     // there: a stale registry entry from a previous tmux-server generation occasionally collides with
     // a freshly-minted pane id, and that collision clears on its own on the very next pane.
+    prepareApiTools(cwd, engine)
     // Mutually exclusive with a grid (backendSocket.ts refuses the two together): a chosen Codex
     // profile becomes the new session's CODEX_HOME, the same `-e` mechanism a grid's own env rides.
     const result = await createAndRegisterPane({
@@ -4790,6 +4835,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ...(plan.level === 'native' ? { forkSessionId: plan.forkSessionId } : {}),
       ...(firstPrompt ? { firstPrompt } : {}),
     }
+    prepareApiTools(source.cwd, engine)
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
     const result = await createAndRegisterPane({
@@ -5656,8 +5702,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         runtime: evidence.get(s.agentId)?.runtime ?? 'unavailable',
         state: turnStartedAt.has(s.sessionId) ? 'running' : 'idle' }))
     },
-    submit: submitAgent,
-    cancelDelivery: id => input.cancelDelivery(id),
+    submit: (id, text, deliveryId) => {
+      const session = registry.resolve(id)
+      deviceInput.submit(session?.agentId ?? id, adaptSlashCommand(text, session?.engine ?? 'claude'), deliveryId)
+    },
+    cancelDelivery: id => deviceInput.cancelDelivery(id),
     stop: id => cancelAgent(id, true),
     answer: (agentId, requestId, answers) => questions.answer({ agentId, requestId, answers, allowPermissions: false }),
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
@@ -6730,6 +6779,10 @@ switch (cmd) {
     dshCommand(args[0], args[0] === undefined ? rest : withoutFirst(rest, args[0]))
       .then((code) => { process.exitCode = code })
       .catch(onError)
+    break
+  case 'api':
+    apiCommand(rest, new ApiConnections(env.ADAPTER_DATA_DIR))
+      .then(code => { process.exitCode = code }).catch(onError)
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.

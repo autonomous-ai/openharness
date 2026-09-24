@@ -123,6 +123,45 @@ Future<void> _open(
 }
 
 void main() {
+  testWidgets(
+    'refresh keeps current folders usable and preserves a newer path draft',
+    (tester) async {
+      final app = _Folders();
+      await _open(tester, app);
+      app.requests.single.reply.complete(_listing('/home/dev', ['code']));
+      await tester.pumpAndSettle();
+      final field = find.byType(TextField);
+      await tester.enterText(field, '/home/dev/new-project');
+      await tester.tap(find.byTooltip('Refresh folders'));
+      await tester.pump();
+      expect(app.requests.last.path, '/home/dev');
+      expect(find.text('code'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(field).controller!.text,
+        '/home/dev/new-project',
+      );
+      app.requests.last.reply.complete(
+        _listing('/home/dev', ['code', 'new-project']),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('new-project'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(field).controller!.text,
+        '/home/dev/new-project',
+      );
+      final previous = app.requests.length;
+      await tester.tap(field);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      expect(app.requests.length, previous + 1);
+      expect(app.requests.last.path, '/home/dev');
+      app.requests.last.reply.complete(_listing('/home/dev', ['code']));
+      await tester.pumpAndSettle();
+    },
+  );
+
   testWidgets('cannot select the old folder while opening another folder', (
     tester,
   ) async {

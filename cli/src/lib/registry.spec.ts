@@ -1581,7 +1581,7 @@ describe('registry across a reboot and pane loss', () => {
     })
   })
 
-  it('requires the exact resumed session hook; process discovery alone stays starting', async () => {
+  it('lets process discovery start a resumed row, and still refuses the wrong conversation', async () => {
     const transcriptPath = join(dataDir, 'resume-target.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const { registry } = await loadRegistryModule()
@@ -1589,12 +1589,32 @@ describe('registry across a reboot and pane loss', () => {
     registry.removeAgent(original.agentId)
     registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%22' }])
     registry.openProcessAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%22' }], processIdentity: processIdentity(122) })
-    expect(registry.byAgent(original.agentId)?.launch?.state).toBe('starting')
+    // The engine is running in the row's pane, so the row has started — it no longer waits for a
+    // hook a resume may never send. What it has NOT yet been told is which conversation reopened.
+    expect(registry.byAgent(original.agentId)?.launch?.state).toBe('ready')
     expect(registry.byAgent(original.agentId)?.lastHookAt).toBe(0)
     expect(registry.register({ engine: 'claude', sessionId: 'unexpected-new-session', transcriptPath, tmuxPane: '%22', processIdentity: processIdentity(122) })).toBeNull()
     expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'resume-target', launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
     const confirmed = registry.register({ engine: 'claude', sessionId: 'resume-target', transcriptPath, tmuxPane: '%22', processIdentity: processIdentity(122) })
     expect(confirmed?.entry).toMatchObject({ agentId: original.agentId, sessionId: 'resume-target', launch: { state: 'ready' } })
+  })
+
+  // The guard reads `lastHookAt`, not `launch`. A resume is now confirmed by its own live engine
+  // process (`resumeStoppedAgent.ts`), which marks the row ready BEFORE any hook arrives — and a
+  // guard keyed on `launch` would have been disarmed for exactly the resumes it protects.
+  it('still refuses another conversation on the first hook after the row was marked ready', async () => {
+    const transcriptPath = join(dataDir, 'ready-first.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    const original = registerProcess(registry, { engine: 'claude', sessionId: 'ready-first', transcriptPath, tmuxPane: '%31' })!.entry
+    registry.removeAgent(original.agentId)
+    registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%32' }])
+    // What the resume service does the moment it sees the engine process in the pane.
+    registry.setLaunch(original.agentId, { state: 'ready' })
+    expect(registry.byAgent(original.agentId)?.lastHookAt).toBe(0)
+
+    expect(registry.register({ engine: 'claude', sessionId: 'somebody-elses-session', transcriptPath, tmuxPane: '%32', processIdentity: processIdentity(132) })).toBeNull()
+    expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'ready-first', launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
   })
 
   it('drops any launch state on the hook that proves the engine is up', async () => {

@@ -284,6 +284,20 @@ void main() {
         findsNothing,
       );
       expect(find.text('Remote'), findsNothing);
+      // Dimmed text alone reads as a theme. A row that cannot be chosen says
+      // which of the two things is wrong with it, because they need different
+      // answers from the person: one is a link, the other is a power button.
+      expect(
+        find.descendant(
+          of: _option('studio'),
+          matching: find.text('Link required'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: _option('build'), matching: find.text('Offline')),
+        findsOneWidget,
+      );
       for (final (id, message) in [
         ('studio', 'not linked'),
         ('build', 'offline'),

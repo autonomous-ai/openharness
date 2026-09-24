@@ -88,7 +88,7 @@ void main() {
             // Only the device image: the ground behind the page is drawn
             // (swarm_wallpaper.dart), not loaded.
             await precacheImage(
-              const AssetImage('assets/harness_device_studio.png'),
+              const AssetImage('assets/harness_device_studio.jpg'),
               context,
             );
           });

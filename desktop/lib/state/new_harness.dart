@@ -501,6 +501,9 @@ class NewHarnessController extends ChangeNotifier {
   Future<void>? _gitFuture;
   int _gitRevision = 0;
   bool checkingGit = false;
+  bool refreshingBranches = false;
+  String? branchRefreshError;
+  DateTime? _branchesCheckedAt;
   Future<void> waitForGitProject() async {
     while (checkingGit && !_disposed) {
       await _gitFuture;
@@ -612,6 +615,54 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Cached matches stay usable while Git discovers branches pushed elsewhere.
+  /// Typing only filters; entering Branch refreshes at most once per ten seconds.
+  Future<void> refreshBranches({bool force = true}) async {
+    if (_disposed ||
+        locked ||
+        checkingGit ||
+        refreshingBranches ||
+        !isGitProject ||
+        _gitKey == null) {
+      return;
+    }
+    if (!force &&
+        _branchesCheckedAt != null &&
+        _now().difference(_branchesCheckedAt!) < const Duration(seconds: 10)) {
+      return;
+    }
+    _branchesCheckedAt = _now();
+    await _readGitProject(_gitKey!, refresh: true);
+  }
+
+  bool get canRefreshChoices => switch (field) {
+    NewHarnessField.branch => isGitProject,
+    NewHarnessField.project ||
+    NewHarnessField.projectName => _visibleFolder != null,
+    _ => false,
+  };
+  bool get refreshingChoices =>
+      field == NewHarnessField.branch ? refreshingBranches : listing;
+  String? get choicesStatus => field == NewHarnessField.branch
+      ? refreshingBranches
+            ? 'Checking remote branches…'
+            : branchRefreshError
+      : canRefreshChoices
+      ? listing
+            ? 'Checking folders…'
+            : folderRefreshError
+      : null;
+
+  void refreshChoices() {
+    if (locked || !canRefreshChoices) return;
+    if (field == NewHarnessField.branch) {
+      unawaited(refreshBranches());
+    } else if (_visibleFolder case final folder?) {
+      _requestListing(folder);
+      notifyListeners();
+    }
+  }
+
   void _syncGitProject() {
     final key = (_machineId, _project.folder, isTerminal);
     if (_gitKey == key) return;
@@ -625,23 +676,48 @@ class NewHarnessController extends ChangeNotifier {
     _gitKey = key;
     _gitRevision++;
     checkingGit = false;
+    refreshingBranches = false;
+    branchRefreshError = null;
+    _branchesCheckedAt = null;
     _gitFuture = null;
     if (key.$2 != null && !key.$3 && !checking) {
       _gitFuture = _readGitProject(key);
     }
   }
 
-  Future<void> _readGitProject((String, String?, bool) key) async {
-    checkingGit = true;
+  Future<void> _readGitProject(
+    (String, String?, bool) key, {
+    bool refresh = false,
+  }) async {
+    if (refresh) {
+      refreshingBranches = true;
+      branchRefreshError = null;
+      _refresh();
+    } else {
+      checkingGit = true;
+    }
     final revision = ++_gitRevision;
     GitProjectInfo info;
     try {
-      info = GitProjectInfo.fromJson(await app.readGitProject(key.$1, key.$2!));
+      final data = await app.readGitProject(key.$1, key.$2!, refresh: refresh);
+      if (_disposed || _gitKey != key || revision != _gitRevision) return;
+      info = GitProjectInfo.fromJson(data);
+      if (refresh && data['refreshed'] != true) {
+        branchRefreshError =
+            'Couldn’t refresh remote branches. Showing saved branches.';
+      }
     } catch (_) {
       info = const GitProjectInfo(error: 'UNAVAILABLE');
     }
     if (_disposed || _gitKey != key || revision != _gitRevision) return;
     checkingGit = false;
+    refreshingBranches = false;
+    if (refresh && info.error != null) {
+      branchRefreshError =
+          'Couldn’t refresh remote branches. Showing saved branches.';
+      _refresh();
+      return;
+    }
     // A worktree is a temporary folder, so the launcher shows its repository.
     // With Worktree off its branch stays chosen and Start reopens that
     // worktree; otherwise new work starts from the repository's own branch.
@@ -665,6 +741,9 @@ class NewHarnessController extends ChangeNotifier {
       _placeholder = null;
     }
     _refresh();
+    if (!refresh && field == NewHarnessField.branch) {
+      unawaited(refreshBranches(force: false));
+    }
   }
 
   LocalCodexProfile? _profile;
@@ -836,7 +915,7 @@ class NewHarnessController extends ChangeNotifier {
 
   /// A folder's listing has been asked for and has not come back: the list is
   /// not empty, it is not here yet, and the two must not read the same.
-  bool get listing => _listing != null;
+  bool get listing => _visibleFolder != null && _listing == _visibleFolder;
   bool busy = false;
   String? status;
   String? error;
@@ -844,6 +923,8 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Folder listings for path completion, by the folder that was listed.
   final _listings = <String, List<String>>{};
+  final _loadingFolders = <String>{};
+  String? _visibleFolder, folderRefreshError;
   String? _listing;
 
   bool _known(String? id) =>
@@ -933,6 +1014,7 @@ class NewHarnessController extends ChangeNotifier {
     // use the agent currently being previewed in the choices list.
     if (!previewAgent) _agentPreview = null;
     if (field == next || !_supportsField(next)) return;
+    _visibleFolder = folderRefreshError = null;
     if (next == NewHarnessField.machine) {
       _machineOrigin = (
         field: field,
@@ -971,6 +1053,9 @@ class NewHarnessController extends ChangeNotifier {
         : '';
     error = null;
     _refresh();
+    if (next == NewHarnessField.branch) {
+      unawaited(refreshBranches(force: false));
+    }
   }
 
   void nextField([int step = 1]) {
@@ -1398,6 +1483,8 @@ class NewHarnessController extends ChangeNotifier {
     _machineRevision++;
     _listDebounce?.cancel();
     _listings.clear();
+    _loadingFolders.clear();
+    _visibleFolder = folderRefreshError = null;
     _listing = null;
     _pathKey = null;
     unawaited(app.probeEngines(id, force: true));
@@ -1769,6 +1856,10 @@ class NewHarnessController extends ChangeNotifier {
         state.isLocalMachine,
         state.needsLink,
         state.nodeOnline,
+        // The machine list's own word, which moves without `nodeOnline` ever
+        // changing — a machine that goes offline while nothing has been heard
+        // from it would otherwise keep its old row.
+        state.isOffline,
       ],
       machine?.engines.loaded,
       for (final identity in allEngines)
@@ -1854,7 +1945,14 @@ class NewHarnessController extends ChangeNotifier {
     final kept = current == null
         ? -1
         : options.indexWhere((option) => option.id == current);
-    final now = options.indexWhere(_isCurrent);
+    final selectedBranch = field == NewHarnessField.branch ? branchRef : null;
+    final now = query.isNotEmpty
+        ? -1
+        : options.indexWhere(
+            field == NewHarnessField.branch
+                ? (option) => option.id == selectedBranch
+                : _isCurrent,
+          );
     final pathChoice = isPathQuery
         ? options.indexWhere((option) => option.project?.folder != null)
         : -1;
@@ -1926,28 +2024,36 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   /// Branches to start from (Worktree on) or to work on (off), tagged the way
-  /// editors tag them. Branches Harness named for worktrees that are gone are
-  /// left out: nobody chose them.
+  /// editors tag them. The default list hides duplicate remote names and old
+  /// Harness branches; typing can find every branch.
   List<NewHarnessOption> _branchOptions() {
     final info = _gitProject;
+    final selectedRef = branchRef;
+    final usesWorktree = worktree;
+    final searching = query.trim().isNotEmpty;
     final defaultName = info.defaultRef?.split('/').skip(3).join('/');
     bool isDefault(GitBranch b) =>
         b.ref == info.defaultRef || !b.remote && b.name == defaultName;
     bool isCurrent(GitBranch b) => !b.remote && b.name == info.branch;
     // A remote branch with a local one of its name is that branch: Start
     // brings the local one up to it.
-    final locals = {
+    final candidates = [
       for (final branch in info.branches)
+        if (searching ||
+            !((branch.harness || branch.name.startsWith('harness/')) &&
+                branch.worktree == null &&
+                branch.ref != selectedRef))
+          branch,
+    ];
+    final locals = {
+      for (final branch in candidates)
         if (!branch.remote) branch.name,
     };
     bool hasLocal(GitBranch b) =>
         b.remote && locals.contains(b.name.split('/').skip(1).join('/'));
     final shown = [
-      for (final branch in info.branches)
-        if (!((branch.harness || branch.name.startsWith('harness/')) &&
-                branch.worktree == null &&
-                branch.ref != branchRef) &&
-            !(hasLocal(branch) && branch.ref != branchRef))
+      for (final branch in candidates)
+        if (searching || !(hasLocal(branch) && branch.ref != selectedRef))
           branch,
     ];
     int rank(GitBranch b) => isDefault(b)
@@ -1968,10 +2074,11 @@ class NewHarnessController extends ChangeNotifier {
           detail: [
             if (isDefault(branch)) 'default',
             if (isCurrent(branch)) 'current',
-            if (_worktreeOf(branch.ref) != null) 'worktree',
+            if (branch.worktree != null && branch.name != info.branch)
+              'worktree',
             if (branch.remote) 'remote',
           ].join(' · '),
-          enabled: worktree || !branch.remote,
+          enabled: usesWorktree || !branch.remote,
           why: branch.remote
               ? 'Turn Worktree on to start from a remote branch.'
               : null,
@@ -1984,9 +2091,11 @@ class NewHarnessController extends ChangeNotifier {
   /// the default branch, off in the folder from the branch it is on. Spaces
   /// become `-`, and what Git refuses in a name is dropped.
   NewHarnessOption? _createBranchRow() {
+    if (refreshingBranches) return null;
     final name = branchNameFrom(query);
     if (!plausibleBranchName(name) ||
-        newBranchHere(_gitProject, name) == null) {
+        newBranchHere(_gitProject, name) == null ||
+        _gitProject.branches.any((branch) => branch.name == name)) {
       return null;
     }
     final base = worktree
@@ -2105,10 +2214,14 @@ class NewHarnessController extends ChangeNotifier {
             machine.isLocalMachine ? 'This computer' : 'Remote',
             if (machine.needsLink)
               'link required'
-            else if (machine.nodeOnline == false)
+            else if (machine.isOffline)
               'offline',
           ].join(' · '),
-          enabled: !machine.needsLink && machine.nodeOnline != false,
+          // `isOffline`, not `nodeOnline == false`: a machine nothing has been
+          // heard from yet still has the machine list's word for it, and a
+          // computer the list calls offline cannot start an agent — offering
+          // it is offering a failure a minute from now.
+          enabled: !machine.needsLink && !machine.isOffline,
           why: machine.needsLink
               ? '${machine.machine.displayName} is not linked to this '
                     'computer yet. Link it from the Machines menu.'
@@ -2187,7 +2300,7 @@ class NewHarnessController extends ChangeNotifier {
         detail: location(folder),
         project: NewHarnessProject.folder(folder),
         machineId: _machineId,
-        enabled: _machine?.needsLink != true && _machine?.nodeOnline != false,
+        enabled: _machine?.needsLink != true && _machine?.isOffline != true,
         why: _machine?.needsLink == true
             ? '$machineLabel needs linking. Open Machines to link it.'
             : '$machineLabel is offline.',
@@ -2198,6 +2311,7 @@ class NewHarnessController extends ChangeNotifier {
     final typed = query.trim();
     if (field == NewHarnessField.project) {
       if (_isPath(typed)) return _pathOptions(typed);
+      _visibleFolder = folderRefreshError = null;
       // Recent projects live in the project menu. This prompt only opens a
       // folder by path or browser, so it cannot look like a second history.
       total = 0;
@@ -2208,8 +2322,13 @@ class NewHarnessController extends ChangeNotifier {
     // Resolve the owning machine's home before offering an existing name.
     // The daemon still reserves a fresh name atomically on submission.
     final root = _expand('~/harnesses');
-    if (slug != null && p.isAbsolute(root) && !_listings.containsKey(root)) {
-      _requestListing(root);
+    if (slug != null && p.isAbsolute(root)) {
+      if (_visibleFolder != root) {
+        _visibleFolder = root;
+        _requestListing(root);
+      }
+    } else {
+      _visibleFolder = folderRefreshError = null;
     }
     final existingName = _listings[root]
         ?.where((name) => name == slug)
@@ -2275,6 +2394,7 @@ class NewHarnessController extends ChangeNotifier {
   List<NewHarnessOption> _pathOptions(String typed) {
     final full = _expand(typed);
     if (!p.isAbsolute(full)) {
+      _visibleFolder = folderRefreshError = null;
       total = 0;
       return [_browse, _changeMachine];
     }
@@ -2284,8 +2404,11 @@ class NewHarnessController extends ChangeNotifier {
     // list stays the list of the stem that was typed — a completion menu.
     final stem = (_cycle?.stem ?? full.substring(slash + 1)).toLowerCase();
     final names = _listings[parent];
-    if (names == null) {
+    if (_visibleFolder != parent) {
+      _visibleFolder = parent;
       _requestListing(parent);
+    }
+    if (names == null) {
       total = 0;
       return const [];
     }
@@ -2366,7 +2489,9 @@ class NewHarnessController extends ChangeNotifier {
   void _requestListing(String folder) {
     if (_listing == folder) return;
     _listing = folder;
+    folderRefreshError = null;
     _listDebounce?.cancel();
+    if (_loadingFolders.contains(folder)) return;
     if (_machine?.isLocalMachine == true) {
       unawaited(_list(folder));
     } else {
@@ -2378,9 +2503,11 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   Future<void> _list(String folder) async {
+    if (_disposed || !_loadingFolders.add(folder)) return;
     final machineId = _machineId;
     final revision = _machineRevision;
     var names = <String>[];
+    var failed = false;
     try {
       if (_machine?.isLocalMachine == true) {
         // Five thousand entries streamed through the UI isolate's event loop
@@ -2395,7 +2522,7 @@ class NewHarnessController extends ChangeNotifier {
       } else {
         final answer = await app.listRemoteFolder(_machineId, folder);
         final entries = answer['entries'];
-        if (entries is List) {
+        if (answer['error'] == null && entries is List) {
           names = [
             for (final entry in entries)
               if (entry is Map &&
@@ -2403,24 +2530,34 @@ class NewHarnessController extends ChangeNotifier {
                   entry['name'] is String)
                 entry['name'] as String,
           ];
+        } else {
+          failed = true;
         }
       }
     } catch (_) {
-      // A folder that cannot be read lists nothing, as a shell's Tab does.
+      failed = true;
     }
     if (_disposed || machineId != _machineId || revision != _machineRevision) {
       return;
     }
+    _loadingFolders.remove(folder);
     names.sort((a, b) => compareNatural(a.toLowerCase(), b.toLowerCase()));
-    _listings.remove(folder);
-    _listings[folder] = names;
+    if (!failed || !_listings.containsKey(folder)) {
+      _listings.remove(folder);
+      _listings[folder] = names;
+    }
     // Recently listed folders stay; a long walk does not keep every one.
     while (_listings.length > _maxListings) {
       _listings.remove(_listings.keys.first);
     }
     // An answer for a folder the line has already left is kept, not shown.
     final current = _listing == folder;
-    if (current) _listing = null;
+    if (current) {
+      _listing = null;
+      folderRefreshError = failed
+          ? 'Couldn’t refresh folders. Try again.'
+          : null;
+    }
     if (current &&
         (field == NewHarnessField.project ||
             field == NewHarnessField.projectName)) {

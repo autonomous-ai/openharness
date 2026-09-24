@@ -60,6 +60,56 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await readGitProject('relative/path')).toEqual({ error: 'INVALID_PATH' })
   })
 
+  it('discovers a newly pushed branch without fetching objects, then fetches only on Start', async () => {
+    const remote = join(root, 'remote.git')
+    const clone = join(root, 'other computer')
+    await git('clone', '--bare', repo, remote)
+    await git('clone', '--no-local', '--single-branch', '--branch', 'main', remote, clone)
+    const there = async (...args: string[]) => (await exec('git', ['-C', clone, ...args])).stdout.trim()
+    await git('remote', 'add', 'origin', remote)
+    await git('switch', '-c', 'feat/toolbar-onboarding')
+    await writeFile(join(repo, 'src', 'value'), 'new remote work')
+    await git('commit', '-am', 'new work')
+    await git('push', 'origin', 'feat/toolbar-onboarding')
+    await writeFile(join(clone, 'src', 'value'), 'unsaved local work')
+    const refs = await there('show-ref')
+    expect((await readGitProject(clone) as any).branches.map((b: any) => b.name)).not.toContain('origin/feat/toolbar-onboarding')
+    const info = await readGitProject(clone, { refresh: true })
+    expect(info).toMatchObject({ refreshed: true, branch: 'main', branches: expect.arrayContaining([
+      { ref: 'refs/remotes/origin/feat/toolbar-onboarding', name: 'origin/feat/toolbar-onboarding', remote: true },
+    ]) })
+    expect(await there('show-ref')).toBe(refs)
+    expect(await readFile(join(clone, 'src', 'value'), 'utf8')).toBe('unsaved local work')
+    const path = await prepare('worktree', 'refs/remotes/origin/feat/toolbar-onboarding', clone,
+      { branchName: 'feat/toolbar-onboarding' })
+    expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('new remote work')
+    expect(await there('branch', '--show-current')).toBe('main')
+  })
+
+  it('keeps saved branches from unreachable remotes and refreshes the others', async () => {
+    const remote = join(root, 'remote.git')
+    await git('clone', '--bare', repo, remote)
+    await git('remote', 'add', 'origin', join(root, 'missing.git'))
+    await git('remote', 'add', 'upstream', remote)
+    const info = await readGitProject(repo, { refresh: true })
+    expect(info).toMatchObject({ refreshed: false, branches: expect.arrayContaining([
+      { ref: 'refs/remotes/origin/feature', name: 'origin/feature', remote: true },
+      { ref: 'refs/remotes/upstream/main', name: 'upstream/main', remote: true },
+    ]) })
+    expect(await git('branch', '--show-current')).toBe('main')
+  })
+
+  it('removes deleted remote choices after a successful lookup without changing saved refs', async () => {
+    const remote = join(root, 'remote.git')
+    await git('clone', '--bare', repo, remote)
+    await git('remote', 'add', 'origin', remote)
+    await exec('git', ['-C', remote, 'branch', '-D', 'feature'])
+    const info = await readGitProject(repo, { refresh: true }) as { branches: Array<{ name: string }> }
+    expect(info.branches.map(b => b.name)).toContain('feature')
+    expect(info.branches.map(b => b.name)).not.toContain('origin/feature')
+    expect(await git('show-ref', '--verify', 'refs/remotes/origin/feature')).toBeTruthy()
+  })
+
   it('starts concurrent worktrees on distinct branches from the chosen ref and preserves dirty source files', async () => {
     await writeFile(join(repo, 'src', 'value'), 'my uncommitted work')
     const paths = await Promise.all([prepare('worktree'), prepare('worktree', 'refs/remotes/origin/feature')])

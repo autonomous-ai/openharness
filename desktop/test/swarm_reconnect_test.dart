@@ -39,7 +39,14 @@ class _ReconnectConnection extends WsConn {
               },
           ],
         }
-      : {'protocolVersion': 3, 'backend': 'tmux', 'available': true};
+      : {
+          'protocolVersion': 3,
+          'backend': 'tmux',
+          'available': true,
+          // A current daemon — see `AttachIntent`: without `noTakeover` a
+          // reconnect may not reopen anything on its own.
+          'features': {'noTakeover': true},
+        };
   @override
   Future<bool> sendTerminalFrame(
     String type,

@@ -80,6 +80,8 @@ import '../widgets/harness_command_bar.dart';
 import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 import '../state/workspace_learning.dart';
+import '../state/workspace_onboarding.dart';
+import '../widgets/onboarding_card.dart';
 import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
@@ -99,6 +101,7 @@ class SwarmScreen extends StatefulWidget {
     ),
     this.commandResolver,
     this.learning,
+    this.onboarding,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
@@ -107,6 +110,7 @@ class SwarmScreen extends StatefulWidget {
   final bool commandBarEnabled;
   final CommandResolver? commandResolver;
   final WorkspaceLearning? learning;
+  final WorkspaceOnboarding? onboarding;
   @override
   State<SwarmScreen> createState() => _SwarmScreenState();
 }
@@ -148,6 +152,9 @@ class _SwarmScreenState extends State<SwarmScreen>
   final _sessionsButton = GlobalKey();
   MachinesPanelHandle? _machinesPanel;
   final _toolbarNotices = ToolbarNotices();
+  late final _onboarding =
+      widget.onboarding ??
+      WorkspaceOnboarding(storage: kUnderTest ? null : HarnessFileStore.shared);
   OverlayEntry? _sessionsOverlay;
   VoidCallback? _unregisterSessions;
   OverlayEntry? _modelsOverlay;
@@ -207,6 +214,15 @@ class _SwarmScreenState extends State<SwarmScreen>
   (String, bool)? _lastWorkspace;
   bool _spokenPaletteOpen = false;
   bool _dialogOpen = false;
+
+  /// A folder chooser opened from the new-harness box is still waiting.
+  ///
+  /// The box keeps its keyboard focus while the chooser is up, so Enter on the
+  /// Browse… row — or a second click — arrives here again. AppKit answers a
+  /// second `beginSheetModal` by QUEUEING it behind the first, which looks
+  /// exactly like a picker that refused to open.
+  bool _pickingFolder = false;
+  bool _newHarnessHidden = false;
   bool _routeIsCurrent = true;
   String? _linkDialogMachineId;
   String? _nativeState;
@@ -245,8 +261,12 @@ class _SwarmScreenState extends State<SwarmScreen>
     // Its own notifier, so marking one agent does not rebuild the workspace —
     // which means the badge has to ask for its own redraw.
     app.agentUnread.addListener(_unreadChanged);
+    // Coming back to the window puts the tab in front of the person again, and
+    // nothing in the app necessarily changes when that happens — so it is told.
+    _lifecycle = AppLifecycleListener(onResume: app.seeWatchedAgents);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
+    _onboarding.addListener(_onboardingChanged);
     _syncToolbarNotices();
     unawaited(
       _learning.load().then((_) {
@@ -320,6 +340,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.removeListener(_syncToolbarNotices);
     _toolbarNotices.removeListener(_toolbarNoticesChanged);
     _toolbarNotices.dispose();
+    _onboarding.removeListener(_onboardingChanged);
+    if (widget.onboarding == null) _onboarding.dispose();
     _machinesPanel?.close(restoreFocus: false);
     app.modelManager.removeListener(_modelManagerChanged);
     app.modelManager.setPanelVisible(false);
@@ -341,6 +363,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.removeListener(_recordNavigation);
     app.removeListener(_observeLearning);
     app.agentUnread.removeListener(_unreadChanged);
+    _lifecycle?.dispose();
     if (widget.learning == null) _learning.dispose();
     FocusManager.instance.removeListener(_restoreEmptyFocus);
     FocusManager.instance.removeListener(_syncKeyContext);
@@ -559,7 +582,69 @@ class _SwarmScreenState extends State<SwarmScreen>
   /// still separates the two — its "Needs input" tab is exactly [_attention].
   int get _unread => app.agentUnread.count;
 
+  void _syncOnboarding() {
+    final profile = app.currentUser;
+    final local = app.localMachineState?.machine.machineId;
+    final used = app.allPanes
+        .where(
+          (pane) =>
+              pane.session?.acceptsInput == true &&
+              pane.session?.engineId != kTerminalEngine &&
+              app.stateOf(pane.machineId)?.machine.isShared == false,
+        )
+        .toList();
+    final localModels = app.modelManager.sections
+        .where((section) => section.own)
+        .expand((section) => section.models)
+        .map((model) => model.id)
+        .toSet();
+    _onboarding.sync(
+      scope: app.isGuest
+          ? 'local:${local ?? 'guest'}'
+          : 'account:${profile?.id ?? profile?.email ?? local}',
+      observed: {
+        if (used.isNotEmpty) OnboardingStep.harnesses,
+        if (used.any(
+          (pane) => app.stateOf(pane.machineId)?.isLocalMachine == false,
+        ))
+          OnboardingStep.machines,
+        if (used.any(
+          (pane) =>
+              app
+                  .stateOf(pane.machineId)
+                  ?.agents
+                  .any(
+                    (agent) =>
+                        agent.id == pane.agentId &&
+                        agent.gridModel != null &&
+                        localModels.contains(agent.gridModel),
+                  ) ==
+              true,
+        ))
+          OnboardingStep.models,
+      },
+      otherComputer:
+          !app.isGuest &&
+          app.machineStates.values.any(
+            (machine) => !machine.isLocalMachine && !machine.machine.isShared,
+          ),
+      modelsAvailable: app.modelManager.localModels.any(
+        (model) => model.canStart || model.running,
+      ),
+    );
+  }
+
+  void _onboardingChanged() {
+    if (!mounted) return;
+    _sessionsOverlay?.markNeedsBuild();
+    _modelsOverlay?.markNeedsBuild();
+    _machinesPanel?.rebuild();
+    if (_native) _syncNative();
+    setState(() {});
+  }
+
   void _syncToolbarNotices() {
+    _syncOnboarding();
     final local = app.localMachineState?.machine.machineId;
     final models = app.modelManager;
     final profile = app.currentUser;
@@ -597,6 +682,8 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (_native) _syncNative();
     setState(() {});
   }
+
+  AppLifecycleListener? _lifecycle;
 
   void _unreadChanged() {
     if (!mounted) return;
@@ -709,6 +796,10 @@ class _SwarmScreenState extends State<SwarmScreen>
       'machinesOpen': _machinesPanel != null,
       'machineNotices': _toolbarNotices.machineCount,
       'modelNotices': _toolbarNotices.modelCount,
+      'onboarding':
+          _onboarding.next != null && _onboarding.showsDot(_onboarding.next!)
+          ? _onboarding.next!.name
+          : null,
       'modelsOpen': _modelsOverlay != null,
       'localModelReady': app.modelManager.readyModel != null,
       'runningSessions': harnessSessions(app)
@@ -1418,11 +1509,13 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
+    _onboarding.acknowledge(OnboardingStep.machines);
     final panel = openMachinesPanel(
       context,
       app,
       keymap: _keymap,
       initialMachineId: initialMachineId,
+      onboarding: _onboarding,
       toolbarHeight: _native ? 0 : _tabBarHeight,
     );
     _machinesPanel = panel;
@@ -1757,59 +1850,65 @@ class _SwarmScreenState extends State<SwarmScreen>
       },
     );
     _newHarnessOverlay = OverlayEntry(
-      builder: (context) => KeymapProvider(
-        keymap: _keymap,
-        child: ListenableBuilder(
-          listenable: box,
-          builder: (context, child) => LayoutBuilder(
-            builder: (context, constraints) {
-              final setupScale = terminalTextScaleOf(context).clamp(1.0, 1.25);
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: BlockSemantics(
-                      child: GestureDetector(
-                        key: const ValueKey('new-harness-dismiss'),
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          if (box.requestDismiss()) {
-                            final target = box.swarmId ?? app.activeSwarmId;
-                            _closeNewHarness();
-                            app.cancelSwarmDraft(target);
-                          }
-                        },
-                        // The popup is the terminal's own colour, so the
-                        // screen behind it is dimmed rather than competed
-                        // with — that, and the light shadow, are what carry
-                        // the separation a different fill used to.
-                        child: ColoredBox(
-                          color: Colors.black.withValues(alpha: .94),
+      // Hidden, not removed, while a dialog ROUTE is up — see
+      // [_withNewHarnessHidden]. The form keeps its State and its draft.
+      builder: (context) => Offstage(
+        offstage: _newHarnessHidden,
+        child: KeymapProvider(
+          keymap: _keymap,
+          child: ListenableBuilder(
+            listenable: box,
+            builder: (context, child) => LayoutBuilder(
+              builder: (context, constraints) {
+                final setupScale = terminalTextScaleOf(context)
+                    .clamp(1.0, 1.25);
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: GestureDetector(
+                          key: const ValueKey('new-harness-dismiss'),
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            if (box.requestDismiss()) {
+                              final target = box.swarmId ?? app.activeSwarmId;
+                              _closeNewHarness();
+                              app.cancelSwarmDraft(target);
+                            }
+                          },
+                          // The popup is the terminal's own colour, so the
+                          // screen behind it is dimmed rather than competed
+                          // with — that, and the light shadow, are what carry
+                          // the separation a different fill used to.
+                          child: ColoredBox(
+                            color: Colors.black.withValues(alpha: .94),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Positioned.fill(
-                    top: _native ? 0 : _tabBarHeight,
-                    child: Align(
-                      alignment: const Alignment(0, -0.12),
-                      // Sized for the setup fields rather than the session
-                      // catalog, with some extra room for larger terminal text.
-                      child: SizedBox(
-                        width: math.min(
-                          960 * setupScale,
-                          constraints.maxWidth - 48,
+                    Positioned.fill(
+                      top: _native ? 0 : _tabBarHeight,
+                      child: Align(
+                        alignment: const Alignment(0, -0.12),
+                        // Sized for the setup fields rather than the session
+                        // catalog, with some extra room for larger terminal text.
+                        child: SizedBox(
+                          width: math.min(
+                            960 * setupScale,
+                            constraints.maxWidth - 48,
+                          ),
+                          height: math.min(
+                            480 * setupScale,
+                            constraints.maxHeight - 88,
+                          ),
+                          child: content,
                         ),
-                        height: math.min(
-                          480 * setupScale,
-                          constraints.maxHeight - 88,
-                        ),
-                        child: content,
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -1838,22 +1937,61 @@ class _SwarmScreenState extends State<SwarmScreen>
     FocusManager.instance.applyFocusChangesIfNeeded();
   }
 
+  /// Runs [show] — a dialog ROUTE — with the new-harness box out of the way.
+  ///
+  /// The box is an [OverlayEntry] this screen inserts itself, so it sits above
+  /// every route pushed AFTERWARDS: the navigator inserts a new route directly
+  /// above the previous ROUTE's entries, which is still below ours. The remote
+  /// folder browser is such a route, and it opened underneath the box — nothing
+  /// appeared until the box was dismissed, and then the chooser was sitting
+  /// there. The chooser on this computer is an AppKit sheet in its own window
+  /// and needs none of this.
+  ///
+  /// Hidden rather than removed: re-inserting the entry would build a second
+  /// [NewHarnessForm] and lose the row, the query and the focus the person left
+  /// behind.
+  Future<T?> _withNewHarnessHidden<T>(Future<T?> Function() show) async {
+    final entry = _newHarnessOverlay;
+    if (entry == null) return show();
+    _newHarnessHidden = true;
+    entry.markNeedsBuild();
+    try {
+      return await show();
+    } finally {
+      _newHarnessHidden = false;
+      // The box may have been closed under the dialog; the flag is reset
+      // either way so the next one does not open invisible.
+      _newHarnessOverlay?.markNeedsBuild();
+    }
+  }
+
   /// The Browse… row: the system's folder chooser on this computer, the
   /// folder browser on another. The box stays open behind it and takes the
   /// answer when it comes back.
   Future<void> _browseForNewHarness(NewHarnessController box) async {
+    if (_pickingFolder) return;
     final previousFocus = FocusManager.instance.primaryFocus;
     final machineId = box.machineId;
     final machine = app.stateOf(machineId);
-    final path = machine?.isLocalMachine == true
-        ? await getDirectoryPath(initialDirectory: box.project.folder)
-        : await showRemoteFolderPicker(
-            context,
-            notifier: app,
-            machineId: machineId,
-            initialPath: box.project.folder,
-            terminal: true,
-          );
+    _pickingFolder = true;
+    final String? path;
+    try {
+      path = machine?.isLocalMachine == true
+          ? await whileNativePicker(
+              () => getDirectoryPath(initialDirectory: box.project.folder),
+            )
+          : await _withNewHarnessHidden(
+              () => showRemoteFolderPicker(
+                context,
+                notifier: app,
+                machineId: machineId,
+                initialPath: box.project.folder,
+                terminal: true,
+              ),
+            );
+    } finally {
+      _pickingFolder = false;
+    }
     if (mounted && identical(_newHarness, box) && box.machineId == machineId) {
       if (path != null) box.setFolder(path);
       if (previousFocus?.context?.mounted == true &&
@@ -1864,23 +2002,33 @@ class _SwarmScreenState extends State<SwarmScreen>
   }
 
   Future<void> _linkProfileForNewHarness(NewHarnessController box) async {
-    if (box.locked || !box.supportsProfiles) return;
+    if (box.locked || !box.supportsProfiles || _pickingFolder) return;
     final previousFocus = FocusManager.instance.primaryFocus;
     final machineId = box.machineId;
     final engine = box.engine;
     final initialPath = box.draft.profile?.path;
     final machine = app.stateOf(machineId);
-    final path = machine?.isLocalMachine == true
-        ? await getDirectoryPath(
-            initialDirectory: initialPath,
-            confirmButtonText: 'Link profile',
-          )
-        : await showRemoteFolderPicker(
-            context,
-            notifier: app,
-            machineId: machineId,
-            initialPath: initialPath,
-          );
+    _pickingFolder = true;
+    final String? path;
+    try {
+      path = machine?.isLocalMachine == true
+          ? await whileNativePicker(
+              () => getDirectoryPath(
+                initialDirectory: initialPath,
+                confirmButtonText: 'Link profile',
+              ),
+            )
+          : await _withNewHarnessHidden(
+              () => showRemoteFolderPicker(
+                context,
+                notifier: app,
+                machineId: machineId,
+                initialPath: initialPath,
+              ),
+            );
+    } finally {
+      _pickingFolder = false;
+    }
     if (!mounted ||
         !identical(_newHarness, box) ||
         box.machineId != machineId ||
@@ -2155,7 +2303,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     }
   }
 
-  void _toggleModels({ModelsTab initialTab = ModelsTab.subscriptions}) {
+  void _toggleModels({ModelsTab initialTab = ModelsTab.all}) {
     if (_modelsOverlay != null) {
       _closeModels();
       return;
@@ -2166,6 +2314,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
+    _onboarding.acknowledge(OnboardingStep.models);
     app.modelManager.setPanelVisible(true);
     unawaited(app.modelManager.dismissIntroduction());
     unawaited(app.modelManager.refresh());
@@ -2207,6 +2356,9 @@ class _SwarmScreenState extends State<SwarmScreen>
                   ),
                   child: ModelsPanel(
                     newModelIds: _toolbarNotices.newModelIds,
+                    showOnboarding: _onboarding.next == OnboardingStep.models,
+                    onDismissOnboarding: () =>
+                        _onboarding.dismiss(OnboardingStep.models),
                     controller: app.modelManager,
                     subscriptions: _modelsMenu!,
                     initialTab: initialTab,
@@ -2259,6 +2411,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
+    _onboarding.acknowledge(OnboardingStep.harnesses);
     final overlay = Overlay.of(context);
     _sessionsOverlay = OverlayEntry(
       builder: (context) => LayoutBuilder(
@@ -2302,6 +2455,20 @@ class _SwarmScreenState extends State<SwarmScreen>
                     padding: const EdgeInsets.all(1),
                     child: HarnessSessionManager(
                       app: app,
+                      introduction: _onboarding.next == OnboardingStep.harnesses
+                          ? OnboardingCard(
+                              title: 'Run your first harness',
+                              description:
+                                  'Give an agent a task. Watch it get to work.',
+                              action: 'New harness',
+                              onAction: () {
+                                _closeSessions(restoreFocus: false);
+                                _runShortcut('agent.new');
+                              },
+                              onDismiss: () =>
+                                  _onboarding.dismiss(OnboardingStep.harnesses),
+                            )
+                          : null,
                       initialFilter: filter ?? SessionFilter.all,
                       recent: _navigation.recent,
                       onClose: _closeSessions,
@@ -2876,7 +3043,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       report: (voiceId, state, agentId) =>
           app.reportVoiceRoute(request.machineId, voiceId, state, agentId),
     );
-    if (_spokenPaletteOpen || _dialogOpen || !mounted) {
+    // A native chooser is modal to this window, so the palette would open
+    // behind it and take neither a key nor a click. Reporting the task back as
+    // cancelled is the honest answer — the dial drops its sending overlay
+    // instead of leaving the words in a box nobody can reach.
+    if (_spokenPaletteOpen || _dialogOpen || nativePickerOpen || !mounted) {
       spoken.cancelled();
       return;
     }
@@ -3599,6 +3770,7 @@ class _SwarmScreenState extends State<SwarmScreen>
                           if (!_commandBarOpen && _newHarness == null)
                             LocalModelInvitation(
                               controller: app.modelManager,
+                              showIntroduction: false,
                               onOpen: () =>
                                   _toggleModels(initialTab: ModelsTab.local),
                             ),
@@ -3685,6 +3857,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     required int count,
     required String label,
     required Widget child,
+    OnboardingStep? step,
   }) => Badge(
     key: key,
     isLabelVisible: count > 0,
@@ -3697,7 +3870,31 @@ class _SwarmScreenState extends State<SwarmScreen>
       semanticsLabel: label,
       style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
     ),
-    child: child,
+    child: step != null && _onboarding.showsDot(step)
+        ? Stack(
+            clipBehavior: Clip.none,
+            children: [
+              child,
+              Positioned(
+                right: -3,
+                top: count > 0 ? null : -3,
+                bottom: count > 0 ? -3 : null,
+                child: Semantics(
+                  label: 'Suggested next step',
+                  child: Container(
+                    key: ValueKey('onboarding-${step.name}-dot'),
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0xff99c2ed),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          )
+        : child,
   );
 
   Widget _tabStrip() => LayoutBuilder(
@@ -3867,6 +4064,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               style: _toolbarIconStyle(_toolbarNotices.machineCount),
               icon: _toolbarBadge(
                 key: const ValueKey('swarm-machines-badge'),
+                step: OnboardingStep.machines,
                 count: _toolbarNotices.machineCount,
                 label:
                     '${_toolbarNotices.machineCount} new ${_toolbarNotices.machineCount == 1 ? 'computer' : 'computers'} ready to connect',
@@ -3881,6 +4079,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               style: _toolbarIconStyle(_toolbarNotices.modelCount),
               icon: _toolbarBadge(
                 key: const ValueKey('swarm-models-badge'),
+                step: OnboardingStep.models,
                 count: _toolbarNotices.modelCount,
                 label:
                     '${_toolbarNotices.modelCount} ${_toolbarNotices.modelCount == 1 ? 'model' : 'models'} ready to use',
@@ -3895,6 +4094,7 @@ class _SwarmScreenState extends State<SwarmScreen>
               style: _toolbarIconStyle(_unread),
               icon: _toolbarBadge(
                 key: const ValueKey('swarm-unread-badge'),
+                step: OnboardingStep.harnesses,
                 count: _unread,
                 label:
                     '$_unread ${_unread == 1 ? 'harness has' : 'harnesses have'} news you have not seen',

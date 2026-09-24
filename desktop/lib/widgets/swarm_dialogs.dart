@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_type.dart';
 
+import '../core/desktop_window.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
@@ -79,7 +80,9 @@ class _ProjectDialogState extends State<_ProjectDialog> {
     });
     try {
       final folder = widget.notifier.stateOf(id)?.isLocalMachine == true
-          ? await getDirectoryPath(initialDirectory: path)
+          ? await whileNativePicker(
+              () => getDirectoryPath(initialDirectory: path),
+            )
           : await showRemoteFolderPicker(
               context,
               notifier: widget.notifier,

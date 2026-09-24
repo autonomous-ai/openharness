@@ -281,6 +281,21 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     box.applyOption(_wheel[_at]);
   }
 
+  /// Hand the keys back to the rows, leaving the choices on screen.
+  ///
+  /// One implementation for the two ways out that are not Escape: ← from the
+  /// live list, and the narrow layout's back chevron. They used to be written
+  /// twice, which is how a back button and a back key drift apart.
+  void _backToRows() {
+    if (_prompts.contains(box.field)) {
+      box.focusField(NewHarnessField.projectMenu);
+    }
+    box.setQuery('');
+    setState(() => _listOpen = false);
+    _focus.requestFocus();
+    _revealRow();
+  }
+
   /// Folder paths, project names and repository URLs keep their prompt active
   /// even before anything is typed.
   static const _prompts = {
@@ -452,6 +467,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     // Candidate navigation and confirmation belong to the input method. Keep
     // these keys out of both the picker and ancestor focus-traversal shortcuts.
     if (_isComposing()) return KeyEventResult.skipRemainingHandlers;
+    if (event.logicalKey == LogicalKeyboardKey.keyR &&
+        (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed) &&
+        box.canRefreshChoices) {
+      if (event is KeyDownEvent) box.refreshChoices();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.keyV &&
         (HardwareKeyboard.instance.isMetaPressed ||
             HardwareKeyboard.instance.isControlPressed)) {
@@ -474,16 +496,31 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       case LogicalKeyboardKey.arrowUp:
         _picking ? _stepMatch(-1) : _moveRow(-1);
       case LogicalKeyboardKey.arrowRight:
-      case LogicalKeyboardKey.pageDown:
-        if (_picking && event.logicalKey == LogicalKeyboardKey.arrowRight) {
-          return KeyEventResult.ignored;
+        // → goes to the COLUMN on the right, it does not edit the value on
+        // the left. Two columns side by side, and the arrow follows the eye:
+        // reading the choices and reaching for → to get at them is what
+        // everybody tried first. A row with no column to enter — Worktree,
+        // which is two values and nothing to browse — still flips in place.
+        if (_picking) return KeyEventResult.ignored; // the caret's key now
+        if (_hasChoices) {
+          setState(() => _listOpen = true);
+        } else {
+          _stepValue(1);
         }
-        if (!_picking) _stepValue(1);
       case LogicalKeyboardKey.arrowLeft:
-      case LogicalKeyboardKey.pageUp:
-        if (_picking && event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-          return KeyEventResult.ignored;
+        if (_picking) {
+          // With something typed, ← is an editing key: it moves through the
+          // characters rather than walking out of the search they are in.
+          if (box.query.isNotEmpty) return KeyEventResult.ignored;
+          _backToRows();
+        } else if (!_hasChoices) {
+          _stepValue(-1);
         }
+      case LogicalKeyboardKey.pageDown:
+        // The wheel's home now that the arrows have left it — as documented
+        // long before this: hyphens are values, so - and + cannot serve.
+        if (!_picking) _stepValue(1);
+      case LogicalKeyboardKey.pageUp:
         if (!_picking) _stepValue(-1);
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
@@ -718,15 +755,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               padding: const EdgeInsets.only(bottom: 16),
               child: InkWell(
                 canRequestFocus: false,
-                onTap: () {
-                  if (_prompts.contains(box.field)) {
-                    box.focusField(NewHarnessField.projectMenu);
-                  }
-                  box.setQuery('');
-                  setState(() => _listOpen = false);
-                  _focus.requestFocus();
-                  _revealRow();
-                },
+                onTap: _backToRows,
                 child: Row(
                   children: [
                     Icon(
@@ -742,6 +771,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             ),
           if (_hasChoices) ...[
             _searchBar(),
+            if (box.choicesStatus case final status?)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(status, style: _ink(kBoxFaint)),
+                ),
+              ),
             const SizedBox(height: 24),
             Flexible(child: SingleChildScrollView(child: _matchPane())),
           ],
@@ -778,7 +815,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (shown.isEmpty && !_prompts.contains(box.field))
+        if (shown.isEmpty &&
+            !_prompts.contains(box.field) &&
+            !box.refreshingChoices)
           Text('No matches', style: _ink(kBoxFaint)),
         for (var i = 0; i < shown.length; i++) ...[
           _matchRow(shown[i]),
@@ -864,16 +903,42 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           ),
+          if (box.canRefreshChoices)
+            IconButton(
+              key: const ValueKey('new-harness-refresh'),
+              tooltip: 'Refresh results',
+              onPressed: box.refreshingChoices ? null : box.refreshChoices,
+              icon: Icon(
+                LucideIcons.refreshCw300,
+                size: terminalFontStore.size,
+                color: kBoxFaint,
+              ),
+            ),
         ],
       ),
     );
   }
 
+  /// The word at the right of a machine row.
+  ///
+  /// A row that cannot be chosen has to SAY so: dimmed text alone reads as a
+  /// theme, and the reason — offline, or never linked — is the one thing the
+  /// person needs in order to do something about it. Machine rows are the only
+  /// ones that carry a note, so "This machine" keeps the slot when there is no
+  /// bad news to put in it.
+  String? _machineNote(String machineId) {
+    final machine = box.app.stateOf(machineId);
+    if (machine == null) return null;
+    if (machine.needsLink) return 'Link required';
+    if (machine.isOffline) return 'Offline';
+    return machine.isLocalMachine ? 'This machine' : null;
+  }
+
   Widget _matchRow(NewHarnessOption option) {
     final on = identical(option, box.selected);
-    final local =
-        box.field == NewHarnessField.machine &&
-        box.app.stateOf(option.id)?.isLocalMachine == true;
+    final note = box.field == NewHarnessField.machine
+        ? _machineNote(option.id)
+        : null;
     final actionIcon = switch (option.id) {
       NewHarnessController.repositoryId => LucideIcons.gitBranch300,
       NewHarnessController.existingProjectId ||
@@ -932,13 +997,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (local)
+                    if (note != null)
                       Row(
                         children: [
                           Expanded(child: title),
                           const SizedBox(width: 12),
                           Text(
-                            'This machine',
+                            note,
                             style: _ink(
                               kBoxFaint,
                             ).copyWith(fontSize: terminalFontStore.size * .85),

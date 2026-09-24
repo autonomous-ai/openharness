@@ -26,6 +26,7 @@ import '../terminal/terminal_session.dart';
 import '../theme/app_theme.dart';
 import 'agent_drag.dart';
 import 'harness_join_guide_screen.dart';
+import 'link_machine_screen.dart';
 import 'new_agent_dialog.dart';
 import 'delete_agent_dialog.dart';
 import 'fork_agent_dialog.dart';
@@ -448,6 +449,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       upload: session.uploadProgress,
       focused: app.isPaneFocused(pane.id),
       focusRequest: app.isPaneFocused(pane.id) ? app.paneFocusRequest : 0,
+      focusByUser: app.paneFocusByUser,
       single: app.panes.length == 1,
       pinned: app.isPanePinned(pane),
       zoomed: app.zoomedPaneId == pane.id,
@@ -1430,7 +1432,7 @@ class _PaneContent extends StatelessWidget {
           terminalPaneCount >= 3;
       final TerminalNotice? notice;
       if (machine == null) {
-        notice = (
+        notice = terminalNotice(
           label: 'Unavailable',
           icon: Icons.cloud_off,
           detail: notifier.machineInventoryLoaded
@@ -1438,21 +1440,29 @@ class _PaneContent extends StatelessWidget {
               : 'Waiting for this machine. Retained output is read only.',
         );
       } else if (needsLink) {
-        notice = (
+        notice = terminalNotice(
           label: 'Link required',
           icon: Icons.link_off,
           detail:
               '${machine.machine.displayName} needs linking. Retained output is read only.',
+          // A tile still showing its last screen gets the same way out as an
+          // empty one — the band's button asks for the remote password.
+          actionLabel: 'Link…',
+          onAction: () => showLinkMachineScreenDialog(
+            context,
+            notifier,
+            pane.machineId,
+          ).ignore(),
         );
       } else if (offline) {
-        notice = (
+        notice = terminalNotice(
           label: 'Offline',
           icon: Icons.cloud_off,
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
         );
       } else if (agent == null || !agent.terminalAvailable) {
-        notice = (
+        notice = terminalNotice(
           label: 'Unavailable',
           icon: Icons.terminal,
           detail:
@@ -1460,7 +1470,7 @@ class _PaneContent extends StatelessWidget {
               'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
         );
       } else if (agent.launchState == 'failed') {
-        notice = (
+        notice = terminalNotice(
           label: 'Start failed',
           icon: Icons.error_outline,
           detail:
@@ -1531,7 +1541,7 @@ class _PaneContent extends StatelessWidget {
                   notifier.toggleZoomPane();
                 }
               : null,
-          onRendererFocus: () => notifier.focusPane(pane.id),
+          onRendererFocus: () => notifier.focusPaneFromRenderer(pane.id),
           paneDrag: single
               ? null
               : PaneDragHandle(
@@ -1572,8 +1582,19 @@ class _PaneContent extends StatelessWidget {
         title: agentName ?? machine.machine.displayName,
         icon: Icons.link_off,
         message:
-            '${machine.machine.displayName} is not linked to this computer yet.',
+            '${machine.machine.displayName} is not linked to this computer yet. '
+            'Link it with the remote password set on that machine.',
         onClose: single && !swarmMode ? null : close,
+        // The way out, where the dead end was: the same card the Machines
+        // panel's Connect row opens, asking for that machine's remote
+        // password. It closes itself the moment the link lands, and this tile
+        // goes back to attaching.
+        actionLabel: 'Link…',
+        onAction: () => showLinkMachineScreenDialog(
+          context,
+          notifier,
+          pane.machineId,
+        ).ignore(),
       );
     }
     if (offline) {
@@ -1616,6 +1637,25 @@ class _PaneContent extends StatelessWidget {
             agent.terminalUnavailableReason ??
             'This agent has no available terminal.',
         onClose: close,
+      );
+    }
+    // Nothing is attaching, and nothing will: this machine's CLI cannot open a
+    // terminal without taking it from whoever has it, so an open here waits for
+    // a person rather than happening behind one (`AttachIntent`). A spinner
+    // would promise something that is never coming.
+    if (!machine.terminalNoTakeoverAvailable) {
+      return _PaneStatus(
+        title: agentName,
+        icon: Icons.terminal,
+        message:
+            'Open this harness here. Another screen may be using its terminal; '
+            'opening takes it, because ${machine.machine.displayName} runs an '
+            'older Harness CLI.',
+        onClose: single && !swarmMode ? null : close,
+        actionLabel: 'Open here',
+        onAction: () {
+          notifier.selectAgent(pane.machineId, wantedAgentId).ignore();
+        },
       );
     }
     return _PaneStatus(

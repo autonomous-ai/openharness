@@ -3,8 +3,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
-import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed } from './resumeStoppedAgent.js'
-import { awaitsResumeHook } from './resumeCapability.js'
+import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
@@ -38,6 +37,32 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
     refreshGridWebSearch, clearDeleted, attachDsh } = deps
   const resumeConversations = new Set<string>()
+  /** Same short form every other `[…]` line in the daemon logs uses. */
+  const sid = (id: string) => id.slice(0, 8)
+
+  /**
+   * A reservation nothing can still be using, taken over.
+   *
+   * `beginResume` reserves an agent before tmux allocation so that a crash in the window between
+   * allocating a pane and persisting its row cannot be followed by a second process for the same
+   * conversation. It is deliberately NOT released on an unverified outcome — which is right, and
+   * which also means a reservation whose owner died leaves the harness unresumable for good: every
+   * later Enter is refused before it looks at anything, with "the saved conversation has not been
+   * confirmed yet" over a harness nobody is confirming.
+   *
+   * Age settles it. The readiness wait is the longest a resume can legitimately hold this, so an
+   * older reservation belongs to an operation that is over. By then the crash window it guards is
+   * closed too: a pane that outlived it has had many reconcile passes to be discovered, given a row
+   * and bound to its conversation, and `canLaunch` — which has already returned true to get here —
+   * checks both the registry and the saved process before any of this runs.
+   */
+  const retakeStaleReservation = (agentId: string): string | null => {
+    const heldSince = stoppedAgents.resumeReservedAt(agentId)
+    if (heldSince === null || Date.now() - heldSince <= RESUME_READINESS_BUDGET_MS) return null
+    console.log(`[resume] ${sid(agentId)} taking over a reservation held since ${new Date(heldSince).toISOString()} · its owner is gone`)
+    stoppedAgents.finishResume(agentId)
+    return stoppedAgents.beginResume(agentId)
+  }
   const waitForResume = async (entry: RegisteredSession, current: () => boolean) => {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
@@ -61,18 +86,25 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       await clearPaneRemainOnExit(saved.tmuxPane)
       if (!ownsRoute()) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
-      // A resume confirmed by its process rather than by a startup hook has nothing else coming to
-      // mark the row ready, and a row left `starting` reads as "Starting" for ever and keeps
-      // discovery out of it (see cli.ts's resumeOnly guard). Same condition as the proof itself in
-      // `waitForResumedAgent`: only a resume that ASKED for a conversation, on an engine that hooks
-      // at launch, is marked ready by `register` instead.
-      const ready = awaitsResumeHook(saved.engine, saved.sessionId)
+      // Whoever got there first wins, and if nobody did, this does: a hook that already reached
+      // `register` has marked the row ready, and a resume confirmed by its process alone has nothing
+      // else coming. A row left `starting` reads as "Starting" for ever, is made dormant without
+      // being retained by discovery's `onExited`, and is refused by the desk's own resume receipt —
+      // asking WHICH proof confirmed it got that wrong in both directions, so ask the row instead.
+      const confirmed = registry.byAgent(saved.agentId)
+      const ready = confirmed?.launch?.state === 'ready'
         ? result.session
         : registry.setLaunch(saved.agentId, { state: 'ready' }) ?? result.session
+      console.log(`[resume] ${sid(saved.agentId)} confirmed · engine=${saved.engine}`
+        + ` · hook=${(confirmed?.lastHookAt ?? 0) > 0 ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
       announceSession(ready)
     } else if (result.error !== 'AGENT_CHANGED') {
       const row = registry.byAgent(saved.agentId)!
       const failed = registry.setLaunch(row.agentId, { state: 'failed', error: result.error, detail: result.detail })
+      // Logged like the confirmation above, and for the same reason: this verdict clears `active`,
+      // makes the desk refuse to open the harness, and is the one a person comes asking about —
+      // openharness#189 was hard to place precisely because the resume path said nothing either way.
+      console.log(`[resume] ${sid(saved.agentId)} ${result.error} · engine=${saved.engine}${result.detail ? ` · ${result.detail}` : ''}`)
       announceSession(failed!)
       // A verified exit releases the reservation and keeps the shell/output. Unknown startup
       // keeps both runtime and reservation; another Enter cannot launch a duplicate process.
@@ -140,6 +172,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         // Reserve before preparing history or rewriting launch configuration: an unknown previous
         // allocation may still have a writer using those files.
         token = stoppedAgents.beginResume(agentId)
+        if (!token) token = retakeStaleReservation(agentId)
         if (!token) return resumeUnconfirmed
         const built = await relaunchOverrides(saved)
         if (!built.ok) return { ok: false, error: built.error, detail: built.detail }

@@ -77,7 +77,10 @@ void main() {
   });
 
   testWidgets('a digit takes the row it numbers', (tester) async {
-    final (app, source) = await _open(tester, others: const ['Second', 'Third']);
+    final (app, source) = await _open(
+      tester,
+      others: const ['Second', 'Third'],
+    );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
     await tester.pumpAndSettle();
@@ -86,6 +89,33 @@ void main() {
     expect(_agentsOf(app, third), ['a0']);
     expect(_agentsOf(app, source), ['a1']);
   });
+
+  testWidgets('the palette moves the pane it opened for after focus changes', (
+    tester,
+  ) async {
+    final (app, source) = await _open(tester);
+    app.focusPane(1);
+    await tester.tap(find.text('Second'));
+    await tester.pumpAndSettle();
+
+    expect(_agentsOf(app, source), ['a1']);
+    expect(_agentsOf(app, app.activeSwarmId), ['a0']);
+  });
+
+  testWidgets(
+    'changing tabs keeps the palette source and destinations stable',
+    (tester) async {
+      final (app, source) = await _open(tester);
+      final destination = app.swarms.firstWhere((s) => s.name == 'Second').id;
+      app.selectSwarm(destination);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+      await tester.pumpAndSettle();
+
+      expect(_agentsOf(app, source), ['a1']);
+      expect(_agentsOf(app, destination), ['a0']);
+      expect(app.activeSwarmId, destination);
+    },
+  );
 
   testWidgets('the arrows walk the list and Enter takes it', (tester) async {
     final (app, _) = await _open(tester, others: const ['Second', 'Third']);
@@ -97,6 +127,22 @@ void main() {
     final third = app.swarms.firstWhere((s) => s.name == 'Third').id;
     expect(_agentsOf(app, third), ['a0']);
   });
+
+  testWidgets(
+    'a pane removed while the palette is open does not move its neighbour',
+    (tester) async {
+      final (app, source) = await _open(tester);
+      await app.closePane(0);
+      await tester.tap(find.text('Second'));
+      await tester.pumpAndSettle();
+      expect(app.activeSwarmId, source);
+      expect(_agentsOf(app, source), ['a1']);
+      expect(
+        _agentsOf(app, app.swarms.firstWhere((s) => s.name == 'Second').id),
+        isEmpty,
+      );
+    },
+  );
 
   testWidgets('the last row opens a tab of its own', (tester) async {
     final (app, source) = await _open(tester);

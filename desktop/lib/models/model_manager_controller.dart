@@ -10,6 +10,7 @@ import '../core/test_run.dart';
 import '../state/app_state.dart';
 import '../widgets/grid_model_picker.dart' show modelPickerSupports;
 import 'local_model.dart';
+import 'api_connections_controller.dart';
 
 const modelManagerName = 'Model Manager';
 
@@ -24,6 +25,8 @@ class ModelManagerController extends ChangeNotifier {
   final AppNotifier app;
   final LocalKeyValueStore? _storage;
   final bool poll;
+  ApiConnectionsController? _apis;
+  ApiConnectionsController get apis => _apis ??= ApiConnectionsController(app);
   static const introKey = 'models.introduction.dismissed';
   MachineState? _machine;
   Future<void>? _preparing, _opening, _refreshing;
@@ -422,6 +425,7 @@ class ModelManagerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _apis?.dispose();
     _timer?.cancel();
     if (_started) app.removeListener(_observe);
     super.dispose();

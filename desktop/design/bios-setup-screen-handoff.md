@@ -141,11 +141,25 @@ Three earlier designs were rejected, and the reasons still apply:
 | Key | On the items | With the list live |
 | --- | --- | --- |
 | `↑↓` | move between rows | move within the list |
-| `←→` | change the focused value in place | — |
-| `↵` | **Pick from List** — hand the arrows to the right column | take the value |
+| `→` | **hand the keys to the right column** (Worktree: flip it) | move the caret |
+| `←` | — (Worktree: flip it) | empty search: **back to the items**; otherwise move the caret |
+| `PgDn` `PgUp` | change the focused value in place | — |
+| `↵` | hand the keys to the right column | take the value |
 | `Esc` | close | back to the items |
 | `Tab` | walk the rows | walk the list |
 | typing | fuzzy search the focused row | narrow further |
+
+**Changed 2026-09-24, on the owner's request, and loudly rather than
+quietly.** The arrows used to change the focused value where it stood, the way
+a BIOS screen does, and `↵` alone handed the keys across. But this screen is
+two columns side by side, which a BIOS is not: people read the choices on the
+right and reach for `→` to get at them, and what they got instead was the
+value on the LEFT changing under them. `→` now goes where the eye already
+went. Stepping a value in place keeps `PgUp`/`PgDn`, which this document
+already picked for it, and `↵` is unchanged so nobody's hands have to be
+re-taught. Worktree is the one exception both arrows keep: two values and
+nothing to browse, so there is no column to go to (and
+`new-harness-entry-rules.md` still describes it exactly as before).
 
 Two rules hold it together:
 

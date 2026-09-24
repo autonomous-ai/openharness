@@ -202,6 +202,9 @@ class _App extends AppNotifier {
   }
 }
 
+/// Shared disposable fixture for toolbar/onboarding reviews.
+AppNotifier createMachinesReviewApp() => _App(_Cli());
+
 Future<void> main() async {
   if (!kUnderTest) throw StateError('Preview requires FLUTTER_TEST=1.');
   WidgetsFlutterBinding.ensureInitialized();

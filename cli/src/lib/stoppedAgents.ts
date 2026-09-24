@@ -1,5 +1,5 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { closeSync, constants, fsyncSync, openSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, openSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -101,14 +101,35 @@ export class StoppedAgentStore {
     return token
   }
 
-  /** Clear only a verified outcome. Unknown allocation/readiness keeps its reservation. */
+  /**
+   * When the reservation for this agent was taken, or null if there is none.
+   *
+   * The reservation's whole job is to outlive a crash, so the caller needs to know how long it has
+   * been held: one taken by an operation that cannot still be running is protecting nothing, and a
+   * harness whose reservation is never released can never be resumed again.
+   */
+  resumeReservedAt(agentId: string): number | null {
+    if (!SAFE_ID.test(agentId)) return null
+    try { return statSync(join(this.directory, `${agentId}.resume`)).mtimeMs } catch { return null }
+  }
+
+  /**
+   * Clear only a verified outcome. Unknown allocation/readiness keeps its reservation.
+   *
+   * `token` asks for the reservation to be cleared only if it is still the caller's own, which can
+   * only be answered by parsing the marker. Without one the caller is clearing it unconditionally,
+   * so the CONTENTS are not parsed — a reservation left behind by a crash can be half-written, and
+   * refusing to clear THAT is refusing exactly the case a takeover exists for. The file is still
+   * opened the same guarded way either way, so a symlink or anything else unsafe in its place
+   * fails closed rather than being unlinked on trust.
+   */
   finishResume(agentId: string, token?: string): void {
     if (!SAFE_ID.test(agentId)) return
     const file = join(this.directory, `${agentId}.resume`)
     try {
       secureStateDirectory(this.directory, false)
-      const marker = JSON.parse(readPrivateStateFile(file, 1024))
-      if (token !== undefined && marker.token !== token) return
+      const marker = readPrivateStateFile(file, 1024)
+      if (token !== undefined && JSON.parse(marker).token !== token) return
       unlinkSync(file)
       this.syncDirectory()
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }

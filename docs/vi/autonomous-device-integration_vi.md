@@ -180,3 +180,12 @@ không có gì để retry — mất một `move` chỉ là cuộn ngắn hơn. 
 Chỉ terminal Desktop đang focus mới cuộn; pane viewer thì không. Lỗi: `FOCUS_UNAVAILABLE` khi không
 có cửa sổ Desktop; `INVALID_REQUEST` khi phase sai, giá trị không phải số nguyên hoặc ngoài khoảng,
 hoặc có field lạ. CLI cũ không liệt kê `scroll` trong capabilities của hello.
+
+## Input bổ sung khi agent đang chạy
+
+`turn.send` tới Claude/Codex dùng input native ngay khi agent đang làm việc; chỉ serialize thao
+tác ghi terminal. Capability `input.status.v1` bổ sung `receipt.input` để phân biệt steering,
+native queue, daemon queue và trạng thái xác nhận input. Không đổi nghĩa receipt cũ: input đã
+nhận không có nghĩa task hoàn tất. Các lượt chồng nhau thiếu correlation phải giữ `unknown`.
+Xem [chi tiết engine, kiểm thử và phần OS cần phối hợp](../in-flight-agent-input.md). OS cần lưu
+nhiều delivery và không gán summary/recap theo session cho câu bổ sung mới nhất.

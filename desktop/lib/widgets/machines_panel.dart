@@ -10,8 +10,11 @@ import '../core/models.dart';
 import '../core/machine_resources.dart';
 import '../screens/login_screen.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_menu.dart';
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
+import '../state/workspace_onboarding.dart';
+import 'onboarding_card.dart';
 import '../terminal/terminal_text.dart';
 import 'box_chrome.dart' show ReadlineKeys;
 import 'link_another_machine_dialog.dart'
@@ -49,6 +52,7 @@ MachinesPanelHandle openMachinesPanel(
   AppKeymap? keymap,
   String? initialMachineId,
   double toolbarHeight = 0,
+  WorkspaceOnboarding? onboarding,
 }) {
   if (initialMachineId != null) notifier.revisitLinkPrompt(initialMachineId);
   final activeKeymap = keymap ?? KeymapTheme.of(context, listen: false);
@@ -58,6 +62,7 @@ MachinesPanelHandle openMachinesPanel(
       builder: (context, constraints) {
         final panel = _MachinesPanel(
           notifier: notifier,
+          onboarding: onboarding,
           initialMachineId: initialMachineId,
           onClose: () => handle.close(),
           onOpen: (id) => handle.close(destination: id, restoreFocus: false),
@@ -146,6 +151,7 @@ class MachinesPanelHandle {
 class _MachinesPanel extends StatefulWidget {
   const _MachinesPanel({
     required this.notifier,
+    this.onboarding,
     this.initialMachineId,
     required this.onClose,
     required this.onOpen,
@@ -153,6 +159,7 @@ class _MachinesPanel extends StatefulWidget {
     required this.active,
   });
   final AppNotifier notifier;
+  final WorkspaceOnboarding? onboarding;
   final String? initialMachineId;
   final VoidCallback onClose;
   final ValueChanged<String> onOpen;
@@ -331,19 +338,60 @@ class _MachinesPanelState extends State<_MachinesPanel>
     if (!app.isGuest) unawaited(app.retryMachines());
   }
 
+  /// Something that covers the panel is on screen. The row menu is NOT one of
+  /// these — it is anchored inside the panel — and the flag is what keeps a
+  /// menu closing into an action from pulling focus off the sheet it opened.
+  bool _modalOpen = false;
+
+  /// One controller per row, kept across rebuilds (the rows rebuild on every
+  /// resource reading), and which one is open — Escape has to reach the MENU
+  /// before it reaches the panel, or dismissing three items closes the list.
+  /// Entries for machines that have left the account are dropped as the list
+  /// is built, so an account churning machines does not grow this for ever.
+  final _rowMenus = <String, MenuController>{};
+  MenuController? _openRowMenu;
+
+  MenuController _rowMenu(String machineId) =>
+      _rowMenus.putIfAbsent(machineId, MenuController.new);
+
+  void _pruneRowMenus(Iterable<MachineState> shown) {
+    if (_rowMenus.length <= shown.length) return;
+    final live = {for (final machine in shown) machine.machine.machineId};
+    _rowMenus.removeWhere((id, _) => !live.contains(id));
+  }
+
   Future<T> _modal<T>(Future<T> Function() show) async {
+    _modalOpen = true;
     widget.onModalChanged(true);
     try {
       return await show();
     } finally {
+      _modalOpen = false;
       if (mounted) _reveal();
     }
   }
 
+  /// Escape closes the innermost thing first: an open row menu, then the panel.
+  void _cancel() {
+    if (_openRowMenu case final menu? when menu.isOpen) {
+      menu.close();
+      return;
+    }
+    widget.onClose();
+  }
+
   void _reveal() {
     widget.onModalChanged(false);
+    _restoreFocus();
+  }
+
+  /// Put the keyboard back on the list once something it opened is gone, so the
+  /// arrows and Escape work again without a click. A menu that closed BY
+  /// choosing an action leaves a sheet behind it; that sheet keeps the
+  /// keyboard.
+  void _restoreFocus() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _panelFocus.requestFocus();
+      if (mounted && !_modalOpen) _panelFocus.requestFocus();
     });
   }
 
@@ -377,38 +425,162 @@ class _MachinesPanelState extends State<_MachinesPanel>
   }
 
   int _passwordRevision = 0;
+  int _setupRequest = 0;
+  bool _shareSetup = false;
+  String? _onboardingConnect;
 
-  Widget _actions(MachineState machine) => SizedBox(
-    width: 32,
-    height: 32,
-    child: PopupMenuButton<String>(
-      tooltip: 'Options for ${machine.machine.displayName}',
-      padding: EdgeInsets.zero,
-      icon: Icon(
-        LucideIcons.ellipsis,
-        semanticLabel: 'Options for ${machine.machine.displayName}',
-        size: 16,
-        color: grid.AppPalette.textFaint,
+  Widget _introduction() {
+    final receiving = !widget.onboarding!.completed(OnboardingStep.harnesses);
+    final source = receiving
+        ? _remotes.where((m) => !m.machine.isShared).firstOrNull
+        : null;
+    final local = app.localMachineState;
+    final name = source?.machine.displayName;
+    final offline = source?.nodeOnline == false;
+    final linked =
+        source != null &&
+        !source.needsLink &&
+        source.connectionStatus == ConnectionStatus.connected;
+    return OnboardingCard(
+      title: source == null
+          ? 'Use your harnesses from another computer'
+          : 'Use your harnesses here',
+      description: source == null
+          ? 'They keep running here. Open them on your other computer.'
+          : offline
+          ? 'Open Harness on $name, then check again.'
+          : 'Connect to $name and open its existing harnesses.',
+      action: app.isGuest
+          ? 'Sign in'
+          : source != null
+          ? offline
+                ? 'Check again'
+                : linked
+                ? 'Open harnesses'
+                : 'Connect to $name'
+          : 'Set up access',
+      onAction: app.isGuest
+          ? () => unawaited(_signIn())
+          : offline
+          ? () => unawaited(app.retryMachines())
+          : source != null
+          ? () {
+              if (linked) {
+                widget.onOpen(source.machine.machineId);
+              } else {
+                setState(() {
+                  _onboardingConnect = source.machine.machineId;
+                  _expandedMachine = source.machine.machineId;
+                  _focusMachine = source.machine.machineId;
+                });
+              }
+            }
+          : local == null
+          ? null
+          : () => setState(() {
+              _shareSetup = true;
+              _setupRequest++;
+            }),
+      onDismiss: () => widget.onboarding!.dismiss(OnboardingStep.machines),
+    );
+  }
+
+  Widget _shareInstructions(MachineState local) {
+    final name = local.machine.displayName;
+    final email = app.currentUser?.email;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(46, 4, 16, 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('On your other computer'),
+          const SizedBox(height: 8),
+          _Detail(
+            email == null
+                ? '1. Open Harness and sign in with the same account.'
+                : '1. Open Harness and sign in as $email.',
+          ),
+          const SizedBox(height: 6),
+          _CopyButton('Copy download link', kHarnessDownloadUrl.toString()),
+          const SizedBox(height: 8),
+          _Detail(
+            '2. Open Machines → Connect to $name. Enter the password you set here.',
+          ),
+          const SizedBox(height: 8),
+          _Detail('Keep $name awake and Harness running.'),
+          TextButton(
+            onPressed: () => setState(() => _shareSetup = false),
+            child: const Text('Hide setup steps'),
+          ),
+        ],
       ),
-      onOpened: () => widget.onModalChanged(true),
-      onCanceled: _reveal,
-      onSelected: (action) =>
-          unawaited(_modal(() => _machineAction(action, machine))),
-      itemBuilder: (_) => [
-        const PopupMenuItem(value: 'rename', child: Text('Rename')),
-        if (!machine.isLocalMachine)
-          const PopupMenuItem(
-            value: 'delete',
-            child: Text('Remove from account…'),
+    );
+  }
+
+  Widget _actions(MachineState machine) {
+    final label = 'Options for ${machine.machine.displayName}';
+    final controller = _rowMenu(machine.machine.machineId);
+    // `AppMenuItem` does not dismiss its anchor (the other menus in the app
+    // close theirs by hand too), and a menu left open would swallow the Escape
+    // that should close the panel.
+    void choose(String action) {
+      controller.close();
+      unawaited(_modal(() => _machineAction(action, machine)));
+    }
+
+    return SizedBox(
+      width: 32,
+      height: 32,
+      // ⚠️ A `MenuAnchor`, not a `PopupMenuButton`. A popup menu is a Navigator
+      // ROUTE, and this panel is an overlay entry the app inserted on top of
+      // the navigator — so the menu opened UNDER the list, which is why it used
+      // to hide the whole panel to show three items. Hiding is what a person
+      // saw as their machines vanishing the moment they clicked "…". A
+      // MenuAnchor renders through an `OverlayPortal` above its own anchor, so
+      // the list stays where it is and the menu sits over it, styled like every
+      // other menu in the app.
+      child: MenuAnchor(
+        controller: controller,
+        // Clear of the button it hangs from; Flutter keeps the rest on screen.
+        alignmentOffset: const Offset(0, 4),
+        onOpen: () => _openRowMenu = controller,
+        onClose: () {
+          if (identical(_openRowMenu, controller)) _openRowMenu = null;
+          _restoreFocus();
+        },
+        menuChildren: [
+          AppMenuItem(label: 'Rename', onPressed: () => choose('rename')),
+          if (!machine.isLocalMachine)
+            AppMenuItem(
+              label: 'Remove from account…',
+              onPressed: () => choose('delete'),
+            ),
+          if (machine.isLocalMachine)
+            AppMenuItem(
+              label: 'Connection settings…',
+              onPressed: () => choose('advanced'),
+            ),
+        ],
+        builder: (context, _, _) => Tooltip(
+          message: label,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            // An IconButton asks for a 48px tap target by default, which this
+            // 32px row slot would silently shrink; state the box it has.
+            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+            onPressed: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+            icon: Icon(
+              LucideIcons.ellipsis,
+              semanticLabel: label,
+              size: 16,
+              color: grid.AppPalette.textFaint,
+            ),
           ),
-        if (machine.isLocalMachine)
-          const PopupMenuItem(
-            value: 'advanced',
-            child: Text('Connection settings…'),
-          ),
-      ],
-    ),
-  );
+        ),
+      ),
+    );
+  }
 
   Widget _setup() {
     final email = app.currentUser?.email;
@@ -530,6 +702,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         machine: machine,
         options: options,
         autofocus: _focusMachine == id,
+        onLinked: _onboardingConnect == id ? () => widget.onOpen(id) : null,
         resources: _resources[id],
         onClose: widget.onClose,
       );
@@ -590,6 +763,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         app: app,
         machine: machine,
         resources: _resources[machine.machine.machineId],
+        setupRequest: _setupRequest,
         options: _actions(machine),
         onClose: widget.onClose,
       );
@@ -647,10 +821,15 @@ class _MachinesPanelState extends State<_MachinesPanel>
     TerminalFontScope.watch(context);
     grid.AppTheme.watch(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([app, terminalFontStore]),
+      listenable: Listenable.merge([
+        app,
+        terminalFontStore,
+        if (widget.onboarding != null) widget.onboarding!,
+      ]),
       builder: (context, _) {
         final local = app.localMachineState;
         final remotes = _remotes;
+        _pruneRowMenus([?local, ...remotes]);
         // New arrivals must not replace a password someone is already typing.
         if (!remotes.any((m) => m.machine.machineId == _expandedMachine)) {
           _expandedMachine = null;
@@ -659,7 +838,7 @@ class _MachinesPanelState extends State<_MachinesPanel>
         return FocusScope(
           child: TerminalPromptKeys(
             focusNode: _panelFocus,
-            cancel: widget.onClose,
+            cancel: _cancel,
             refresh: app.isGuest ? null : () => unawaited(app.retryMachines()),
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -711,6 +890,11 @@ class _MachinesPanelState extends State<_MachinesPanel>
                             ],
                           ),
                         ),
+                        if (widget.onboarding?.next ==
+                                OnboardingStep.machines &&
+                            !_shareSetup &&
+                            _onboardingConnect == null)
+                          _introduction(),
                         Divider(
                           height: 1,
                           color: grid.AppPalette.textPrimary.withValues(
@@ -724,6 +908,8 @@ class _MachinesPanelState extends State<_MachinesPanel>
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 _local(local),
+                                if (_shareSetup && local != null)
+                                  _shareInstructions(local),
                                 if (!app.isGuest) ...[
                                   for (final machine in remotes)
                                     _remote(machine),
@@ -971,6 +1157,8 @@ class _MachinePassword extends StatefulWidget {
     this.options,
     this.resources,
     this.autofocus = false,
+    this.setupRequest = 0,
+    this.onLinked,
   });
   final AppNotifier app;
   final MachineState machine;
@@ -980,6 +1168,8 @@ class _MachinePassword extends StatefulWidget {
   String? get machineId =>
       machine.isLocalMachine ? null : machine.machine.machineId;
   final bool autofocus;
+  final int setupRequest;
+  final VoidCallback? onLinked;
   @override
   State<_MachinePassword> createState() => _MachinePasswordState();
 }
@@ -1027,6 +1217,16 @@ class _MachinePasswordState extends State<_MachinePassword> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant _MachinePassword oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.setupRequest > oldWidget.setupRequest &&
+        _status?.hasPassword == false &&
+        !_busy) {
+      _editPassword();
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -1039,9 +1239,10 @@ class _MachinePasswordState extends State<_MachinePassword> {
       _error = status.error;
       if (status.error == null) {
         _status = status;
-        _editing = false;
+        _editing = widget.setupRequest > 0 && !status.hasPassword;
       }
     });
+    if (_editing) _editPassword();
   }
 
   Future<void> _finishPassword(Future<RemotePasswordStatus> request) async {
@@ -1080,6 +1281,7 @@ class _MachinePasswordState extends State<_MachinePassword> {
     });
     if (error == null) {
       _password.clear();
+      widget.onLinked?.call();
     } else {
       _input.requestFocus();
     }

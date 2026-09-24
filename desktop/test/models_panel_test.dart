@@ -92,6 +92,7 @@ void main() {
                   controller: controller,
                   subscriptions: subscriptions,
                   newModelIds: const {'qwen'},
+                  initialTab: ModelsTab.subscriptions,
                   onClose: () => closed++,
                   onManage: () {},
                 ),
@@ -103,7 +104,7 @@ void main() {
       expect(find.text('Subscriptions 2'), findsOneWidget);
       expect(find.text('Local 0'), findsOneWidget);
       expect(find.text('Shared 0'), findsOneWidget);
-      expect(find.textContaining('All '), findsNothing);
+      expect(find.text('All 2'), findsOneWidget);
       expect(find.textContaining('Running '), findsNothing);
       expect(find.text('Account abc123'), findsOneWidget);
       expect(find.text('Account def456'), findsOneWidget);
@@ -680,8 +681,10 @@ void main() {
     app.modelManager.start();
     await app.modelManager.refresh();
     await tester.pump();
-    expect(find.text('Explore models'), findsOneWidget);
-    await tester.tap(find.text('Explore models'));
+    expect(find.text('Explore models'), findsNothing);
+    await tester.tap(button);
+    await tester.pump();
+    await tester.tap(find.textContaining('Local').first);
     await tester.pump();
     expect(find.text('Qwen3.8-27B'), findsOneWidget);
     expect(find.text('Search models…'), findsOneWidget);
@@ -724,7 +727,10 @@ void main() {
       lessThan(tester.getRect(find.byTooltip('Harnesses')).left),
     );
     expect(find.byType(Dialog), findsNothing);
-    expect(find.text('Search subscriptions…'), findsOneWidget);
+    expect(find.text('Search models…'), findsOneWidget);
+    expect(find.text('All 14'), findsOneWidget);
+    expect(find.text('Subscriptions'), findsOneWidget);
+    expect(find.text('Qwen3.8-27B'), findsOneWidget);
     expect(find.text('Run AI on this computer'), findsNothing);
     expect(app.activeSwarmId, tab);
     expect(app.panes.map((pane) => pane.id), panes);

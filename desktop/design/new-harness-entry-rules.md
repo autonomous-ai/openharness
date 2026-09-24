@@ -13,8 +13,9 @@ Tasks carried from search or Store examples remain part of the draft.
 
 Values and search use the terminal's selected font, size, and line height.
 The right pane previews choices without a selection highlight while the left
-has focus. Return or typing activates the list; accepting a value returns to
-its field. The three project actions have icons. Clone, folder path, and new
+has focus. Right arrow, Return, or typing activates the list, and Left arrow
+gives the keys back to the rows once the search is empty; accepting a value
+returns to its field. The three project actions have icons. Clone, folder path, and new
 project prompts return to Project after acceptance; only New Harness starts.
 Project, machine, branch, and approval options occupy one line. Only the local
 machine has a note, **This machine**. Approvals come from the chosen agent's

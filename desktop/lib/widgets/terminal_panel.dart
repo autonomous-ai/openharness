@@ -42,7 +42,36 @@ import 'pane_header_actions.dart';
 /// The pane header's own horizontal inset.
 const double _stripPadding = 14;
 
-typedef TerminalNotice = ({String label, String detail, IconData icon});
+typedef TerminalNotice = ({
+  String label,
+  String detail,
+  IconData icon,
+
+  /// A way out of what the notice describes, shown as the header's button —
+  /// a machine that needs linking offers to ask for its password. Null where
+  /// the state is merely reported and nothing here would fix it.
+  String? actionLabel,
+  VoidCallback? onAction,
+});
+
+/// A [TerminalNotice] without spelling out the fields it does not have.
+///
+/// A record has no default values, so every caller of a five-field one has to
+/// name all five — which is how widening this typedef broke eight untouched
+/// call sites at once. This is the one place that knows the full shape.
+TerminalNotice terminalNotice({
+  required String label,
+  required String detail,
+  required IconData icon,
+  String? actionLabel,
+  VoidCallback? onAction,
+}) => (
+  label: label,
+  detail: detail,
+  icon: icon,
+  actionLabel: actionLabel,
+  onAction: onAction,
+);
 
 class TerminalPanel extends StatefulWidget {
   final AppNotifier notifier;
@@ -665,7 +694,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool get _inputBlocked =>
       !widget.readOnly &&
       widget.notice == null &&
-      widget.session.status == TerminalSessionStatus.takenOver;
+      // A watcher is the same situation seen from the other side: this window
+      // has the output but another client has the terminal, and the band's
+      // button is how a person here asks for it.
+      (widget.session.watching ||
+          widget.session.status == TerminalSessionStatus.takenOver);
 
   /// Retakes the stream, the same path as the header chip: `selectAgent` on a
   /// dead pane is `reopen()`, and a repeat while it is already `opening` only
@@ -720,7 +753,18 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// there is the "called during build" error the crash log was full of.
   /// Deferred one frame, the retake lands on a built tree.
   void _autoTakeControlAfterBuild() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoTakeControl());
+    final session = widget.session;
+    final request = widget.focusRequest;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !widget.focused ||
+          !widget.focusByUser ||
+          widget.focusRequest != request ||
+          !identical(widget.session, session)) {
+        return;
+      }
+      _autoTakeControl();
+    });
   }
 
   /// A keystroke was typed into a pane that cannot take it. Flash the banner
@@ -1849,24 +1893,25 @@ class _TerminalHeader extends StatelessWidget {
         notice ??
         switch (session.status) {
           TerminalSessionStatus.controlling => null,
-          TerminalSessionStatus.opening => (
+          TerminalSessionStatus.opening => terminalNotice(
             label: 'Connecting',
             icon: Icons.sync,
             detail:
                 'Connecting to this terminal. Retained output is read only.',
           ),
-          TerminalSessionStatus.resyncing => (
+          TerminalSessionStatus.resyncing => terminalNotice(
             label: 'Restoring',
             icon: Icons.sync,
             detail: 'Restoring this terminal. Retained output is read only.',
           ),
-          TerminalSessionStatus.takenOver => (
+          TerminalSessionStatus.takenOver => terminalNotice(
             label: 'Take control',
             icon: Icons.lock_outline,
             detail:
                 'Read only: ${taker ?? 'another app'} controls this terminal. Take control moves input ownership to this app.',
           ),
-          TerminalSessionStatus.error || TerminalSessionStatus.closed => (
+          TerminalSessionStatus.error ||
+          TerminalSessionStatus.closed => terminalNotice(
             label: 'Reconnect',
             icon: Icons.refresh,
             detail:
@@ -1875,12 +1920,17 @@ class _TerminalHeader extends StatelessWidget {
                 'This stream is closed. Retained output is read only.',
           ),
         };
+    // A notice that carries its own way out owns the button — a machine that
+    // needs linking asks for its password there. Otherwise the button is the
+    // session's own reconnect, which a notice has always suppressed.
+    final noticeAction = notice?.onAction;
     final canReconnect =
         notice == null &&
         !readOnly &&
         (session.status == TerminalSessionStatus.error ||
             session.status == TerminalSessionStatus.closed ||
             session.status == TerminalSessionStatus.takenOver);
+    final statusAction = noticeAction ?? (canReconnect ? onReconnect : null);
     final machine = notifier.stateOf(session.machineId);
     final agent = machine?.agents
         .where((a) => a.id == session.agentId)
@@ -1986,8 +2036,8 @@ class _TerminalHeader extends StatelessWidget {
                           Tooltip(
                             message: '${status.label}: ${status.detail}',
                             child: IconButton(
-                              tooltip: status.label,
-                              onPressed: canReconnect ? onReconnect : null,
+                              tooltip: status.actionLabel ?? status.label,
+                              onPressed: statusAction,
                               icon: Icon(status.icon, size: 14),
                               style: IconButton.styleFrom(
                                 foregroundColor: color,
@@ -2015,7 +2065,7 @@ class _TerminalHeader extends StatelessWidget {
                               child: Tooltip(
                                 message: status.detail,
                                 child: TextButton(
-                                  onPressed: canReconnect ? onReconnect : null,
+                                  onPressed: statusAction,
                                   style: TextButton.styleFrom(
                                     foregroundColor: color,
                                     disabledForegroundColor: AppColors.textSoft,
@@ -2034,6 +2084,12 @@ class _TerminalHeader extends StatelessWidget {
                                       const SizedBox(width: 6),
                                       Flexible(
                                         child: Text(
+                                          // The chip names the STATE; what
+                                          // pressing it does is in the tooltip
+                                          // and in `actionLabel`. "Link
+                                          // required" that can be pressed reads
+                                          // better than a bare verb where every
+                                          // neighbour is a status.
                                           status.label,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,

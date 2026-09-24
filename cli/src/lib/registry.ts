@@ -1063,7 +1063,12 @@ class Registry {
       if (!existing.sessionId || !existing.cwd) existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
-      if (existing.launch && !existing.resumeOnly) {
+      // The same rule the discovery callback applies on its own door (`cli.ts`): a verified engine
+      // process in this row's pane is what "started" means. Resume-only rows used to be excluded
+      // here, waiting for a startup hook that a resume does not reliably send — which left one
+      // reading "Starting" for 19 hours over a pane its owner could type in. The wrong-conversation
+      // guard in `register` keys on `lastHookAt`, untouched by this method, so it stays armed.
+      if (existing.launch) {
         const before = existing.launch
         existing.launch = { state: 'ready' }
         this.traceLaunch(existing.agentId, before, existing.launch, 'openProcessAgent re-observed')
@@ -1331,7 +1336,15 @@ class Registry {
 
     const now = Date.now()
     const existing = this.agents.get(agentId)
-    if (existing?.resumeOnly && existing.launch && existing.launch.state !== 'ready') {
+    // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
+    // Two ways to be in that state, and both have to count:
+    //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
+    //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
+    //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook. Reading
+    //    only `launch` here disarmed this guard for exactly the resumes it exists to protect.
+    //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
+    //    `--resume` against a row that kept `lastHookAt` from its previous life.
+    if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))) {
       // A native startup hook, carrying the verified process, must confirm this exact history —
       // but only where an exact history was asked for. A resume that opened a NEW conversation (an
       // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
