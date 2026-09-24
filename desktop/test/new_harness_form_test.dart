@@ -115,13 +115,15 @@ void main() {
       'Agent',
       'Machine',
       'Project',
+      // Branch belongs to Project, so it is a core field, not an advanced one.
+      'Branch',
       'Advanced',
     ]) {
       expect(find.text(label), findsOneWidget);
     }
-    expect(find.text('Branch'), findsNothing);
+    expect(find.text('Worktree'), findsNothing);
     await openLaunchRow(tester, 'advanced');
-    for (final label in ['Branch', 'Worktree', 'Approvals']) {
+    for (final label in ['Worktree', 'Approvals']) {
       expect(find.text(label), findsOneWidget);
     }
   });
@@ -505,7 +507,7 @@ void main() {
     tester,
   ) async {
     final box = await mount(tester);
-    expect(find.text('New Harness'), findsOneWidget);
+    expect(find.text('[ New Harness ]'), findsOneWidget);
     expect(
       find.text('Open Folder'),
       findsOneWidget,
@@ -606,7 +608,7 @@ void main() {
     tester,
   ) async {
     await mount(tester);
-    expect(find.text('New Harness'), findsOneWidget);
+    expect(find.text('[ New Harness ]'), findsOneWidget);
     expect(
       tester
           .widget<Semantics>(

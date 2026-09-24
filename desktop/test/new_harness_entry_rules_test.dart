@@ -188,7 +188,7 @@ void main() {
             findsNothing,
           );
         }
-        expect(find.text('New Harness'), findsOneWidget);
+        expect(find.text('[ New Harness ]'), findsOneWidget);
         expect(connections['m']!.starts, isEmpty);
         await acceptSetupOrSearch(tester);
         expect(connections['m']!.starts, hasLength(1));

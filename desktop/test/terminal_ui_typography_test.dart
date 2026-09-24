@@ -257,11 +257,17 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       final box = checkText(tester, atLeast: 1);
-      expect(tester.widget<Text>(find.text('New Harness')).style!.fontSize, 18);
+      expect(
+        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
+        18,
+      );
       selectFont(22);
       await tester.pumpAndSettle();
       expectSameSizes(box, checkText(tester, atLeast: 1));
-      expect(tester.widget<Text>(find.text('New Harness')).style!.fontSize, 22);
+      expect(
+        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
+        22,
+      );
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
         LogicalKeyboardKey.keyO,

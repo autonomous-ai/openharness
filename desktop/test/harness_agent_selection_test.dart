@@ -716,14 +716,21 @@ void main() {
           ),
         );
         await tester.pump();
-        for (final row in ['harness', 'agent', 'model', 'machine', 'project']) {
+        for (final row in [
+          'harness',
+          'agent',
+          'model',
+          'machine',
+          'project',
+          'branch',
+        ]) {
           expect(
             find.byKey(ValueKey('new-harness-field-$row')).hitTestable(),
             findsOneWidget,
           );
         }
         expect(
-          find.byKey(const ValueKey('new-harness-field-branch')),
+          find.byKey(const ValueKey('new-harness-field-worktree')),
           findsNothing,
         );
         await tester.tap(

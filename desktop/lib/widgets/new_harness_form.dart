@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
+import '../shortcuts/keymap_commands.dart' show describeKeyBinding;
 import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
@@ -51,8 +52,10 @@ enum _Row {
   model,
   machine,
   project,
-  advanced,
+  // Branch belongs to Project — which line of it to start from — so it sits
+  // under it rather than behind Advanced.
   branch,
+  advanced,
   worktree,
   approvals,
   profile,
@@ -71,7 +74,6 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   final _choiceKey = GlobalKey();
 
   static const _advancedRows = {
-    _Row.branch,
     _Row.worktree,
     _Row.approvals,
     _Row.profile,
@@ -502,6 +504,25 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _revealRow();
   }
 
+  /// ⇧⏎ from anywhere: start with what is on screen, instead of walking
+  /// down every field to the button. A value highlighted in a live list is
+  /// taken first — it is what the person was looking at when they pressed
+  /// it — and a door's prompt is finished the way Return finishes it.
+  void _go() {
+    if (box.locked) return;
+    if (_prompts.contains(box.field)) {
+      box.accept();
+    } else if (_picking) {
+      final option = box.selected;
+      if (option != null && option.enabled && !_isDoor(option)) {
+        box.applyOption(option);
+        box.setQuery('');
+      }
+    }
+    setState(() => _listOpen = false);
+    unawaited(_start());
+  }
+
   void _confirm() {
     // Return chooses a value in the list; only the start row launches.
     if (_picking) {
@@ -614,6 +635,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         if (!_picking) _stepValue(-1);
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
+        // ⇧⏎ is `picker.start`, a keymap command so it can be remapped: let
+        // it past, to the region that dispatches it.
+        if (HardwareKeyboard.instance.isShiftPressed) {
+          return KeyEventResult.ignored;
+        }
         _confirm();
       case LogicalKeyboardKey.escape:
         _cancel();
@@ -662,26 +688,72 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   // Only the column that owns the keys carries Open Harness's full highlight.
   Color get _activeFill => Colors.white.withValues(alpha: .12);
+
+  /// A machine that cannot be picked — unlinked or offline — in dark grey,
+  /// darker than the faint of an idle list, so it recedes rather than warns.
+  Color get _unavailableInk => Colors.white.withValues(alpha: .28);
+
   Color get _idleFill => Colors.white.withValues(alpha: .04);
 
   /// One face, one size, everywhere on this screen — and it is the
   /// TERMINAL's size, the one ⌘+ and ⌘− set, not the UI's fixed 13pt. A box
   /// that stays small beside a zoomed terminal reads as another application.
+  ///
+  /// Its line height IS the row, so every line of every text on this form —
+  /// wrapped ones included — lands on the grid by itself. A two-line notice
+  /// is exactly two rows; nothing needs a box around it to stay in step.
   TextStyle _ink([Color? color]) =>
-      terminalContentStyle(color: color ?? Colors.white);
+      terminalContentStyle(color: color ?? Colors.white).copyWith(
+        height: _rowHeight / _font,
+        leadingDistribution: TextLeadingDistribution.even,
+      );
 
-  /// ONE row unit for the whole form. Every line on either side occupies
-  /// exactly this, and anything taller is a whole number of them — a field
-  /// is one, a choice with a description is two, the gap between entries is
-  /// one. Per-container padding is what let the two columns drift apart;
-  /// a grid cannot drift.
-  /// Measured through the text scaler, because that is what the glyphs are
-  /// drawn at. Sized from the font alone, the rows came out half the height
-  /// of their own text at accessibility sizes and overflowed.
-  double _line = 20;
-  double _lineFor(BuildContext context) =>
-      (MediaQuery.textScalerOf(context).scale(terminalFontStore.size) * 1.6)
-          .roundToDouble();
+  /// THE GRID. A terminal has two units and positions nothing in pixels:
+  ///
+  /// * [_cell] — one character wide, in the terminal's own face and size.
+  /// * [_rowHeight] — one row tall; a field, a name, a description line and
+  ///   the gap between entries are each exactly one.
+  ///
+  /// Every margin, column and gap on this form is a whole number of one of
+  /// them. Per-widget pixel padding is what gave each pane three left edges
+  /// and let the two columns drift apart; a grid cannot drift.
+  ///
+  /// Both are measured through the text scaler, because that is what the
+  /// glyphs are drawn at.
+  double _font = 13;
+  double _cell = 8;
+  double _rowHeight = 20;
+
+  void _measureGrid(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    _font = scaler.scale(terminalFontStore.size);
+    _rowHeight = (_font * 1.6).roundToDouble();
+    final painter = TextPainter(
+      text: TextSpan(text: '0000000000', style: terminalContentStyle()),
+      textDirection: TextDirection.ltr,
+      textScaler: scaler,
+    )..layout();
+    _cell = painter.width / 10;
+    painter.dispose();
+  }
+
+  /// Where each pane's rows sit: one cell in from the pane's edge, so the
+  /// selection bar has a column of air on either side.
+  double get _margin => _cell;
+
+  /// The fzf pointer column on the right: `>`, and the action glyphs, live
+  /// in these two cells, and every name, heading and notice starts after it.
+  double get _gutter => _cell * 2;
+
+  /// A field's label is padded to this many cells, as `ls -l` pads a column,
+  /// so every value on the left starts on the same column.
+  static const _labelCells = 12;
+
+  /// One row, with its content sitting on the line.
+  Widget _oneRow(Widget child) => SizedBox(
+    height: _rowHeight,
+    child: Align(alignment: Alignment.centerLeft, child: child),
+  );
 
   /// Geometry follows the same size, so the columns keep their proportions.
   double _scale = 1;
@@ -695,12 +767,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _scale = scale;
       _revealRow();
     }
-    _line = _lineFor(context);
+    _measureGrid(context);
     return KeymapRegion(
       contextKind: KeymapContext.picker,
       composing: _isComposing,
       actions: {
         'picker.accept': () => _runCommand(_confirm),
+        'picker.start': () => _runCommand(_go),
         'picker.cancel': () => _runCommand(_cancel),
         'picker.next': () =>
             _runCommand(() => _picking ? _stepMatch(1) : _moveRow(1)),
@@ -737,7 +810,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                       if (!_picking &&
                           (box.error != null || box.status != null))
                         Padding(
-                          padding: const EdgeInsets.all(24),
+                          padding: EdgeInsets.fromLTRB(
+                            _margin * 2,
+                            0,
+                            _margin * 2,
+                            _rowHeight,
+                          ),
                           child: _status(),
                         ),
                     ],
@@ -760,7 +838,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   Widget _items() => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+    padding: EdgeInsets.fromLTRB(_margin, _rowHeight, _margin, _rowHeight),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -776,7 +854,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   for (final row in _rows.where(
                     (row) => row != _Row.start,
                   )) ...[
-                    if (row == _Row.machine) SizedBox(height: _line),
+                    // Blank rows group the fields: what runs, where it
+                    // runs, then the settings most people never open.
+                    if (row == _Row.machine || row == _Row.advanced)
+                      SizedBox(height: _rowHeight),
                     _buildRow(row),
                   ],
                 ],
@@ -789,38 +870,60 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     ),
   );
 
-  /// The only action that starts an agent, distinct from the editable fields.
+  /// The only action that starts an agent, and the one thing on this form
+  /// that is not a value. A terminal has no buttons, only text in cells, so
+  /// it is drawn the way BIOS draws `[Yes]`: bracketed, on the label column,
+  /// one row tall — with the key that reaches it from anywhere printed
+  /// beside it, so nobody has to walk down every field to find it.
   Widget _buildButton() {
     final on = _row == _Row.start && !_picking;
+    final label = box.checking ? 'Check status' : 'New Harness';
     return Semantics(
       key: const ValueKey('new-harness-field-start'),
       container: true,
       button: true,
+      // The brackets and the key are how it LOOKS; a screen reader says
+      // what it is.
+      label: label,
+      excludeSemantics: true,
       selected: on,
       enabled: !box.busy && !box.linkingProfile,
       onTap: !box.busy && !box.linkingProfile ? _start : null,
       child: Padding(
         key: _itemKeys[_Row.start],
-        padding: const EdgeInsets.only(top: 24),
+        // One blank row between the last field and the action.
+        padding: EdgeInsets.only(top: _rowHeight),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           excludeFromSemantics: true,
           onTap: !box.busy && !box.linkingProfile ? _start : null,
           child: Container(
             color: on ? _activeFill : Colors.transparent,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            padding: EdgeInsets.symmetric(horizontal: _margin),
+            height: _rowHeight,
+            alignment: Alignment.centerLeft,
+            // In a narrow pane at large text the key hint gives way first,
+            // clipped like a terminal line, so the label is never what is cut.
             child: Row(
               children: [
-                Icon(
-                  box.checking ? LucideIcons.refreshCw300 : LucideIcons.plus300,
-                  size: terminalFontStore.size * 1.25,
-                  color: grid.AppPalette.swarmAccent,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
+                Flexible(
+                  flex: 4,
                   child: Text(
-                    box.checking ? 'Check status' : 'New Harness',
+                    '[ $label ]',
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.clip,
                     style: _ink(grid.AppPalette.swarmAccent),
+                  ),
+                ),
+                SizedBox(width: _cell * 2),
+                Flexible(
+                  child: Text(
+                    _startKeyLabel,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.clip,
+                    style: _ink(kBoxFaint),
                   ),
                 ),
               ],
@@ -831,6 +934,20 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     );
   }
 
+  /// The start key as the keymap has it bound — a remap shows the new key.
+  String get _startKeyLabel {
+    final binding = KeymapTheme.of(context)
+        ?.bindings('picker.start', context: KeymapContext.picker)
+        .firstOrNull;
+    // A space after each modifier — `⇧ ⏎`, not `⇧⏎` — so the glyphs read as
+    // separate keys at terminal size rather than as one symbol.
+    final keys = binding == null ? '⇧⏎' : describeKeyBinding(binding);
+    return keys
+        .replaceAllMapped(RegExp('([⌘⌥⌃⇧])'), (m) => '${m[1]} ')
+        .replaceAll(RegExp(' +'), ' ')
+        .trim();
+  }
+
   /// Wide windows preview choices beside the fields. Narrow windows give the
   /// active list the full width, with Escape returning to the same field.
   Widget _sidePane({bool compact = false}) => Semantics(
@@ -839,40 +956,44 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     focused: _picking,
     label: '${_label(_row)} choices',
     child: Padding(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.fromLTRB(_margin, _rowHeight, _margin, _rowHeight),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (compact)
             Padding(
-              padding: const EdgeInsets.only(bottom: 16),
+              // The back row, then one blank row.
+              padding: EdgeInsets.only(bottom: _rowHeight),
               child: InkWell(
                 canRequestFocus: false,
                 onTap: _backToRows,
-                child: Row(
-                  children: [
-                    Icon(
-                      LucideIcons.chevronLeft300,
-                      size: terminalFontStore.size,
-                      color: kBoxFaint,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(_label(_row), style: _ink(kBoxFaint)),
-                  ],
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: _margin),
+                  child: Row(
+                    children: [
+                      _inGutter(
+                        Icon(
+                          LucideIcons.chevronLeft300,
+                          size: _font,
+                          color: kBoxFaint,
+                        ),
+                      ),
+                      Text(_label(_row), style: _ink(kBoxFaint)),
+                    ],
+                  ),
                 ),
               ),
             ),
           if (_hasChoices) ...[
             _searchBar(),
             if (box.choicesStatus case final status?)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Semantics(
+              _atTextColumn(
+                Semantics(
                   liveRegion: true,
                   child: Text(status, style: _ink(kBoxFaint)),
                 ),
               ),
-            const SizedBox(height: 24),
+            SizedBox(height: _rowHeight),
             Flexible(
               child: Scrollbar(
                 controller: _choicesScroll,
@@ -885,8 +1006,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             ),
           ],
           if (box.error != null || box.status != null) ...[
-            const SizedBox(height: 24),
-            _status(),
+            SizedBox(height: _rowHeight),
+            _atTextColumn(_status()),
           ],
         ],
       ),
@@ -913,38 +1034,54 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// fourth row, so the doors are visible without being in the way.
   Widget _matchPane() {
     final shown = box.options;
+    // At most ONE blank row before an entry, whatever asks for it: a new
+    // heading, the end of a two-row entry, or the doors giving way to the
+    // projects. Adding each reason's own gap is how two blanks appeared.
+    bool blankBefore(int i) {
+      if (i == 0) return false;
+      final heading =
+          shown[i].group != null && shown[i].group != shown[i - 1].group;
+      return heading ||
+          _showsDetail(shown[i - 1]) ||
+          (shown[i - 1].synthetic && !shown[i].synthetic);
+    }
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_row == _Row.model && box.modelNotice != null)
-          Padding(
-            padding: EdgeInsets.only(bottom: 12 * _scale),
-            child: Text(box.modelNotice!, style: _ink(kBoxFaint)),
-          ),
+        if (_row == _Row.model && box.modelNotice != null) ...[
+          _atTextColumn(Text(box.modelNotice!, style: _ink(kBoxFaint))),
+          SizedBox(height: _rowHeight),
+        ],
         if (shown.isEmpty &&
             !_prompts.contains(box.field) &&
             !box.refreshingChoices)
-          Text('No matches', style: _ink(kBoxFaint)),
+          _atTextColumn(Text('No matches', style: _ink(kBoxFaint))),
         for (var i = 0; i < shown.length; i++) ...[
+          if (blankBefore(i)) SizedBox(height: _rowHeight),
           if (shown[i].group != null &&
               (i == 0 || shown[i].group != shown[i - 1].group))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 16, 12, 4),
-              child: Text(shown[i].group!, style: _ink(kBoxFaint)),
-            ),
+            _atTextColumn(Text(shown[i].group!, style: _ink(kBoxFaint))),
           _matchRow(shown[i]),
-          if (_showsDetail(shown[i]) && i + 1 < shown.length)
-            SizedBox(height: _line),
-          // One gap where the doors end and the projects begin.
-          if (shown[i].synthetic &&
-              i + 1 < shown.length &&
-              !shown[i + 1].synthetic)
-            const SizedBox(height: 8),
         ],
       ],
     );
   }
+
+  /// A line that is not a choice — a heading, a notice, a status — starts on
+  /// the same column as the names below it, so each pane has one left edge.
+  Widget _atTextColumn(Widget child) => Padding(
+    padding: EdgeInsets.only(left: _margin + _gutter, right: _margin),
+    child: child,
+  );
+
+  /// The pointer column's two cells, holding a glyph centred in them, so the
+  /// prompt's `>` and every row's icon share one x.
+  Widget _inGutter(Widget? child) => SizedBox(
+    width: _gutter,
+    child: child == null ? null : Center(child: child),
+  );
 
   /// A prompt people can see, because "type to search" printed in a key
   /// guide is a sentence nobody reads. fzf's `>` rather than a labelled box:
@@ -958,13 +1095,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _searchBar() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: EdgeInsets.symmetric(horizontal: _margin),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
           SizedBox(
-            width: terminalFontStore.size * 1.25,
+            width: _gutter,
             child: Text(
               '>',
               key: const ValueKey('new-harness-prompt'),
@@ -972,7 +1109,6 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               style: _ink(_picking ? Colors.white : kBoxFaint),
             ),
           ),
-          const SizedBox(width: 12),
           Expanded(
             child: Actions(
               actions: {
@@ -991,7 +1127,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 showCursor: _picking,
                 style: _ink(Colors.white),
                 cursorColor: Colors.white70,
-                cursorWidth: terminalFontStore.size * .62,
+                // A block caret, one cell wide, as a terminal draws it.
+                cursorWidth: _cell,
                 cursorRadius: Radius.zero,
                 cursorOpacityAnimates: false,
                 autocorrect: false,
@@ -1003,7 +1140,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 },
                 onTapOutside: (_) {},
                 decoration: InputDecoration(
-                  hintText: '${_picking ? ' ' : ''}$_promptHint',
+                  hintText: _promptHint,
                   hintStyle: _ink(kBoxFaint),
                   hintMaxLines: 1,
                   isDense: true,
@@ -1019,15 +1156,19 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             ),
           ),
           if (box.canRefreshChoices)
+            // Held to two cells by one row: a Material button's 48px tap
+            // target would make the prompt taller than every other line.
             IconButton(
               key: const ValueKey('new-harness-refresh'),
               tooltip: 'Refresh results',
               onPressed: box.refreshingChoices ? null : box.refreshChoices,
-              icon: Icon(
-                LucideIcons.refreshCw300,
-                size: terminalFontStore.size,
-                color: kBoxFaint,
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints.tightFor(
+                width: _gutter,
+                height: _rowHeight,
               ),
+              iconSize: _font,
+              icon: Icon(LucideIcons.refreshCw300, color: kBoxFaint),
             ),
         ],
       ),
@@ -1044,7 +1185,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   String? _machineNote(String machineId) {
     final machine = box.app.stateOf(machineId);
     if (machine == null) return null;
-    if (machine.needsLink) return 'Link required';
+    // Not linked: said by colour, not a word (see [_unlinked]).
+    if (machine.needsLink) return null;
     if (machine.isOffline) return 'Offline';
     return machine.isLocalMachine ? 'This machine' : null;
   }
@@ -1058,25 +1200,30 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       option.detail.isNotEmpty &&
       !_isDoor(option);
 
+  /// A machine this computer has not linked yet. On screen it looks like
+  /// any other machine that cannot be picked (see [_unavailableInk]); the
+  /// difference is kept for screen readers, which hear "Link required", and
+  /// an offline machine keeps its printed word.
+  bool _unlinked(NewHarnessOption option) =>
+      box.field == NewHarnessField.machine &&
+      box.app.stateOf(option.id)?.needsLink == true;
+
   Widget _matchRow(NewHarnessOption option) {
     final on = identical(option, box.selected);
     final note = box.field == NewHarnessField.machine
         ? _machineNote(option.id)
         : null;
-    final actionIcon = switch (option.id) {
-      NewHarnessController.repositoryId => LucideIcons.gitBranch300,
-      NewHarnessController.existingProjectId ||
-      NewHarnessController.browseId => LucideIcons.folder300,
-      NewHarnessController.newProjectId => LucideIcons.plus300,
-      _ => null,
-    };
     final showDetail = _showsDetail(option);
+    final unlinked = _unlinked(option);
+    final unavailable = box.field == NewHarnessField.machine && !option.enabled;
     final title = Text(
       option.title,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: _ink(
-        !_picking || !option.enabled
+        unavailable
+            ? _unavailableInk
+            : !_picking || !option.enabled
             ? kBoxFaint
             : option.synthetic
             ? grid.AppPalette.swarmAccent
@@ -1087,58 +1234,63 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     );
     return Semantics(
       key: ValueKey('new-harness-option-${option.id}'),
+      // Colour is not announced, so the word the row no longer prints is
+      // still what a screen reader says.
+      hint: unlinked ? 'Link required' : null,
       selected: on,
       enabled: option.enabled && !box.locked,
       button: _isDoor(option),
       child: InkWell(
         canRequestFocus: false,
         onTap: !box.locked ? () => _acceptChoice(option) : null,
-        child: Container(
+        child: Column(
           key: on ? _choiceKey : null,
-          color: on && _picking ? _activeFill : Colors.transparent,
-          padding: EdgeInsets.symmetric(horizontal: 12 * _scale),
-          height: _line * (showDetail ? 2 : 1),
-          alignment: Alignment.centerLeft,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (actionIcon != null) ...[
-                Icon(
-                  actionIcon,
-                  size: terminalFontStore.size * 1.25,
-                  color: _picking ? grid.AppPalette.swarmAccent : kBoxFaint,
-                ),
-                const SizedBox(width: 12),
-              ],
-              // Name, then description on the line under it — and a blank
-              // line between entries, which is what a BIOS uses instead of
-              // an icon or a rule to tell one entry from the next.
-              if (showDetail)
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      title,
-                      Text(
-                        option.detail,
-                        style: _ink(kBoxFaint),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                )
-              else ...[
-                Expanded(child: title),
-                // Main's note says WHY a machine cannot be chosen — offline,
-                // or never linked — which a dimmed row alone cannot.
-                if (note != null) ...[
-                  SizedBox(width: 12 * _scale),
-                  Text(note, style: _ink(kBoxFaint)),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The bar covers the NAME, one row, and stops there. Filling the
+            // description with it made the selection two rows tall and the
+            // list read as blocks rather than lines.
+            Container(
+              color: on && _picking ? _activeFill : Colors.transparent,
+              padding: EdgeInsets.symmetric(horizontal: _margin),
+              height: _rowHeight,
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  // The pointer column stays, empty, so names keep one edge
+                  // with the prompt's text.
+                  _inGutter(null),
+                  Expanded(child: title),
+                  // Main's note says WHY a machine cannot be chosen — offline,
+                  // or never linked — which a dimmed row alone cannot.
+                  if (note != null) ...[
+                    SizedBox(width: _cell * 2),
+                    Text(note, style: _ink(kBoxFaint)),
+                  ],
                 ],
-              ],
-            ],
-          ),
+              ),
+            ),
+            if (showDetail)
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: _margin),
+                child: Row(
+                  children: [
+                    _inGutter(null),
+                    Expanded(
+                      child: _oneRow(
+                        Text(
+                          option.detail,
+                          style: _ink(kBoxFaint),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -1220,19 +1372,19 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               color: highlighted
                   ? (_picking ? _idleFill : _activeFill)
                   : Colors.transparent,
-              padding: EdgeInsets.symmetric(horizontal: 16 * _scale),
-              height: _line * (stacked ? 2 : 1),
+              padding: EdgeInsets.symmetric(horizontal: _margin),
+              height: _rowHeight * (stacked ? 2 : 1),
               alignment: Alignment.centerLeft,
               child: stacked
                   ? Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [label, content],
+                      children: [_oneRow(label), _oneRow(content)],
                     )
                   : Row(
                       children: [
-                        SizedBox(width: 120 * _scale, child: label),
-                        SizedBox(width: 16 * _scale),
+                        SizedBox(width: _cell * _labelCells, child: label),
+                        SizedBox(width: _cell * 2),
                         Expanded(child: content),
                       ],
                     ),

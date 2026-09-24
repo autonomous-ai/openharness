@@ -2512,8 +2512,9 @@ class NewHarnessController extends ChangeNotifier {
           title: labelOf(id),
           engine: id,
           detail: [
+            // Terminal needs no gloss: its name says what it is.
             if (isTerminalEngine(id))
-              'A shell, no agent'
+              null
             else if (isHarnessId(id))
               machine?.dsh[id]?.tagline ??
                   engineIdentity(id).tagline ??
@@ -2538,16 +2539,29 @@ class NewHarnessController extends ChangeNotifier {
       kTerminalEngine,
     })
       if (!isHarnessId(id) && compatibleEngines.contains(id))
-        NewHarnessOption(
-          id: id,
-          title: labelOf(id),
-          engine: id,
-          detail: isTerminalEngine(id) ? 'A shell, no agent' : '',
-        ),
+        NewHarnessOption(id: id, title: labelOf(id), engine: id, detail: ''),
   ]);
 
+  /// Whether [machine] can be given work now — the same test that enables
+  /// its row below.
+  bool _machineUsable(MachineState machine) =>
+      !machine.needsLink && !machine.isOffline;
+
+  // Before any query ranks the list: this computer, then the machines that
+  // can take work now, then the ones that cannot (unlinked or offline). The
+  // local one is the choice most launches want, and an unusable machine in
+  // the middle of the usable ones made the list read as a jumble. Within
+  // each group the inventory's own order holds.
   List<NewHarnessOption> _machineOptions() => _ranked([
-    for (final machine in app.machineStates.values)
+    for (final machine in [
+      ...app.machineStates.values.where((m) => m.isLocalMachine),
+      ...app.machineStates.values.where(
+        (m) => !m.isLocalMachine && _machineUsable(m),
+      ),
+      ...app.machineStates.values.where(
+        (m) => !m.isLocalMachine && !_machineUsable(m),
+      ),
+    ])
       if (!machine.machine.isShared)
         NewHarnessOption(
           id: machine.machine.machineId,

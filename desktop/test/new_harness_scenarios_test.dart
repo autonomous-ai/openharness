@@ -209,45 +209,48 @@ void main() {
   });
 
   for (final scale in [1.0, 1.8]) {
-    testWidgets(
-      'prompt shares action icon column and text baseline at $scale',
-      (tester) async {
-        await _mount(tester, scale: scale, size: const Size(1600, 1000));
-        final prompt = find.byKey(const ValueKey('new-harness-prompt'));
-        final hint = find.text('Search project');
-        double baseline(Finder finder) {
-          final render = tester.renderObject<RenderBox>(finder);
-          return render
-              .localToGlobal(
-                Offset(
-                  0,
-                  render.getDryBaseline(
-                    render.constraints,
-                    TextBaseline.alphabetic,
-                  )!,
-                ),
-              )
-              .dy;
-        }
+    testWidgets('prompt text, doors and names share one column at $scale', (
+      tester,
+    ) async {
+      await _mount(tester, scale: scale, size: const Size(1600, 1000));
+      final prompt = find.byKey(const ValueKey('new-harness-prompt'));
+      final hint = find.text('Search project');
+      double baseline(Finder finder) {
+        final render = tester.renderObject<RenderBox>(finder);
+        return render
+            .localToGlobal(
+              Offset(
+                0,
+                render.getDryBaseline(
+                  render.constraints,
+                  TextBaseline.alphabetic,
+                )!,
+              ),
+            )
+            .dy;
+      }
 
-        expect(baseline(prompt), closeTo(baseline(hint), .1));
-        for (final id in [
-          NewHarnessController.repositoryId,
-          NewHarnessController.existingProjectId,
-          NewHarnessController.newProjectId,
-        ]) {
-          final icon = find.descendant(
-            of: _option(id),
-            matching: find.byType(Icon),
-          );
-          expect(
-            tester.getCenter(prompt).dx,
-            closeTo(tester.getCenter(icon).dx, .1),
-          );
-        }
-        expect(tester.takeException(), isNull);
-      },
-    );
+      expect(baseline(prompt), closeTo(baseline(hint), .1));
+      // The doors lost their glyphs; their names start where the typed
+      // text does, and no icon is left in the pointer column.
+      final text = tester.getTopLeft(hint).dx;
+      for (final id in [
+        NewHarnessController.repositoryId,
+        NewHarnessController.existingProjectId,
+        NewHarnessController.newProjectId,
+      ]) {
+        expect(
+          find.descendant(of: _option(id), matching: find.byType(Icon)),
+          findsNothing,
+        );
+        final name = find.descendant(
+          of: _option(id),
+          matching: find.byType(Text),
+        );
+        expect(tester.getTopLeft(name.first).dx, closeTo(text, .5));
+      }
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets(
@@ -286,16 +289,27 @@ void main() {
         findsNothing,
       );
       expect(find.text('Remote'), findsNothing);
-      // Dimmed text alone reads as a theme. A row that cannot be chosen says
-      // which of the two things is wrong with it, because they need different
-      // answers from the person: one is a link, the other is a power button.
+      // The two things wrong with a machine need different answers — a link,
+      // or a power button — so they still look different: an unlinked one in
+      // the warning colour, an offline one with its word. The unlinked row
+      // prints no word, but a screen reader is still told.
       expect(
         find.descendant(
           of: _option('studio'),
           matching: find.text('Link required'),
         ),
-        findsOneWidget,
+        findsNothing,
       );
+      final studio = tester.widget<Text>(
+        find
+            .descendant(of: _option('studio'), matching: find.byType(Text))
+            .first,
+      );
+      // Dark grey: darker than an idle row's faint, so it recedes.
+      expect(studio.style!.color, Colors.white.withValues(alpha: .28));
+      final handle = tester.ensureSemantics();
+      expect(tester.getSemantics(_option('studio')).hint, 'Link required');
+      handle.dispose();
       expect(
         find.descendant(of: _option('build'), matching: find.text('Offline')),
         findsOneWidget,
@@ -461,8 +475,10 @@ void main() {
     await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp);
     await tester.pump();
+    // Two steps up from Approvals: Worktree, then Advanced — Branch now sits
+    // above Advanced, beside Project.
     expect(
-      tester.widget<Semantics>(_field('branch')).properties.selected,
+      tester.widget<Semantics>(_field('advanced')).properties.selected,
       isTrue,
     );
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'new-harness-form');
@@ -527,10 +543,11 @@ void main() {
     expect(scenario.box.field, NewHarnessField.projectMenu);
   });
 
-  testWidgets('the three project actions have icons, project names do not', (
+  testWidgets('the three project actions carry no glyphs, and read as text', (
     tester,
   ) async {
     final scenario = await _mount(tester);
+    // A terminal has no icons: the actions are words, like every other row.
     for (final id in [
       NewHarnessController.repositoryId,
       NewHarnessController.existingProjectId,
@@ -538,7 +555,7 @@ void main() {
     ]) {
       expect(
         find.descendant(of: _option(id), matching: find.byType(Icon)),
-        findsOneWidget,
+        findsNothing,
       );
     }
     final project = scenario.box.options.firstWhere(
