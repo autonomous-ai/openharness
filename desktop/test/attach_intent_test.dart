@@ -321,6 +321,18 @@ void main() {
       return storage;
     }
 
+    /// Two tabs, `a0` on the one that will be showing and `a1` behind it.
+    Future<MemoryStore> savedTwoTabs() async {
+      final storage = MemoryStore();
+      final store = PaneLayoutStore(storage: storage);
+      final front = Swarm(id: 'swarm-1', name: 'Work', nameIsCustom: true)
+        ..panes.add(TerminalPane(id: 1, machineId: 'm', agentId: 'a0'));
+      final behind = Swarm(id: 'swarm-2', name: 'Build', nameIsCustom: true)
+        ..panes.add(TerminalPane(id: 2, machineId: 'm', agentId: 'a1'));
+      await store.saveSwarms([front, behind], 'swarm-1');
+      return storage;
+    }
+
     /// The app, opened on that layout, with its machine ready to answer.
     Future<AppNotifier> opened({
       required MemoryStore storage,
@@ -433,6 +445,154 @@ void main() {
         opened0.single.containsKey('takeover'),
         isFalse,
         reason: 'a refusal must not spend the claim',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('a tab nobody is looking at is left alone', (tester) async {
+      final storage = await savedTwoTabs();
+      app.dispose();
+      app = await opened(storage: storage);
+      await mount(tester);
+      await machineAnswers(tester, about: 'a1');
+
+      expect(
+        conn.opens
+            .where((o) => o['agentId'] == 'a0')
+            .single
+            .containsKey('takeover'),
+        isFalse,
+        reason: 'the tab in front took its terminal',
+      );
+      expect(
+        conn.opens.any((o) => o['agentId'] == 'a1'),
+        isFalse,
+        reason: 'a tile in a tab behind is not opened at all',
+      );
+      expect(
+        app.swarms
+            .firstWhere((s) => s.id == 'swarm-2')
+            .panes
+            .single
+            .claimOnFirstAttach,
+        isTrue,
+        reason: 'it keeps the claim for the switch that brings it forward',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('switching to that tab is its own gesture', (tester) async {
+      final storage = await savedTwoTabs();
+      app.dispose();
+      app = await opened(storage: storage);
+      await mount(tester);
+      await machineAnswers(tester, about: 'a1');
+      conn.opens.clear();
+
+      app.selectSwarm('swarm-2');
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final asked = conn.opens.where((o) => o['agentId'] == 'a1');
+      expect(asked, hasLength(1), reason: 'the tile asked again');
+      expect(
+        asked.single.containsKey('takeover'),
+        isFalse,
+        reason: 'and this time it asked for the terminal itself',
+      );
+      expect(
+        app.swarms
+            .firstWhere((s) => s.id == 'swarm-2')
+            .panes
+            .single
+            .claimOnFirstAttach,
+        isFalse,
+        reason: 'spent on the attach it paid for',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('a tile switched away from reconnects as a watcher', (
+      tester,
+    ) async {
+      final storage = await savedTwoTabs();
+      app.dispose();
+      app = await opened(storage: storage);
+      await mount(tester);
+      await machineAnswers(tester, about: 'a1');
+      // Open the second tab, then leave it: its tile now HAS a stream, so the
+      // sweep keeps reaching it — politely, since nobody is looking at it.
+      app.selectSwarm('swarm-2');
+      await tester.pump(const Duration(milliseconds: 200));
+      final behind = app.swarms
+          .firstWhere((s) => s.id == 'swarm-2')
+          .panes
+          .single;
+      await behind.session!.handleFrame('terminal_ready', {
+        'requestId': conn.opens.lastWhere(
+          (o) => o['agentId'] == 'a1',
+        )['requestId'],
+        'protocolVersion': 3,
+        'streamId': 'stream-a1',
+        'agentId': 'a1',
+      });
+      app.selectSwarm('swarm-1');
+      await tester.pump(const Duration(milliseconds: 200));
+      behind.session!.transportLost('Harness reconnected');
+      await tester.pump();
+      conn.opens.clear();
+
+      await machineAnswers(tester, about: 'a1');
+
+      final asked = conn.opens.where((o) => o['agentId'] == 'a1');
+      expect(asked, isNotEmpty, reason: 'the tile did come back');
+      expect(
+        asked.every((o) => o['takeover'] == false),
+        isTrue,
+        reason: 'but it watches: the person is on another tab',
+      );
+      await finish(tester);
+    });
+
+    testWidgets('arriving at the tab takes back what it was watching', (
+      tester,
+    ) async {
+      final storage = await savedTwoTabs();
+      app.dispose();
+      app = await opened(storage: storage);
+      await mount(tester);
+      await machineAnswers(tester, about: 'a1');
+      // Open the second tab and let its tile become a watcher: the terminal is
+      // somebody else's, so the daemon answers read-only.
+      app.selectSwarm('swarm-2');
+      await tester.pump(const Duration(milliseconds: 200));
+      final behind = app.swarms
+          .firstWhere((s) => s.id == 'swarm-2')
+          .panes
+          .single;
+      await behind.session!.handleFrame('terminal_ready', {
+        'requestId': conn.opens.lastWhere(
+          (o) => o['agentId'] == 'a1',
+        )['requestId'],
+        'protocolVersion': 3,
+        'streamId': 'stream-a1',
+        'agentId': 'a1',
+        'readOnly': true,
+      });
+      behind.session!.status = TerminalSessionStatus.controlling;
+      expect(behind.session!.watching, isTrue);
+      app.selectSwarm('swarm-1');
+      await tester.pump(const Duration(milliseconds: 200));
+      conn.opens.clear();
+
+      app.selectSwarm('swarm-2');
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final asked = conn.opens.where((o) => o['agentId'] == 'a1');
+      expect(asked, hasLength(1), reason: 'arriving asked again');
+      expect(
+        asked.single.containsKey('takeover'),
+        isFalse,
+        reason: 'and asked for the terminal itself this time',
       );
       await finish(tester);
     });

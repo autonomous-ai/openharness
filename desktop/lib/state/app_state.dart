@@ -1033,7 +1033,19 @@ class AppNotifier extends ChangeNotifier {
     if (attachPending) {
       for (final machine in machineStates.values) {
         // ⌘] / a tab clicked: a person is arriving at these tiles.
-        _attachPendingPanes(machine, retryExisting: false, intent: AttachIntent.person);
+        _attachPendingPanes(
+          machine,
+          retryExisting: false,
+          intent: AttachIntent.person,
+        );
+      }
+      // A tile that was only WATCHING while this tab sat behind: arriving is
+      // asking for its terminal, and the sweep above cannot do it — a watcher
+      // is a live stream, so `_paneNeedsAttach` leaves it alone on purpose.
+      for (final pane in panes) {
+        if (pane.session?.watching != true) continue;
+        if (!_canAttachPane(pane)) continue;
+        unawaited(_reattachPane(pane, intent: AttachIntent.person));
       }
     }
     notifyListeners();
@@ -10253,12 +10265,18 @@ class AppNotifier extends ChangeNotifier {
       // or discard its output while the machine is unavailable.
       if (!retryExisting && pane.session != null) continue;
       if (!_paneNeedsAttach(pane)) continue;
-      // A tile the app restored when it opened carries the gesture that opened
-      // it, once. Everything else attaching here is [AttachIntent.automatic]
-      // however this sweep was reached.
-      final paneIntent = pane.claimOnFirstAttach
+      // A gesture reaches only the tab it was made in. A person opening the
+      // app, switching to a tab or clicking a tile is asking about what is in
+      // front of them; the tabs behind it are somebody else's business, and
+      // two Macs sitting on two different tabs have to be able to work at the
+      // same time. A tile the app restored carries the gesture that opened it
+      // (once), but only once it is the tab being looked at — until then it
+      // keeps the claim and watches.
+      final inFocusedTab = panes.contains(pane);
+      final asked = pane.claimOnFirstAttach || intent == AttachIntent.person;
+      final paneIntent = asked && inFocusedTab
           ? AttachIntent.person
-          : intent;
+          : AttachIntent.automatic;
       // Nobody asked for this one, and this machine's CLI cannot open a
       // terminal without taking it from whoever has it: leave the tile as
       // intent (`pane_grid.dart` offers to open it) rather than pulling the
@@ -10272,9 +10290,10 @@ class AppNotifier extends ChangeNotifier {
       // that refusal would leave the tile watching the terminal it was opened
       // to take, once the agent does come ready.
       if (!_canAttachPane(pane)) continue;
-      // Spent on the attach it pays for; a retry of that open is already the
-      // ordinary rule, and the session carries the claim from here.
-      pane.claimOnFirstAttach = false;
+      // Spent on the attach it pays for, and only when it was used: a tile in
+      // a tab nobody has opened yet keeps its claim for the switch that brings
+      // it forward.
+      if (paneIntent == AttachIntent.person) pane.claimOnFirstAttach = false;
       // Covers a tile that never attached AND one holding a stream the machine
       // lost. Only the first used to be covered, and the second is why a
       // reconnect left every tile but one frozen on "restoring terminal…":
@@ -10321,9 +10340,16 @@ class AppNotifier extends ChangeNotifier {
 
   /// A person acted on this app — clicked a tile, brought the window forward
   /// — so every stream another client took from it comes back, not only the
-  /// tile they touched: being at this app is a fact about the app, not about
-  /// one pane. Every tab, since a tile parked behind another tab is this
-  /// app's too. Only ever from a user gesture — see
+  /// tile they touched: being at this tab is a fact about the tab, not about
+  /// one pane.
+  ///
+  /// THIS tab only. A tile parked behind another tab is not what the person
+  /// is looking at, and taking its terminal too is how two Macs sitting on two
+  /// different tabs ended up fighting over terminals neither of them had on
+  /// screen. Switching to that tab is its own gesture, and brings its tiles
+  /// back then.
+  ///
+  /// Only ever from a user gesture — see
   /// `_TerminalPanelState._autoTakeControl` for why a session or focus
   /// callback must never call this.
   ///
@@ -10333,7 +10359,7 @@ class AppNotifier extends ChangeNotifier {
   /// not moved — the tile the person is on stays the one they are on.
   Future<void> retakeTakenOverPanes() async {
     final reopening = <Future<void>>[];
-    for (final pane in allPanes) {
+    for (final pane in panes) {
       final session = pane.session;
       if (session == null || session.readOnly) continue;
       // A watcher is the same thing from the other side: this window has the
