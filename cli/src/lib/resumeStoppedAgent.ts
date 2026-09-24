@@ -1,6 +1,6 @@
 import { isTerminalEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
-import { confirmsResumeByHook, resumesConversation } from './resumeCapability.js'
+import { resumesConversation } from './resumeCapability.js'
 import type { RestartAgentReply } from './restartAgent.js'
 import type { RuntimeCheck } from './tmux.js'
 
@@ -75,11 +75,12 @@ export interface ResumeReadinessDeps {
 /**
  * Wait for the replacement process to prove it came back.
  *
- * For an engine that hooks at LAUNCH, the proof is its `SessionStart` carrying the new pid: process
- * discovery and a resume argument alone do not prove the conversation loaded. An engine that hooks
- * later — or not at all — cannot produce that, and waiting for it turns a working resume into ten
- * minutes of "Starting"; there the live engine process in its own pane is the proof, which is the
- * bar `agent_restart` clears for every engine today. See `resumeCapability.ts`.
+ * The proof is the engine process alive in this row's own pane — the bar `agent_restart` has cleared
+ * for every engine for as long as it has existed. Claude and Codex were held to their `SessionStart`
+ * hook instead; see the note at the check itself for why that is no longer a precondition.
+ *
+ * The budget is only reached when NO engine process was ever seen: the pane is up, and nothing this
+ * row would recognise is running in it. That is the one state worth reporting as unconfirmed.
  */
 export async function waitForResumedAgent(saved: RegisteredSession, deps: ResumeReadinessDeps): Promise<RestartAgentReply> {
   const now = deps.now ?? Date.now
@@ -96,23 +97,22 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     if (!pane || pane.dead || pane.engineExit != null) {
       return { ok: false, error: 'RESUME_FAILED', detail: 'The agent exited before confirming the saved conversation. Its terminal output and conversation have been retained.' }
     }
-    // Two things decide what proof is available. A conversation was only REQUESTED when the engine
-    // can reopen one and a row recorded one — otherwise there is nothing for a hook to confirm and
-    // the id it eventually reports is a new one by design. And only some engines hook at launch at
-    // all. Where both hold, the hook carrying the new pid is the proof; everywhere else the engine
-    // process alive in its own pane is, which is the bar `agent_restart` clears for every engine.
-    const resumed = resumesConversation(saved.engine, saved.sessionId)
-    if (process && resumed && confirmsResumeByHook(saved.engine)) {
-      if (row.lastHookAt > 0 && row.launch?.state !== 'starting'
-        && row.processIdentity?.pid === process.pid && row.processIdentity.startMarker === process.startMarker) {
-        return { ok: true, session: row, resumed }
-      }
-    } else if (process) {
-      // The row's own `processIdentity` stays null until a hook binds it (`resumePendingAgent`), so
-      // the evidence here is the pane's engine process itself, checked against a pane confirmed
-      // alive above.
-      return { ok: true, session: row, resumed }
-    }
+    // ONE proof, for every engine: this row's own engine process, running in this row's own pane,
+    // which the checks above have just confirmed is alive. `deps.process()` resolves the engine
+    // binary beneath THAT pane, so it cannot be answered by somebody else's shell.
+    //
+    // Claude and Codex used to be held to a stricter one — their `SessionStart` hook, carrying the
+    // new pid, proving they had reopened this very conversation. It is better evidence, and it is
+    // evidence that does not reliably come to a RESUME, which is a narrower thing than "has a
+    // startup hook": opencode's plugin posts on `session.created`, which `--session <id>` never
+    // emits; a claude hook can announce a transcript path that never appears and be dropped
+    // (openharness#189); and measured on machine-remote-1, both resume-only codex rows carried
+    // `lastHookAt: 0` while every fresh launch beside them had hooked. Waiting for it turned a
+    // working harness into ten minutes of "Starting" and then a permanent "Start failed" over a pane
+    // the person could type in — with `active` cleared and the desk refusing to open it, the cost of
+    // the strict rule was never the resume, it was the harness. A resume that reopened the WRONG
+    // conversation is still caught, by `registry.register`'s mismatch guard, when the hook arrives.
+    if (process) return { ok: true, session: row, resumed: resumesConversation(saved.engine, saved.sessionId) }
     await deps.sleep(250)
   }
   return resumeUnconfirmed

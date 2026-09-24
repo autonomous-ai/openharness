@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
@@ -235,6 +235,23 @@ describe('existing runtime and readiness verification', () => {
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
     expect(create).not.toHaveBeenCalled()
     expect(announced).toEqual(['starting', 'ready'])
+  })
+  // The regression openharness#189 left behind. The fixture above fakes a SessionStart on every
+  // process probe; here it deliberately does not, which is the real shape of a re-check: the engine
+  // has been running for hours and will never send another hook. The re-check re-arms `starting` to
+  // withdraw the old verdict, and the readiness probe used to refuse to confirm while it read
+  // `starting` — so every Enter bought ten minutes of "Starting" and the same banner again.
+  it('confirms a live unconfirmed resume that has no further hook coming', async () => {
+    live({ processIdentity: identity, lastHookAt: 0, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'fixture' } })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    // Ready, not `starting`: a row left starting is made dormant without being retained by
+    // discovery, and the desk reads its own resume receipt as unknown.
+    expect(registry.byAgent(saved.agentId)?.launch).toEqual({ state: 'ready' })
+    // The reservation is released, so the next Enter is not refused by `beginResume`.
+    expect(existsSync(join(dir, 'saved', `${saved.agentId}.resume`))).toBe(false)
+    expect(create).not.toHaveBeenCalled()
   })
   it('does not re-verify a live process that reported another conversation', async () => {
     live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } })

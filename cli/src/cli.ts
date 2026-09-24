@@ -88,7 +88,6 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { createAndRegisterPane } from './lib/createAgentPane.js'
 import { forkName, planFork } from './lib/forkAgent.js'
 import { restoreAgents } from './lib/restoreAgents.js'
-import { awaitsResumeHook } from './lib/resumeCapability.js'
 import { createRetainExitedSession } from './lib/retainExitedSession.js'
 import { repairClaudeCwd } from './lib/cwdRepair.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
@@ -3119,14 +3118,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
       const withDsh = registry.byAgent(current.agentId)
       if (withDsh?.dsh) attachDsh(withDsh)
-      // A strict-resume row waits for the hook that proves the engine reopened THAT conversation —
-      // but only where such a hook is coming. For every other engine this live process, in this
-      // row's own pane, IS the proof (`resumeCapability.ts`), and refusing to say so left an
-      // opencode harness restored after a reboot reading "Starting" while it was working. The Open
-      // path already marks those ready itself (`resumeAgentService.ts`); this is the same rule on
-      // the door restore comes through.
-      const waitingForResumeHook = !!current.resumeOnly && awaitsResumeHook(current.engine, current.sessionId)
-      if (wasLaunching && !waitingForResumeHook) registry.setLaunch(current.agentId, { state: 'ready' })
+      // This live process, in this row's own pane, is what "started" means — for a resumed row as
+      // much as any other. A resume used to be held back here until its `SessionStart` hook landed,
+      // on the grounds that only the hook proves WHICH conversation reopened. Two things were wrong
+      // with that. The hook does not always come: measured on machine-remote-1, both resume-only
+      // codex rows carried `lastHookAt: 0` while every fresh launch beside them had hooked, and one
+      // of them sat at "Starting" for 19 hours over a pane its owner could type in — re-attached and
+      // re-announced every 5s for the whole time, because `wasLaunching` stays true for a row that
+      // nothing will ever mark ready (openharness#189). And nothing was actually protected by the
+      // wait: the wrong-conversation guard in `registry.register` keys on `lastHookAt`, not on this
+      // launch state, so it stays armed until the first hook whatever is written here.
+      if (wasLaunching) registry.setLaunch(current.agentId, { state: 'ready' })
       await bindObservedAgent(observed)
       if (wasDormant || wasLaunching || adopted) {
         const active = registry.byAgent(current.agentId)

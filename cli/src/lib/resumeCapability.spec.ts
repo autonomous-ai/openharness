@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { ENGINES, type AgentEngine } from '../engines/types.js'
+import { ENGINES } from '../engines/types.js'
 import { LAUNCH_RESUME_FLAG } from './engineLaunch.js'
-import { awaitsResumeHook, confirmsResumeByHook, resumeMode, resumesConversation } from './resumeCapability.js'
+import { resumeMode, resumesConversation } from './resumeCapability.js'
 
 describe('what a paused harness can promise, per engine', () => {
   it('gives every engine exactly one mode, from the launch table itself', () => {
@@ -30,35 +30,10 @@ describe('what a paused harness can promise, per engine', () => {
     expect(resumesConversation('terminal', 'abc')).toBe(false)
   })
 
-  it('trusts a startup hook to confirm a resume only where one is sent on a resume', () => {
-    expect(confirmsResumeByHook('claude')).toBe(true)
-    expect(confirmsResumeByHook('codex')).toBe(true)
-    // OpenCode re-attaches its session silently on `--session <id>` and posts nothing; copilot, pi
-    // and amp hook on a turn; muse never hooks. Waiting for one only hangs the resume.
-    for (const engine of ['opencode', 'kilo', 'copilot', 'pi', 'amp', 'muse', 'cursor', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'terminal'] as AgentEngine[]) {
-      expect(confirmsResumeByHook(engine)).toBe(false)
-    }
-  })
-
-  it('waits for a resume hook only where one is both asked for and sent', () => {
-    // The pair that hooks, with a conversation to confirm: wait for it.
-    expect(awaitsResumeHook('claude', 'sess-1')).toBe(true)
-    expect(awaitsResumeHook('codex', 'sess-1')).toBe(true)
-    // Nothing was asked for, so the id the engine reports is a new one by design.
-    expect(awaitsResumeHook('claude', null)).toBe(false)
-    expect(awaitsResumeHook('codex', '')).toBe(false)
-    // The engine that made this rule worth naming: a restored opencode row waiting for a hook that
-    // `--session <id>` never sends read "Starting" while it was working.
-    expect(awaitsResumeHook('opencode', 'ses_f333bf6d8ffe')).toBe(false)
-    for (const engine of ['kilo', 'copilot', 'pi', 'amp', 'muse', 'hermes', 'grok', 'agy', 'devin', 'terminal'] as AgentEngine[]) {
-      expect(awaitsResumeHook(engine, 'sess-1')).toBe(false)
-    }
-  })
-
+  // A canary on the roster itself: adding an engine without deciding its resume mode should make
+  // the loop above fail, and this makes "the loop above ran over everything" explicit.
   it('covers the whole roster, so a new engine cannot be forgotten', () => {
-    // A new engine gets the weaker proof by default, never a ten-minute wait.
-    const strict = ENGINES.filter(engine => confirmsResumeByHook(engine))
-    expect(strict).toEqual(['claude', 'codex'])
+    expect(ENGINES.filter(engine => resumeMode(engine)).length).toBe(ENGINES.length)
     expect(ENGINES.length).toBe(15)
   })
 })
