@@ -1151,6 +1151,10 @@ class _TerminalPageState extends State<TerminalPage>
       (id) => widget.notifier.stateOf(id)?.machine.displayName,
     );
     final takeoverNotice = phoneTakeoverNotice(session, takerName);
+    final holderName = phoneHolderName(
+      session,
+      (id) => widget.notifier.stateOf(id)?.machine.displayName,
+    );
     final headerStatus = phoneSessionSummary(
       session,
       takerName: takerName,
@@ -1534,6 +1538,7 @@ class _TerminalPageState extends State<TerminalPage>
                                   watching: session?.watching ?? false,
                                   busy: !blocked,
                                   takeoverNotice: takeoverNotice,
+                                  holderName: holderName,
                                   onTakeControl: _takeControl,
                                 ),
                             ],
@@ -1948,6 +1953,7 @@ class _ControlBanner extends StatelessWidget {
     required this.watching,
     required this.busy,
     required this.takeoverNotice,
+    required this.holderName,
     required this.onTakeControl,
   });
 
@@ -1961,11 +1967,15 @@ class _ControlBanner extends StatelessWidget {
   /// never lost a terminal, and while a take is in flight.
   final String? takeoverNotice;
 
+  /// Who is driving the terminal a watcher is looking at, as [phoneHolderName] names it — the
+  /// machine, as the desktop names a taker. Null when the daemon did not say.
+  final String? holderName;
+
   final VoidCallback onTakeControl;
 
   String get _title {
     if (busy) return 'Taking control…';
-    if (watching) return 'Another app is using this terminal';
+    if (watching) return '${holderName ?? 'Another app'} is using this terminal';
     return takeoverNotice ?? 'Another app took control of this terminal';
   }
 

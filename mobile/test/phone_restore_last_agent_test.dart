@@ -20,13 +20,22 @@ import 'voice_fakes.dart';
 /// for a second or two. Reading that as "gone" put the phone on whichever agent happened to have
 /// been verified first, which is the oldest one on the machine.
 void main() {
+  /// What the shell hands the home screen when an agent is picked elsewhere —
+  /// the search sheet, the tabs panel (`PhoneShell._openAgentAtHome`).
+  ValueNotifier<({String machineId, String agentId})?>? picked;
+
   Future<void> pumpHome(WidgetTester tester, AppNotifier app) async {
+    final request = picked = ValueNotifier(null);
+    addTearDown(request.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: PhoneShellScope(
           onMachineLinked: (_) {},
-          onOpenAgent: (_, _) {},
-          child: AgentHome(notifier: app),
+          onOpenAgent: (machineId, agentId) {
+            request.value = null;
+            request.value = (machineId: machineId, agentId: agentId);
+          },
+          child: AgentHome(notifier: app, openAgent: request),
         ),
       ),
     );
@@ -132,6 +141,63 @@ void main() {
     await pumpHome(tester, notifier);
     expect(storage.values['phone_last_agent_v1'], isNotNull);
   });
+
+  testWidgets('the next launch opens the agent picked last, not the first', (
+    tester,
+  ) async {
+    final storage = remembering('a');
+    final first = await app(tester, storage: storage);
+    machineLists(first, [
+      for (final id in pagerAgentIds) agent(id, terminal: true),
+    ]);
+    await pumpHome(tester, first);
+    expect(openedAgent(tester), 'a');
+
+    // Picked from the search sheet or the tabs panel.
+    picked!.value = (machineId: 'm', agentId: 'c');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(openedAgent(tester), 'c');
+    expect(storage.values['phone_last_agent_v1'], contains('"agentId":"c"'));
+
+    // Relaunch: a new app over the same storage.
+    await tester.pumpWidget(const SizedBox());
+    final second = await app(tester, storage: storage);
+    machineLists(second, [
+      for (final id in pagerAgentIds) agent(id, terminal: true),
+    ]);
+    await pumpHome(tester, second);
+    expect(openedAgent(tester), 'c');
+  });
+
+  testWidgets(
+    'the agent left on was paused: the most recent one opens, not the oldest',
+    (tester) async {
+      final now = DateTime.now();
+      Agent at(String id, int minutesAgo, {bool stopped = false}) => Agent(
+        id: id,
+        name: id,
+        engine: 'claude',
+        sessionId: 'session-$id',
+        status: stopped ? 'stopped' : 'active',
+        project: const AgentProject(name: 'work', cwd: '/work'),
+        updatedAt: now.subtract(Duration(minutes: minutesAgo)),
+        terminalAvailable: !stopped,
+      );
+      final notifier = await app(tester, storage: remembering('b'));
+      machineLists(notifier, [
+        // First on the machine's list, and untouched for days — what the
+        // phone kept landing on.
+        at('a', 60 * 24 * 3),
+        // Where the phone was left, paused since from the desktop's monitor.
+        at('b', 5, stopped: true),
+        at('c', 20),
+        at('d', 90),
+      ]);
+      await pumpHome(tester, notifier);
+      expect(openedAgent(tester), 'c');
+    },
+  );
 
   testWidgets('waits for the remembered agent\'s terminal to be verified', (
     tester,

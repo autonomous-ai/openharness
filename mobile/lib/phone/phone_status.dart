@@ -195,6 +195,13 @@ String? phoneTakerName(
     ? session?.takenOverBy?.label(resolveMachine)
     : null;
 
+/// Who is driving the terminal this session only watches, when the daemon said — the fleet's name
+/// for that machine where it knows one. Null unless [TerminalSession.watching].
+String? phoneHolderName(
+  TerminalSession? session,
+  String? Function(String machineId) resolveMachine,
+) => session?.watching == true ? session?.heldBy?.label(resolveMachine) : null;
+
 /// The one line under the header while another client drives this terminal —
 /// the desktop's banner, at phone size. Null in every other state.
 String? phoneTakeoverNotice(TerminalSession? session, String? takerName) =>

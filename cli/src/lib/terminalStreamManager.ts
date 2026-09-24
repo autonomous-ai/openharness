@@ -420,6 +420,9 @@ export class TerminalStreamManager {
       // a WATCHER: tmux attaches read-only (no control lease, no resize, no input), the incumbent
       // keeps the terminal, and the client is told which it got by `readOnly` on `terminal_ready`.
       const watching = !this.deps.readOnly && !takeover && incumbents.length > 0
+      // Who a watcher is watching, named on its banner — "MacBook Pro is using this terminal" — as
+      // `takenBy` names the winner on the incumbent's. Read now, before any stream below moves.
+      const heldBy = watching ? this.holderOf(incumbents, reservedPlacement) : undefined
       // A terminal is single-controller. A later client explicitly wins the lease and the incumbent
       // receives a targeted close notification; it must not be broadcast to other clients. The
       // notification names the winner when it can (`takenBy`), so the incumbent's banner can too.
@@ -535,6 +538,7 @@ export class TerminalStreamManager {
         // True for a watcher too: the client draws output and withholds input, exactly as it does
         // for an observer's stream. See the `takeover: false` branch above.
         readOnly: this.deps.readOnly === true || watching,
+        ...(heldBy ? { heldBy } : {}),
       })) {
         await this.closeStream(state, 'backend disconnected', false)
         return
@@ -1187,6 +1191,15 @@ export class TerminalStreamManager {
     return [...this.streams.values()].filter((state) =>
       !state.closing && state.connId !== nextConnId
         && (state.agentId === agentId || state.placementKey === placementKey))
+  }
+
+  /** The client driving a terminal a watcher opened onto: the placement's controller, or failing
+   *  that the first incumbent that said who it is. Undefined when none did — the banner then says
+   *  "another app", as it always has. */
+  private holderOf(incumbents: ActiveStream[], placementKey: string): TerminalClientDescriptor | undefined {
+    const controller = this.controllerByPlacement.get(placementKey)
+    return (incumbents.find((state) => state.connId === controller && state.client)
+      ?? incumbents.find((state) => state.client))?.client
   }
 
   private async closeStreamsForTakeover(

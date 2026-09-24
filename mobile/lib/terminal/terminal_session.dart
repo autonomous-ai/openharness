@@ -232,6 +232,12 @@ class TerminalSession extends ChangeNotifier {
   /// and the daemon said (`terminal_closed.takenBy`); null from an older daemon
   /// or a taker that did not introduce itself — "another app", then.
   TerminalClientDescriptor? takenOverBy;
+
+  /// Who is driving this terminal while this session only [watching] it — the daemon's
+  /// `terminal_ready.heldBy`, so the banner can say "MacBook Pro is using this terminal" as the
+  /// desktop names a taker. Null when not watching, from an older daemon, or when the holder never
+  /// introduced itself — "another app", then.
+  TerminalClientDescriptor? heldBy;
   int cols = 80;
   int rows = 24;
 
@@ -384,6 +390,7 @@ class TerminalSession extends ChangeNotifier {
     streamId = null;
     linkMode = null;
     watching = false;
+    heldBy = null;
     errorCode = null;
     errorMessage = null;
     takenOverBy = null;
@@ -571,6 +578,9 @@ class TerminalSession extends ChangeNotifier {
         // The daemon's answer to a polite open on a terminal somebody else holds: it opened, it
         // renders, and it may not type. See [watching].
         watching = payload['readOnly'] == true;
+        heldBy = watching
+            ? TerminalClientDescriptor.fromJson(payload['heldBy'])
+            : null;
         // ⚠️ **The press is spent here.** A takeover was asked for and ANSWERED, so the claim it
         // was making is now a lease this session holds — and holding it is what later opens should
         // rest on, not the press that won it.
@@ -651,6 +661,7 @@ class TerminalSession extends ChangeNotifier {
         takenOverBy = takenOver
             ? TerminalClientDescriptor.fromJson(payload['takenBy'])
             : null;
+        heldBy = null;
         errorMessage = takenOver
             ? (takenOverBy == null
                   ? 'Another client connected to this terminal.'

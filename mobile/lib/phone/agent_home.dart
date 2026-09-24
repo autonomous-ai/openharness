@@ -348,12 +348,9 @@ class _AgentHomeState extends State<AgentHome> {
     // something real while the machine dials rather than blanking to a skeleton.
     final awaiting = _awaitingMachine;
     if (awaiting != null) {
-      final arrival = entries
-          .where(
-            (entry) =>
-                entry.machineId == awaiting && entry.agent.terminalAvailable,
-          )
-          .firstOrNull;
+      final arrival = _mostRecentOpenable(
+        entries.where((entry) => entry.machineId == awaiting),
+      );
       if (arrival != null) return arrival;
     }
     // ⚠️ **The pager the screen already holds is asked FIRST, before [_showing], and that ordering
@@ -401,7 +398,24 @@ class _AgentHomeState extends State<AgentHome> {
         }
       }
     }
-    return entries.where((entry) => entry.agent.terminalAvailable).firstOrNull;
+    return _mostRecentOpenable(entries);
+  }
+
+  /// The agent to fall back on: the one whose conversation moved last, of those that can be opened.
+  ///
+  /// ⚠️ **Not the first in the list, which is what it was — and the first is the OLDEST.** [entries]
+  /// run in each machine's own order, which is creation order, so every miss of the record above —
+  /// the agent left on paused from the desktop's monitor since, deleted, or no record at all — landed
+  /// on the same agent untouched for days, and the pager then remembered THAT, so it stuck. The
+  /// desktop's monitor puts the most recently active harness on top ([compareMonitorOrder]); this is
+  /// the agent somebody means when the one they left is gone.
+  static AgentEntry? _mostRecentOpenable(Iterable<AgentEntry> entries) {
+    AgentEntry? best;
+    for (final entry in entries) {
+      if (!entry.agent.terminalAvailable) continue;
+      if (best == null || compareMonitorOrder(entry, best) < 0) best = entry;
+    }
+    return best;
   }
 
   /// Whether any machine can currently host an agent.
