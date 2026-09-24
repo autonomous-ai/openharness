@@ -12,8 +12,7 @@ import 'key_chord.dart';
 /// `tui.keymap`) — so the key the CLI prints next to what it does is the one
 /// reliable source for both halves. Measured on Codex 0.156.1 and Claude Code
 /// 2.1.281, where the chords that stranded a phone were `shift+←` (a queued
-/// question), `ctrl+]` and `⌥+↓` (leaving one), and `shift+tab` (Claude's
-/// permission modes).
+/// question) and `ctrl+]` and `⌥+↓` (leaving one).
 class KeyHint {
   const KeyHint({
     required this.chord,
@@ -96,6 +95,13 @@ bool _isProcessControl(KeyChord chord) =>
     chord.key == null &&
     const {'c', 'd', 'z', '\\'}.contains(chord.char);
 
+/// Shift+Tab: Claude's permission-mode cycle (`shift+tab to cycle`), and its
+/// plan-approval shortcut. Never offered — how far a harness may go without
+/// asking is chosen when it is made (New Harness ▸ Approvals), and a button in
+/// the corner of the pane would change it mid-session on a stray tap.
+bool _isShiftTab(KeyChord chord) =>
+    chord.key == TerminalKey.tab && chord.shift && !chord.alt && !chord.ctrl;
+
 /// Words that make a hint an irreversible act. Offered as a button, each would
 /// be one tap from a glance at the screen — a confirm-by-pressing-again prompt
 /// (`ctrl+x again to delete`) exists precisely to take more than that.
@@ -141,7 +147,8 @@ List<KeyHint> parseKeyHints(List<String> lines) {
       if (chord == null ||
           !chord.sendable ||
           _phoneHas(chord) ||
-          _isProcessControl(chord)) {
+          _isProcessControl(chord) ||
+          _isShiftTab(chord)) {
         continue;
       }
       final words = _action.firstMatch(line.substring(match.end));
