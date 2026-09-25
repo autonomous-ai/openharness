@@ -45,11 +45,11 @@ import 'sheet_list.dart';
 /// until the field is focused; then the results take their place, and Cancel
 /// puts the tabs back.
 ///
-/// ⚠️ **Full height from the moment it opens.** Its top edge stands just under
-/// the status bar and stays there; the results take the tabs' place, and a
-/// keyboard, when it comes, takes the sheet's foot onto its own top rather
-/// than covering the rows — pinned to the window's foot, the sheet let the
-/// keys cover all but two rows of results.
+/// ⚠️ **Full height from the moment it opens.** Its top edge stands a little
+/// under the status bar, and rises to just under it while searching; the
+/// results take the tabs' place, and a keyboard, when it comes, takes the
+/// sheet's foot onto its own top rather than covering the rows — pinned to the
+/// window's foot, the sheet let the keys cover all but two rows of results.
 ///
 /// ⚠️ **The field is not focused on the way in.** The tabs are what the sheet
 /// is opened to read, and focus is what trades them for the results.
@@ -133,16 +133,21 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// [BottomSheet]'s own figure, so this sheet lets go like the others do.
   static const double _flingSpeed = 700;
 
-  /// How close under the status bar the sheet's top edge stands: a strip of
-  /// the dimmed page left showing, which is what says it is a layer over the
-  /// terminal rather than a page of its own.
+  /// How close under the status bar the sheet's top edge stands while it
+  /// reads the tabs: a strip of the dimmed page left showing, which is what
+  /// says it is a layer over the terminal rather than a page of its own.
   ///
-  /// ⚠️ **The sheet opens full height, up to here, and stays there.** It used
-  /// to rest at a share of the screen and climb to this edge only when a
-  /// keyboard pushed it; now it opens where the keyboard used to take it, so
-  /// the tabs get the whole screen to list in and focusing the field moves
-  /// only the sheet's foot, never its top.
-  static const double _topGap = 8;
+  /// ⚠️ **The sheet opens full height, up to here.** It used to rest at a
+  /// share of the screen and climb only when a keyboard pushed it; now the
+  /// tabs get the whole screen to list in, and a keyboard takes only the
+  /// sheet's foot.
+  static const double _topGap = 28;
+
+  /// The same, while searching: the sheet rises the rest of the way, to just
+  /// under the status bar, and gives the results the whole screen. It moves
+  /// with the tabs and the results trading places ([_swap]) and goes back
+  /// down with them on Cancel.
+  static const double _searchTopGap = 8;
 
   final _controller = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Terminal search');
@@ -399,11 +404,15 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
 
   Widget _layOut(BuildContext context, Size area, Widget sheet) {
     final screen = MediaQuery.sizeOf(context).height;
-    final ceiling = MediaQuery.paddingOf(context).top + _topGap;
+    final statusBar = MediaQuery.paddingOf(context).top;
     return AnimatedBuilder(
-      animation: Listenable.merge([widget.animation, _pull, _keyboard]),
+      animation: Listenable.merge([widget.animation, _pull, _keyboard, _swap]),
       child: sheet,
       builder: (context, sheet) {
+        // Up to [_searchTopGap] as the search takes over, back down to
+        // [_topGap] as Cancel puts the tabs back — on the swap's own clock.
+        final lift = Curves.easeInOut.transform(_swap.value);
+        final ceiling = statusBar + _topGap + (_searchTopGap - _topGap) * lift;
         // ⚠️ **The sheet stands on the keyboard as measured, not on the
         // page's foot.** The page does not always end at the keyboard's top:
         // where it has been resized for the keys this is zero, and where it
@@ -414,7 +423,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
         //
         // The sheet runs from the ceiling down to whatever is under it — the
         // foot of the window, or the keyboard's top — so a keyboard shortens
-        // it from below and its top edge never moves.
+        // it from below; only the search moves its top edge.
         //
         // ⚠️ **Read from the view HERE, not from the notifier's last value.**
         // [_keyboard] is written from metrics ticks and is what makes this
