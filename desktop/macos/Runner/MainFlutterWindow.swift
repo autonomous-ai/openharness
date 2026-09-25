@@ -18,6 +18,7 @@ class MainFlutterWindow: NSWindow {
   private var swarmTitlebar: SwarmTitlebar?
   private var menuChannel: FlutterMethodChannel?
   private var clipboardImageChannel: FlutterMethodChannel?
+  private var notifications: HarnessNotifications?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -33,6 +34,7 @@ class MainFlutterWindow: NSWindow {
     )
     swarmTitlebar = SwarmTitlebar(window: self, messenger: flutterViewController.engine.binaryMessenger)
     installClipboardImageChannel(messenger: flutterViewController.engine.binaryMessenger)
+    notifications = HarnessNotifications(messenger: flutterViewController.engine.binaryMessenger)
 
     // Harness Desktop is dark-only. Flutter's own theme does not reach AppKit —
     // every native surface (the standard About panel, the menu bar, the
