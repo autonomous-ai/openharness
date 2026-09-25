@@ -23,6 +23,8 @@ pub fn handle(app: &mut App, event: CEvent) {
         CEvent::Paste(text) => on_paste(app, text),
         CEvent::Mouse(mouse) => on_mouse(app, mouse),
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes() }
+        CEvent::FocusGained => app.terminal_focused = true,
+        CEvent::FocusLost => app.terminal_focused = false,
         _ => {}
     }
 }

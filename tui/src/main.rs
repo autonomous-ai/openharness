@@ -31,6 +31,18 @@ use tokio::sync::mpsc;
 
 use crate::event::Event;
 
+/// A notification on the computer the person is at, through their terminal — OSC 9 (iTerm2,
+/// WezTerm, Ghostty, kitty) and OSC 777 (foot, Ghostty, rxvt). Over SSH it still lands locally.
+/// `HARNESS_TUI_NOTIFY=off` silences it.
+pub fn notify(title: &str, body: &str) {
+    if std::env::var("HARNESS_TUI_NOTIFY").as_deref() == Ok("off") { return }
+    let clean = |t: &str| t.chars().filter(|c| !c.is_control() && *c != ';').collect::<String>();
+    let (title, body) = (clean(title), clean(body));
+    let mut out = io::stdout();
+    let _ = write!(out, "\x1b]9;{title}: {body}\x07\x1b]777;notify;{title};{body}\x07");
+    let _ = out.flush();
+}
+
 /// The terminal's own bell — a tab in the person's terminal app lights up when this one is behind.
 pub fn bell() {
     let mut out = io::stdout();
