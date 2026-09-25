@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -169,8 +170,8 @@ void main() {
         addTearDown(app.dispose);
         addTearDown(journey.dispose);
         await _mount(tester, app, onboarding: journey);
-        expect(find.text('Harness like a boss.'), findsOneWidget);
-        expect(find.text('○'), findsNWidgets(3));
+        expect(find.text('Follow your curiosity.'), findsOneWidget);
+        expect(find.text('○'), findsNothing);
         expect(app.panes, isEmpty);
 
         if (keyboard) {
@@ -219,8 +220,9 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyT, cmd: true);
         await tester.pumpAndSettle();
         expect(find.byType(WorkspaceWelcome), findsOneWidget);
-        expect(find.text('✓'), findsOneWidget);
-        expect(find.text('○'), findsNWidgets(2));
+        expect(find.text('Follow your curiosity.'), findsOneWidget);
+        expect(find.text('✓'), findsNothing);
+        expect(find.text('○'), findsNothing);
         expect(app.launches, hasLength(1));
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
@@ -260,7 +262,8 @@ void main() {
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byType(NewHarnessForm), findsNothing);
-    expect(find.text('○'), findsNWidgets(3));
+    expect(find.text('Follow your curiosity.'), findsOneWidget);
+    expect(find.text('○'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
     await tester.pumpAndSettle();
@@ -284,7 +287,7 @@ void main() {
     await _mount(tester, app);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('Harness like a boss.'), findsOneWidget);
+    expect(find.text('Follow your curiosity.'), findsOneWidget);
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(search, findsNothing);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
@@ -294,7 +297,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
     final tab = app.activeSwarmId;
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
-    expect(find.text('Harness like a boss.'), findsOneWidget);
+    expect(find.text('Follow your curiosity.'), findsOneWidget);
     expect(search, findsNothing);
     await openHarnessPicker(tester);
     await tester.pump();

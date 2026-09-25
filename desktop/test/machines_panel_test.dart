@@ -18,10 +18,8 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/workspace_onboarding.dart';
 import 'package:harness/widgets/machines_panel.dart';
 import 'package:harness/widgets/toolbar_icon.dart';
-import 'package:harness/widgets/workspace_welcome.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -1221,41 +1219,4 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
-
-  testWidgets('welcome teaches the effective Machines shortcut', (
-    tester,
-  ) async {
-    final map = MemoryKeymap();
-    addTearDown(map.dispose);
-    final onboarding = WorkspaceOnboarding();
-    addTearDown(onboarding.dispose);
-    onboarding.sync(
-      scope: 'welcome-test',
-      observed: {},
-      otherComputer: false,
-      modelsAvailable: true,
-    );
-    final commands = <String>[];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: KeymapProvider(
-          keymap: map,
-          child: WorkspaceWelcome(
-            onboarding: onboarding,
-            onCommand: commands.add,
-          ),
-        ),
-      ),
-    );
-    expect(find.text('⌘M'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('welcome-machines.list')));
-    expect(commands, ['machines.list']);
-    map.apply(
-      '{"bindings":[{"keys":"cmd+m","command":null},{"keys":"cmd+y","command":"machines.list"}]}',
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('⌘Y'), findsOneWidget);
-    expect(find.text('⌘M'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-  });
 }
