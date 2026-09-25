@@ -410,7 +410,8 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Store => {
             let catalog = app.dsh.get(&app.fleet.local_id).cloned().unwrap_or_default();
             picker.set_rows(modal::store_rows(&catalog));
-            picker.status = format!("{} available", catalog.len());
+            let installed = picker.rows.iter().filter(|r| r.lead.first().map(|s| s.content.contains('●')).unwrap_or(false)).count();
+            picker.status = format!("{installed} installed");
             picker.hints = vec![("enter", "start one"), ("^i", "install")];
             if catalog.is_empty() { picker.empty = "Loading the Store…".into() }
         }

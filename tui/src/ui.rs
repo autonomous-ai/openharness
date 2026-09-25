@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Clear, Paragraph, Widget};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -374,11 +374,6 @@ fn home(buf: &mut Buffer, app: &App, area: Rect) {
 
 // ── overlays ─────────────────────────────────────────────────────────────────
 
-fn overlay_rect(area: Rect, w: u16, h: u16) -> Rect {
-    let w = w.min(area.width.saturating_sub(4)).max(20.min(area.width));
-    let h = h.min(area.height.saturating_sub(2));
-    Rect::new(area.x + (area.width - w) / 2, area.y + 2.min(area.height.saturating_sub(h)), w, h)
-}
 
 /// The launcher, docked at the bottom the way fzf draws with `--height`: the panes stay in view
 /// above it, the prompt is the last line, the best match sits right above the prompt, and the
@@ -519,24 +514,28 @@ fn clip(text: &str, cols: usize) -> String {
     out
 }
 
+/// A one-line question (rename, first message, send, a password), docked where the launcher's
+/// prompt is: a rule with the title, the hint, the input.
 fn prompt_box(buf: &mut Buffer, area: Rect, prompt: &crate::modal::Prompt) -> Position {
-    dim_backdrop(buf, area);
-    let rect = overlay_rect(area, 76, 8);
+    let h: u16 = if prompt.hint.is_empty() { 2 } else { 3 };
+    let rect = Rect::new(area.x, area.y + area.height.saturating_sub(h), area.width, h);
+    dim_backdrop(buf, Rect::new(area.x, area.y, area.width, area.height.saturating_sub(h)));
     Clear.render(rect, buf);
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(fg(theme::ACCENT))
-        .title(Span::styled(format!(" {} ", prompt.title), bold(theme::ACCENT_SOFT))).style(Style::default().bg(theme::PANEL));
-    let inner = block.inner(rect);
-    block.render(rect, buf);
-    buf.set_string(inner.x + 1, inner.y, &prompt.label, fg(theme::SOFT));
+    buf.set_style(rect, Style::default().bg(theme::PANEL));
+    for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.set_symbol("─").set_style(fg(theme::LINE).bg(theme::PANEL)); } }
+    let title = format!(" {} ", prompt.title);
+    buf.set_string(rect.x + 1, rect.y, &title, bold(theme::ACCENT_SOFT).bg(theme::PANEL));
+    let keys = " enter ok  esc cancel ";
+    buf.set_string(rect.x + rect.width.saturating_sub(keys.width() as u16 + 1), rect.y, keys, fg(theme::SOFT).bg(theme::PANEL));
+    if !prompt.hint.is_empty() { buf.set_stringn(rect.x + 3, rect.y + 1, &prompt.hint, rect.width as usize - 4, fg(theme::MUTED).bg(theme::PANEL)); }
+    let y = rect.y + rect.height - 1;
     let shown: String = if prompt.secret { "•".repeat(prompt.value.chars().count()) } else { prompt.value.clone() };
-    let room = inner.width.saturating_sub(5) as usize;
+    let room = rect.width.saturating_sub(5) as usize;
     let visible: String = if shown.width() > room { shown.chars().rev().take(room).collect::<Vec<_>>().into_iter().rev().collect() } else { shown };
-    buf.set_string(inner.x + 1, inner.y + 2, "❯ ", bold(theme::ACCENT));
-    buf.set_string(inner.x + 3, inner.y + 2, &visible, fg(theme::TEXT));
-    if !prompt.hint.is_empty() { buf.set_stringn(inner.x + 1, inner.y + 4, &prompt.hint, inner.width as usize - 2, fg(theme::MUTED)); }
-    let keys = Line::from(vec![Span::styled(" enter", bold(theme::ACCENT)), Span::styled(" ok   ", fg(theme::SOFT)), Span::styled("esc", bold(theme::ACCENT)), Span::styled(" cancel", fg(theme::SOFT))]);
-    buf.set_line(inner.x, inner.y + inner.height.saturating_sub(1), &keys, inner.width);
-    Position::new(inner.x + 3 + visible.width() as u16, inner.y + 2)
+    buf.set_string(rect.x, y, " ❯ ", bold(theme::ACCENT).bg(theme::PANEL));
+    if visible.is_empty() { buf.set_stringn(rect.x + 3, y, &prompt.label, room, fg(theme::MUTED).bg(theme::PANEL)); }
+    else { buf.set_string(rect.x + 3, y, &visible, fg(theme::TEXT).bg(theme::PANEL)); }
+    Position::new(rect.x + 3 + visible.width() as u16, y)
 }
 
 /// ⌥F's bar, in the pane's header line: what is being looked for and whether it is there.
