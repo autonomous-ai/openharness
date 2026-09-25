@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
-import { placeholderBranch, sessionBranchSlug, worktreeFolderName } from './agentNames.js'
+import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
@@ -131,10 +131,57 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(placeholderBranch(['refs/heads/amber-badger', 'amber-badger-2'], () => 0)).toBe('amber-badger-3')
     expect(worktreeFolderName('deehw/brave-otter')).toBe('brave-otter')
     expect(worktreeFolderName('fix/login page')).toBe('loginpage')
-    expect(sessionBranchSlug('Worktree and branches organization')).toBe('worktree-and-branches-organization')
-    expect(sessionBranchSlug('✳ Fix: the login page — redirects twice?')).toBe('fix-the-login-page-redirects-twice')
-    expect(sessionBranchSlug('a'.repeat(30) + ' ' + 'b'.repeat(30))).toBe('a'.repeat(30))
-    expect(sessionBranchSlug('✳ ✳')).toBeNull()
+    // Two words when both carry the meaning.
+    expect(sessionBranchNames('Worktree and branches organization')).toEqual(['worktree-branches', 'worktree-branches-organization'])
+    expect(sessionBranchNames('Fix the harness list order')).toEqual(['harness-list', 'harness-list-order'])
+    expect(sessionBranchNames('Add dark mode to settings')).toEqual(['dark-mode', 'dark-mode-settings'])
+    expect(sessionBranchNames('Review and fix flaky tests')).toEqual(['flaky-tests'])
+    expect(sessionBranchNames('Portable harnesses, launch models')).toEqual(['portable-harnesses', 'portable-harnesses-launch'])
+    expect(sessionBranchNames('Release 0.3.1 notes')).toEqual(['release-notes'])
+    expect(sessionBranchNames('Café résumé')).toEqual(['cafe-resume'])
+    // One word when the second is generic, the two-word name kept for a clash.
+    expect(sessionBranchNames('✳ Fix: the login page — redirects twice?')).toEqual(['login', 'login-page', 'login-page-redirects'])
+    expect(sessionBranchNames('Onboarding experience')).toEqual(['onboarding', 'onboarding-experience'])
+    expect(sessionBranchNames('UI polish')).toEqual(['ui', 'ui-polish'])
+    // One word when that is all the title has.
+    expect(sessionBranchNames('Onboarding')).toEqual(['onboarding'])
+    expect(sessionBranchNames('Fix')).toEqual(['fix'])
+    expect(sessionBranchNames('0.3.1')).toEqual(['0-3', '0-3-1'])
+    expect(sessionBranchNames('a'.repeat(30) + ' ' + 'b'.repeat(30))).toEqual(['a'.repeat(24) + '-' + 'b'.repeat(24)])
+    // Real session titles from Claude Code, Codex and this repository's PRs (2026-09-25).
+    for (const [title, name] of [
+      ['Catch up on autonomous-grid', 'autonomous-grid'],
+      ['ok catch up on this landing page. we', 'landing'],
+      ['Look at my Chrome. Open the file, au', 'chrome'],
+      ['What time is it', 'time'],
+      ['Build simple Pacman game', 'pacman-game'],
+      ['Respond to greeting', 'greeting'],
+      ['Define GPU Pod concept', 'gpu-pod'],
+      ['Research roleplay app names', 'roleplay-app'],
+      ['Device stuck issue', 'device-stuck'],
+      ['Harness landing page redesign', 'harness-landing'],
+      ['Review inventory protection', 'inventory-protection'],
+      ['Remove Grid desktop app', 'grid-desktop'],
+      ['feat(cli): add a Requesty preset to saved APIs', 'requesty-preset'],
+      ['perf(desktop): redraw only terminal lines that changed', 'redraw-terminal'],
+      ['fix(cli): unlink a linked dsh on remove instead of rmSync', 'unlink-linked'],
+      ['feat(harnesses): add eight interactive experiences', 'interactive-experiences'],
+      ['feat(login): record whether a sign-in came from the terminal', 'sign-in'],
+      ['Study autonomous-code repo', 'autonomous-code'],
+      ['8-bit CPU Fibonacci on iCEBreaker', '8-bit'],
+      ['Restore split-right and split-down pane controls', 'split-right'],
+      ['App auto-opening extra tabs', 'app-auto'],
+      ['Explore print-in-place uses', 'print-place'],
+      ['desktop: an on-screen banner for the same two moments', 'desktop'],
+      ['Harness on-off switch', 'harness-switch'],
+      ['Simplify Cmd-P with single-line results', 'cmd-p'],
+      ['Give Harness Monitor its stacked-terminal identity', 'harness-monitor'],
+      ['ci: CI and release workflows', 'ci-release'],
+      ['catch up', 'catch'],
+    ] as const) expect(sessionBranchNames(title)[0], title).toBe(name)
+    expect(sessionBranchNames('The and of')).toEqual([])
+    expect(sessionBranchNames('✳ ✳')).toEqual([])
+    expect(sessionBranchNames(null)).toEqual([])
     const made = [await prepare('worktree'), await prepare('worktree')]
     expect(new Set(made).size).toBe(2)
     for (const path of made) {
@@ -174,17 +221,38 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
   it('names a made-up worktree branch after its session once, and never a pushed or chosen one', async () => {
     const path = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-owl', branchMode: 'placeholder' })
     expect(await nameBranchAfterSession(path, null)).toBeNull()
-    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('worktree-and-branches-organization')
-    expect(await current(path)).toBe('worktree-and-branches-organization')
-    expect(await git('config', '--get', 'branch.worktree-and-branches-organization.harness')).toBe('created')
+    expect(await nameBranchAfterSession(path, 'Worktree and branches organization')).toBe('worktree-branches')
+    expect(await current(path)).toBe('worktree-branches')
+    expect(await git('config', '--get', 'branch.worktree-branches.harness')).toBe('created')
     expect(await nameBranchAfterSession(path, 'A later name')).toBeNull()
-    expect(await current(path)).toBe('worktree-and-branches-organization')
+    expect(await current(path)).toBe('worktree-branches')
+    // Taken, with no third word to add: a number.
     const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'calm-fox', branchMode: 'placeholder' })
-    expect(await nameBranchAfterSession(second, 'Worktree and branches organization')).toBe('worktree-and-branches-organization-2')
+    expect(await nameBranchAfterSession(second, 'Fix the worktree branches')).toBe('worktree-branches-2')
+    // A clash takes the fuller name, then a third word, then numbers the shortest.
+    const named = async (title: string, placeholders: string[]) => {
+      const out = []
+      for (const branchName of placeholders) {
+        const at = await prepare('worktree', 'refs/heads/feature', repo, { branchName, branchMode: 'placeholder' })
+        out.push(await nameBranchAfterSession(at, title))
+      }
+      return out
+    }
+    expect(await named('Fix the login page', ['keen-lynx', 'tidy-heron', 'rosy-finch']))
+      .toEqual(['login', 'login-page', 'login-2'])
+    expect(await named('Harness monitor DDOS requests', ['warm-ibis', 'glad-crane', 'bold-lark']))
+      .toEqual(['harness-monitor', 'harness-monitor-ddos', 'harness-monitor-2'])
+    // A repository's own names are never taken, whatever the title says.
+    // This repository has no `master`: only the reserved list keeps a session from taking it.
+    expect(await git('branch', '--list', 'master')).toBe('')
+    expect(await named('Master', ['sunny-moose'])).toEqual(['master-2'])
+    // Case does not tell names apart: on macOS `Deploy` and `deploy` are one ref file.
+    await git('update-ref', 'refs/remotes/origin/Deploy', 'main')
+    expect(await named('Deploy', ['noble-reef'])).toEqual(['deploy-2'])
     // A name a remote has is taken too.
     const third = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-fox', branchMode: 'placeholder' })
-    await git('update-ref', 'refs/remotes/origin/onboarding-experience', 'main')
-    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience-2')
+    await git('update-ref', 'refs/remotes/origin/onboarding', 'main')
+    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience')
     const chosen = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/mine' })
     expect(await nameBranchAfterSession(chosen, 'Anything')).toBeNull()
     const pushed = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'sunny-owl', branchMode: 'placeholder' })
@@ -209,13 +277,13 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       id: session.sessionId, thread_name: 'Discuss configurable harness agents',
     }) + '\n')
     const title = namingTitle(engineSessionTitle(session, 'renaming... ⠴'), session)
-    expect(await nameBranchAfterSession(path, title)).toBe('discuss-configurable-harness-agents')
-    expect(await current(path)).toBe('discuss-configurable-harness-agents')
-    expect(await git('config', '--get', 'branch.discuss-configurable-harness-agents.harness')).toBe('created')
-    expect(await git('rev-parse', 'discuss-configurable-harness-agents')).toBe(await git('rev-parse', 'feature'))
+    expect(await nameBranchAfterSession(path, title)).toBe('configurable-harness')
+    expect(await current(path)).toBe('configurable-harness')
+    expect(await git('config', '--get', 'branch.configurable-harness.harness')).toBe('created')
+    expect(await git('rev-parse', 'configurable-harness')).toBe(await git('rev-parse', 'feature'))
     expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('work in progress')
     expect(await nameBranchAfterSession(path, 'A later conversation title')).toBeNull()
-    expect(await current(path)).toBe('discuss-configurable-harness-agents')
+    expect(await current(path)).toBe('configurable-harness')
   })
 
   it('checks out an existing branch as it is in a new worktree, once', async () => {
