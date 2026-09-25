@@ -542,10 +542,9 @@ class _GridModelPickerState extends State<GridModelPicker> {
               if (widget.enabled) 'Switch model · Subscription or local models',
               ?sentence,
             ].join('\n'),
-            selection: theme.selection,
             foreground: theme.foreground,
             onPressed: widget.enabled ? _open : null,
-            child: SizedBox(
+            builder: (context, emphasized) => SizedBox(
               width: math.min(labelSize.width, textWidth) + padding * 2,
               height: workspaceBarControlHeight(context),
               child: Padding(
@@ -555,7 +554,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
                     label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: workspaceBarTextStyle(),
+                    style: workspaceBarTextStyle(emphasized: emphasized),
                   ),
                 ),
               ),

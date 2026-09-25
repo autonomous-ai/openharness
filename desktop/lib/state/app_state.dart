@@ -2978,18 +2978,30 @@ class AppNotifier extends ChangeNotifier {
   /// them under the one it does, and remember it for next time.
   Future<void> _followLocalMachineId(int revision) async {
     final store = _paneLayout;
-    final current = localMachineState?.machine.machineId;
+    final local = localMachineState?.machine;
+    final current = local?.machineId;
     if (store == null || current == null) return;
     final remembered = await store.loadLocalMachineId();
     if (!_authWorkCurrent(revision)) return;
     var from = remembered != null && remembered != current ? remembered : null;
+    // THIS COMPUTER'S OWN ID, on a tile, is this computer under the identity it
+    // had while signed out — and that is a fact rather than a reading. The
+    // daemon serves this machine under `computerId()` with no account and under
+    // the account's `machineId` with one, and the machine row carries BOTH, so
+    // a tile keyed by the first is one this window made before signing in.
+    //
+    // It outranks the remembered id because the remembered id can be wrong in
+    // the one direction that matters: a pass that could not re-seat used to
+    // record the new id anyway, erasing the only clue the next pass had. Seen
+    // on a real desk — two harnesses made signed-out, `local_machine_id` already
+    // the account's, and no way back (owner, 2026-09-24).
+    final strandedOnThisComputer = _strandedGuestTiles(local);
+    if (strandedOnThisComputer != null) from = strandedOnThisComputer;
     // A guest's list is this computer and nothing else, so a tile waiting for a
     // machine the list does not have can only be this computer under the account
-    // it left — IF every such tile names the same one. That reading beats the
-    // remembered id: a desk saved before the id was remembered, or remembered by
-    // a launch that could not re-seat, still comes home. Signed in, an unknown id
-    // is a machine that was deleted, and nothing is inferred.
-    if (isGuest) {
+    // it left — IF every such tile names the same one. Kept for the desk saved
+    // before any of the ids above were recorded.
+    if (from == null && isGuest) {
       final unknown = {
         for (final pane in allPanes)
           if (!machineStates.containsKey(pane.machineId)) pane.machineId,
@@ -3002,7 +3014,32 @@ class AppNotifier extends ChangeNotifier {
       await _reseatDesk(from: from, to: current, dropOthers: isGuest);
       if (!_authWorkCurrent(revision)) return;
     }
-    await store.saveLocalMachineId(current);
+    // ONLY ONCE THE DESK REALLY NAMES THIS MACHINE.
+    //
+    // This used to run whatever happened above, which is what made a single
+    // missed re-seat permanent: the id it wrote was the evidence the next launch
+    // needed. If tiles are still sitting on this computer's signed-out id, the
+    // desk has not been re-seated and the old id has to stand.
+    if (_strandedGuestTiles(local) == null) {
+      await store.saveLocalMachineId(current);
+    }
+  }
+
+  /// This computer's signed-out id, when tiles are still keyed by it.
+  ///
+  /// Returns the id AS THE TILES SPELL IT — the re-key rewrites what is on the
+  /// desk, and the two sides spell the same id differently. See [sameMachineId].
+  String? _strandedGuestTiles(Machine? local) {
+    final computerId = local?.computerId;
+    if (computerId == null || computerId.isEmpty) return null;
+    if (sameMachineId(computerId, local!.machineId)) return null;
+    for (final pane in allPanes) {
+      if (sameMachineId(pane.machineId, computerId) &&
+          !machineStates.containsKey(pane.machineId)) {
+        return pane.machineId;
+      }
+    }
+    return null;
   }
 
   /// The account left this window — signed out from Settings, or a session that
@@ -3518,6 +3555,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The build to install now: the newest the manifest offers, or [captured]
+  /// when the manifest cannot be read or has nothing newer. Null means the
+  /// manifest no longer offers anything at all — the build was pulled.
+  ///
+  /// Only ever forward: a manifest that regressed (a bad publish, a stale
+  /// mirror) must not talk this into a downgrade, which is what `semverGt`
+  /// settles. And never onto a version this person SKIPPED — pressing Update
+  /// on one build is not consent to a different one they already said no to,
+  /// and nothing is lost by installing what they pressed: the skipped newer
+  /// one raises no offer afterwards either (`_recordUpdateCheck`).
+  Future<UpdateInfo?> _freshestUpdate(UpdateInfo captured) async {
+    final DesktopUpdateCheck result;
+    try {
+      result = await _updater.check();
+    } catch (error) {
+      // A network that cannot answer is not a reason to refuse an update whose
+      // bytes are verified against their own sha256 anyway.
+      debugPrint('AppNotifier.installAvailableUpdate: refresh failed · $error');
+      return captured;
+    }
+    if (_disposed) return captured;
+    lastUpdateCheck = result;
+    final latest = result.update;
+    if (latest != null) {
+      final newer =
+          semverGt(latest.version, captured.version) &&
+          _skippedDesktopUpdateVersion != latest.version;
+      return newer ? latest : captured;
+    }
+    return result.status == DesktopUpdateCheckStatus.upToDate ? null : captured;
+  }
+
   /// Clears a failed install without burying the offer.
   ///
   /// Skipping is permanent — it records the version so the background check
@@ -3545,19 +3614,43 @@ class AppNotifier extends ChangeNotifier {
   /// Downloads, verifies, and installs only after an explicit user action.
   /// A failed operation leaves the running app untouched and retryable.
   Future<bool> installAvailableUpdate({UpdateInfo? update}) async {
-    final info = update ?? availableUpdate;
-    if (_disposed || viewer != null || info == null || isInstallingUpdate) {
+    final chosen = update ?? availableUpdate;
+    if (_disposed || viewer != null || chosen == null || isInstallingUpdate) {
       return false;
     }
-    // The displayed version is the one the user chose. Later manifest
-    // responses cannot change the installation or the offer a failure retains.
-    availableUpdate = info;
+    // Reassigned once the manifest has been re-read below; the failure messages
+    // at the end name whichever build was actually attempted.
+    var info = chosen;
     isInstallingUpdate = true;
     updateDownloadFraction = null;
     updateError = null;
     notifyListeners();
     try {
       final updater = _updater;
+      // One press, the newest build. What is on screen can be minutes old, and
+      // installing THAT only to be offered the next one on the way back is two
+      // updates for one thing. The check costs a small GET against a manifest
+      // the download already depends on.
+      //
+      // `isInstallingUpdate` is set above first, so the answer cannot race
+      // `_recordUpdateCheck` — which bows out while an install is running —
+      // and the offer is published here instead, once the version is settled.
+      final fresh = await _freshestUpdate(info);
+      if (fresh == null) {
+        // Withdrawn from the channel between the offer and the press. Installing
+        // a build that has just been pulled is the one outcome here worth
+        // refusing; everything else falls through to the captured one.
+        //
+        // Not an `updateError`: nothing failed, and the banner that would carry
+        // one is keyed on there being an offer — which there is not any more.
+        // Dropping the offer IS the state, and the dialog that asked turns
+        // itself into "You're up to date" on the false return.
+        availableUpdate = null;
+        updateError = null;
+        return false;
+      }
+      info = fresh;
+      availableUpdate = info;
       // One notify per whole percent. Dio reports every chunk, and each notify
       // rebuilds the whole app shell (the banner lives in its ListenableBuilder),
       // so a 45 MB build would repaint thousands of times for a bar 200px wide.

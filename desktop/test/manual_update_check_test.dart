@@ -77,9 +77,21 @@ class _Manifest {
 }
 
 class _Installer extends DesktopUpdater {
-  _Installer() : super(enabled: false);
+  _Installer({this.refresh}) : super(enabled: false);
+
+  /// What the manifest says when the install re-reads it. Null leaves the
+  /// disabled updater's own answer, which no-ops the refresh — the shape of
+  /// every test here that is not about it.
+  final DesktopUpdateCheck? refresh;
+  int refreshes = 0;
   final staged = Completer<StagedUpdate?>();
   UpdateInfo? requested;
+
+  @override
+  Future<DesktopUpdateCheck> check({String? currentVersion}) async {
+    refreshes++;
+    return refresh ?? await super.check(currentVersion: currentVersion);
+  }
 
   /// The progress hook the real updater calls per chunk; tests drive it by
   /// hand to check what the UI makes of a number arriving mid-download.
@@ -309,7 +321,7 @@ void main() {
   });
 
   testWidgets(
-    'background checks wait six hours, avoid overlap, and stop after cancellation',
+    'background checks wait five minutes, avoid overlap, and stop after cancellation',
     (tester) async {
       final manifest = _Manifest();
       final observed = <DesktopUpdateCheck>[];
@@ -321,9 +333,9 @@ void main() {
       manifest.answer(version: '1.0.0');
       await tester.pump();
       expect(observed, hasLength(1));
-      await tester.pump(const Duration(hours: 5, minutes: 59));
+      await tester.pump(const Duration(minutes: 4, seconds: 59));
       expect(manifest.requests, isEmpty);
-      await tester.pump(const Duration(minutes: 1));
+      await tester.pump(const Duration(seconds: 1));
       await manifest.waitForRequest(tester);
       await tester.pump(const Duration(hours: 12));
       expect(manifest.requests, hasLength(1));
@@ -448,9 +460,14 @@ void main() {
   });
 
   testWidgets(
-    'Update uses the reviewed version and stays open during installation',
+    'Update installs the newest build, not the one that was on screen',
     (tester) async {
-      final installer = _Installer();
+      // One press has to be enough. Installing what the dialog opened on, and
+      // then being offered the next version on the way back, is two updates for
+      // one thing — which is what this used to do on purpose.
+      final installer = _Installer(
+        refresh: const DesktopUpdateCheck.available(_laterUpdate),
+      );
       final app = AppNotifier(
         config: AppConfig.dev,
         authSession: AuthSession(),
@@ -467,10 +484,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // A newer background result must not change what the visible action does.
-      app.availableUpdate = _laterUpdate;
       await tester.tap(find.text('Update'));
       await tester.pump();
+      // The dialog names the build going in, not the one that was reviewed.
+      expect(find.textContaining('Installing Harness 1.0.5'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump(const Duration(milliseconds: 200));
       final stayedOpen = find.byType(Dialog).evaluate().length == 1;
@@ -478,12 +495,132 @@ void main() {
       await tester.pumpAndSettle();
       await dialog;
       expect(stayedOpen, isTrue);
-      expect(installer.requested?.version, '1.0.4');
-      expect(app.updateError, contains('1.0.4'));
-      expect(app.availableUpdate?.version, '1.0.4');
+      expect(installer.requested?.version, '1.0.5');
+      expect(app.updateError, contains('1.0.5'));
+      expect(app.availableUpdate?.version, '1.0.5');
       expect(find.byType(Dialog), findsNothing);
     },
   );
+
+  testWidgets('a manifest that cannot be read installs what was offered', (
+    tester,
+  ) async {
+    // Refusing an update because the network blinked would be worse than
+    // installing bytes that still have to match their own sha256.
+    final installer = _Installer(refresh: const DesktopUpdateCheck.failed());
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    final install = app.installAvailableUpdate();
+    await tester.pump();
+    installer.staged.complete(null);
+    expect(await install, isFalse);
+    expect(installer.refreshes, 1);
+    expect(installer.requested?.version, '1.0.4');
+    expect(app.availableUpdate?.version, '1.0.4');
+  });
+
+  testWidgets('a build pulled from the channel is not installed', (
+    tester,
+  ) async {
+    final installer = _Installer(refresh: const DesktopUpdateCheck.upToDate());
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    expect(await app.installAvailableUpdate(), isFalse);
+    expect(installer.requested, isNull, reason: 'nothing was downloaded');
+    expect(app.availableUpdate, isNull);
+    // Nothing failed, and there is no offer left for a banner to carry an
+    // error on; the dialog below is what tells the person.
+    expect(app.updateError, isNull);
+  });
+
+  testWidgets('the dialog says you are up to date when the build was pulled', (
+    tester,
+  ) async {
+    final installer = _Installer(refresh: const DesktopUpdateCheck.upToDate());
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    await tester.pumpWidget(const MaterialApp(home: Placeholder()));
+    final dialog = showUpdateCheckDialog(
+      tester.element(find.byType(Placeholder)),
+      app,
+      const ManualUpdateCheck(
+        check: DesktopUpdateCheck.available(_reviewedUpdate),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Update'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsOneWidget, reason: 'it does not vanish');
+    expect(find.textContaining('up to date'), findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await dialog;
+  });
+
+  testWidgets('Update does not jump to a version the person skipped', (
+    tester,
+  ) async {
+    // Pressing Update on 1.0.4 is not consent to 1.0.5, which they said no to.
+    final installer = _Installer(
+      refresh: const DesktopUpdateCheck.available(_laterUpdate),
+    );
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _laterUpdate;
+    addTearDown(app.dispose);
+    await app.skipAvailableUpdate(update: _laterUpdate);
+    app.availableUpdate = _reviewedUpdate;
+    final install = app.installAvailableUpdate();
+    await tester.pump();
+    installer.staged.complete(null);
+    expect(await install, isFalse);
+    expect(installer.requested?.version, '1.0.4');
+  });
+
+  testWidgets('a manifest that went backwards cannot downgrade the offer', (
+    tester,
+  ) async {
+    final installer = _Installer(
+      refresh: const DesktopUpdateCheck.available(
+        UpdateInfo(
+          version: '1.0.3',
+          url: 'https://updates.example.test/1.0.3.zip',
+          sha256: 'unused',
+          size: 1024,
+        ),
+      ),
+    );
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    final install = app.installAvailableUpdate();
+    await tester.pump();
+    installer.staged.complete(null);
+    expect(await install, isFalse);
+    expect(installer.requested?.version, '1.0.4');
+  });
 
   testWidgets('Skip uses the reviewed version without hiding a newer offer', (
     tester,

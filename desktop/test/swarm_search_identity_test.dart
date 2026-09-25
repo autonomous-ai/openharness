@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -364,8 +365,8 @@ void main() {
   testWidgets(
     'Cmd O renders one harness result and opens it from a tab-name alias',
     (tester) async {
-      final app = createApp();
-      final machine = app.machineStates['m']!..nodeOnline = true;
+      final app = createApp(connected: true);
+      final machine = app.machineStates['m']!;
       machine.agents = const [
         Agent(
           id: 'a0',

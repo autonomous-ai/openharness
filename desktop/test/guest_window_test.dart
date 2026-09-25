@@ -16,6 +16,7 @@ library;
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/pane_layout_store.dart';
 
 import 'swarm_state_test.dart' show MemoryStore, createApp;
@@ -93,6 +94,25 @@ void main() {
       expect(await layout.loadLocalMachineId(), 'machine-xyz');
     });
 
+    test('a desk keyed by the DASHED computer id still re-keys', () async {
+      // The tiles carry `~/.harness/computer-id` verbatim — the daemon served
+      // them under it while signed out — and the account's machine is a
+      // different id entirely. The re-key rewrites what is actually on the desk.
+      const dashed = 'd11a1f3b-ca2a-44e9-ae68-a942e044e6d8';
+      final store = await savedDesk(dashed);
+      final layout = PaneLayoutStore(storage: store);
+      await layout.rekeyMachine(
+        from: dashed,
+        to: '001bcba1e7e9deb6f8756c053a951ce2',
+      );
+
+      expect(savedPanes((await layout.loadSwarms())!), [
+        ('001bcba1e7e9deb6f8756c053a951ce2', 'a1'),
+        ('001bcba1e7e9deb6f8756c053a951ce2', 'a2'),
+        ('other-machine', 'b1'),
+      ]);
+    });
+
     test('a desk that already names the right id is left alone', () async {
       final store = await savedDesk('machine-xyz');
       final before = await store.read('swarm_layout_v1');
@@ -102,15 +122,43 @@ void main() {
     });
   });
 
-  group('what a guest window is', () {
-    test('a desktop window without an account is a guest; a viewer never is', () {
-      final app = createApp();
-      addTearDown(app.dispose);
-      expect(app.signedIn, isTrue, reason: 'presumed until the CLI answers');
-      expect(app.isGuest, isFalse);
+  group('the two spellings of one computer id', () {
+    // The backend strips the dashes; `~/.harness/computer-id` keeps them, and
+    // that file is what the daemon serves under while signed out — so it is what
+    // a tile made then is keyed by. A plain `==` across that boundary never
+    // matches, and the re-key that depends on it silently does nothing.
+    const dashed = 'd11a1f3b-ca2a-44e9-ae68-a942e044e6d8';
+    const plain = 'd11a1f3bca2a44e9ae68a942e044e6d8';
 
-      app.signedIn = false;
-      expect(app.isGuest, isTrue);
+    test('the same id written two ways is the same id', () {
+      expect(sameMachineId(dashed, plain), isTrue);
+      expect(sameMachineId(plain, dashed), isTrue);
+      expect(sameMachineId(dashed, dashed), isTrue);
     });
+
+    test('case is not part of the id either', () {
+      expect(sameMachineId(plain.toUpperCase(), dashed), isTrue);
+    });
+
+    test('two different ids stay different', () {
+      expect(sameMachineId(plain, '001bcba1e7e9deb6f8756c053a951ce2'), isFalse);
+      // Not a prefix match: one is not the other with the rest cut off.
+      expect(sameMachineId(plain, plain.substring(0, 20)), isFalse);
+    });
+  });
+
+  group('what a guest window is', () {
+    test(
+      'a desktop window without an account is a guest; a viewer never is',
+      () {
+        final app = createApp();
+        addTearDown(app.dispose);
+        expect(app.signedIn, isTrue, reason: 'presumed until the CLI answers');
+        expect(app.isGuest, isFalse);
+
+        app.signedIn = false;
+        expect(app.isGuest, isTrue);
+      },
+    );
   });
 }

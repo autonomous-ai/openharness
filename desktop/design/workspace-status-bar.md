@@ -36,21 +36,26 @@ each group is alphabetical. Pane focus and navigation history do not change that
 order. Cmd-Q retains its native Quit action.
 
 Tabs, status fields/symbols, PRs, and model labels and pane close actions share `WorkspaceBarControl`
-in Flutter and the same native draw metrics: 28 pt minimum highlight height,
-flat corners, and the terminal selection color at 50% opacity for hover, press,
-and keyboard focus. The active tab uses that same rectangle with full selection
-opacity. Keep the 13 pt regular text centered; no ripple or rounded button well.
+in Flutter and the same native draw metrics: 28 pt minimum click height and
+bold text on hover, press, and keyboard focus, with a hand cursor. Preserve the
+underlying colors, including Agnoster segment backgrounds and joins. Reserve
+both text weights during layout so labels and ribbon shapes never shift.
+The active tab fills the entire bar height with the workspace background color,
+joining the content below. Its resting text stays regular; do not add a `*`
+marker. Keep text centered, with no ripple or rounded button well.
+
+![Agnoster PR hover and a selected tab joining the workspace, rendered with synthetic data](images/workspace-bar-hover.png)
 
 Do not show a tooltip that repeats a visible tab name (the numeric prefix does
 not make it a different name). Show a different underlying name or the full
 label when it is truncated. Keep action hints on symbols and status links.
 
 The new-tab `+` uses the same plain-text control as `>` `@` `:` `*`: no resting
-box, with a flat rectangular terminal-selection highlight on hover or keyboard
+box, with bold text on hover or keyboard
 focus. Keep its New Tab tooltip and shortcut hint.
 
 Tab labels, status text, pane titles, and model selectors use **13 pt SF Mono,
-regular weight** on macOS. Linux uses its platform monospace stack at the same
+regular weight at rest** on macOS. Linux uses its platform monospace stack at the same
 size. Use `workspaceBarTextStyle()` and `workspaceBarCellSizeOf(context)` from
 `lib/shared/theme/workspace_bar_style.dart`; the native bar receives that same
 font through `barStyle`. Keep this size independent of terminal zoom and avoid
@@ -65,7 +70,7 @@ and size.
 The shared bar shows the focused harness's model selector before machine and
 project. Pane headers keep the harness title and a hover-only ASCII `x` at their
 far right. The `x` closes that pane view, keeps its harness running, and uses the
-shared flat highlight. Its tooltip names Close Pane and the current shortcut.
+shared bold hover treatment. Its tooltip names Close Pane and the current shortcut.
 Reserve its width so revealing it does not move the title.
 
 For the model label, prefer
@@ -73,8 +78,8 @@ its local model ID or the daemon's observed subscription model (`selectedModel`)
 such as `GPT-6 Astra`, `Fable`, or `Opus`. Keep versions when reported; never infer
 a version from a family alias. Older daemons fall back to the provider name.
 Keep this label visible without requiring hover, including while disconnected;
-disable switching when the pane is read-only. Use a hand cursor, subtle hover and
-keyboard-focus fill, and a tooltip explaining subscription/local switching.
+disable switching when the pane is read-only. Use a hand cursor, bold text on hover
+and keyboard focus, and a tooltip explaining subscription/local switching.
 Do not repeat the model name in that tooltip unless it is truncated or replaced
 by `Switching…`. Preserve useful capability details and full truncated names
 while offline, but do not advertise switching when it is disabled.
@@ -109,8 +114,8 @@ Keep the full actual path in the tooltip and accessibility detail.
 
 A focused viewer shows its owning harness's context. Omit absent project or Git
 metadata; detached commits say `detached:<commit>`. Clear it for an empty tab.
-Each field is independently clickable, with the same flat hover/keyboard-focus
-tint and hand cursor as the status symbols. Machine opens the shared picker scoped by machine
+Each field is independently clickable, with the same bold hover/keyboard-focus
+text and hand cursor as the status symbols. Machine opens the shared picker scoped by machine
 identity; project opens its harnesses across matching remote checkouts; branch
 opens that project filtered by its exact branch or detached commit. Escape returns
 from branch to project, then to project search. Names never establish identity.
@@ -169,14 +174,14 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Agnoster](https://github.com/agnoster/agnoster-zsh-theme), and
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
-Pane headers keep task identity and model selection. Four text symbols sit at the far
+Pane headers keep task identity and the hover-only close action. Four text symbols sit at the far
 right, after the focused context and PR: `>` Harnesses, `@` Machines, `:` Models,
 and `*` Store. Use the same compact monospace font, size, weight, and baseline as the
 status text. Each symbol is centered in an equal four-column slot (at least
 28 points wide) with an equally sized click target. In narrow windows, reduce
 all four slots together in whole columns. Keep the symbols plain at
-rest; hovering, pressing, or keyboard focus adds a flat selection tint and
-brightens the text. A hand cursor, descriptive tooltip, and accessible button
+rest; hovering, pressing, or keyboard focus makes the text bold without changing
+the background. A hand cursor, descriptive tooltip, and accessible button
 name make each action discoverable. Do not show a help symbol for now.
 
 Harnesses opens the existing session manager with Pause and Resume. Machines

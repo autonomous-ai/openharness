@@ -92,6 +92,13 @@ creation entries, use consecutive single lines. Details remain searchable and
 available to screen readers. Machine and project previews retain their name
 and harness count even when they contain just one session.
 
+Unavailable sessions keep their place in the list. Dim their names and replace
+the activity age with a short reason such as `Offline`, `Not connected`, or
+`Link required`. They remain selectable for their saved preview, but Enter and
+click cannot open them. Availability updates in place when the machine reconnects.
+
+![An offline session remains readable in the preview](images/terminal-open-unavailable.png)
+
 ![A selected session with its context in the preview](images/terminal-open-harness-preview.png)
 
 ![Models use the same single-line list with details in the preview](images/terminal-open-models.png)

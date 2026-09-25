@@ -19,6 +19,7 @@ class StatusLine extends StatelessWidget {
     this.nextBackground,
     this.segmentOffset = 0,
     this.workspaceBar = false,
+    this.emphasized = false,
   });
   final StatusLineParts parts;
   final bool color;
@@ -28,6 +29,7 @@ class StatusLine extends StatelessWidget {
   final Color? nextBackground;
   final int segmentOffset;
   final bool workspaceBar;
+  final bool emphasized;
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +43,10 @@ class StatusLine extends StatelessWidget {
           terminalThemeStore.value,
         );
         final style = workspaceBar
-            ? workspaceBarTextStyle(color: theme.foreground)
+            ? workspaceBarTextStyle(
+                color: theme.foreground,
+                emphasized: emphasized,
+              )
             : terminalContentStyle(color: theme.foreground);
         final segments = statusLinePaintSegments(
           parts,
@@ -50,7 +55,7 @@ class StatusLine extends StatelessWidget {
           segmentOffset: segmentOffset,
         );
         if (!parts.style.segmented) {
-          return Text.rich(
+          final text = Text.rich(
             TextSpan(
               children: [
                 for (final segment in segments)
@@ -66,6 +71,15 @@ class StatusLine extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             textAlign: textAlign,
           );
+          return workspaceBar
+              ? SizedBox(
+                  width: workspaceBarTextSizeOf(
+                    context,
+                    segments.map((s) => s.text).join(),
+                  ).width,
+                  child: text,
+                )
+              : text;
         }
         final cell = workspaceBar
             ? workspaceBarCellSizeOf(context)
@@ -91,7 +105,9 @@ class StatusLine extends StatelessWidget {
               }
               final widths = [
                 for (final segment in segments)
-                  _measure(segment.text, style, scaler),
+                  workspaceBar
+                      ? workspaceBarTextSizeOf(context, segment.text).width
+                      : _measure(segment.text, style, scaler),
               ];
               final natural =
                   widths.fold(0.0, (a, b) => a + b) +

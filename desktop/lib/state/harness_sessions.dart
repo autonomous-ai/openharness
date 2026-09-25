@@ -17,6 +17,30 @@ enum SessionSort {
   final String label;
 }
 
+/// Why a session cannot be reached now, even when a saved pane still exists.
+/// Paused sessions that the machine can resume remain valid destinations.
+String? harnessSessionUnavailable(MachineState? machine, Agent? agent) {
+  if (machine == null) return 'Unavailable';
+  if (machine.isOffline) return 'Offline';
+  if (machine.needsLink) return 'Link required';
+  if (!machine.machine.isShared &&
+      machine.connectionStatus != ConnectionStatus.connected) {
+    return 'Not connected';
+  }
+  if (agent == null) return 'Unavailable';
+  if (agent.terminalAvailable ||
+      (agent.isStopped &&
+          agent.canPauseAndResume &&
+          !machine.machine.isShared)) {
+    return null;
+  }
+  return switch (agent.launchState) {
+    'starting' => 'Starting',
+    'failed' => 'Start failed',
+    _ => 'Unavailable',
+  };
+}
+
 /// A session appears once, however many tabs or viewers show it.
 class HarnessSession {
   const HarnessSession({

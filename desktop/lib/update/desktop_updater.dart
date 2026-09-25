@@ -177,7 +177,16 @@ class DesktopUpdater {
   final String _architecture;
   final _checksInFlight = <String?, Future<DesktopUpdateCheck>>{};
 
-  static const checkInterval = Duration(hours: 6);
+  /// How often the background poll asks the manifest.
+  ///
+  /// Five minutes, not the six hours this used to be, because the offer on
+  /// screen has to be close to the build Update will actually install: a person
+  /// who leaves a notice sitting for an afternoon should not be shown a version
+  /// that was superseded hours ago. The request is one small GET that GCS
+  /// serves `no-cache`, the overlap guard in [startChecking] and the in-flight
+  /// map above mean a slow answer never stacks up a second one, and the CLI's
+  /// own self-updater polls on the same order (`cli/src/lib/selfUpdate.ts`).
+  static const checkInterval = Duration(minutes: 5);
 
   bool get canCheck => _enabled && _releaseMode;
 

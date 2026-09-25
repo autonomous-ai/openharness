@@ -130,13 +130,17 @@ class PaneCloseButton extends StatelessWidget {
           'Close Pane',
           if (hint != null && hint.isNotEmpty) hint,
         ].join(' · '),
-        selection: theme.selection,
         foreground: theme.foreground,
         onPressed: onPressed,
-        child: SizedBox(
+        builder: (context, emphasized) => SizedBox(
           width: workspaceBarCellSizeOf(context).width * 3,
           height: workspaceBarControlHeight(context),
-          child: Center(child: Text('x', style: workspaceBarTextStyle())),
+          child: Center(
+            child: Text(
+              'x',
+              style: workspaceBarTextStyle(emphasized: emphasized),
+            ),
+          ),
         ),
       ),
     );

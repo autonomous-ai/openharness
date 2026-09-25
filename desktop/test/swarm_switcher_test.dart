@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,8 +32,7 @@ void main() {
             null,
           ),
         );
-        final app = createApp();
-        app.machineStates['m']!.nodeOnline = true;
+        final app = createApp(connected: true);
         final frames = <TerminalBinaryFrame>[];
         final pane = app.adoptSessionForTest(terminal('a0', frames));
         final original = app.activeSwarm;

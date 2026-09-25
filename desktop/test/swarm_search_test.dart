@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -308,7 +309,7 @@ void main() {
   testWidgets(
     'machine names filter harnesses without adding the whole machine',
     (tester) async {
-      final app = createApp();
+      final app = createApp(connected: true);
       app.machineStates['m']!.agents = app.machineStates['m']!.agents
           .take(3)
           .toList();
@@ -332,8 +333,7 @@ void main() {
   testWidgets('Add keeps a shared view here and the first key reaches it', (
     tester,
   ) async {
-    final app = createApp();
-    app.machineStates['m']!.nodeOnline = true;
+    final app = createApp(connected: true);
     final firstInputs = <TerminalBinaryFrame>[];
     final secondInputs = <TerminalBinaryFrame>[];
     final firstSession = terminal('a0', firstInputs);
@@ -373,7 +373,7 @@ void main() {
     testWidgets(
       'Return waits for composing text in ${adding ? 'Add' : 'New Harness'}',
       (tester) async {
-        final app = createApp();
+        final app = createApp(connected: true);
         app.adoptSessionForTest(terminal('a0', []));
         final original = app.activeSwarm;
         app.newSwarm();

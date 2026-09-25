@@ -86,6 +86,17 @@ class SharedHarness {
 }
 
 /// Control-plane machine (GET /api/machines).
+/// Two spellings of the same machine or computer id.
+///
+/// The backend stores a computer id with its dashes stripped
+/// (`d11a1f3bca2a44e9…`) while `~/.harness/computer-id` — which is what the
+/// daemon serves under while signed out, and therefore what a tile made then is
+/// keyed by — keeps them (`d11a1f3b-ca2a-44e9-…`). The same id, written two
+/// ways, and a plain `==` between them never matches. Anything comparing an id
+/// that crossed that boundary has to come through here.
+bool sameMachineId(String a, String b) =>
+    a.replaceAll('-', '').toLowerCase() == b.replaceAll('-', '').toLowerCase();
+
 class Machine {
   final String machineId;
 

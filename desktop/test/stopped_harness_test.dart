@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -32,7 +33,7 @@ void main() {
   setUp(() {
     disposed = false;
     connection = RestartConnection();
-    app = createApp(connectionForTest: (_) => connection);
+    app = createApp(connectionForTest: (_) => connection, connected: true);
     app.machineStates['m']!.agents.add(stopped);
   });
   tearDown(() {

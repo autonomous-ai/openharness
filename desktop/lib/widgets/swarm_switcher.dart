@@ -565,7 +565,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         _announcer.row(
           context,
           '${row.title}${detail.isEmpty ? '' : ', $detail'}, '
-          '${search.actionLabel(row)}',
+          '${search.sessionUnavailable(row) ?? search.actionLabel(row)}',
         );
       });
     }
@@ -643,14 +643,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     );
     final selected = search.selected;
     final unavailable =
-        (selected != null && !search.canSubmit(selected)) ||
-        search.adding &&
-            !search.canCreate &&
-            !search.isCommandMode &&
-            !search.isHelpMode &&
-            !search.isGroupMode &&
-            !search.isModelMode &&
-            !search.isStoreMode;
+        search.sessionUnavailable(selected) == null &&
+        ((selected != null && !search.canSubmit(selected)) ||
+            search.adding &&
+                !search.canCreate &&
+                !search.isCommandMode &&
+                !search.isHelpMode &&
+                !search.isGroupMode &&
+                !search.isModelMode &&
+                !search.isStoreMode);
     return LayoutBuilder(
       builder: (context, constraints) {
         final sideBySide = constraints.maxWidth >= widget.sideBySideMinWidth;
@@ -700,6 +701,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final row = search.rows[index];
           final highlighted = index == search.cursor;
           final canSubmit = search.canSubmit(row);
+          final unavailableReason = search.sessionUnavailable(row);
           final alreadyHere = search.alreadyHere(row);
           final activityAge = widget.bios && row.lastActivityAt != null
               ? harnessActivityAge(row.lastActivityAt, DateTime.now())
@@ -708,6 +710,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             row,
             highlighted,
             canSubmit,
+            unavailableReason,
             alreadyHere,
             highlighted ? (search.canAccept, search.actionLabel(row)) : null,
             _rowHeight,
@@ -755,6 +758,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                       enabled: canSubmit,
                       cellSize: cell,
                       activityAge: activityAge,
+                      unavailableReason: unavailableReason,
                     ),
                   ),
                 )
@@ -1157,6 +1161,7 @@ class _SearchRowContent extends StatefulWidget {
     this.enabled = true,
     this.cellSize,
     this.activityAge,
+    this.unavailableReason,
   });
 
   final SwarmSearchController search;
@@ -1169,6 +1174,7 @@ class _SearchRowContent extends StatefulWidget {
   final bool enabled;
   final Size? cellSize;
   final String? activityAge;
+  final String? unavailableReason;
 
   @override
   State<_SearchRowContent> createState() => _SearchRowContentState();
@@ -1243,6 +1249,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         label: row.isCreate
             ? '${row.title}\n$detail'
             : '${row.title}\n${row.terminalDetail ?? row.detail}'
+                  '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
                   '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
         excludeSemantics: true,
         child: Column(
@@ -1266,7 +1273,14 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                             style: style,
                           ),
                   ),
-                  if (widget.activityAge case final age?) ...[
+                  if (widget.unavailableReason case final reason?) ...[
+                    SizedBox(width: cell.width * 2),
+                    Text(
+                      reason,
+                      maxLines: 1,
+                      style: terminalContentStyle(color: muted),
+                    ),
+                  ] else if (widget.activityAge case final age?) ...[
                     SizedBox(width: cell.width * 2),
                     Tooltip(
                       message: 'Last active ${row.lastActivityAt!.toLocal()}',

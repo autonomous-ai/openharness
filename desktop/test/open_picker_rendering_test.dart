@@ -112,7 +112,13 @@ void main() {
         );
         expect(rowTitles, isNotEmpty);
         for (final title in rowTitles) {
-          expect(title.style.color, pane.theme.foreground);
+          final row = search.rows.firstWhere((row) => row.title == title.text);
+          expect(
+            title.style.color,
+            search.canSubmit(row)
+                ? pane.theme.foreground
+                : pane.theme.foreground.withValues(alpha: .28),
+          );
         }
         final previewText = tester.widgetList<Text>(
           find.descendant(
