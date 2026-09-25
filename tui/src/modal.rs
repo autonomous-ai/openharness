@@ -128,6 +128,7 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Tabs", "⌥T", "New tab"),
     ("Tabs", "⌥1…9", "Go to tab"),
     ("Tabs", "⌥{  ⌥}", "Previous / next tab"),
+    ("Tabs", "⌥`", "The tab you were on before"),
     ("Tabs", "⌥⇧R", "Rename tab"),
     ("Tabs", "⌥⇧W", "Close tab (harnesses keep running)"),
     ("Panes", "⌥\\  ⌥-", "Split right / down"),

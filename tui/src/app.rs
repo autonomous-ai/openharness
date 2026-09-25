@@ -89,6 +89,8 @@ pub struct App {
     /// What the outer terminal's title was last set to.
     pub title: String,
     pub first_frame: bool,
+    /// The tab before this one, by id — ⌥` goes back to it.
+    pub last_tab: Option<String>,
     /// The person's own bindings (tui.toml): chord → command, or None to leave it to the pane.
     pub keys: Vec<(crate::config::Chord, Option<String>)>,
     pub prefix_key: crate::config::Chord,
@@ -136,6 +138,7 @@ impl App {
             last_click: None,
             title: String::new(),
             first_frame: false,
+            last_tab: None,
             keys: Vec::new(),
             prefix_key: crate::config::Config::default().prefix,
             terminal_focused: true,
@@ -825,6 +828,7 @@ impl App {
 
     pub fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
+            if index != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()) }
             self.active = index;
             if let Some(f) = self.tabs[index].focus { self.seen(f) }
             self.fit_panes();
