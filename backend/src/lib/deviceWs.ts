@@ -550,6 +550,11 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     goal ? `/goal ${text}` : loop ? `/loop ${text}` : text
 
   const ROUTE_AUTO_THRESHOLD = 0.75
+  // A harness CLI machine (`remote`) takes a turn only sealed under the sender's own E2EE session, and
+  // this backend holds no key — so a transcript can no longer be typed into one from here. The current
+  // dial speaks the cable protocol and its daemon transcribes and seals the turn itself; only firmware
+  // that dials device-ws directly still takes this path.
+  const REMOTE_VOICE_UNSUPPORTED = 'FIRMWARE_UPDATE_REQUIRED'
   const ROUTE_PENDING_TTL_MS = 60_000
   const pendingRoutes = new Map<string, { text: string; goal: boolean; loop: boolean; ts: number }>()
   // Pruned on a timer too, not only on the next route_confirm: a device that walks away after a routed
@@ -1142,6 +1147,7 @@ function relay(device: WebSocket, opts: RelayOpts): void {
       if (!agentId || agentId === 'new') { sendDeviceNow({ type: 'error', message: 'route needs an agent' }); return } // 'new' (create-agent) is a later phase
       const ac = activeClient()
       if (!ac) { sendDeviceNow({ type: 'error', message: 'NO_MACHINE_SELECTED' }); return }
+      if (activeRemote()) { sendDeviceNow({ type: 'error', message: REMOTE_VOICE_UNSUPPORTED }); return }
       try {
         await ensureActiveReady()
         sendDeviceNow({ type: 'commander_event', agentId, payload: { kind: 'processing' } })
@@ -1321,6 +1327,8 @@ function relay(device: WebSocket, opts: RelayOpts): void {
         ? activeBinding
         : await prisma.machine.findUnique({ where: { machineId } })
       if (!voiceBinding || voiceBinding.deletedAt) throw new Error('machine not found')
+      // Before the quota is reserved: the transcript could never be delivered, so do not charge for it.
+      if (voiceBinding.authMode === 'remote') throw new Error(REMOTE_VOICE_UNSUPPORTED)
       const durationMs = pcm.length / ((sr * 2) / 1000)
       const reservation = await voiceQuotaService.reserve(machineId, uploadId, durationMs)
       if (reservation.state !== 'reserved') {

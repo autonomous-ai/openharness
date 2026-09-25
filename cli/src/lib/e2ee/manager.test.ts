@@ -290,6 +290,10 @@ describe('E2eeManager pairing', () => {
       { requestId: 'q1', sessionId: 'sX', answers: { color: 'Xanh' } })
     const qdown = mgr.unwrapDown(conn, { type: 'question_response', payload: qw })
     expect((qdown!.payload as Record<string, unknown>).answers).toEqual({ color: 'Xanh' })
+
+    // Plaintext is never opened into a request: it came from the relay, not from the paired client.
+    expect(mgr.unwrapDown(conn, { type: 'message', payload: { content: 'from the relay', agentId: 'a1' } })).toBeNull()
+    expect(mgr.unwrapDown('no-session', { type: 'message', payload: wrapped })).toBeNull()
   })
 
   it('rejects a wrong code at the confirmation MAC (round 2)', async () => {

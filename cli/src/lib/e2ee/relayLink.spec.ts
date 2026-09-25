@@ -122,6 +122,15 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(crypto.handleWelcome(welcome.payload as Record<string, unknown>)).toBe(true)
       expect(crypto.ready).toBe(true)
       expect(crypto.terminalP2pVersion).toBe(1)
+      expect(crypto.strictDown).toBe(true)
+
+      // A daemon that says strictDown gets the formerly-plaintext RPCs sealed, and opens them.
+      const install = { requestId: 'dsh-1', url: 'https://example.invalid/harness.git' }
+      const sealedInstall = crypto.wrapOutgoing({ type: 'dsh_install', payload: install })
+      expect(sealedInstall.payload).not.toHaveProperty('url')
+      expect(manager.unwrapDown('session-conn', sealedInstall)?.payload).toEqual(install)
+      // …and nothing unsealed is opened: a plaintext frame is the relay's, not the client's.
+      expect(manager.unwrapDown('session-conn', { type: 'message', payload: { content: 'x', agentId: 'a' } })).toBeNull()
 
       // Outgoing: client encrypts a down-type frame; manager decrypts it via unwrapDown.
       const outgoing = crypto.wrapOutgoing({ type: 'terminal_input', payload: { requestId: 'r1', foo: 'bar' } })

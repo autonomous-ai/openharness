@@ -30,7 +30,9 @@ class E2eeRelayCodec implements RelayCodec {
   @override
   Map<String, dynamic>? encodeFrame(Map<String, dynamic> frame) {
     final type = frame['type'];
-    final mustSeal = type is String && encryptedDownTypes.contains(type);
+    // Before the welcome it is not yet known whether the machine opens [strictDownTypes], and
+    // either way they must not leave in the clear to one that refuses them — so hold them too.
+    final mustSeal = type is String && sealsDown(type, strictDown: true);
     if (mustSeal && !_session.ready) return null;
     return _session.wrapOutgoing(frame);
   }

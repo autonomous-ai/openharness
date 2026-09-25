@@ -69,6 +69,27 @@ const Set<String> encryptedDownTypes = {
   'p2p_promote',
 };
 
+/// Requests an older CLI took in the clear and a current one refuses unsealed — applicationFrames.ts
+/// `STRICT_DOWN_TYPES`. Sealed only for a machine whose welcome says `strictDown`: an older one would
+/// never open the envelope and would read the request as empty.
+const Set<String> strictDownTypes = {
+  'dsh_install',
+  'dsh_update',
+  'dsh_remove',
+  'dsh_list',
+  'agent_retarget',
+  'engines_probe',
+  'grid_models_list',
+  'cancel',
+  'claude_login_status',
+  'speaking',
+};
+
+/// Whether [type] goes sealed to a machine — applicationFrames.ts `encryptDownFrameFor`.
+bool sealsDown(String type, {required bool strictDown}) =>
+    encryptedDownTypes.contains(type) ||
+    (strictDown && strictDownTypes.contains(type));
+
 Uint8List _aad(
   int v,
   String type,

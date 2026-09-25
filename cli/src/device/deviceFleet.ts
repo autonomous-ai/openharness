@@ -318,9 +318,9 @@ export class DeviceFleet implements MachineFleet {
 
   // ── internals ───────────────────────────────────────────────────────────────────────────────────
 
-  /** Send a frame addressed to one machine. The tag is what the backend routes on. */
+  /** Send a frame addressed to one machine, sealed for it. The tag is what the backend routes on. */
   private tagged(machineId: string, frame: DeviceFrame): void {
-    this.opts.link.send({ ...frame, machineId })
+    void this.opts.link.sendSealed({ ...frame, machineId })
   }
 
   private async prefetchRecaps(machineId: string): Promise<void> {
