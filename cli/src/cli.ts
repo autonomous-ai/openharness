@@ -349,6 +349,10 @@ Machine:
   harness auth status --json   print {loggedIn,...} for this computer's saved session
   harness start                start the adapter using the saved SSO session
   harness start -f             run the adapter in the FOREGROUND (for a supervisor; logs to stdout)
+  harness start --device-dump[=<file>]
+                               record every frame to/from the paired Autonomous device, decrypted, as
+                               JSON lines (default ~/.harness/logs/device-dump-<time>.jsonl). Contains
+                               prompts and answers in the clear — diagnostics only. Stop the daemon first.
   harness start --repair       also re-verify the managed Node runtime and repoint the launcher at it
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
@@ -2597,6 +2601,8 @@ async function runForeground(session: AuthSession): Promise<void> {
       }
     }
     mirror.ingest(events, sessionId)
+    // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
+    if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
   for (const queued of queuedSessionEvents.splice(0)) emitSessionEvents(queued.sessionId, queued.events, queued.opts)
   const cursorSubagents = new CursorSubagentManager(env.CURSOR_HOME, emitSessionEvents)
@@ -5475,7 +5481,7 @@ async function runForeground(session: AuthSession): Promise<void> {
     answer: (agentId, requestId, answers) => questions.answer({ agentId, requestId, answers, allowPermissions: false }),
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
     fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
-    emit: frame => backend.emitAutonomousDeviceEvent(frame),
+    emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
   })
   if (appVoiceFocus) autonomousDeviceService.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
   backend.setAutonomousDeviceService(autonomousDeviceService)
@@ -6492,9 +6498,14 @@ switch (cmd) {
   case 'logout':
     logout().catch(onError)
     break
-  case 'start':
+  case 'start': {
+    // `--device-dump[=<file>]`: the daemon (this process with -f, else the detached child, which inherits
+    // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
+    const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
+    if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
     startCommand(foreground, repair).catch(onError)
     break
+  }
   case 'join':
     console.error('`harness join` has been removed. Run `harness login`, then `harness start`.')
     process.exit(1)
