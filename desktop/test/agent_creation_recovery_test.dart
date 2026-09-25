@@ -108,10 +108,11 @@ void main() {
             await chord(tester, LogicalKeyboardKey.keyP);
             await tester.pump();
             await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+            expect(find.byType(AlertDialog), findsNothing);
+            await chord(tester, LogicalKeyboardKey.keyN);
           case 'new tab':
             await chord(tester, LogicalKeyboardKey.keyT);
-            await chord(tester, LogicalKeyboardKey.keyP);
-            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+            await chord(tester, LogicalKeyboardKey.keyN);
           case 'search shortcut':
             await chord(tester, LogicalKeyboardKey.keyP);
             await tester.enterText(

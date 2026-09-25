@@ -14,8 +14,8 @@ viewers keep their own component systems.
 
 ![Cmd-P rendered with fixture data](images/terminal-open-harness.png)
 
-The fixture above shows the terminal grid, plain-text rows, and one-line
-selection. Live surfaces use the user's selected terminal font and palette.
+The fixture above shows the terminal grid, plain-text rows, and unselected
+opening state. Live surfaces use the user's selected terminal font and palette.
 
 ## Lay out a character grid
 
@@ -58,9 +58,11 @@ when using custom row widgets.
 
 - No provider logos, avatars, decorative emoji, image assets, or icon-font
   glyphs in dialog chrome. Write `Codex`, `Claude`, or the harness name.
-- Use `>` for the search prompt. Harness result subtitles use the compact
-  Standard status format: `machine:project  (branch)`. Omit missing fields and
-  redundant provider/engine labels; preserve important state such as Offline.
+- Use `>` for the search prompt. Cmd-P session results occupy one row: title
+  on the left and activity age on the right. The preview puts the compact
+  Standard context `machine:project  (branch)` directly below the session title,
+  followed by status and harness type. Omit missing fields and preserve
+  important state such as Offline.
 - Boolean controls use `[x]` and `[ ]`; Enter and Space toggle them.
 - Actions use concise text, such as `[ New Harness ]`. Shortcut hints are text
   beside the action, resolved from the live keymap.
@@ -69,19 +71,20 @@ when using custom row widgets.
 - Preserve user content, including Unicode. The restriction on decorative
   graphics applies to our controls, not to the text someone supplied.
 
-For example, a result is two text lines followed by one blank row:
+For example, Cmd-P session results are consecutive single lines:
 
 ```text
-> Find a harness...
+> Search harnesses
 
   Checkout retries                         5m
-  M2:storefront  (fix/retry)
-
   Search experience                        1h
-  M2:storefront  (main)
 ```
 
-The highlight covers only the selected title line.
+The highlight covers the selected row. Machine, project, and branch metadata
+remain searchable and available to screen readers. Resource choices with
+descriptions keep two text lines followed by one blank row.
+
+![A selected session with its context in the preview](images/terminal-open-harness-preview.png)
 
 ## Inherit the real terminal's appearance
 
@@ -106,10 +109,18 @@ Search is one unfilled, borderless text line with a block caret one measured
 cell wide. Its prompt occupies the shared gutter. Previews use the same text
 metrics and blank-row spacing; warnings are readable text in semantic colors.
 
-An empty Cmd-P search uses the blank row below its input for a muted type hint:
-`> harnesses   @ machines   # projects   : models   * store`. Hide it while a
-query or type filter is active, keeping that row's height so results never jump.
-In narrow layouts, show only the symbols and retain the full accessible label.
+Cmd-P opens with no selected row. The preview area shows the type hints as plain,
+muted text: `> harnesses`, `@ machines`, `# projects`, `: models`, and `* store`.
+Typing selects the first match and replaces the hints with its preview. Arrows,
+Tab, and pointer movement can also select a row. Clearing the root search returns
+to the hints; live inventory updates must not choose a row for the user. Enter
+does nothing until a row is selected. Keep the input and list in place throughout.
+Cmd-P has no New Harness row, including in machine and project session lists.
+Cmd-N opens creation. Resource setup rows use general guidance rather than
+presumed defaults.
+Page Up/Down pages the result list; Shift-Up/Down scrolls the preview by one
+measured terminal row. These keys preserve the input's focus and query. Preview
+scrolling keeps the selected result and result-list scroll position unchanged.
 
 Open dialogs must follow live terminal font and theme changes while preserving
 the input controller, query, selection, focus, and scroll state. Wire the font,

@@ -171,12 +171,21 @@ void main() {
 
   for (final shortcut in [LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP]) {
     testWidgets(
-      '${shortcut.keyLabel} starts a pane with no extra launch controls',
+      '${shortcut.keyLabel == 'N' ? 'Cmd-N' : 'command palette'} starts a pane with no extra launch controls',
       (tester) async {
         await mount(tester, store: false);
         final origin = app.activeSwarm;
-        await key(tester, shortcut, cmd: true);
+        await key(
+          tester,
+          shortcut,
+          cmd: true,
+          shift: shortcut == LogicalKeyboardKey.keyP,
+        );
         if (shortcut != LogicalKeyboardKey.keyN) {
+          await tester.enterText(
+            find.byKey(const ValueKey('swarm-search-input')),
+            '> New Harness',
+          );
           await acceptSetupOrSearch(tester);
         }
         final controller = box(tester);
@@ -446,7 +455,9 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('Cmd-P repeats without losing the search task', (tester) async {
+  testWidgets('an unmatched Cmd-P query waits for explicit Cmd-N creation', (
+    tester,
+  ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
     final shortcut = LogicalKeyboardKey.keyP;
@@ -475,6 +486,10 @@ void main() {
     expect(app.swarms.first, same(origin));
     expect(app.swarms.length, 1);
     await acceptSetupOrSearch(tester);
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(updated.search!.rows, isEmpty);
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     expect(box(tester).task, 'Check the keyboard workflow');
     expect(box(tester).placement, HarnessPlacement.currentTab);
     await acceptSetupOrSearch(tester);
@@ -491,23 +506,21 @@ void main() {
   });
 
   testWidgets(
-    'Cmd-P keeps drafts separate when the focused source pane changes',
+    'Cmd-N keeps drafts separate when the focused source pane changes',
     (tester) async {
       await mount(tester, store: false);
       final first = app.focusedPane!;
       final other = app.adoptSessionForTest(terminal('a2', []));
       app.focusPane(first.id);
       await tester.pump();
-      final shortcut = LogicalKeyboardKey.keyP;
+      final shortcut = LogicalKeyboardKey.keyN;
       await key(tester, shortcut, cmd: true);
-      await acceptSetupOrSearch(tester);
       await nameProject(tester, 'keyboard-review');
       box(tester).task = 'Review this project';
       await dismiss(tester);
       app.focusPane(other.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
-      await acceptSetupOrSearch(tester);
       expect(box(tester).harnessId, 'autonomous/typst');
       expect(box(tester).project.folder, '/work/release-notes');
       expect(box(tester).task, isEmpty);
@@ -515,7 +528,6 @@ void main() {
       app.focusPane(first.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
-      await acceptSetupOrSearch(tester);
       expect(box(tester).engine, 'codex');
       expect(box(tester).project.name, 'keyboard-review');
       expect(box(tester).task, 'Review this project');
@@ -526,14 +538,13 @@ void main() {
     },
   );
 
-  testWidgets('Cmd-P inherits its source and resumes edits via Open Harness', (
+  testWidgets('Cmd-N inherits its source and resumes edits after finding', (
     tester,
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyP;
+    final shortcut = LogicalKeyboardKey.keyN;
     await key(tester, shortcut, cmd: true);
-    await acceptSetupOrSearch(tester);
     var draft = box(tester);
     expect(draft.engine, 'codex');
     expect(draft.machineId, 'm');
@@ -547,6 +558,9 @@ void main() {
     expect(app.activeSwarm, same(origin));
     await key(tester, LogicalKeyboardKey.keyP, cmd: true);
     await acceptSetupOrSearch(tester);
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     draft = box(tester);
     expect(draft.task, 'Check keyboard focus');
     expect(draft.project.name, 'keyboard-review');
@@ -592,7 +606,11 @@ void main() {
       expect(picker.rows.any((row) => row.isCreate), isFalse);
       expect(picker.selected?.id, selected);
       expect(picker.rows.map((row) => row.id), results);
-      expect(find.text('Harnesses · openharness'), findsOneWidget);
+      expect(find.text('Harnesses · openharness'), findsNothing);
+      expect(
+        tester.widget<TextField>(search).decoration!.hintText,
+        'Search harnesses in openharness',
+      );
       await key(tester, LogicalKeyboardKey.escape);
       expect(picker.query, '# openharness');
       expect(picker.canGoBack, isFalse);

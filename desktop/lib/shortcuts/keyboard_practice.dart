@@ -379,22 +379,34 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
     }
   }
 
-  void _read(int direction) {
+  void _read(int direction, {bool byLine = false}) {
     if (!_detailScroll.hasClients) return;
     final position = _detailScroll.position;
     _detailScroll.jumpTo(
-      (position.pixels + direction * position.viewportDimension * .8).clamp(
-        0.0,
-        position.maxScrollExtent,
-      ),
+      (position.pixels +
+              direction *
+                  (byLine
+                      ? terminalCellSizeOf(context).height
+                      : position.viewportDimension * .8))
+          .clamp(0.0, position.maxScrollExtent),
     );
   }
 
   void _record(String id) {
     if (_lesson == null) return;
     if ((_matched || id != _lesson!.command) &&
-        (id == 'picker.preview_page_down' || id == 'picker.preview_page_up')) {
-      _read(id == 'picker.preview_page_down' ? 1 : -1);
+        {
+          'picker.page_down',
+          'picker.page_up',
+          'picker.preview_down',
+          'picker.preview_up',
+          'picker.preview_page_down',
+          'picker.preview_page_up',
+        }.contains(id)) {
+      _read(
+        id.endsWith('_down') ? 1 : -1,
+        byLine: id == 'picker.preview_down' || id == 'picker.preview_up',
+      );
       return;
     }
     if (id == 'picker.accept' &&

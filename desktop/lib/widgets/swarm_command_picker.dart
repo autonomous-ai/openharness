@@ -95,7 +95,7 @@ class _SwarmCommandPickerState extends State<SwarmCommandPicker> {
                     search: widget.search,
                     onClose: _close,
                     onChanged: widget.search.setQuery,
-                    hintText: 'Find an action…',
+                    hintText: 'Search actions',
                     prompt: '>',
                     terminal: true,
                     bios: true,

@@ -7,9 +7,6 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 
-const _resourceTypeHints =
-    '> harnesses   @ machines   # projects   : models   * store';
-
 /// The shared input for the start page, Open Agent and split searches.
 /// Flutter owns the caret and result navigation; native chrome only opens it.
 class SwarmSearchInput extends StatelessWidget {
@@ -36,7 +33,6 @@ class SwarmSearchInput extends StatelessWidget {
     this.prompt,
     this.terminal = false,
     this.bios = false,
-    this.showResourceHints = false,
     this.onEmptyBackspace,
   });
 
@@ -69,7 +65,6 @@ class SwarmSearchInput extends StatelessWidget {
   /// The active resource prefix can be rendered separately as [prompt].
   final bool terminal;
   final bool bios;
-  final bool showResourceHints;
   final VoidCallback? onEmptyBackspace;
 
   @override
@@ -244,61 +239,28 @@ class SwarmSearchInput extends StatelessWidget {
     );
     if (!bios) return field;
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        cell.width * 2,
-        cell.height,
-        cell.width * 2,
-        showResourceHints ? 0 : cell.height,
+      padding: EdgeInsets.symmetric(
+        horizontal: cell.width * 2,
+        vertical: cell.height,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            height: cell.height,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                SizedBox(
-                  width: cell.width * 2,
-                  child: Text(
-                    prompt ?? '>',
-                    key: const ValueKey('swarm-search-prompt'),
-                    textAlign: TextAlign.center,
-                    style: style,
-                  ),
-                ),
-                Expanded(child: field),
-              ],
-            ),
-          ),
-          // Use the existing blank row so typing never moves the results.
-          if (showResourceHints)
+      child: SizedBox(
+        height: cell.height,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
             SizedBox(
-              height: cell.height,
-              child: controller.text.isEmpty && search?.query.isEmpty == true
-                  ? Padding(
-                      padding: EdgeInsets.only(left: cell.width * 2),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) => Text(
-                          constraints.maxWidth >=
-                                  cell.width * _resourceTypeHints.length
-                              ? _resourceTypeHints
-                              : '>   @   #   :   *',
-                          key: const ValueKey('swarm-search-type-hints'),
-                          semanticsLabel: _resourceTypeHints,
-                          maxLines: 1,
-                          overflow: TextOverflow.clip,
-                          style: style.copyWith(
-                            color: theme.foreground.withValues(alpha: .54),
-                          ),
-                        ),
-                      ),
-                    )
-                  : null,
+              width: cell.width * 2,
+              child: Text(
+                prompt ?? '>',
+                key: const ValueKey('swarm-search-prompt'),
+                textAlign: TextAlign.center,
+                style: style,
+              ),
             ),
-        ],
+            Expanded(child: field),
+          ],
+        ),
       ),
     );
   }

@@ -139,7 +139,8 @@ void main() {
         .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
         .search;
     expect(search.isCommandMode, isFalse);
-    expect(search.selected!.isCreate, isTrue);
+    expect(search.selected, isNull);
+    expect(search.rows.any((row) => row.isCreate), isFalse);
     expect(frames, isEmpty);
     await tester.pumpWidget(const SizedBox());
     app.dispose();

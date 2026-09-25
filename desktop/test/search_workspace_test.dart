@@ -66,6 +66,10 @@ void main() {
           find.byKey(const ValueKey('swarm-search-preview')),
           findsNothing,
         );
+        expect(
+          find.byKey(const ValueKey('swarm-search-type-hints')),
+          findsOneWidget,
+        );
         await key(tester, LogicalKeyboardKey.escape);
         expect(field, findsNothing);
         await key(tester, LogicalKeyboardKey.keyP, cmd: true);

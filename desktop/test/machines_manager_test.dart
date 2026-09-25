@@ -363,7 +363,7 @@ void main() {
         find.byKey(const ValueKey('swarm-search-input')),
       );
       expect(search.controller!.text, isEmpty);
-      expect(find.text('Harnesses · Test host'), findsOneWidget);
+      expect(search.decoration!.hintText, 'Search harnesses in Test host');
       expect(find.text('Task from another Test host'), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -413,7 +413,7 @@ void main() {
     );
   }
 
-  testWidgets('a fresh machine opens creation with that machine selected', (
+  testWidgets('an empty machine session list waits for Cmd-N to create there', (
     tester,
   ) async {
     final previous = newHarnessOpensInBox;
@@ -436,6 +436,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('machine:fresh')));
     await tester.pumpAndSettle();
     await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(find.text('New Harness'), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     final box = tester.widget<NewHarnessForm>(find.byType(NewHarnessForm));
     expect(box.controller.machineId, 'fresh');

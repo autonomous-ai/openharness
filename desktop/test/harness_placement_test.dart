@@ -366,8 +366,7 @@ void main() {
         final original = app.activeSwarm;
         await mount(tester, app);
         await chord(tester, LogicalKeyboardKey.keyT);
-        await chord(tester, LogicalKeyboardKey.keyP);
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await chord(tester, LogicalKeyboardKey.keyN);
         await tester.pump();
         final input = find.byKey(const ValueKey('new-harness-query'));
         tester
@@ -722,6 +721,9 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
+      expect(find.byType(NewHarnessForm), findsNothing);
+      expect(connection.requests, isEmpty);
+      await chord(tester, LogicalKeyboardKey.keyN);
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
@@ -813,8 +815,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyP);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
@@ -833,8 +834,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessForm), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
@@ -851,8 +851,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessForm), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
@@ -934,6 +933,8 @@ void main() {
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
+        expect(find.byType(NewHarnessForm), findsNothing);
+        await chord(tester, LogicalKeyboardKey.keyN);
         final box = tester
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;

@@ -377,7 +377,7 @@ void main() {
             .widget<TextField>(find.byKey(const ValueKey('session-search')))
             .decoration
             ?.hintText,
-        'Search harnesses, machines, projects, branches…',
+        'Search harnesses, machines, projects, branches',
       );
       await tester.enterText(
         find.byKey(const ValueKey('session-search')),

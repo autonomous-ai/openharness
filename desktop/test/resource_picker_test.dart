@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/dsh_catalog.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/models/api_connections_controller.dart';
 import 'package:harness/models/api_connections_panel.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -112,6 +113,10 @@ void main() {
         expect(field, findsOneWidget);
         final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
         expect(hints, findsOneWidget);
+        expect(search(tester).selected, isNull);
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(field, findsOneWidget);
+        expect(search(tester).selected, isNull);
         expect(search(tester).isCommandMode, isFalse);
         await tester.enterText(field, ':qwen');
         await tester.pump();
@@ -143,74 +148,126 @@ void main() {
     }),
   );
 
-  testWidgets('type hints keep the input and results fixed while typing', (
-    tester,
-  ) async {
-    final app = await fixture();
-    final originalFont = terminalFontStore.value;
-    final originalPalette = grid.AppTheme.palette.value;
-    final originalTheme = terminalThemeStore.value;
-    addTearDown(() {
-      terminalFontStore.value = originalFont;
-      grid.AppTheme.palette.value = originalPalette;
-      terminalThemeStore.value = originalTheme;
-    });
-    await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
-    final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
-    final input = tester.widget<TextField>(field);
-    final inputPosition = tester.getTopLeft(field);
-    final createPosition = tester.getTopLeft(find.text('New Harness'));
-    const fullHint =
-        '> harnesses   @ machines   # projects   : models   * store';
-    expect(tester.widget<Text>(hints).data, fullHint);
-    expect(tester.getTopLeft(hints).dx, closeTo(inputPosition.dx, .01));
-    expect(
-      tester.getTopLeft(hints).dy - inputPosition.dy,
-      closeTo(terminalCellSizeOf(tester.element(field)).height, 1),
-      reason: 'The hint sits one terminal row below the input.',
-    );
-    await capture(tester, 'empty-type-hints');
+  testWidgets(
+    'empty search shows hints in the preview until a result is selected',
+    (tester) async {
+      final app = await fixture();
+      final originalFont = terminalFontStore.value;
+      final originalPalette = grid.AppTheme.palette.value;
+      final originalTheme = terminalThemeStore.value;
+      addTearDown(() {
+        terminalFontStore.value = originalFont;
+        grid.AppTheme.palette.value = originalPalette;
+        terminalThemeStore.value = originalTheme;
+      });
+      await mount(tester, app);
+      await chord(tester, LogicalKeyboardKey.keyP);
+      final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
+      final input = tester.widget<TextField>(field);
+      final inputPosition = tester.getTopLeft(field);
+      final listPosition = tester.getTopLeft(
+        find.byKey(const ValueKey('swarm-search-result-list')),
+      );
+      const fullHint =
+          '>  harnesses\n@  machines\n#  projects\n:  models\n*  store';
+      expect(tester.widget<Text>(hints).data, fullHint);
+      final controller = search(tester);
+      expect(controller.selected, isNull);
+      expect(controller.rows.any((row) => row.isCreate), isFalse);
+      expect(find.text('New Harness'), findsNothing);
+      expect(
+        tester.getRect(hints).left,
+        greaterThanOrEqualTo(
+          tester
+              .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+              .right,
+        ),
+      );
+      for (final row in controller.rows) {
+        final line = find.byKey(ValueKey('swarm-search-line:${row.id}'));
+        if (line.evaluate().isNotEmpty) {
+          expect(tester.widget<Container>(line).color, Colors.transparent);
+        }
+      }
+      app.machineStates['m']!.agents.add(
+        const Agent(
+          id: 'late-result',
+          name: 'Discovered session',
+          terminalAvailable: true,
+        ),
+      );
+      app.notifyListeners();
+      await tester.pump();
+      expect(controller.selected, isNull);
+      await capture(tester, 'empty-type-hints');
 
-    await tester.enterText(field, 'search');
-    await tester.pump();
-    expect(hints, findsNothing);
-    expect(tester.getTopLeft(field), inputPosition);
-    expect(tester.getTopLeft(find.text('New Harness')), createPosition);
-    expect(tester.widget<TextField>(field).controller, same(input.controller));
-    expect(input.focusNode!.hasFocus, isTrue);
-    for (final prefix in ['@', '#', ':', '*']) {
-      await tester.enterText(field, prefix);
+      await key(tester, LogicalKeyboardKey.arrowDown);
+      expect(controller.selected, controller.rows.first);
+      expect(hints, findsNothing);
+      await key(tester, LogicalKeyboardKey.tab);
+      expect(controller.selected, controller.rows[1]);
+
+      await tester.enterText(field, 'search');
       await tester.pump();
       expect(hints, findsNothing);
-      await key(tester, LogicalKeyboardKey.backspace);
+      expect(controller.selected!.isCreate, isFalse);
+      expect(
+        controller.selected,
+        controller.rows.firstWhere((row) => !row.isCreate),
+      );
+      expect(tester.getTopLeft(field), inputPosition);
+      expect(
+        tester.getTopLeft(
+          find.byKey(const ValueKey('swarm-search-result-list')),
+        ),
+        listPosition,
+      );
+      expect(
+        tester.widget<TextField>(field).controller,
+        same(input.controller),
+      );
+      expect(input.focusNode!.hasFocus, isTrue);
+      await capture(tester, 'selected-search');
+      await tester.enterText(field, '');
+      await tester.pump();
+      expect(controller.selected, isNull);
       expect(hints, findsOneWidget);
-    }
+      await key(tester, LogicalKeyboardKey.arrowUp);
+      expect(controller.selected, controller.rows.last);
+      for (final prefix in ['@', '#', ':', '*']) {
+        await tester.enterText(field, prefix);
+        await tester.pump();
+        expect(hints, findsNothing);
+        expect(controller.selected!.isCreate, isFalse);
+        await key(tester, LogicalKeyboardKey.backspace);
+        expect(hints, findsOneWidget);
+        expect(controller.selected, isNull);
+      }
 
-    grid.AppTheme.palette.value = HarnessPalette.slate;
-    terminalThemeStore.value = TerminalThemeChoice.tango;
-    terminalFontStore.value = const TerminalStyle(
-      fontSize: 18,
-      fontFamily: 'Menlo',
-    );
-    tester.view.physicalSize = const Size(480, 600);
-    await tester.pumpAndSettle();
-    final compact = tester.widget<Text>(hints);
-    expect(compact.data, '>   @   #   :   *');
-    expect(compact.semanticsLabel, fullHint);
-    expect(compact.style!.fontSize, 18);
-    expect(
-      compact.style!.color,
-      terminalThemeFor(
-        grid.AppTheme.palette.value,
-        terminalThemeStore.value,
-      ).foreground.withValues(alpha: .54),
-    );
-    expect(tester.takeException(), isNull);
-    await capture(tester, 'narrow-type-hints');
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+      grid.AppTheme.palette.value = HarnessPalette.slate;
+      terminalThemeStore.value = TerminalThemeChoice.tango;
+      terminalFontStore.value = const TerminalStyle(
+        fontSize: 18,
+        fontFamily: 'Menlo',
+      );
+      tester.view.physicalSize = const Size(480, 600);
+      await tester.pumpAndSettle();
+      final compact = tester.widget<Text>(hints);
+      expect(compact.data, fullHint);
+      expect(compact.style!.fontSize, 18);
+      expect(
+        compact.style!.color,
+        terminalThemeFor(
+          grid.AppTheme.palette.value,
+          terminalThemeStore.value,
+        ).foreground.withValues(alpha: .54),
+      );
+      expect(tester.takeException(), isNull);
+      await capture(tester, 'narrow-type-hints');
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   for (final withKeymap in [false, true]) {
     testWidgets(
@@ -231,7 +288,8 @@ void main() {
         ]) {
           await tester.enterText(field, prefix);
           await tester.pump();
-          expect(search(tester).selected!.title, label);
+          expect(search(tester).rows.first.title, label);
+          expect(search(tester).selected!.isCreate, isFalse);
           expect(
             tester
                 .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
@@ -305,6 +363,115 @@ void main() {
   }
 
   testWidgets(
+    'resource previews scroll by line and empty searches stay inert',
+    (tester) async {
+      final app = await fixture();
+      app.machineStates['m']!.dsh.replace([
+        DshEntry(
+          id: 'blender',
+          name: 'Blender',
+          engine: 'codex',
+          description: List.generate(
+            90,
+            (i) => 'Product description line $i.',
+          ).join('\n'),
+        ),
+      ]);
+      app.modelManager.apis.connections = [
+        ApiConnection({
+          'id': 'deepseek-api',
+          'provider': 'custom',
+          'name': 'DeepSeek API',
+          'baseUrl':
+              'https://example.test/${List.filled(500, 'endpoint/').join()}',
+          'keyEnv': 'TEST_API_KEY',
+        }),
+      ];
+      final originalFont = terminalFontStore.value;
+      addTearDown(() => terminalFontStore.value = originalFont);
+      await configured.mount(tester, app, MemoryKeymap());
+      await chord(tester, LogicalKeyboardKey.keyP);
+      final controller = search(tester);
+      ScrollPosition position() => tester
+          .widget<ListView>(
+            find.descendant(
+              of: find.byType(SwarmResourcePreview),
+              matching: find.byType(ListView),
+            ),
+          )
+          .controller!
+          .position;
+      for (final query in ['*blender', ':deepseek']) {
+        await tester.enterText(field, query);
+        await tester.pumpAndSettle();
+        final selected = controller.selected!.id;
+        expect(position().pixels, 0);
+        expect(position().maxScrollExtent, greaterThan(0));
+        final editing = tester.widget<TextField>(field).controller!.value;
+        await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+        expect(
+          position().pixels,
+          closeTo(terminalCellSizeOf(tester.element(field)).height, .01),
+        );
+        await key(tester, LogicalKeyboardKey.arrowUp, shift: true);
+        await key(tester, LogicalKeyboardKey.arrowUp, shift: true);
+        expect(position().pixels, 0);
+        terminalFontStore.value = const TerminalStyle(
+          fontSize: 20,
+          fontFamily: 'Menlo',
+          height: 1.5,
+        );
+        await tester.pumpAndSettle();
+        await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+        expect(
+          position().pixels,
+          closeTo(terminalCellSizeOf(tester.element(field)).height, .01),
+        );
+        controller.scrollPreview(10000);
+        await tester.pumpAndSettle();
+        expect(position().pixels, position().maxScrollExtent);
+        await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+        expect(position().pixels, position().maxScrollExtent);
+        expect(controller.selected!.id, selected);
+        expect(tester.widget<TextField>(field).controller!.value, editing);
+        expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+      }
+      await tester.enterText(field, '*no-such-product');
+      await tester.pumpAndSettle();
+      expect(controller.rows, isEmpty);
+      expect(controller.selected, isNull);
+      for (final button in [
+        LogicalKeyboardKey.arrowUp,
+        LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.pageUp,
+        LogicalKeyboardKey.pageDown,
+        LogicalKeyboardKey.enter,
+      ]) {
+        await key(tester, button);
+      }
+      await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+      expect(controller.selected, isNull);
+      expect(field, findsOneWidget);
+      expect(app.actions, isEmpty);
+      // A pending scroll cannot act on a later selection or a disposed view.
+      controller.setQuery('*blender');
+      controller.scrollPreview(1);
+      controller.setQuery('');
+      await tester.pump();
+      expect(controller.selected, isNull);
+      expect(
+        find.byKey(const ValueKey('swarm-search-type-hints')),
+        findsOneWidget,
+      );
+      controller.setQuery('*blender');
+      controller.scrollPreview(1);
+      await tester.pumpWidget(const SizedBox());
+      expect(tester.takeException(), isNull);
+      app.dispose();
+    },
+  );
+
+  testWidgets(
     'machine Enter always opens its sessions, even before connection',
     (tester) async {
       final app = await fixture();
@@ -323,12 +490,16 @@ void main() {
               origin.cursor,
         );
         await tester.pump();
+        final inputPosition = tester.getTopLeft(field);
         await key(tester, LogicalKeyboardKey.enter);
         expect(search(tester), same(origin));
         expect(origin.canGoBack, isTrue);
         expect(origin.scopedMachineId, 'm');
+        expect(tester.getTopLeft(field), inputPosition);
+        expect(find.text(origin.title), findsNothing);
         expect(find.byType(TextField), findsOneWidget);
         expect(app.actions, isEmpty);
+        await capture(tester, 'machine-sessions');
         await key(tester, LogicalKeyboardKey.escape);
         expect(origin.isMachineMode, isTrue);
       }
@@ -406,6 +577,7 @@ void main() {
     await chord(tester, LogicalKeyboardKey.keyP);
     await tester.enterText(field, '@');
     await tester.pump();
+    await key(tester, LogicalKeyboardKey.arrowUp);
     await key(tester, LogicalKeyboardKey.enter);
     expect(find.text('Link another machine'), findsWidgets);
     await key(tester, LogicalKeyboardKey.escape);

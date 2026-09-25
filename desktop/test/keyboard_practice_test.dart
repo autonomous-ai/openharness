@@ -15,6 +15,7 @@ import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/state/workspace_learning.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/workspace_quick_start.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -322,6 +323,12 @@ void main() {
       addTearDown(tester.view.reset);
       final boundary = GlobalKey();
       final storage = LearningMemoryStore();
+      final map = MemoryKeymap();
+      addTearDown(map.dispose);
+      map.apply('''{"version":1,"bindings":[
+        {"keys":"alt+j","command":"picker.page_down","when":"picker"},
+        {"keys":"alt+k","command":"picker.page_up","when":"picker"}
+      ]}''');
       await tester.pumpWidget(
         MaterialApp(
           theme: ThemeData.dark(),
@@ -332,7 +339,7 @@ void main() {
           ),
           home: RepaintBoundary(
             key: boundary,
-            child: KeyboardPractice(storage: storage),
+            child: KeyboardPractice(storage: storage, keymap: map),
           ),
         ),
       );
@@ -362,6 +369,21 @@ void main() {
         await key(tester, LogicalKeyboardKey.pageDown);
         await key(tester, LogicalKeyboardKey.escape);
         await openLesson(tester, 'New Pane');
+        expect(scrolling.offset, 0);
+        await key(tester, LogicalKeyboardKey.escape);
+        await openLesson(tester, 'Next result');
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        final cell = terminalCellSizeOf(
+          tester.element(find.byType(KeyboardPractice)),
+        );
+        await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+        expect(scrolling.offset, closeTo(cell.height, .01));
+        await key(tester, LogicalKeyboardKey.arrowUp, shift: true);
+        expect(scrolling.offset, 0);
+        await key(tester, LogicalKeyboardKey.keyJ, alt: true);
+        expect(scrolling.offset, greaterThan(cell.height));
+        await key(tester, LogicalKeyboardKey.keyK, alt: true);
         expect(scrolling.offset, 0);
       }
       expect(storage.values.values.any((v) => v.contains('swarm.new')), isTrue);

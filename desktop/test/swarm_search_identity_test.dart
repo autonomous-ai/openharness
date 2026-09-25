@@ -394,15 +394,15 @@ void main() {
       );
       await tester.enterText(input, 'extensibility');
       await tester.pump();
-      // One harness, then the row that makes what was typed instead.
+      // Only the matching harness; creation belongs to Cmd-N.
       expect(
         tester
             .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
             .search
             .rows,
-        hasLength(2),
+        hasLength(1),
       );
-      expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsOneWidget);
+      expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsNothing);
       // Minimal rows keep the full metadata accessible and searchable.
       for (final value in [
         'Claude',
@@ -427,7 +427,7 @@ void main() {
             .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
             .search
             .rows,
-        hasLength(2),
+        hasLength(1),
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();

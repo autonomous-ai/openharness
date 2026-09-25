@@ -305,7 +305,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                     },
                     decoration: InputDecoration(
                       hintText:
-                          'Search harnesses, machines, projects, branches…',
+                          'Search harnesses, machines, projects, branches',
                       hintStyle: AppType.monoLabel(color: AppPalette.textFaint),
                       prefixIcon: Icon(
                         LucideIcons.search,

@@ -204,7 +204,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   );
   final _searchCatalog = SwarmSearchCatalog();
   final _searchText = TextEditingController();
-  final _searchFocus = FocusNode(debugLabel: 'Find a harness');
+  final _searchFocus = FocusNode(debugLabel: 'Search harnesses');
   final _tabScroll = ScrollController();
   ({String activeId, List<String> order, double viewport, List<double> widths})?
   _tabGeometry;
@@ -503,9 +503,11 @@ class _SwarmScreenState extends State<SwarmScreen>
       final split = _search!.split;
       final placement = _search!.placement;
       final task = _search!.createTask;
+      final machineId = _search!.scopedMachineId;
       _closeSearch(restoreFocus: false);
       unawaited(
         _newAgent(
+          machineId: machineId,
           swarmId: target,
           split: split,
           placement: placement,
@@ -2770,10 +2772,10 @@ class _SwarmScreenState extends State<SwarmScreen>
       ),
       adding: adding,
       offersCreate: adding,
-      activityFirst: split == null && !query.startsWith('>'),
-      // The input leads now, so the results read downward from it. Left
-      // bottom-up, the list reversed itself and New Harness — first in the
-      // rows — landed visually last.
+      offersHarnessCreate: split != null,
+      activityFirst: split == null,
+      selectOnEmptyQuery: split != null,
+      // Results read downward from the input.
       resultsFromBottom: false,
       split: split,
       placement:
@@ -3089,7 +3091,6 @@ class _SwarmScreenState extends State<SwarmScreen>
         if (app.modelManager.error == null) _closeSearch(restoreFocus: false);
       },
     );
-    final cell = terminalCellSizeOf(context);
     final terminalTheme = terminalThemeFor(
       grid.AppTheme.palette.value,
       terminalThemeStore.value,
@@ -3121,53 +3122,28 @@ class _SwarmScreenState extends State<SwarmScreen>
                   terminal: true,
                   bios: true,
                   previewBuilder: preview,
-                  header: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (search.canGoBack)
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            cell.width * 4,
-                            cell.height,
-                            cell.width * 2,
-                            0,
-                          ),
-                          child: Text(
-                            search.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: terminalContentStyle(
-                              color: terminalTheme.foreground.withValues(
-                                alpha: .54,
-                              ),
-                            ),
-                          ),
-                        ),
-                      Semantics(
-                        label: search.hint,
-                        child: ReadlineKeys(
-                          controller: _searchText,
-                          onChanged: search.editQuery,
-                          child: SwarmSearchInput(
-                            inputKey: const ValueKey('swarm-search-input'),
-                            controller: _searchText,
-                            focusNode: _searchFocus,
-                            search: search,
-                            onClose: _dismissSearch,
-                            onChanged: search.editQuery,
-                            onOpen: _focusSearch,
-                            terminal: true,
-                            bios: true,
-                            showResourceHints: search.allowsCommands,
-                            prompt: search.prompt,
-                            onEmptyBackspace: search.scopePrefix.isEmpty
-                                ? null
-                                : () => search.setQuery(''),
-                            hintText: search.hint,
-                          ),
-                        ),
+                  header: Semantics(
+                    label: search.hint,
+                    child: ReadlineKeys(
+                      controller: _searchText,
+                      onChanged: search.editQuery,
+                      child: SwarmSearchInput(
+                        inputKey: const ValueKey('swarm-search-input'),
+                        controller: _searchText,
+                        focusNode: _searchFocus,
+                        search: search,
+                        onClose: _dismissSearch,
+                        onChanged: search.editQuery,
+                        onOpen: _focusSearch,
+                        terminal: true,
+                        bios: true,
+                        prompt: search.prompt,
+                        onEmptyBackspace: search.scopePrefix.isEmpty
+                            ? null
+                            : () => search.setQuery(''),
+                        hintText: search.hint,
                       ),
-                    ],
+                    ),
                   ),
                 )
               : Column(

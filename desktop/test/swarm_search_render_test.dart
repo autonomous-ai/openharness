@@ -255,7 +255,7 @@ void main() {
       if (element.widget is InkWell && visibleRows.contains(element)) rows++;
     };
     try {
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
     } finally {
       debugOnRebuildDirtyWidget = null;

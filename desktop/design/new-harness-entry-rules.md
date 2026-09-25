@@ -36,7 +36,7 @@ Narrow windows show the active list full-width with a back action.
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
 | Cmd-T, then Cmd-N | Previous pane's agent, machine, and project | The blank tab opened by Cmd-T |
-| Cmd-P or Cmd-Shift-P → New Harness | Focused pane's agent, machine, and project | Current tab |
+| Cmd-Shift-P → New Harness | Focused pane's agent, machine, and project | Current tab |
 | Cmd-N or the New Harness command | Focused pane's defaults; retain a task and destination already chosen in search | Current tab unless its source requests a new tab |
 | Explicit pane split | Focused pane's defaults | Requested split in that tab |
 | Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
@@ -50,7 +50,9 @@ apply any agent or machine explicitly named by the request.
 
 The unified picker has search and results on the left, with a read-only preview
 on the right. It has no action strip or keyboard footer. Enter opens a result;
-machines and projects drill into their session lists. Cmd-Shift-P searches named
+machines and projects drill into their session lists. Cmd-P never offers New
+Harness, including when no sessions match or a scoped list is empty. Cmd-N opens
+creation explicitly. Cmd-Shift-P searches named
 commands for the selected resource and returns to the same search after an action
 or cancellation. Each item action names its target, which is revalidated before
 execution. Filters and sorting are explicit commands, with no More menu.
@@ -192,7 +194,7 @@ worktree: the retry selects that worktree's branch with Worktree off.
 
 - Workspace drafts belong to their original machine, focused source harness,
   and project context. A different focused harness does not inherit their edits.
-- Cmd-P and Cmd-Shift-P can resume the same workspace draft. The current tab controls
+- Cmd-N and Cmd-Shift-P can resume the same workspace draft. The current tab controls
   placement; a saved draft cannot redirect it to an old destination.
 - Store drafts belong to the explicitly requested product and machine. Opening
   Blender cannot restore Workshop's agent, task, or generated project name.
@@ -231,7 +233,7 @@ never silently renamed, and existing files are never overwritten.
 - `test/new_harness_entry_rules_test.dart`: product changes with an open or
   dismissed dock, Open/Try, edited names, machine changes, explicit agent
   precedence, search isolation, exact launch payloads, pending receipts, source
-  pane changes, and Cmd-P/Cmd-Shift-P draft recovery and placement. Repeated/switched
+  pane changes, and Cmd-N/Cmd-Shift-P draft recovery and placement. Repeated/switched
   shortcuts retain typed tasks, text selection, existing results, and project
   scope; starting then uses the displayed destination.
 - `test/harness_placement_test.dart`, `test/box_flows_test.dart`,

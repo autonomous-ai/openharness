@@ -368,7 +368,7 @@ void main() {
         findsNothing,
       );
       await openWorkspaceTool(tester, 'harnesses');
-      expect(find.text('New Harness'), findsOneWidget);
+      expect(find.text('New Harness'), findsNothing);
       expect(journey.completed(OnboardingStep.harnesses), isFalse);
       expect(
         find.byKey(const ValueKey('onboarding-harnesses-dot')),
@@ -377,7 +377,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       await openWorkspaceTool(tester, 'harnesses');
-      await tap(tester, find.text('New Harness'));
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(resourceScope(''), findsNothing);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -458,7 +458,7 @@ void main() {
     expect(app.connections, ['source']);
     await key(tester, LogicalKeyboardKey.enter);
     expect(resourceScope('@'), findsNothing);
-    expect(find.text('Harnesses · M2'), findsOneWidget);
+    expect(find.text('Search harnesses in M2'), findsOneWidget);
     expect(find.text('Existing work'), findsWidgets);
     expect(find.text('Work on this computer'), findsNothing);
     expect(journey.completed(OnboardingStep.machines), isFalse);
