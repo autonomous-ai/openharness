@@ -2,17 +2,18 @@ import 'package:xterm/xterm.dart';
 
 import 'key_chord.dart';
 
-/// A key a CLI's own chrome offers — `(shift+tab to cycle)`, `ctrl+] skip`,
-/// `⌥+↓ main prompt` — that a phone has no way to press.
+/// A key Codex's own chrome offers — `ctrl+] skip`, `⌥+↓ main prompt` — that a
+/// phone has no way to press.
 ///
 /// ⚠️ **Why read them off the screen at all.** A phone keyboard has no Shift,
 /// Ctrl, Alt or function keys to hold, and the key strip carries only the
-/// handful of keys every pane needs. What each CLI binds to those modifiers is
-/// its own, changes between versions, and is the person's to remap (Codex's
-/// `tui.keymap`) — so the key the CLI prints next to what it does is the one
-/// reliable source for both halves. Measured on Codex 0.156.1 and Claude Code
-/// 2.1.281, where the chords that stranded a phone were `shift+←` (a queued
-/// question) and `ctrl+]` and `⌥+↓` (leaving one).
+/// handful of keys every pane needs. What Codex binds to those modifiers
+/// changes between versions and is the person's to remap (`tui.keymap`) — so
+/// the key it prints next to what it does is the one reliable source for the
+/// key. WHICH hints become buttons is not read off the screen, though: see
+/// [_offered]. Measured on Codex 0.156.1, where the chords that stranded a
+/// phone were `shift+←` (a queued question) and `ctrl+]` and `⌥+↓` (leaving
+/// one).
 class KeyHint {
   const KeyHint({
     required this.chord,
@@ -47,11 +48,12 @@ class KeyHint {
 
 /// How many of the pane's last non-blank lines count as its live chrome.
 ///
-/// ⚠️ **Only the bottom, never the transcript.** Both CLIs draw their live
-/// chrome — the status line, a dialog's footer, the spinner's key hints —
+/// ⚠️ **Only the bottom, never the transcript.** Codex draws its live chrome —
+/// the status line, a dialog's footer, the queue's `shift+← to answer` —
 /// under everything else; what is above is conversation, where a model
-/// explaining a shortcut would otherwise grow a button. Five covers Claude's
-/// footer wrapped over three lines on a phone-width pane plus the status line.
+/// explaining a shortcut would otherwise grow a button. Five reaches the
+/// queue's hint over the composer and a status line wrapped onto two lines on
+/// a phone-width pane.
 const int _chromeLines = 5;
 
 /// How far up from the bottom the walk may go looking for those lines.
@@ -95,18 +97,26 @@ bool _isProcessControl(KeyChord chord) =>
     chord.key == null &&
     const {'c', 'd', 'z', '\\'}.contains(chord.char);
 
-/// Shift+Tab: Claude's permission-mode cycle (`shift+tab to cycle`), and its
-/// plan-approval shortcut. Never offered — how far a harness may go without
-/// asking is chosen when it is made (New Harness ▸ Approvals), and a button in
-/// the corner of the pane would change it mid-session on a stray tap.
-bool _isShiftTab(KeyChord chord) =>
-    chord.key == TerminalKey.tab && chord.shift && !chord.alt && !chord.ctrl;
-
-/// Words that make a hint an irreversible act. Offered as a button, each would
-/// be one tap from a glance at the screen — a confirm-by-pressing-again prompt
-/// (`ctrl+x again to delete`) exists precisely to take more than that.
-final RegExp _destructive = RegExp(
-  r'\b(exit|quit|kill|delete|discard|remove|suspend|abort|stop|uninstall|reset)\b',
+/// The hints offered as buttons, by what Codex says each one does — every
+/// other hint on the pane is left as text.
+///
+/// ⚠️ **A list, not a rule.** Reading every `key + words` pair off the chrome
+/// turned tips and one-off shortcuts into buttons (`f3 search this
+/// conversation`, `shift+tab to cycle`) that crowded the key strip for keys
+/// nobody needed from a phone. These are the ones a phone is stranded
+/// without, from Codex 0.156.1 and 0.157.0:
+///
+/// - `shift+← to answer` — open a queued async question;
+/// - `ctrl+] skip`, `⌥+↓ main prompt` / `prev question`, `shift+← next
+///   question` — move through an open one, or leave it;
+/// - `shift+← edit last queued message` — take back a queued message;
+/// - `ctrl+o copy` — the warnings view;
+/// - `ctrl+t to view transcript`.
+///
+/// Matched on the WORDS, never the key: the key is the person's to remap, and
+/// the one printed beside the words is the one pressed.
+final RegExp _offered = RegExp(
+  r'^(answer|skip|main prompt|next question|prev(ious)? question|edit last queued|copy|view transcript)\b',
   caseSensitive: false,
 );
 
@@ -147,15 +157,14 @@ List<KeyHint> parseKeyHints(List<String> lines) {
       if (chord == null ||
           !chord.sendable ||
           _phoneHas(chord) ||
-          _isProcessControl(chord) ||
-          _isShiftTab(chord)) {
+          _isProcessControl(chord)) {
         continue;
       }
       final words = _action.firstMatch(line.substring(match.end));
       // A key with nothing said about it is a name in a sentence, not a hint.
       if (words == null) continue;
       final action = words.group(1)!.toLowerCase();
-      if (_destructive.hasMatch(action)) continue;
+      if (!_offered.hasMatch(action)) continue;
       if (hints.any((hint) => hint.chord == chord)) continue;
       hints.add(
         KeyHint(

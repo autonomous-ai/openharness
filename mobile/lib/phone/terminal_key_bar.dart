@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/terminal/key_hints.dart';
+import 'package:harness_mobile/terminal/terminal_font_store.dart';
 
 import 'phone_sheet.dart';
 
@@ -37,6 +40,15 @@ import 'phone_sheet.dart';
 /// on screen says so, and on a dialog that reads "enter to submit answer" a
 /// strip of every other key it names reads as "Enter is missing". `/` is the
 /// slot to give up: a dialog has no prompt to start a command in.
+///
+/// ⚠️ **The other exception: the pane's own keys — [hints] — join the row, and
+/// only then does it scroll.** They are what Codex offers on this screen and
+/// nowhere else (`ctrl+] skip`, `⌥+↓ main prompt`), so they follow the arrows
+/// on the SAME row, which scrolls sideways while they are there and brings
+/// them into view as they arrive. Never a line of their own: a second row
+/// cost the terminal a line of output, and a strip of buttons floating over
+/// the pane covered the very hints it was read off. The fixed keys keep their
+/// size either way — only how far along the row is scrolled changes.
 class TerminalKeyBar extends StatefulWidget {
   const TerminalKeyBar({
     super.key,
@@ -47,6 +59,7 @@ class TerminalKeyBar extends StatefulWidget {
     this.onPickImage,
     this.onTakePhoto,
     this.questionOpen = false,
+    this.hints = const [],
   });
 
   final Terminal terminal;
@@ -54,6 +67,12 @@ class TerminalKeyBar extends StatefulWidget {
   /// An agent's question dialog is on the pane: `/` gives its slot to `⏎` —
   /// see the class docblock.
   final bool questionOpen;
+
+  /// The keys the pane's chrome offers and a phone cannot press — see
+  /// [parseKeyHints]. Each is drawn as the key and Codex's own word for what
+  /// it does, as the pane printed them, in the terminal's face — so it reads
+  /// as the hint it was read off. Empty leaves the row as it always was.
+  final List<KeyHint> hints;
 
   /// Called after `tab` or `/` changed the prompt without the software
   /// keyboard knowing — so its buffer can be emptied before it edits words the
@@ -152,6 +171,22 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
   }
 
+  /// Presses the chord a hint named, as the pane printed it — nothing else:
+  /// what the key does is the CLI's, and it redraws the screen to say so.
+  ///
+  /// ⚠️ **Armed modifiers are put down, never added.** A hint is already the
+  /// whole chord, and a `ctrl` left lit would turn `shift+←` into a key the CLI
+  /// never offered — so, like [_sendKey], nothing armed outlives the tap.
+  ///
+  /// The keyboard's buffer is emptied after it, as after `tab`: these keys move
+  /// between a question and the prompt, and the buffer still holds words typed
+  /// into the one just left.
+  void _sendHint(KeyHint hint) {
+    hint.chord.send(widget.terminal);
+    widget.onPromptEdited?.call();
+    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -240,22 +275,12 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
           child: MediaQuery.withNoTextScaling(
             // Every key the same width, the two apart ones included — they are
             // separated by the rule, not by being a different size.
-            child: Row(
-              children: [
-                ..._row(keys),
-                // The rule earns its place only when there are two kinds of
-                // thing to separate. Against an older CLI the image key is
-                // absent and `⌄` is all that is left, so a rule drawn for it
-                // alone would be marking a distinction that is no longer made.
-                if (_canSendImage) ...[
-                  const SizedBox(width: 8),
-                  Container(width: 1, height: 22, color: AppGlass.hair),
-                  const SizedBox(width: 8),
-                ] else
-                  const SizedBox(width: 4),
-                ..._row(apart),
-              ],
-            ),
+            child: widget.hints.isEmpty
+                ? Row(children: [..._row(keys), ..._rule(), ..._row(apart)])
+                : LayoutBuilder(
+                    builder: (context, constraints) =>
+                        _rowWithHints(keys, apart, constraints.maxWidth),
+                  ),
           ),
         ),
       ),
@@ -271,6 +296,134 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       Expanded(child: keys[index]),
     ],
   ];
+
+  /// The rule between the keys the pty receives and the two that act on the
+  /// phone.
+  ///
+  /// It earns its place only when there are two kinds of thing to separate.
+  /// Against an older CLI the image key is absent and `⌄` is all that is left,
+  /// so a rule drawn for it alone would be marking a distinction that is no
+  /// longer made.
+  List<Widget> _rule() => _canSendImage
+      ? [
+          const SizedBox(width: 8),
+          Container(width: 1, height: 22, color: AppGlass.hair),
+          const SizedBox(width: 8),
+        ]
+      : [const SizedBox(width: 4)];
+
+  /// How wide [_rule] is — `8 + 1 + 8`, or the single gap in its place.
+  double get _ruleWidth => _canSendImage ? 17 : 4;
+
+  /// The row while the pane offers its own keys: the fixed keys, then
+  /// [TerminalKeyBar.hints], scrolling sideways together; the two apart keys
+  /// stay pinned past the rule.
+  ///
+  /// ⚠️ **Every fixed key keeps exactly the width [_row] gives it.** The cell
+  /// is worked out the way the `Expanded` row divides [width] — the same keys,
+  /// gaps and rule — so the keys do not shrink or move when a hint arrives:
+  /// they fill the visible part of the row as they always do, and the hints
+  /// start where it ends. [_revealHints] then scrolls them into view.
+  Widget _rowWithHints(List<Widget> keys, List<Widget> apart, double width) {
+    const gap = 4.0;
+    final gaps =
+        gap * (keys.length - 1) + _ruleWidth + gap * (apart.length - 1);
+    final cell = (width - gaps) / (keys.length + apart.length);
+    if (!cell.isFinite || cell <= 0) {
+      return Row(children: [..._row(keys), ..._rule(), ..._row(apart)]);
+    }
+    final hints = widget.hints;
+    return Row(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            controller: _scroll,
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                ..._cells(keys, cell),
+                // The pane's keys are not the strip's: a hairline says so,
+                // the way the rule sets the phone's own two apart.
+                const SizedBox(width: 6),
+                Container(width: 1, height: 22, color: AppGlass.hair),
+                const SizedBox(width: 6),
+                for (var i = 0; i < hints.length; i++) ...[
+                  if (i > 0) const SizedBox(width: gap),
+                  _hint(hints[i]),
+                ],
+              ],
+            ),
+          ),
+        ),
+        ..._rule(),
+        ..._cells(apart, cell),
+      ],
+    );
+  }
+
+  /// A run of keys at a fixed [width] each — [_row]'s layout, in a row that
+  /// scrolls and so cannot divide itself with `Expanded`.
+  List<Widget> _cells(List<Widget> keys, double width) => [
+    for (var index = 0; index < keys.length; index++) ...[
+      if (index > 0) const SizedBox(width: 4),
+      SizedBox(width: width, child: keys[index]),
+    ],
+  ];
+
+  /// Keeps the fixed keys and the hints on one row.
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    // The strip opens with the keyboard, and a pane already offering its keys
+    // shows them as it does.
+    if (widget.hints.isNotEmpty) _revealHints();
+  }
+
+  @override
+  void didUpdateWidget(TerminalKeyBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.hints.isNotEmpty && !listEquals(widget.hints, oldWidget.hints)) {
+      _revealHints();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Scrolls the row to its end, where the hints are, once they are laid out.
+  ///
+  /// ⚠️ **Brought into view, not left past the edge.** The fixed keys fill the
+  /// visible row by design, so hints that simply joined it would start just
+  /// out of sight and read as no hints at all. Only a new set of hints moves
+  /// the row; the same ones redrawn leave it wherever it was swiped to.
+  void _revealHints() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      final end = _scroll.position.maxScrollExtent;
+      if (_scroll.offset == end) return;
+      _scroll.animateTo(
+        end,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Widget _hint(KeyHint hint) => Semantics(
+    button: true,
+    label: '${hint.action}, ${hint.keyText}',
+    child: _KeyCap(
+      hint: hint,
+      live: widget.enabled,
+      armed: false,
+      onTap: () => _send(() => _sendHint(hint)),
+    ),
+  );
 
   Widget _key({
     String? label,
@@ -311,15 +464,27 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
 /// feedback is worth nothing.
 class _KeyCap extends StatefulWidget {
   const _KeyCap({
-    required this.label,
-    required this.icon,
+    this.label,
+    this.icon,
+    this.hint,
     required this.live,
     required this.armed,
     required this.onTap,
-  });
+  }) : assert(
+         (label != null ? 1 : 0) +
+                 (icon != null ? 1 : 0) +
+                 (hint != null ? 1 : 0) ==
+             1,
+         'a key carries one of the three',
+       );
 
   final String? label;
   final IconData? icon;
+
+  /// One of the pane's own keys — see [TerminalKeyBar.hints]. As wide as its
+  /// words, rather than one of the row's equal cells.
+  final KeyHint? hint;
+
   final bool live;
 
   /// A modifier that is DOWN, waiting for the key it belongs to.
@@ -346,6 +511,7 @@ class _KeyCapState extends State<_KeyCap> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final lit = (_down || widget.armed) && widget.live;
+    final hint = widget.hint;
     final foreground = lit
         ? AppPalette.accentOnSurface
         : widget.live
@@ -376,7 +542,9 @@ class _KeyCapState extends State<_KeyCap> {
             color: lit ? AppPalette.accentOnSurface : AppGlass.lift,
           ),
         ),
-        child: widget.icon != null
+        child: hint != null
+            ? _hintFace(hint, foreground: foreground, lit: lit)
+            : widget.icon != null
             ? Icon(widget.icon, size: 16, color: foreground)
             // Shrinks rather than clips: ten keys share a phone's width, and
             // `clear` is the widest word among them.
@@ -399,4 +567,48 @@ class _KeyCapState extends State<_KeyCap> {
       ),
     );
   }
+
+  /// A [_KeyCap.hint]'s face: the key as the pane printed it, then the CLI's
+  /// word for what it does, quieter — both in the terminal's own face,
+  /// followed live, since Settings ▸ Terminal can change it while the row is
+  /// up.
+  Widget _hintFace(
+    KeyHint hint, {
+    required Color foreground,
+    required bool lit,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    child: ValueListenableBuilder<TerminalStyle>(
+      valueListenable: terminalFontStore,
+      builder: (context, face, _) {
+        TextStyle style(Color color, FontWeight weight) => TextStyle(
+          fontFamily: face.fontFamily,
+          fontFamilyFallback: face.fontFamilyFallback,
+          fontSize: 12,
+          height: 1,
+          color: color,
+          fontWeight: weight,
+        );
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(hint.keyText, style: style(foreground, FontWeight.w600)),
+            const SizedBox(width: 6),
+            Text(
+              hint.action,
+              maxLines: 1,
+              style: style(
+                lit
+                    ? foreground
+                    : widget.live
+                    ? AppPalette.textSecondary
+                    : AppPalette.textFaint,
+                FontWeight.w400,
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }

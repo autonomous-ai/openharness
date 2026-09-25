@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 
 import 'terminal_key_bar.dart';
@@ -34,6 +35,7 @@ class TerminalInputDock extends StatefulWidget {
     this.onPickImage,
     this.onTakePhoto,
     this.questionOpen = false,
+    this.hints = const [],
   });
 
   final TerminalSession session;
@@ -41,6 +43,9 @@ class TerminalInputDock extends StatefulWidget {
   /// An agent's question dialog is on the pane — see
   /// [TerminalKeyBar.questionOpen].
   final bool questionOpen;
+
+  /// The keys the pane's chrome offers — see [TerminalKeyBar.hints].
+  final List<KeyHint> hints;
 
   /// The software keyboard is up, or has been asked for and is on its way.
   final bool keyboardUp;
@@ -119,6 +124,7 @@ class _TerminalInputDockState extends State<TerminalInputDock>
         onPickImage: widget.onPickImage,
         onTakePhoto: widget.onTakePhoto,
         questionOpen: widget.questionOpen,
+        hints: widget.hints,
       ),
     ),
     builder: (context, child) {

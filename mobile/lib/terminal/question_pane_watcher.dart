@@ -55,7 +55,7 @@ class QuestionPaneWatcher extends ChangeNotifier {
   QueuedQuestions? get queued => _queued;
 
   /// The keys the pane's live chrome offers that a phone cannot press — see
-  /// [parseKeyHints]. Empty when there are none.
+  /// [parseKeyHints]. Codex only; empty when there are none.
   ///
   /// Debounced as [view] is: a repaint caught mid-way reads as a bare pane,
   /// and a row of buttons that blinked out on every redraw would be one
@@ -118,7 +118,10 @@ class QuestionPaneWatcher extends ChangeNotifier {
           ? parseQueuedQuestions(lines)
           : null,
     );
-    final keys = _readHints(parseKeyHints(lines));
+    // Codex only: every hint offered is one of its own (see `parseKeyHints`).
+    final keys = _readHints(
+      engine == QuestionEngine.codex ? parseKeyHints(lines) : const <KeyHint>[],
+    );
     if (dialog.again || queue.again || keys.again) {
       // ⚠️ **Ask for the next read rather than waiting for one.** Reads are
       // driven by terminal output, and the engine may print NOTHING after the
