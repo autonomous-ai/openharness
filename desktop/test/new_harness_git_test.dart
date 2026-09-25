@@ -297,7 +297,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('new-harness-field-branch')));
+      await openLaunchRow(tester, 'branch');
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('new-harness-query')),
@@ -1104,9 +1104,7 @@ void main() {
       find.byKey(const ValueKey('new-harness-field-branch')),
       findsOneWidget,
     );
-    // Branch no longer lives behind Advanced, so reaching it opened nothing;
-    // Worktree still does, and is opened here to be checked.
-    await openLaunchRow(tester, 'advanced');
+    // Branch and Worktree remain in the expanded Options group.
     expect(
       find.byKey(const ValueKey('new-harness-field-worktree')),
       findsOneWidget,

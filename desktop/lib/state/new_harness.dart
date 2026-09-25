@@ -440,7 +440,7 @@ class NewHarnessController extends ChangeNotifier {
     _modelUsage = modelUsage;
     _ownsModelUsage = modelUsage == null;
     _modelUsage?.addListener(_refresh);
-    advancedOpen = draft?.advancedOpen ?? app.agentPreference.advancedOpen;
+    advancedOpen = draft?.advancedOpen ?? false;
     _project = projectName != null
         ? NewHarnessProject.fresh(projectName)
         : folder != null
@@ -497,9 +497,6 @@ class NewHarnessController extends ChangeNotifier {
           if (_project.generated != null) _project = _generatedProject();
         } else if (!_selectionTouched && draft == null && isHarnessId(engine)) {
           _engine = _initialEngine(null);
-        }
-        if (!_advancedTouched && draft == null) {
-          advancedOpen = app.agentPreference.advancedOpen;
         }
         _refresh();
       }),
@@ -587,11 +584,10 @@ class NewHarnessController extends ChangeNotifier {
 
   String get harnessLabel => _harnessId == null ? 'Code' : labelOf(_harnessId!);
   bool advancedOpen = false;
-  bool _selectionTouched = false, _advancedTouched = false;
+  bool _selectionTouched = false;
   void toggleAdvanced() {
     if (locked) return;
     advancedOpen = !advancedOpen;
-    _advancedTouched = true;
     if (!advancedOpen &&
         [
           NewHarnessField.branch,
@@ -601,7 +597,6 @@ class NewHarnessController extends ChangeNotifier {
       field = NewHarnessField.launch;
       query = '';
     }
-    unawaited(app.agentPreference.setAdvanced(advancedOpen));
     _refresh();
   }
 
@@ -1249,6 +1244,10 @@ class NewHarnessController extends ChangeNotifier {
   String get createLabel => 'Start Harness';
 
   String get agentLabel => labelOf(_engine);
+  String get launchAgentLabel =>
+      _harnessId == null ? agentLabel : '$harnessLabel · $agentLabel';
+  String get launchProjectLabel =>
+      '$machineLabel:${needsProject ? "Choose project" : p.basename(projectLabel)}';
   String labelOf(String id) => currentHarnessName(
     id,
     _machine?.dsh[id]?.name ??
@@ -1292,12 +1291,12 @@ class NewHarnessController extends ChangeNotifier {
 
   String get hint => switch (field) {
     NewHarnessField.launch => '',
-    NewHarnessField.projectMenu => 'Find a project by name or path',
+    NewHarnessField.projectMenu => 'Search projects',
     NewHarnessField.task => 'What should this agent work on? (optional)',
-    NewHarnessField.harness => 'Search harnesses',
+    NewHarnessField.harness => 'Search agents',
     NewHarnessField.agent => 'Search agents',
     NewHarnessField.model => 'Search subscriptions and models',
-    NewHarnessField.machine => 'Choose a machine',
+    NewHarnessField.machine => 'Search machines',
     NewHarnessField.branch => 'Search branches',
     NewHarnessField.project => 'Folder path',
     NewHarnessField.projectName => 'Project name',
@@ -1500,8 +1499,16 @@ class NewHarnessController extends ChangeNotifier {
       warn('Choose a Codex profile on $machineLabel. The machine has changed.');
       return false;
     }
-    if ((field == NewHarnessField.projectMenu ||
-            field == NewHarnessField.project ||
+    if (field == NewHarnessField.projectMenu && option.machineId != null) {
+      final machine = app.stateOf(option.machineId!);
+      if (machine == null ||
+          machine.machine.isShared ||
+          !_machineUsable(machine)) {
+        warn('This project is unavailable. Choose a connected machine.');
+        return false;
+      }
+    }
+    if ((field == NewHarnessField.project ||
             field == NewHarnessField.projectName ||
             field == NewHarnessField.projectRepository) &&
         option.machineId != null &&
@@ -1529,7 +1536,7 @@ class NewHarnessController extends ChangeNotifier {
   /// wears the ✓, as the current folder and branch do in an editor's pickers.
   bool isCurrent(NewHarnessOption option) => switch (field) {
     NewHarnessField.launch || NewHarnessField.task => false,
-    NewHarnessField.harness => option.id == (_harnessId ?? codingId),
+    NewHarnessField.harness => option.id == (_harnessId ?? _engine),
     NewHarnessField.agent => option.id == _engine,
     NewHarnessField.model =>
       option.id == (_model == null ? defaultModelId : _modelId(_model!)),
@@ -1572,7 +1579,7 @@ class NewHarnessController extends ChangeNotifier {
   static const _store = NewHarnessOption(
     id: storeId,
     synthetic: true,
-    title: 'Browse Harness Store…',
+    title: 'Browse Harness Store',
   );
 
   // For anyone who would rather point at a folder than type its path. It stays
@@ -1603,7 +1610,7 @@ class NewHarnessController extends ChangeNotifier {
     const NewHarnessOption(
       id: newProjectId,
       synthetic: true,
-      title: 'New Project',
+      title: 'New Folder',
       detail: 'Name a new folder',
     ),
     ..._ranked(_recentProjects()),
@@ -1749,7 +1756,12 @@ class NewHarnessController extends ChangeNotifier {
   void _apply(NewHarnessOption option) {
     switch (field) {
       case NewHarnessField.harness:
-        _selectHarness(option.id == codingId ? null : option.id);
+        if (isHarnessId(option.id) && option.id != codingId) {
+          _selectHarness(option.id);
+        } else {
+          _selectHarness(null);
+          if (option.id != codingId) _selectEngine(option.id);
+        }
       case NewHarnessField.agent:
         _selectEngine(option.id);
       case NewHarnessField.model:
@@ -2246,7 +2258,7 @@ class NewHarnessController extends ChangeNotifier {
       ],
       // Projects can arrive after the box opens, including metadata recovered
       // by the local CLI. Terminal output alone must not reorder this list.
-      ..._recentProjectFolders(),
+      for (final id in app.machineStates.keys) ..._recentProjectFolders(id),
       null,
       for (final id in app.machineStates.keys) ...[
         id,
@@ -2492,7 +2504,7 @@ class NewHarnessController extends ChangeNotifier {
           field != NewHarnessField.projectMenu) {
         return lower;
       }
-      final normalized = lower.replaceAll(RegExp(r'[\s._-]+'), ' ').trim();
+      final normalized = lower.replaceAll(RegExp(r'[\s._:-]+'), ' ').trim();
       return normalized.isEmpty ? lower : normalized;
     }
 
@@ -2543,9 +2555,8 @@ class NewHarnessController extends ChangeNotifier {
           id,
         )?.id ??
         canonicalHarnessId(id);
-    // Recent harnesses, then Code, then what this machine has installed,
-    // then the rest of the Store — every harness is here, and searchable; one
-    // that is not installed yet installs when it starts.
+    // Recent specialized harnesses, direct coding agents, then the catalog.
+    // A specialized harness that is not installed yet installs when it starts.
     final recents = <String>{
       for (final id in app.agentPreference.recentHarnesses.where(isHarnessId))
         if (_offered(id)) operationId(id),
@@ -2558,8 +2569,7 @@ class NewHarnessController extends ChangeNotifier {
       id: id,
       title: labelOf(id),
       engine: id,
-      // Every row here is a harness (Terminal moved to the Agent list), so
-      // every row carries its description.
+      // Specialized harnesses carry their catalog description.
       detail: [
         machine?.dsh[id]?.tagline ??
             engineIdentity(id).tagline ??
@@ -2570,11 +2580,13 @@ class NewHarnessController extends ChangeNotifier {
     );
     return _ranked([
       for (final id in recents) row(id),
-      const NewHarnessOption(
-        id: codingId,
-        title: 'Code',
-        detail: 'Work in any code project',
-      ),
+      for (final id in <String>{
+        _engine,
+        ...app.agentPreference.recent.where((id) => !isHarnessId(id)),
+        for (final engine in allEngines) engine.id,
+        kTerminalEngine,
+      })
+        NewHarnessOption(id: id, title: labelOf(id), engine: id),
       for (final id in rest.where(installed)) row(id),
       for (final id in rest.where((id) => !installed(id))) row(id),
     ]);
@@ -2673,14 +2685,15 @@ class NewHarnessController extends ChangeNotifier {
     return text;
   }
 
-  Iterable<String> _recentProjectFolders() sync* {
-    final machine = _machine;
+  Iterable<String> _recentProjectFolders(String id) sync* {
+    final machine = app.stateOf(id);
     final seen = <String>{};
     // Worktrees Start made are temporary: their repository is the project.
-    final worktrees = _expand('~/harnesses/worktrees');
+    final home = _homeOf(id);
+    final worktrees = home == null ? null : p.join(home, 'harnesses/worktrees');
     for (final folder in [
-      ?_project.folder,
-      ...app.projectHistory.recent(_machineId),
+      if (id == _machineId) ?_project.folder,
+      ...app.projectHistory.recent(id),
       // Match the full form: explicit choices first, then known agent folders
       // on this machine. Older projects need not be picked again to appear.
       if (machine != null)
@@ -2690,27 +2703,45 @@ class NewHarnessController extends ChangeNotifier {
       if (!p.isAbsolute(folder) ||
           folder.length > 4096 ||
           RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder) ||
-          folder != _project.folder && p.isWithin(worktrees, folder)) {
+          folder != _project.folder &&
+              (worktrees != null && p.isWithin(worktrees, folder) ||
+                  folder.contains('/harnesses/worktrees/'))) {
         continue;
       }
       if (seen.add(p.normalize(folder))) yield folder;
     }
   }
 
-  List<NewHarnessOption> _recentProjects() => [
-    for (final folder in _recentProjectFolders())
-      NewHarnessOption(
-        id: 'project:$_machineId:$folder',
-        title: p.basename(folder),
-        detail: location(folder),
-        project: NewHarnessProject.folder(folder),
-        machineId: _machineId,
-        enabled: _machine?.needsLink != true && _machine?.isOffline != true,
-        why: _machine?.needsLink == true
-            ? '$machineLabel needs linking. Open Machines to link it.'
-            : '$machineLabel is offline.',
-      ),
-  ];
+  List<NewHarnessOption> _recentProjects() {
+    final result = <NewHarnessOption>[];
+    for (final machine in [
+      ...app.machineStates.values.where((m) => m.isLocalMachine),
+      ...app.machineStates.values.where((m) => !m.isLocalMachine),
+    ].where((m) => !m.machine.isShared)) {
+      final id = machine.machine.machineId;
+      final folders = _recentProjectFolders(id).toList();
+      final names = <String, int>{};
+      for (final folder in folders) {
+        names.update(p.basename(folder), (n) => n + 1, ifAbsent: () => 1);
+      }
+      for (final folder in folders) {
+        final name = p.basename(folder);
+        result.add(
+          NewHarnessOption(
+            id: 'project:$id:$folder',
+            title:
+                '${machine.machine.displayName}:${names[name]! > 1 ? tildePath(folder, id) : name}',
+            detail: location(folder, id),
+            project: NewHarnessProject.folder(folder),
+            machineId: id,
+            enabled: _machineUsable(machine),
+            why: machine.needsLink ? 'Link required' : 'Offline',
+          ),
+        );
+      }
+    }
+    return result;
+  }
 
   List<NewHarnessOption> _projectOptions() {
     final typed = query.trim();

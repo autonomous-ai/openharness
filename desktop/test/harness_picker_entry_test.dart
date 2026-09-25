@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -142,6 +143,8 @@ void main() {
           findsOneWidget,
         );
         await capture('creation');
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
         await capture('creation-options');
