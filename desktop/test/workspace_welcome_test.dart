@@ -104,18 +104,30 @@ void main() {
   ) async {
     for (final tab in ['first', 'next']) {
       await mount(tester, tab: tab);
-      expect(find.text('Follow your curiosity.'), findsOneWidget);
+      expect(find.text('Harness like a boss.'), findsOneWidget);
       expect(find.text('✓'), findsNothing);
       expect(find.text('○'), findsNothing);
-      for (final hint in ['⌘N', '⌘P', '⌘S']) {
+      for (final hint in ['⌘N', '⌘P', '⌘I', '⌘M', '⌘S']) {
         expect(find.text(hint), findsOneWidget);
       }
       expect(find.text('⌘O'), findsNothing);
       commands.clear();
-      for (final command in ['agent.new', 'harnesses.list', 'app.store']) {
+      for (final command in [
+        'agent.new',
+        'harnesses.list',
+        'models.list',
+        'machines.list',
+        'app.store',
+      ]) {
         await tester.tap(find.byKey(ValueKey('welcome-$command')));
       }
-      expect(commands, ['agent.new', 'harnesses.list', 'app.store']);
+      expect(commands, [
+        'agent.new',
+        'harnesses.list',
+        'models.list',
+        'machines.list',
+        'app.store',
+      ]);
       await capture(tester, 'new-tab-$tab');
     }
   });
@@ -136,8 +148,7 @@ void main() {
 
     keymap.apply('{"bindings":[{"keys":"cmd+p","command":null}]}');
     await tester.pump();
-    expect(find.text('click'), findsOneWidget);
-    expect(find.text('Open Harness'), findsOneWidget);
+    expect(find.text('Manage all your agents'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('welcome-harnesses.list')));
     expect(commands, ['harnesses.list', 'harnesses.list']);
     expect(tester.takeException(), isNull);
@@ -153,14 +164,31 @@ void main() {
         scale: 1.7,
         brightness: brightness,
       );
-      for (final command in ['agent.new', 'harnesses.list', 'app.store']) {
+      final hintInk = tester.widget<Text>(find.text('⌘N')).style!.color!;
+      final contrast =
+          (hintInk.computeLuminance() + .05) /
+          (grid.AppPalette.swarmField.computeLuminance() + .05);
+      expect(contrast, greaterThanOrEqualTo(4.5));
+      for (final command in [
+        'agent.new',
+        'harnesses.list',
+        'models.list',
+        'machines.list',
+        'app.store',
+      ]) {
         final row = find.byKey(ValueKey('welcome-$command'));
         await tester.ensureVisible(row);
         await tester.pumpAndSettle();
         expect(row.hitTestable(), findsOneWidget);
         await tester.tap(row);
       }
-      expect(commands, ['agent.new', 'harnesses.list', 'app.store']);
+      expect(commands, [
+        'agent.new',
+        'harnesses.list',
+        'models.list',
+        'machines.list',
+        'app.store',
+      ]);
       final scroll = tester.getRect(
         find.byKey(const ValueKey('welcome-scroll')),
       );

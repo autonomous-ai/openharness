@@ -75,9 +75,11 @@ actions use `terminalContentStyle()` and follow the terminal font preference.
 
 ## Keep surfaces quiet
 
-First launch uses the same New Tab page as every later visit: “Follow your
-curiosity.” with New Harness, Open Harness, and Harness Store shortcuts. Keep
-this page independent of onboarding progress; no checklist or automatic dialog.
+First launch uses the same New Tab page as every later visit: “Harness like a
+boss.” followed by five clickable shortcuts: Start an agent, Manage all your
+agents, Deploy a local model, Manage all your machines, and Build beyond code.
+Resolve the shortcut hints from the live keymap; unbound actions remain clickable.
+Keep this page independent of onboarding progress; no checklist or automatic dialog.
 
 ![Shared first-launch and New Tab welcome](images/workspace-welcome.png)
 
