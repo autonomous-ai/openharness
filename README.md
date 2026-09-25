@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://harness.autonomous.ai/desktop"><b>Download</b></a> ·
+  <a href="https://www.autonomous.ai/harness"><b>Download</b></a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#beyond-code">Beyond code</a> ·
   <a href="#domain-specific-harnesses-dsh">Harnesses</a> ·
@@ -108,7 +108,7 @@ The [architecture guide](docs/architecture.md) has the details.
 <a id="run-it"></a>
 ## Get started
 
-**[Download the app](https://harness.autonomous.ai/desktop)** for macOS or Linux.
+**[Download the app](https://www.autonomous.ai/harness)** for macOS or Linux.
 
 Add a machine. Run this on it, then **Machines → Link Machine** in the app:
 
