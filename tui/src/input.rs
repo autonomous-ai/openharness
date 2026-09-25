@@ -110,12 +110,22 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         return;
     }
-    if mods.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(' ') | KeyCode::Char('@')) {
+    let chord_now = crate::config::Chord::of(&key);
+    let default_prefix = crate::config::Config::default().prefix;
+    if chord_now == app.prefix_key || (app.prefix_key == default_prefix && mods.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('@')) {
         app.prefix = true;
         return;
     }
+    // The person's own bindings first: a command, or `none` — the chord goes to the pane.
+    let mut released = false;
+    if let Some((_, bound)) = app.keys.iter().find(|(c, _)| *c == chord_now) {
+        match bound.clone() {
+            Some(command) => { run(app, &command); return }
+            None => released = true,
+        }
+    }
     let command_mod = mods.contains(KeyModifiers::ALT) || mods.contains(KeyModifiers::SUPER);
-    if command_mod && !mods.contains(KeyModifiers::CONTROL) {
+    if command_mod && !released && !mods.contains(KeyModifiers::CONTROL) {
         if let Some(command) = chord(&key) {
             // An open overlay answers ⌥1…9 itself (answer a question).
             let digits_to_modal = app.modal.is_some() && matches!(key.code, KeyCode::Char('1'..='9'));
