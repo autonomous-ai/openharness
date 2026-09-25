@@ -292,7 +292,13 @@ void main() {
       '> Open Models',
     );
     await tester.pumpAndSettle();
-    expect(find.text('Open Models'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('command:models.list')),
+        matching: find.text('Open Models'),
+      ),
+      findsOneWidget,
+    );
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(resourceScope(':'), findsOneWidget);

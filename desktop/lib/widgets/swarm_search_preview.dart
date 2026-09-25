@@ -104,6 +104,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
     _selectedId = row?.id;
     setState(() {});
     _warm?.cancel();
+    if (row?.isCommand == true || row?.pickerQuery != null) return;
     _warm = Timer(const Duration(milliseconds: 140), () {
       if (!mounted || row == null) return;
       final selected = _agents(app, row);
@@ -147,6 +148,39 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
       builder: (context, _) {
         final row = widget.search.selected;
         if (row == null) return const SizedBox.shrink();
+        if (row.isCommand || row.pickerQuery != null) {
+          return Semantics(
+            container: true,
+            label: 'Command preview',
+            child: ListView(
+              key: ValueKey('preview-content:${row.id}'),
+              controller: _scroll,
+              padding: padding,
+              children: [
+                Text(
+                  row.title,
+                  style: terminalContentStyle(color: theme.foreground),
+                ),
+                if (row.detail.isNotEmpty)
+                  Text(
+                    row.detail,
+                    style: terminalContentStyle(
+                      color: theme.foreground.withValues(alpha: .54),
+                    ),
+                  ),
+                if (row.shortcut case final shortcut?) ...[
+                  SizedBox(height: cell.height),
+                  Text(
+                    shortcut,
+                    style: terminalContentStyle(
+                      color: theme.foreground.withValues(alpha: .54),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }
         final agents = _agents(app, row);
         return Semantics(
           container: true,

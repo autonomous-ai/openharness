@@ -140,6 +140,15 @@ Page Up/Down pages the result list; Shift-Up/Down scrolls the preview by one
 measured terminal row. These keys preserve the input's focus and query. Preview
 scrolling keeps the selected result and result-list scroll position unchanged.
 
+Cmd-Shift-P opens this same picker with editable `>` text. Commands and `?` help
+keep the same input, frame, terminal metrics, and two-pane arrangement as Cmd-P;
+changing a prefix must not replace the editor or move it. Command names occupy
+one row with their live shortcut aligned right. The preview shows the selected
+command's name, category, and shortcut, without session-text placeholders. Empty
+matches clear the preview. Omit the older title/count row and key-hint footer.
+
+![Commands in the shared terminal picker](images/terminal-search-commands.png)
+
 Open dialogs must follow live terminal font and theme changes while preserving
 the input controller, query, selection, focus, and scroll state. Wire the font,
 palette, and terminal-theme dependencies as the reference dialogs do. Settings

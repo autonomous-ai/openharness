@@ -1250,6 +1250,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             ? '${row.title}\n$detail'
             : '${row.title}\n${row.terminalDetail ?? row.detail}'
                   '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
+                  '${row.shortcut == null ? '' : ', Shortcut ${row.shortcut}'}'
                   '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
         excludeSemantics: true,
         child: Column(
@@ -1260,40 +1261,56 @@ class _SearchRowContentState extends State<_SearchRowContent> {
               height: cell.height,
               color: widget.highlighted ? theme.selection : Colors.transparent,
               padding: EdgeInsets.symmetric(horizontal: cell.width),
-              child: Row(
-                children: [
-                  // Match Cmd-N's empty two-cell gutter.
-                  SizedBox(width: cell.width * 2),
-                  Expanded(
-                    child: row.isCreate
-                        ? Text(row.title, style: style, maxLines: 1)
-                        : SearchResultText(
-                            row.title,
-                            matches: matches.where((match) => match.title),
-                            style: style,
-                          ),
-                  ),
-                  if (widget.unavailableReason case final reason?) ...[
+              child: LayoutBuilder(
+                builder: (context, constraints) => Row(
+                  children: [
+                    // Match Cmd-N's empty two-cell gutter.
                     SizedBox(width: cell.width * 2),
-                    Text(
-                      reason,
-                      maxLines: 1,
-                      style: terminalContentStyle(color: muted),
+                    Expanded(
+                      child: row.isCreate
+                          ? Text(row.title, style: style, maxLines: 1)
+                          : SearchResultText(
+                              row.title,
+                              matches: matches.where((match) => match.title),
+                              style: style,
+                            ),
                     ),
-                  ] else if (widget.activityAge case final age?) ...[
-                    SizedBox(width: cell.width * 2),
-                    Tooltip(
-                      message: 'Last active ${row.lastActivityAt!.toLocal()}',
-                      child: Text(
-                        age,
+                    if (widget.unavailableReason case final reason?) ...[
+                      SizedBox(width: cell.width * 2),
+                      Text(
+                        reason,
                         maxLines: 1,
-                        style: terminalContentStyle(
-                          color: theme.foreground.withValues(alpha: .38),
+                        style: terminalContentStyle(color: muted),
+                      ),
+                    ] else if (row.shortcut case final shortcut?) ...[
+                      SizedBox(width: cell.width * 2),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth * .4,
+                        ),
+                        child: Text(
+                          shortcut,
+                          key: ValueKey('swarm-search-shortcut:${row.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: terminalContentStyle(color: muted),
                         ),
                       ),
-                    ),
+                    ] else if (widget.activityAge case final age?) ...[
+                      SizedBox(width: cell.width * 2),
+                      Tooltip(
+                        message: 'Last active ${row.lastActivityAt!.toLocal()}',
+                        child: Text(
+                          age,
+                          maxLines: 1,
+                          style: terminalContentStyle(
+                            color: theme.foreground.withValues(alpha: .38),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
             if (!widget.singleLine && !row.isCommand && detail.isNotEmpty)

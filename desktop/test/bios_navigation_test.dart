@@ -106,7 +106,7 @@ void main() {
     expect(search.rows.skip(1).map((row) => row.agentId), ['a1', 'a11']);
     expect(search.selected!.agentId, 'a11');
     search.setQuery('>');
-    expect(search.setupLayout, isFalse);
+    expect(search.setupLayout, isTrue);
   });
 
   test(
