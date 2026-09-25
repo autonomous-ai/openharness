@@ -112,11 +112,22 @@ const BRANCH_VERBS = new Set([
   'plan', 'research', 'try', 'check',
 ])
 
-/** A session's name as a branch's last part, in two words: `Worktree and branches organization` →
- *  `worktree-branches`, `Fix the harness list order` → `harness-list`. Filler words and a leading
- *  verb go first (a title that is only a verb keeps it). One word is capped at 24 characters. Null
- *  when nothing meaningful is left, and the placeholder branch stays. */
-export function sessionBranchSlug(title: string | null | undefined): string | null {
+/** Words that say what kind of thing a change touches, not which: `login page` is the login, `onboarding
+ *  experience` is onboarding. As a second word they add length and no meaning. */
+const BRANCH_GENERIC = new Set([
+  'page', 'pages', 'screen', 'screens', 'view', 'views', 'flow', 'flows', 'experience', 'ui', 'ux',
+  'issue', 'issues', 'bug', 'bugs', 'problem', 'problems', 'error', 'errors', 'fix', 'fixes',
+  'feature', 'features', 'support', 'setup', 'logic', 'code', 'handling', 'behavior', 'behaviour',
+  'stuff', 'thing', 'things', 'work', 'change', 'changes', 'update', 'updates', 'improvement',
+  'improvements', 'cleanup', 'polish', 'tweak', 'tweaks', 'part', 'section',
+])
+
+/** The names a session's branch may take, best first: as few words as carry the meaning — one or two
+ *  — then, only for a clash, the fuller two-word name. `Fix the harness list order` → `harness-list`;
+ *  `Fix the login page` → `login`, then `login-page`; `Onboarding` → `onboarding`. Filler words, a
+ *  leading verb and lone numbers go first (a title that is only a verb keeps it). Each word is capped
+ *  at 24 characters. Empty when nothing meaningful is left, and the placeholder branch stays. */
+export function sessionBranchNames(title: string | null | undefined): string[] {
   // NFKD splits `é` into `e` and its accent; the accent goes, or it would split the word in two.
   const words = (title ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
     .split(/[^a-z0-9]+/).filter(Boolean)
@@ -124,9 +135,10 @@ export function sessionBranchSlug(title: string | null | undefined): string | nu
   while (meaningful.length > 1 && BRANCH_VERBS.has(meaningful[0]!)) meaningful.shift()
   // A lone number (`0` of 0.3.1, `2` of "Part 2") says nothing beside a word that does.
   const worded = meaningful.filter(word => !/^\d+$/.test(word))
-  const picked = (worded.length ? worded : meaningful).slice(0, 2)
-  const slug = picked.map(word => word.slice(0, 24)).join('-')
-  return slug || null
+  const picked = (worded.length ? worded : meaningful).slice(0, 2).map(word => word.slice(0, 24))
+  if (picked.length < 2) return picked
+  const two = picked.join('-')
+  return BRANCH_GENERIC.has(picked[1]!) ? [picked[0]!, two] : [two]
 }
 
 /** A name Git might accept for a new branch, checked before Git is asked. */

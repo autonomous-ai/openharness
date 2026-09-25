@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
-import { placeholderBranch, sessionBranchSlug, worktreeFolderName } from './agentNames.js'
+import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
@@ -131,21 +131,26 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(placeholderBranch(['refs/heads/amber-badger', 'amber-badger-2'], () => 0)).toBe('amber-badger-3')
     expect(worktreeFolderName('deehw/brave-otter')).toBe('brave-otter')
     expect(worktreeFolderName('fix/login page')).toBe('loginpage')
-    expect(sessionBranchSlug('Worktree and branches organization')).toBe('worktree-branches')
-    expect(sessionBranchSlug('✳ Fix: the login page — redirects twice?')).toBe('login-page')
-    expect(sessionBranchSlug('Fix the harness list order')).toBe('harness-list')
-    expect(sessionBranchSlug('Add dark mode to settings')).toBe('dark-mode')
-    expect(sessionBranchSlug('Review and fix flaky tests')).toBe('flaky-tests')
-    expect(sessionBranchSlug('Portable harnesses, launch models, and a terminal-grid form')).toBe('portable-harnesses')
-    expect(sessionBranchSlug('Onboarding')).toBe('onboarding')
-    expect(sessionBranchSlug('Fix')).toBe('fix')
-    expect(sessionBranchSlug('Release 0.3.1 notes')).toBe('release-notes')
-    expect(sessionBranchSlug('0.3.1')).toBe('0-3')
-    expect(sessionBranchSlug('Café résumé')).toBe('cafe-resume')
-    expect(sessionBranchSlug('a'.repeat(30) + ' ' + 'b'.repeat(30))).toBe('a'.repeat(24) + '-' + 'b'.repeat(24))
-    expect(sessionBranchSlug('The and of')).toBeNull()
-    expect(sessionBranchSlug('✳ ✳')).toBeNull()
-    expect(sessionBranchSlug(null)).toBeNull()
+    // Two words when both carry the meaning.
+    expect(sessionBranchNames('Worktree and branches organization')).toEqual(['worktree-branches'])
+    expect(sessionBranchNames('Fix the harness list order')).toEqual(['harness-list'])
+    expect(sessionBranchNames('Add dark mode to settings')).toEqual(['dark-mode'])
+    expect(sessionBranchNames('Review and fix flaky tests')).toEqual(['flaky-tests'])
+    expect(sessionBranchNames('Portable harnesses, launch models')).toEqual(['portable-harnesses'])
+    expect(sessionBranchNames('Release 0.3.1 notes')).toEqual(['release-notes'])
+    expect(sessionBranchNames('Café résumé')).toEqual(['cafe-resume'])
+    // One word when the second is generic, the two-word name kept for a clash.
+    expect(sessionBranchNames('✳ Fix: the login page — redirects twice?')).toEqual(['login', 'login-page'])
+    expect(sessionBranchNames('Onboarding experience')).toEqual(['onboarding', 'onboarding-experience'])
+    expect(sessionBranchNames('UI polish')).toEqual(['ui', 'ui-polish'])
+    // One word when that is all the title has.
+    expect(sessionBranchNames('Onboarding')).toEqual(['onboarding'])
+    expect(sessionBranchNames('Fix')).toEqual(['fix'])
+    expect(sessionBranchNames('0.3.1')).toEqual(['0-3'])
+    expect(sessionBranchNames('a'.repeat(30) + ' ' + 'b'.repeat(30))).toEqual(['a'.repeat(24) + '-' + 'b'.repeat(24)])
+    expect(sessionBranchNames('The and of')).toEqual([])
+    expect(sessionBranchNames('✳ ✳')).toEqual([])
+    expect(sessionBranchNames(null)).toEqual([])
     const made = [await prepare('worktree'), await prepare('worktree')]
     expect(new Set(made).size).toBe(2)
     for (const path of made) {
@@ -190,13 +195,20 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await git('config', '--get', 'branch.worktree-branches.harness')).toBe('created')
     expect(await nameBranchAfterSession(path, 'A later name')).toBeNull()
     expect(await current(path)).toBe('worktree-branches')
+    // Taken: a number, never a third word.
     const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'calm-fox', branchMode: 'placeholder' })
-    // Two words stay two words on a clash: a number, not a third word.
     expect(await nameBranchAfterSession(second, 'Fix the worktree branches')).toBe('worktree-branches-2')
+    // One word when the second is generic; the two-word name when the one is taken; then a number.
+    const login = []
+    for (const branchName of ['keen-lynx', 'tidy-heron', 'rosy-finch']) {
+      const at = await prepare('worktree', 'refs/heads/feature', repo, { branchName, branchMode: 'placeholder' })
+      login.push(await nameBranchAfterSession(at, 'Fix the login page'))
+    }
+    expect(login).toEqual(['login', 'login-page', 'login-page-2'])
     // A name a remote has is taken too.
     const third = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-fox', branchMode: 'placeholder' })
-    await git('update-ref', 'refs/remotes/origin/onboarding-experience', 'main')
-    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience-2')
+    await git('update-ref', 'refs/remotes/origin/onboarding', 'main')
+    expect(await nameBranchAfterSession(third, 'Onboarding experience')).toBe('onboarding-experience')
     const chosen = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/mine' })
     expect(await nameBranchAfterSession(chosen, 'Anything')).toBeNull()
     const pushed = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'sunny-owl', branchMode: 'placeholder' })

@@ -163,10 +163,12 @@ dropped.
 A session has no name at Start, so that branch starts as a made-up
 `<word>-<word>`, marked `branch.<name>.harness = placeholder` in the
 repository's config and left out of the pane header. The daemon renames it once,
-to two words of the session's name, when the session first has a name: filler
-words and a leading verb are dropped, so `Fix the harness list order` becomes
-`harness-list` (`harness-list-2` when a local or remote branch has it). It is
-renamed only that once, and never again:
+to one or two words of the session's name, when the session first has a name.
+Filler words and a leading verb are dropped, and a generic second word (page,
+flow, experience, issue…) is too: `Fix the harness list order` becomes
+`harness-list`, `Fix the login page` becomes `login`. A taken name falls back to
+the two-word one (`login-page`), then a number (`login-page-2`); local and remote
+branches both count. It is renamed only that once, and never again:
 not after a later session name, a push, or a rename by the person or the agent.
 A picked or created branch keeps its name. The worktree is checked out in
 `~/harnesses/worktrees/<repository>/<branch>`, and ignored files listed in the
