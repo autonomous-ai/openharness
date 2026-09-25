@@ -2045,7 +2045,7 @@ describe('agent_retarget onto a Local model resolves web tools', () => {
     const ws = wsMock.instances[0]
     ws.open()
     // The grid name is the backend's, pushed on connect; the daemon holds it in memory only.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
     ws.message(sealedDown(socket, 'web-1', 'agent_retarget', { requestId: 'r', agentId: 'a1', gridModel: model }))
     await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'agent_retarget_result')).toBe(true), { timeout: 10_000 })
     const reply = parseSent(ws)
@@ -2202,7 +2202,7 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
     ws.message(sealedDown(socket, 'web-1', 'grid_models_list', { requestId: 'r' }))
     await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'grid_models_list_result')).toBe(true), { timeout: 10_000 })
     const reply = parseSent(ws)
@@ -2286,18 +2286,18 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     ws.open()
 
     // Connect frame: name and grid together.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(socket.gridName()).toBe('someone-7f3a91c4'))
 
     // A rename pushes `{ name }` alone — it must NOT wipe the grid name (the bug that left the picker
     // empty the moment a machine was renamed). Wait until the rename is observably processed, then
     // confirm the grid name survived it.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'renamed' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'renamed' } } })
     await vi.waitFor(() => expect(namesSeen).toContain('renamed'))
     expect(socket.gridName()).toBe('someone-7f3a91c4')
 
     // An explicit null is the account genuinely having no grid, and does clear it.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'renamed', gridName: null } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'renamed', gridName: null } } })
     await vi.waitFor(() => expect(socket.gridName()).toBeNull())
 
     await socket.stop()
@@ -2311,11 +2311,11 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     const ws = wsMock.instances[0]
     ws.open()
     expect(socket.machineName()).toBeNull()
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: ' M2 ', gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: ' M2 ', gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(socket.machineName()).toBe('M2'))
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'Studio' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'Studio' } } })
     await vi.waitFor(() => expect(socket.machineName()).toBe('Studio'))
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(namesSeen).toHaveLength(3))
     expect(socket.machineName()).toBe('Studio')
     await socket.stop()
@@ -2330,7 +2330,7 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     ws.open()
 
     // The backend's own frame sets it, as always.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(socket.gridName()).toBe('someone-7f3a91c4'))
 
     // Now the same frame from a process on this machine, through the local socket — the shape of the
@@ -2582,6 +2582,27 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     socket.onMessage = onMessage
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'peer-1', 'p2p')
     expect(onMessage).not.toHaveBeenCalled()
+  })
+
+  it('takes backend-only frames only on the backend\'s own address (connId \'\'), never one a client sent', async () => {
+    // The backend writes these with connId ''; a client's frame carries its own connId whichever socket
+    // relayed it, so a client-addressed machine_meta must not repoint this computer's grid.
+    const { socket, dispatch } = harness()
+    const onMachineMeta = vi.fn()
+    socket.onMachineMeta = onMachineMeta
+    const onRevoked = vi.fn()
+    socket.onRevoked = onRevoked
+    for (const connId of ['web-1', 'device-conn-7']) {
+      await dispatch({ type: 'machine_meta', payload: { name: 'x', gridName: 'someone-else' } }, connId)
+      await dispatch({ type: 'machine_revoked', payload: {} }, connId)
+      await dispatch({ type: '__clients', payload: { commander: 9 } }, connId)
+    }
+    expect(onMachineMeta).not.toHaveBeenCalled()
+    expect(onRevoked).not.toHaveBeenCalled()
+    expect(socket.gridName()).toBeNull()
+    await dispatch({ type: 'machine_meta', payload: { name: 'mac', gridName: 'mine-1234' } }, '')
+    expect(onMachineMeta).toHaveBeenCalledWith('mac')
+    expect(socket.gridName()).toBe('mine-1234')
   })
 
   it('never opens a SEALED backend-only frame: a paired client must not speak as the backend', async () => {

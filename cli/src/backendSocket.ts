@@ -1484,7 +1484,11 @@ export class BackendSocket {
       const from = `${transport} (${connId ? `conn:${sid(connId)}` : 'backend'})`
       const wrapped = isWrapped(frame.payload)
       if (type.startsWith('__') || BACKEND_ONLY_DOWN_TYPES.has(type)) {
-        if (transport !== 'relay' || wrapped) {
+        // And only on the backend's OWN address: it sends these with `connId: ''`, while every frame a
+        // client sends arrives stamped with that client's connId — so a client-shaped one was relayed, not
+        // written by the backend, whichever socket let it through. `__client_disconnected` is the one the
+        // hub addresses to a client's own connId; it only tears down that connection's state.
+        if (transport !== 'relay' || wrapped || (connId !== '' && type !== '__client_disconnected')) {
           console.warn(`[backend] ignoring ${logSafeType(type)} from ${from} — only the backend sends it, and only in the clear`)
           return
         }
