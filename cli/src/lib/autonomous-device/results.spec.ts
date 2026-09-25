@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceService, type AutonomousDeviceServiceOptions } from './service.js'
 import { DeviceResultJournal } from './resultJournal.js'
 
-const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../../docs/contracts/device-summary-correlation/${name}.json`, import.meta.url), 'utf8'))
+const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../../docs/contracts/autonomous-device-summary-correlation/${name}.json`, import.meta.url), 'utf8'))
 const claude = fixture('claude-native-queue'), codex = fixture('codex-steering')
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })

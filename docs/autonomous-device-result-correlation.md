@@ -49,10 +49,10 @@ for existing clients. They identify that same member and retain their existing m
 One shared result is not copied into several independent replies. A queued but unconsumed
 input is not included. Receipt input acceptance is not task completion.
 
-The exact [runtime-generated schema](contracts/device-summary-correlation/result.schema.json),
-[single summary](contracts/device-summary-correlation/input-result.json),
-[group summary](contracts/device-summary-correlation/group-result.json), and
-[OS replay expectations](contracts/device-summary-correlation/os-replay-cases.json) are the
+The exact [runtime-generated schema](contracts/autonomous-device-summary-correlation/result.schema.json),
+[single summary](contracts/autonomous-device-summary-correlation/input-result.json),
+[group summary](contracts/autonomous-device-summary-correlation/group-result.json), and
+[OS replay expectations](contracts/autonomous-device-summary-correlation/os-replay-cases.json) are the
 shared fixtures. The schema describes enriched summaries; older legacy summaries remain
 valid on the existing protocol. Ownership, uniqueness by each member field, and matching
 singular fields require semantic checks in addition to JSON schema validation.
@@ -115,8 +115,8 @@ it does not independently verify the requested edits. Missing lineage/completion
 pending. A session-wide turn end alone cannot complete native Device inputs.
 
 Redacted structural captures:
-[Claude](contracts/device-summary-correlation/claude-native-queue.json),
-[Codex](contracts/device-summary-correlation/codex-steering.json).
+[Claude](contracts/autonomous-device-summary-correlation/claude-native-queue.json),
+[Codex](contracts/autonomous-device-summary-correlation/codex-steering.json).
 
 ## One return path and compatibility
 

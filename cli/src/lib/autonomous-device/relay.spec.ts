@@ -89,7 +89,7 @@ it('Store uses the same device-only encrypted hello gate and never exposes gener
 
 it('delivers correlated summaries by default only to the originating identity, including replay', async () => {
   const f = fixture()
-  const capture = JSON.parse(readFileSync(new URL('../../../../docs/contracts/device-summary-correlation/codex-steering.json', import.meta.url), 'utf8'))
+  const capture = JSON.parse(readFileSync(new URL('../../../../docs/contracts/autonomous-device-summary-correlation/codex-steering.json', import.meta.url), 'utf8'))
   await f.request({ type: 'hello', proto: 1, requestId: randomUUID() }) // unchanged application hello
   for (const [i, text] of capture.inputs.entries()) {
     await f.request({ type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: `key-${i}`, text })
