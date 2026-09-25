@@ -437,6 +437,36 @@ class EscapeParser {
     }
   }
 
+  /// The colour after SGR 38/48 at [at] — `2;r;g;b` or `5;n` — handed to [rgb]
+  /// or [indexed]. Returns how many parameters after [at] it used.
+  ///
+  /// ⚠️ **A sequence cut short is dropped, never read past.** `CSI 38;2;1 m`
+  /// used to index beyond [params]; the RangeError failed the renderer, which
+  /// forced a resync — and a fresh keyframe — for one malformed colour. The
+  /// rest of the parameters are consumed, as they belong to that colour.
+  int _sgrExtendedColor(
+    List<int> params,
+    int at,
+    void Function(int r, int g, int b) rgb,
+    void Function(int index) indexed,
+  ) {
+    final remaining = params.length - at - 1;
+    final mode = remaining > 0 ? params[at + 1] : null;
+    final needed = switch (mode) {
+      2 => 4,
+      5 => 2,
+      _ => 0,
+    };
+    if (needed == 0) return 0;
+    if (needed > remaining) return remaining;
+    if (mode == 2) {
+      rgb(params[at + 2], params[at + 3], params[at + 4]);
+    } else {
+      indexed(params[at + 2]);
+    }
+    return needed;
+  }
+
   /// `ESC [ [ Ps ] m` Select Graphic Rendition (SGR)
   ///
   /// https://terminalguide.namepad.de/seq/csi_sm/
@@ -542,21 +572,12 @@ class EscapeParser {
           handler.setForegroundColor16(NamedColor.white);
           continue;
         case 38:
-          final mode = params[i + 1];
-          switch (mode) {
-            case 2:
-              final r = params[i + 2];
-              final g = params[i + 3];
-              final b = params[i + 4];
-              handler.setForegroundColorRgb(r, g, b);
-              i += 4;
-              break;
-            case 5:
-              final index = params[i + 2];
-              handler.setForegroundColor256(index);
-              i += 2;
-              break;
-          }
+          i += _sgrExtendedColor(
+            params,
+            i,
+            handler.setForegroundColorRgb,
+            handler.setForegroundColor256,
+          );
           continue;
         case 39:
           handler.resetForeground();
@@ -587,21 +608,12 @@ class EscapeParser {
           handler.setBackgroundColor16(NamedColor.white);
           continue;
         case 48:
-          final mode = params[i + 1];
-          switch (mode) {
-            case 2:
-              final r = params[i + 2];
-              final g = params[i + 3];
-              final b = params[i + 4];
-              handler.setBackgroundColorRgb(r, g, b);
-              i += 4;
-              break;
-            case 5:
-              final index = params[i + 2];
-              handler.setBackgroundColor256(index);
-              i += 2;
-              break;
-          }
+          i += _sgrExtendedColor(
+            params,
+            i,
+            handler.setBackgroundColorRgb,
+            handler.setBackgroundColor256,
+          );
           continue;
         case 49:
           handler.resetBackground();

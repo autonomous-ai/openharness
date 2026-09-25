@@ -152,6 +152,36 @@ describe('tmux snapshot row normalization', () => {
 
     expect(snapshot).toContain('\u001b[H\u001b[2J\u001b[?1003h\u001b[?1006h')
   })
+
+  // What `capture-pane -p -e -N` printed for a dim line wrapped at 20 columns, then a red line, a blank
+  // row, and more red (tmux 3.7c): the second row of the wrap, and the row after the blank one, carry
+  // their SGR over from the row above without restating it.
+  const carriedCapture = Buffer.from(
+    '\u001b[2mdim text that wraps \npast twenty cols\u001b[0m    \n'
+      + '\u001b[31mred\u001b[39m  \n\n\u001b[31mafter blank\u001b[39m\n',
+  )
+
+  it('keeps a wrapped dim line dim on its second row, across the per-row reset', () => {
+    const snapshot = Buffer.from(synthesizeTmuxSnapshot(carriedCapture, {
+      sessionId: '$1', windowId: '@1', windowPanes: 1,
+      windowWidth: 20, windowHeight: 5, paneWidth: 20, paneHeight: 5,
+      alternateOn: false, cursorX: 0, cursorY: 0,
+      cursorVisible: true,
+      mouseStandard: false, mouseButton: false, mouseAll: false,
+      mouseUtf8: false, mouseSgr: false,
+    })).toString()
+
+    expect(snapshot).toContain('\u001b[1;1H\u001b[2mdim text that wraps \u001b[0m')
+    expect(snapshot).toContain('\u001b[2;1H\u001b[2mpast twenty cols\u001b[0m    \u001b[0m')
+    // A row that closed its own colour carries nothing into the next.
+    expect(snapshot).toContain('\u001b[4;1H\u001b[0m\u001b[5;1H\u001b[31mafter blank')
+  })
+
+  it('carries SGR across history rows the same way', () => {
+    expect(Buffer.from(normalizeTmuxHistoryLines(Buffer.from('\u001b[2mone \ntwo\u001b[0m\nthree\n'))).toString()).toBe(
+      '\u001b[2mone \u001b[0m\r\n\u001b[2mtwo\u001b[0m\u001b[0m\r\nthree\u001b[0m\r\n',
+    )
+  })
 })
 
 describe('ControlCommandQueue', () => {

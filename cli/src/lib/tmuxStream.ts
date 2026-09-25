@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { SgrCarry } from './sgrCarry.js'
 import { pasteRawIntoTmux } from './tmux.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
@@ -205,7 +206,15 @@ export function normalizeTmuxHistoryLines(capture: Uint8Array): Uint8Array {
   const end = raw.at(-1) === 0x0a ? raw.length - 1 : raw.length
   if (end <= 0) return Buffer.alloc(0)
   const rows = raw.subarray(0, end).toString('utf8').split('\n')
-  return Buffer.from(rows.map((row) => `${row.replace(/\r$/, '')}\u001b[0m\r\n`).join(''), 'utf8')
+  // The reset keeps a row's trailing background out of the one that scrolls in after it; the carry
+  // puts back what tmux left open across that boundary — see SgrCarry.
+  const carry = new SgrCarry()
+  return Buffer.from(rows.map((line) => {
+    const row = line.replace(/\r$/, '')
+    const restore = carry.restore
+    carry.feed(row)
+    return `${restore}${row}\u001b[0m\r\n`
+  }).join(''), 'utf8')
 }
 
 export function synthesizeTmuxSnapshot(
@@ -244,6 +253,7 @@ export function synthesizeTmuxSnapshot(
   )
   const raw = Buffer.from(capture)
   const rows: Buffer[] = []
+  const carry = new SgrCarry()
   let start = 0
   let rowIndex = 0
   for (let index = 0; index <= raw.length && rowIndex < meta.paneHeight; index++) {
@@ -254,9 +264,15 @@ export function synthesizeTmuxSnapshot(
     // can disagree on the display width of Unicode scalars; replaying rows via
     // CRLF lets that disagreement wrap one row into another. Absolute row
     // placement with autowrap disabled makes the captured grid authoritative.
+    //
+    // Each row ends reset and begins with whatever SGR tmux carried into it (see SgrCarry): a wrapped
+    // dim line's second row has no SGR of its own in the capture.
+    const row = raw.subarray(start, end)
+    const restore = carry.restore
+    carry.feed(row.toString('latin1'))
     rows.push(
-      Buffer.from(`\u001b[${rowIndex + 1};1H`, 'utf8'),
-      raw.subarray(start, end),
+      Buffer.from(`\u001b[${rowIndex + 1};1H${restore}`, 'utf8'),
+      row,
       Buffer.from('\u001b[0m', 'utf8'),
     )
     rowIndex++
