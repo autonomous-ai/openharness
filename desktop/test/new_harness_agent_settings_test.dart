@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/codex_profiles.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_form.dart';
@@ -98,6 +99,62 @@ void main() {
   setUp(() => newHarnessOpensInBox = true);
   tearDown(() => newHarnessOpensInBox = false);
 
+  test(
+    'a remembered agent missing from the catalog requires a replacement',
+    () async {
+      final connection = _Profiles('m');
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
+      addTearDown(app.dispose);
+      await app.agentPreference.remember('claude', harnessId: 'retired/agent');
+      final box = NewHarnessController(app, machineId: 'm', folder: '/work');
+      addTearDown(box.dispose);
+      await Future<void>.delayed(Duration.zero);
+      expect(box.harnessId, 'retired/agent');
+      expect(box.requiredChoice?.field, NewHarnessField.harness);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, contains('Choose an agent'));
+      expect(box.harnessId, 'retired/agent');
+      expect(connection.creates, isEmpty);
+    },
+  );
+
+  for (final unavailable in [false, true]) {
+    test(
+      'an unverified or missing saved profile requires a choice (lookup failed=$unavailable)',
+      () async {
+        final connection = _Profiles('m')..failProfiles = unavailable;
+        final app = createApp(
+          connectionForTest: (_) => connection,
+          connected: true,
+        );
+        addTearDown(app.dispose);
+        final box = NewHarnessController(
+          app,
+          machineId: 'm',
+          draft: const NewHarnessDraft(
+            machineId: 'm',
+            engine: 'codex',
+            project: NewHarnessProject.folder('/work'),
+            task: '',
+            permissionMode: 'full',
+            profile: LocalCodexProfile('/profiles/m/removed', 'Removed'),
+            profileChosen: true,
+          ),
+        );
+        addTearDown(box.dispose);
+        await Future<void>.delayed(Duration.zero);
+        expect(await box.create(), NewHarnessOutcome.failed);
+        expect(box.error, contains('Choose a profile'));
+        expect(box.field, NewHarnessField.profile);
+        expect(box.draft.profile?.path, '/profiles/m/removed');
+        expect(connection.creates, isEmpty);
+      },
+    );
+  }
+
   void setting(NewHarnessController box, String id) {
     if (id == NewHarnessController.permissionsId ||
         id == NewHarnessController.profileId) {
@@ -113,6 +170,10 @@ void main() {
     final connection = _Profiles('m');
     final app = createApp(connectionForTest: (_) => connection);
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     addTearDown(app.dispose);
     final map = MemoryKeymap();
     addTearDown(map.dispose);

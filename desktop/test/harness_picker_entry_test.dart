@@ -54,6 +54,10 @@ void main() {
         addTearDown(tester.view.reset);
         final app = createApp();
         await seedPreviews(app);
+        app.machineStates['m']!.localOnly = true;
+        app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+        await app.agentPreference.remember('codex');
+        await app.projectHistory.select('m', '/work/openharness');
         final frames = <TerminalBinaryFrame>[];
         app.adoptSessionForTest(terminal('a69', frames));
         final pane = app.focusedPane;

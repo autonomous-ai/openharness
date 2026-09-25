@@ -11,8 +11,10 @@ are the detailed implementation references for this system.
 
 ## Text is the interface
 
-Use meaningful names and familiar terminal punctuation. Prefer `[ New Harness ]`
-and `[ Customize Harness ]` to rounded buttons with pictograms. A checkbox is
+Use meaningful names and familiar terminal punctuation. Menu actions such as
+`New Harness` use plain text and the same row highlight as other choices.
+Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
+of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
 commands as editable text. Small, established actions may use `+`,
 `@`, `:`, and `*`, with a descriptive tooltip and accessible name.

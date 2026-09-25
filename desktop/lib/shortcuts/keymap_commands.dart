@@ -567,14 +567,6 @@ final harnessCommands = <HarnessCommand>[
     extraKeys: ['enter', 'ctrl+m'],
     context: KeymapContext.picker,
   ),
-  // Starts New Harness from any field, without walking down to its button.
-  const HarnessCommand(
-    'picker.start',
-    'Start the new harness from any field',
-    ShortcutGroup.actions,
-    extraKeys: ['shift+enter'],
-    context: KeymapContext.picker,
-  ),
   const HarnessCommand(
     'picker.refresh',
     'Refresh the machine list',
