@@ -191,8 +191,22 @@ fn on_paste(app: &mut App, text: String) {
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
     if app.modal.is_some() {
         match mouse.kind {
-            MouseEventKind::ScrollUp => if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.move_by(-3) },
-            MouseEventKind::ScrollDown => if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.move_by(3) },
+            // The list reads bottom-up: the wheel moves the way the rows do.
+            MouseEventKind::ScrollUp => if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.move_by(3) },
+            MouseEventKind::ScrollDown => if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.move_by(-3) },
+            MouseEventKind::Down(MouseButton::Left) => {
+                let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) => Some(picker.click(mouse.row)), _ => None };
+                match hit {
+                    // A click on a row takes it; a click outside the box closes it.
+                    Some(true) => { let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE); modal_key(app, enter) }
+                    Some(false) => {
+                        let top = app.size.1.saturating_sub(1);
+                        let inside = matches!(&app.modal, Some(Modal::Picker { picker, .. }) if picker.row_at.first().map(|(y, _)| mouse.row >= y.saturating_sub(1)).unwrap_or(false) || mouse.row >= top);
+                        if !inside { app.modal = None }
+                    }
+                    None => {}
+                }
+            }
             _ => {}
         }
         return;
@@ -200,8 +214,18 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     let (x, y) = (mouse.column, mouse.row);
     // The tab strip.
     if y == 0 {
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            if let Some(index) = crate::ui::tab_at(app, x) { app.select_tab(index) }
+        let Some(index) = crate::ui::tab_at(app, x) else { return };
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // A second click on the same tab within a moment: rename it.
+                let now = std::time::Instant::now();
+                let double = matches!(app.last_click, Some((0, c, 0, at, _)) if c == index as u16 && at.elapsed() < Duration::from_millis(400));
+                app.last_click = Some((0, index as u16, 0, now, 1));
+                app.select_tab(index);
+                if double { run(app, "rename-tab") }
+            }
+            MouseEventKind::Down(MouseButton::Middle) => app.close_tab(index),
+            _ => {}
         }
         return;
     }

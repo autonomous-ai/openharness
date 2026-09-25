@@ -433,7 +433,11 @@ fn picker_box(buf: &mut Buffer, area: Rect, picker: &mut Picker) {
     let start = end.saturating_sub(body_h);
     let top = rect.y + 1 + (body_h - (end - start)) as u16;
     if n == 0 { buf.set_string(rect.x + 2, rect.y + rect.height - 2, &picker.empty, fg(theme::MUTED).bg(theme::PANEL)); }
-    for (i, (_, line)) in lines[start..end].iter().enumerate() { buf.set_line(rect.x, top + i as u16, line, rect.width); }
+    picker.row_at.clear();
+    for (i, (vi, line)) in lines[start..end].iter().enumerate() {
+        buf.set_line(rect.x, top + i as u16, line, rect.width);
+        if let Some(vi) = vi { picker.row_at.push((top + i as u16, *vi)) }
+    }
     // The prompt: mode ❯ query▏            4/7  status
     let y = rect.y + rect.height - 1;
     let total = picker.rows.iter().filter(|r| !r.disabled).count();

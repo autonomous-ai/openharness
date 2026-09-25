@@ -58,6 +58,8 @@ pub struct Picker {
     pub cursor_pos: Option<ratatui::layout::Position>,
     /// The query starts with a mode character (`>` `@` `#` `:` `*` `?`) that is not part of the match.
     pub prefixed: bool,
+    /// Screen row → visible index, from the last draw (for clicks).
+    pub row_at: Vec<(u16, usize)>,
     matcher: Matcher,
 }
 
@@ -80,6 +82,7 @@ impl Picker {
             scroll: 0,
             cursor_pos: None,
             prefixed: false,
+            row_at: Vec::new(),
             matcher: Matcher::new(Config::DEFAULT),
         }
     }
@@ -171,6 +174,14 @@ impl Picker {
 
     pub fn current_id(&self) -> Option<String> { self.current().map(|r| r.id.clone()) }
 
+    /// Put the cursor on the row drawn at screen row [y]; false when there is none.
+    pub fn click(&mut self, y: u16) -> bool {
+        let Some((_, vi)) = self.row_at.iter().find(|(row, _)| *row == y).copied() else { return false };
+        self.cursor = vi;
+        self.selected_id = self.visible.get(vi).map(|(i, _)| self.rows[*i].id.clone());
+        true
+    }
+
     pub fn say(&mut self, text: impl Into<String>) { self.flash = Some((text.into(), Instant::now())) }
 }
 
@@ -187,5 +198,18 @@ mod tests {
         assert_eq!(p.current_id().as_deref(), Some("b"));
         p.set_rows(vec![Row::new("z", "zeta"), Row::new("b", "login flake")]);
         assert_eq!(p.current_id().as_deref(), Some("b"));
+    }
+}
+
+#[cfg(test)]
+mod colon_tests {
+    use super::*;
+    #[test]
+    fn matches_times() {
+        let mut p = Picker::new("t", "");
+        p.prefixed = true;
+        p.set_rows(vec![Row::new("a", "Terminal harness 9-25 13:53")]);
+        for c in "13:53".chars() { p.type_char(c) }
+        assert_eq!(p.visible.len(), 1, "13:53");
     }
 }
