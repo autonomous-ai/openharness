@@ -17,7 +17,9 @@ export function validGitPath(path: unknown): path is string {
 async function git(path: string, args: string[], timeout = 4000): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
-  return (await exec('git', ['--no-optional-locks', '-C', path, ...args], {
+  // core.fsmonitor names a program git runs on status/diff; a repository's own config must not choose
+  // one for the daemon (same guard as projectPreview.ts).
+  return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', path, ...args], {
     timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
     env,
   })).stdout.replace(/\r?\n$/, '')

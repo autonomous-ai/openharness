@@ -48,6 +48,16 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(encryptRpcResult('git_project_info_result')).toBe(true)
   })
 
+  it('never runs a program the repository names as its fsmonitor', async () => {
+    const marker = join(root, 'fsmonitor-ran')
+    const hook = join(root, 'fsmonitor.sh')
+    await writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+    await git('config', 'core.fsmonitor', hook)
+    await readGitProject(repo)
+    await prepare('branch', 'refs/heads/feature')
+    await expect(readFile(marker)).rejects.toThrow()
+  })
+
   it('reads local and remote branches without switching or creating anything', async () => {
     expect(await readGitProject(repo)).toMatchObject({ isGit: true, branch: 'main', branches: [
       { ref: 'refs/heads/feature', name: 'feature', remote: false },
