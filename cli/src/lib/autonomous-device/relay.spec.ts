@@ -1,18 +1,19 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceRelay } from './relay.js'
 import { AutonomousDeviceService } from './service.js'
 import { randomUUID } from 'node:crypto'
-function fixture(store?: import('./store.js').AutonomousDeviceStore) {
+function fixture(store?: import('./store.js').AutonomousDeviceStore, resultsEnabled = false) {
   let role = 'device', identity: string | null = 'trusted-device'
   const submit = vi.fn(), cancel = vi.fn(() => true), send = vi.fn()
   const crypto = { sessionRole: () => role as 'device' | 'web', sessionIdentity: () => identity,
     unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
     wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) }
-  const service = new AutonomousDeviceService({ store, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
+  const service = new AutonomousDeviceService({ store, resultsEnabled, trackResultEvidence: resultsEnabled, now: () => 0, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
   const remoteRevoke = vi.fn()
   const relay = new AutonomousDeviceRelay(crypto, send, service, 'machine', undefined, remoteRevoke)
   const request = (payload: Record<string, unknown>) => relay.handle('conn', { type: 'autonomous_device_request', payload: { __e2e: payload } })
-  return { relay, request, send, submit, service, cancel, remoteRevoke, setRole: (r: string) => { role = r }, revoke: () => { identity = null } }
+  return { relay, request, send, submit, service, cancel, remoteRevoke, setRole: (r: string) => { role = r }, setIdentity: (id: string) => { identity = id }, revoke: () => { identity = null } }
 }
 describe('Autonomous device existing E2EE relay seam', () => {
   it('requires existing device-role trust and encrypted payload before calling the service', async () => {
@@ -83,4 +84,33 @@ it('Store uses the same device-only encrypted hello gate and never exposes gener
   await f.request({ type: 'agent_create', requestId: randomUUID(), cwd: '/tmp', engine: 'claude' })
   expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { error: { code: 'UNSUPPORTED_CAPABILITY' } } } })
   expect(call).toHaveBeenCalledOnce()
+})
+
+
+it('gates live and replayed results by mutual capability and originating identity on every hello', async () => {
+  const f = fixture(undefined, true)
+  const capture = JSON.parse(readFileSync(new URL('../../../../docs/contracts/turn-correlation-v2/codex-steering.json', import.meta.url), 'utf8'))
+  await f.request({ type: 'hello', proto: 1, requestId: randomUUID() }) // legacy OS
+  for (const [i, text] of capture.inputs.entries()) {
+    await f.request({ type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: `key-${i}`, text })
+    f.service.inputDispatched('agent', f.service.receipt('trusted-device', `key-${i}`)!.deliveryId, text)
+  }
+  for (const row of capture.records) f.service.observeTranscript('agent', 'session', 'codex', JSON.stringify(row))
+  const frames: any[] = []
+  f.service.replay(undefined, e => frames.push(e))
+  const result = frames.find(e => e.kind === 'turn.result')
+  expect(result).toBeDefined()
+  f.send.mockClear(); f.relay.emit(result)
+  expect(f.send).not.toHaveBeenCalled()
+  await f.request({ type: 'hello', proto: 1, requestId: randomUUID(), capabilities: ['turn.correlation.v2'] })
+  const results = () => f.send.mock.calls.map(([, frame]) => frame.payload.__e2e).filter(e => e.kind === 'turn.result')
+  expect(results()).toHaveLength(1) // result reconciliation on hello
+  f.send.mockClear(); f.relay.emit(result)
+  expect(results()).toHaveLength(1)
+  f.send.mockClear()
+  await f.request({ type: 'hello', proto: 1, requestId: randomUUID() }) // capability downgrade
+  f.relay.emit(result); expect(results()).toHaveLength(0)
+  f.setIdentity('other-device')
+  await f.request({ type: 'hello', proto: 1, requestId: randomUUID(), capabilities: ['turn.correlation.v2'] })
+  f.relay.emit(result); expect(results()).toHaveLength(0)
 })

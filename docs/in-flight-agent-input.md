@@ -100,8 +100,8 @@ overlap. It does not support merged results or consume receipt.input yet.
 
 The concrete handoff is [Grouped result contract: turn.correlation.v2](autonomous-device-result-correlation.md).
 It defines the event schema, evidence requirements, run closure, result/TTS dedupe,
-compatibility and joint rollout tests. This is the Harness-side contract decision, not an
-implemented or advertised capability. No OS repository changes are included. PR #294 fixes
+compatibility and joint rollout tests. The follow-up producer implements this behind an explicit opt-in; it is disabled by
+default and requires OS capability negotiation. No OS repository changes are included. PR #294 fixes
 input delivery; the complete overlapping-result → Lamp flow remains follow-up work.
 
 ## Validation (2026-09-24)

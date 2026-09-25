@@ -51,6 +51,7 @@ export interface DeviceInputDeps {
   acquireControl: (id: string) => (() => void) | null
   legacySubmit: (id: string, text: string, deliveryId: string) => void
   legacyCancel: (deliveryId: string) => boolean
+  onDispatch?: (id: string, deliveryId: string, text: string) => void
   onDelivery: (event: SessionInputDelivery) => void
   onInputStatus: (event: DeviceInputStatus) => void
   onForget?: (id: string) => void
@@ -185,6 +186,7 @@ export class AutonomousDeviceInput {
       const version = session.cliVersion?.match(/(\d+)\.(\d+)\.(\d+)/)
       item.mode = !state.busy ? 'direct' : session.engine === 'claude' ? 'native_queue'
         : version && (Number(version[1]) > 0 || Number(version[2]) >= 106) ? 'steering' : 'native_input'
+      this.deps.onDispatch?.(id, item.deliveryId, item.content)
       item.dispatched = true
       state.pending.push(item)
       const result = await this.deps.inject(session.agentId, item.content)

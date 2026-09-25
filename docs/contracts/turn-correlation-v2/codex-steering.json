@@ -1,0 +1,110 @@
+{
+  "description": "Redacted Codex 0.156.1 existing smoke transcript, 2026-09-24. Explicit per-input turn metadata retained. No new engine task.",
+  "inputs": [
+    "Use the shell tool to execute sleep 20, then reply HOUSE_READY. This is an input delivery test. Do not modify files.",
+    "For this text-only test, revise the response to say GARDEN_RED. Do not create or modify files."
+  ],
+  "records": [
+    {
+      "timestamp": "2026-09-24T06:04:09.800Z",
+      "ordinal": 1,
+      "type": "event_msg",
+      "payload": {
+        "type": "task_started",
+        "turn_id": "engine-turn-1",
+        "root_turn_id": "engine-turn-1",
+        "started_at": 1790229849,
+        "model_context_window": 258400,
+        "collaboration_mode_kind": "default"
+      }
+    },
+    {
+      "timestamp": "2026-09-24T06:04:12.561Z",
+      "ordinal": 5,
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "id": "input-5",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Project instructions (redacted)."
+          },
+          {
+            "type": "input_text",
+            "text": "Environment context (redacted)."
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "engine-turn-1",
+          "create_time": 1790229852.561252,
+          "content_item_kinds": [
+            "agents_md.instructions",
+            "environments.environment_context"
+          ]
+        }
+      }
+    },
+    {
+      "timestamp": "2026-09-24T06:04:13.379Z",
+      "ordinal": 8,
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "id": "input-8",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Use the shell tool to execute sleep 20, then reply HOUSE_READY. This is an input delivery test. Do not modify files."
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "engine-turn-1",
+          "create_time": 1790229853.379667,
+          "content_item_kinds": [
+            "user.text"
+          ]
+        }
+      }
+    },
+    {
+      "timestamp": "2026-09-24T06:04:18.692Z",
+      "ordinal": 16,
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "id": "input-16",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "For this text-only test, revise the response to say GARDEN_RED. Do not create or modify files."
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "engine-turn-1",
+          "create_time": 1790229858.692509,
+          "content_item_kinds": [
+            "user.text"
+          ]
+        }
+      }
+    },
+    {
+      "timestamp": "2026-09-24T06:04:41.433Z",
+      "ordinal": 27,
+      "type": "event_msg",
+      "payload": {
+        "type": "task_complete",
+        "turn_id": "engine-turn-1",
+        "last_agent_message": "GARDEN_RED",
+        "started_at": 1790229849,
+        "completed_at": 1790229881,
+        "duration_ms": 31634,
+        "time_to_first_token_ms": 5597
+      }
+    }
+  ]
+}

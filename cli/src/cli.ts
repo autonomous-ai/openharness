@@ -225,6 +225,7 @@ import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js
 import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
+import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceInput, isDeviceInputBoundary } from './lib/autonomous-device/input.js'
 import { adaptSlashCommand } from './lib/goalCommand.js'
 import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile.js'
@@ -2155,6 +2156,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       || (session.engine === 'cursor' && replayCursorFromStart)
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
+    for (const line of lines) autonomousDeviceService?.observeTranscript(session.agentId, session.sessionId, session.engine, line)
     runtimeProfiles.hydrate(session, lines)
     await runtimeProfiles.ingestConfig(session, true)
     // Returns `turnOpen` rather than assigning it: every engine folds exactly once, and a second call
@@ -2403,6 +2405,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     legacySubmit: (id, text, deliveryId) => input.submit(id, text, deliveryId),
     legacyCancel: id => input.cancelDelivery(id),
     onDelivery: event => autonomousDeviceService?.delivery(event),
+    onDispatch: (id, deliveryId, text) => autonomousDeviceService?.inputDispatched(id, deliveryId, text, registry.byAgent(id)?.sessionId),
     onInputStatus: event => autonomousDeviceService?.inputStatus(event),
     onForget: id => autonomousDeviceService?.agentGone(id),
   })
@@ -4167,6 +4170,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const session = registry.bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
     agentTokenUsage.changed(session)
+    autonomousDeviceService?.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
     runtimeProfiles.ingest(session, evt.text)
     let events
     if (session.engine === 'codex') {
@@ -5820,6 +5824,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   deviceStore.startUiDelivery()
   autonomousDeviceService = new AutonomousDeviceService({
     store: deviceStore,
+    trackResultEvidence: true,
+    resultsEnabled: process.env.HARNESS_DEVICE_RESULTS_V2 === '1',
+    resultJournal: new DeviceResultJournal(join(env.ADAPTER_DATA_DIR, 'device-results.json')),
+    inputConsumed: (id, text) => deviceInput.onTurnStarted(id, text),
     machineId: backend.machineId,
     requestAppFocus: (agentId, expiresAt, focusRevision) => backend.sendFirstLocal({
       type: 'device_focus', payload: { machineId: backend.machineId, agentId, expiresAt, focusRevision },
