@@ -68,6 +68,15 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name) async {
 void main() {
   setUpAll(() async {
     await loadRealFonts();
+    if (Platform.isMacOS &&
+        Platform.environment.containsKey('HARNESS_CUSTOMIZE_CAPTURE_DIR')) {
+      final bytes = ByteData.sublistView(
+        await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+      );
+      for (final family in ['SF Mono', '.AppleSystemUIFontMonospaced']) {
+        await (FontLoader(family)..addFont(Future.value(bytes))).load();
+      }
+    }
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
@@ -117,13 +126,19 @@ void main() {
       final storage = _Storage();
       final store = AppearancePrefsStore(storage: storage);
       addTearDown(store.dispose);
+      final boundary = GlobalKey();
       await tester.pumpWidget(
         MaterialApp(
+          debugShowCheckedModeBanner: false,
           theme: grid.buildAppTheme(brightness: Brightness.dark),
+          builder: (context, child) => grid.BrightnessScope(child: child!),
           home: Scaffold(
             body: SizedBox(
               width: 440,
-              child: HarnessCustomizePane(store: store, onClose: () {}),
+              child: RepaintBoundary(
+                key: boundary,
+                child: HarnessCustomizePane(store: store, onClose: () {}),
+              ),
             ),
           ),
         ),
@@ -151,6 +166,27 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(store.value.prompt.statusStyle, StatusLineStyle.robbyrussell);
+      await _capture(tester, boundary, 'status-minimal');
+      for (final format in StatusLineStyle.values.skip(2)) {
+        await focus('prompt-style-${format.name}');
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(store.value.prompt.statusStyle, format);
+        final target = find.byKey(ValueKey('prompt-style-${format.name}'));
+        expect(
+          target.hitTestable(),
+          findsOneWidget,
+          reason: 'Keyboard focus scrolls ${format.label} into view',
+        );
+        expect(
+          tester
+              .widget<StatusLine>(find.byKey(const ValueKey('prompt-preview')))
+              .parts
+              .style,
+          format,
+        );
+      }
+      await _capture(tester, boundary, 'status-powerline');
       await focus('prompt-branch');
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();

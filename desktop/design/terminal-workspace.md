@@ -77,9 +77,13 @@ rounded action pills, and redundant headings. Tabs use concise text labels, with
 selection conveyed by background rather than bold type.
 
 Status layouts and terminal palettes are separate choices. **Plain** always uses
-the terminal foreground, including PR status. Other status presets use the
-terminal's ANSI colors; Color off makes any preset monochrome. Do not invent
-runtime facts, Git dirtiness, exit status, or progress to decorate a theme.
+the terminal foreground, including PR status. Shell layouts use the terminal's
+ANSI colors. The named Pastel Powerline, Catppuccin Powerline, Tokyo Night, and
+Gruvbox Rainbow presets carry their own status-only colors, resolved in the
+shared status formatter for both Flutter and AppKit. Color off makes any preset
+monochrome. Branch symbols and separators are drawn vectors so users can keep
+their normal monospace font. Do not invent runtime facts, Git dirtiness, exit
+status, or progress to decorate a theme.
 
 ## Make context useful
 

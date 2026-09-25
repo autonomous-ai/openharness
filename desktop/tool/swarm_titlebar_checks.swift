@@ -36,6 +36,58 @@ private extension NSView {
   }
 }
 
+private extension SwarmContextButton {
+  func checkThemeSymbolsAndCaps() throws {
+    font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    textAlignment = .left
+    nextBackground = nil
+    let pointer = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    for ribbon in [false, true] {
+      var segment: [String: Any] = ["text": "feature/日本語", "foreground": Int64(0xff11111b)]
+      if ribbon { segment["background"] = Int64(0xfff9e2af) }
+      var payload: [String: Any] = ["text": "feature/日本語", "interactive": true,
+        "segmented": ribbon, "segments": [segment]]
+      update(payload, enabled: true)
+      let withoutSymbol = preferredWidth
+      segment["branchSymbol"] = true
+      payload["segments"] = [segment]
+      update(payload, enabled: true)
+      try checkTitlebar(abs(preferredWidth - withoutSymbol - cellWidth * 2) < 1,
+        "Branch symbol reserves two cells in plain and segmented themes")
+      frame = NSRect(x: 0, y: 0, width: preferredWidth, height: 28)
+      let resting = renderedPixels()
+      let width = preferredWidth
+      mouseEntered(with: pointer)
+      try checkTitlebar(renderedPixels() != resting && width == preferredWidth,
+        "Branch symbol text becomes bold without moving the icon or click target")
+      mouseExited(with: pointer)
+      try checkTitlebar(accessibilityValue() as? String == "feature/日本語",
+        "Decorative branch symbols leave the full accessible branch name intact")
+      for narrow in [CGFloat(12), CGFloat(40), CGFloat(80)] {
+        frame.size.width = narrow
+        try checkTitlebar(!renderedPixels().isEmpty, "Icon-bearing status safely truncates at width \(narrow)")
+      }
+      guard ribbon else { continue }
+      payload["roundedStart"] = true
+      payload["roundedEnd"] = true
+      payload["roundedSeparators"] = true
+      update(payload, enabled: true)
+      frame.size.width = preferredWidth
+      let rounded = renderedBitmap()
+      try checkTitlebar((rounded.colorAt(x: 0, y: 7)?.alphaComponent ?? 1) < 0.1 &&
+        (rounded.colorAt(x: 4, y: 14)?.alphaComponent ?? 0) > 0.99,
+        "Rounded palettes have a clear capsule corner and an opaque center")
+      nextBackground = NSColor(srgbRed: 0.7, green: 0.5, blue: 0.8, alpha: 1)
+      let joined = renderedBitmap()
+      try checkTitlebar((joined.colorAt(x: 0, y: 7)?.alphaComponent ?? 1) < 0.1 &&
+        (joined.colorAt(x: joined.pixelsWide - 1, y: 7)?.alphaComponent ?? 0) > 0.99,
+        "A joined PR fills the tail without filling the leading rounded corner")
+      nextBackground = nil
+    }
+  }
+}
+
 private extension SwarmTabButton {
   // `label` is private to the tab; a same-file extension reads what it draws.
   var drawnFont: NSFont? { label.attribute(.font, at: 0, effectiveRange: nil) as? NSFont }
@@ -308,6 +360,7 @@ private extension SwarmTabStrip {
       abs(tail!.greenComponent - expectedJoin!.greenComponent) < 0.02 &&
       abs(tail!.blueComponent - expectedJoin!.blueComponent) < 0.02,
       "The last arrow paints through to the adjacent PR background without a dark divider")
+    try join.checkThemeSymbolsAndCaps()
     let contextFields: [[String: Any]] = ["machine", "project", "branch"].map { field in
       ["text": field, "field": field, "paneId": 7, "interactive": true,
        "detail": "Find harnesses: \(field)",

@@ -789,6 +789,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }) => {
     'text': parts.text,
     'segmented': parts.style.segmented,
+    'roundedSeparators': parts.style.roundedSeparators,
+    'roundedStart': parts.style.roundedStart && segmentOffset == 0,
+    'roundedEnd': parts.style.roundedEnd,
     'segments': [
       for (final part in statusLinePaintSegments(
         parts,

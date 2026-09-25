@@ -54,17 +54,33 @@ class StatusLine extends StatelessWidget {
           color: color,
           segmentOffset: segmentOffset,
         );
+        final cell = workspaceBar
+            ? workspaceBarCellSizeOf(context)
+            : terminalCellSizeOf(context);
+        final scaler = MediaQuery.textScalerOf(context);
         if (!parts.style.segmented) {
           final text = Text.rich(
             TextSpan(
               children: [
-                for (final segment in segments)
+                for (final segment in segments) ...[
+                  if (segment.branchSymbol)
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: ExcludeSemantics(
+                        child: CustomPaint(
+                          size: Size(cell.width * 2, cell.height * .7),
+                          painter: _BranchSymbolPainter(segment.foreground),
+                        ),
+                      ),
+                    ),
                   TextSpan(
                     text: segment.text,
                     style: TextStyle(color: segment.foreground),
                   ),
+                ],
               ],
             ),
+            semanticsLabel: parts.text,
             style: style,
             maxLines: 1,
             softWrap: false,
@@ -73,18 +89,18 @@ class StatusLine extends StatelessWidget {
           );
           return workspaceBar
               ? SizedBox(
-                  width: workspaceBarTextSizeOf(
-                    context,
-                    segments.map((s) => s.text).join(),
-                  ).width,
+                  width:
+                      workspaceBarTextSizeOf(
+                        context,
+                        segments.map((s) => s.text).join(),
+                      ).width +
+                      segments.where((s) => s.branchSymbol).length *
+                          cell.width *
+                          2,
                   child: text,
                 )
               : text;
         }
-        final cell = workspaceBar
-            ? workspaceBarCellSizeOf(context)
-            : terminalCellSizeOf(context);
-        final scaler = MediaQuery.textScalerOf(context);
         return Semantics(
           label: parts.text,
           child: LayoutBuilder(
@@ -105,9 +121,10 @@ class StatusLine extends StatelessWidget {
               }
               final widths = [
                 for (final segment in segments)
-                  workspaceBar
-                      ? workspaceBarTextSizeOf(context, segment.text).width
-                      : _measure(segment.text, style, scaler),
+                  (workspaceBar
+                          ? workspaceBarTextSizeOf(context, segment.text).width
+                          : _measure(segment.text, style, scaler)) +
+                      (segment.branchSymbol ? cell.width * 2 : 0),
               ];
               final natural =
                   widths.fold(0.0, (a, b) => a + b) +
@@ -129,6 +146,8 @@ class StatusLine extends StatelessWidget {
                     style,
                     scaler,
                     nextBackground,
+                    parts.style,
+                    segmentOffset,
                   ),
                 ),
               );
@@ -178,6 +197,8 @@ class _StatusSegmentsPainter extends CustomPainter {
     this.style,
     this.scaler,
     this.nextBackground,
+    this.format,
+    this.segmentOffset,
   );
   final List<StatusLinePaintSegment> segments;
   final List<double> widths;
@@ -185,6 +206,8 @@ class _StatusSegmentsPainter extends CustomPainter {
   final TextStyle style;
   final TextScaler scaler;
   final Color? nextBackground;
+  final StatusLineStyle format;
+  final int segmentOffset;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -196,7 +219,10 @@ class _StatusSegmentsPainter extends CustomPainter {
     canvas.clipRect(Offset.zero & size);
     // Fill through the next click target's join, including subpixel rounding.
     if (nextBackground != null) {
-      canvas.drawRect(Offset.zero & size, Paint()..color = nextBackground!);
+      canvas.drawRect(
+        Rect.fromLTWH(size.width - cell.width, 0, cell.width, cell.height),
+        Paint()..color = nextBackground!,
+      );
     }
     var x = 0.0;
     for (var i = 0; i < segments.length; i++) {
@@ -209,15 +235,49 @@ class _StatusSegmentsPainter extends CustomPainter {
           Paint()..color = nextBackground!,
         );
       }
+      final roundStart = format.roundedStart && segmentOffset == 0 && i == 0;
+      final roundRight =
+          format.roundedSeparators ||
+          (format.roundedEnd &&
+              i == segments.length - 1 &&
+              nextBackground == null);
+      final h = cell.height;
+      final c = cell.width;
+      final end = x + width;
       final shape = Path()
-        ..moveTo(x, 0)
-        ..lineTo(x + width, 0)
-        ..lineTo(x + width + cell.width, cell.height / 2)
-        ..lineTo(x + width, cell.height)
-        ..lineTo(x, cell.height)
-        ..lineTo(x + (i == 0 ? 0 : cell.width), cell.height / 2)
-        ..close();
+        ..moveTo(x + (roundStart ? c : 0), 0)
+        ..lineTo(end, 0);
+      if (roundRight) {
+        shape.cubicTo(end + c * .55, 0, end + c, h * .225, end + c, h / 2);
+        shape.cubicTo(end + c, h * .775, end + c * .55, h, end, h);
+      } else {
+        shape
+          ..lineTo(end + c, h / 2)
+          ..lineTo(end, h);
+      }
+      shape.lineTo(x + (roundStart ? c : 0), h);
+      if (roundStart) {
+        shape.cubicTo(x + c * .45, h, x, h * .775, x, h / 2);
+        shape.cubicTo(x, h * .225, x + c * .45, 0, x + c, 0);
+      } else if (i > 0 && format.roundedSeparators) {
+        shape.cubicTo(x + c * .55, h, x + c, h * .775, x + c, h / 2);
+        shape.cubicTo(x + c, h * .225, x + c * .55, 0, x, 0);
+      } else {
+        shape.lineTo(x + (i == 0 ? 0 : c), h / 2);
+      }
+      shape.close();
       canvas.drawPath(shape, Paint()..color = segment.background!);
+      // At tight widths, preserve the branch name before its decorative icon.
+      final symbolWidth = segment.branchSymbol && fitted[i] >= cell.width * 3
+          ? cell.width * 2
+          : 0.0;
+      if (symbolWidth > 0) {
+        _paintBranchSymbol(
+          canvas,
+          Rect.fromLTWH(x + inset, h * .15, cell.width, h * .7),
+          segment.foreground,
+        );
+      }
       final painter = TextPainter(
         text: TextSpan(
           text: segment.text,
@@ -227,10 +287,10 @@ class _StatusSegmentsPainter extends CustomPainter {
         textScaler: scaler,
         maxLines: 1,
         ellipsis: '…',
-      )..layout(maxWidth: fitted[i]);
+      )..layout(maxWidth: math.max(0, fitted[i] - symbolWidth));
       painter.paint(
         canvas,
-        Offset(x + inset, (cell.height - painter.height) / 2),
+        Offset(x + inset + symbolWidth, (cell.height - painter.height) / 2),
       );
       painter.dispose();
       x += width;
@@ -245,5 +305,54 @@ class _StatusSegmentsPainter extends CustomPainter {
       cell != oldDelegate.cell ||
       style != oldDelegate.style ||
       scaler != oldDelegate.scaler ||
-      nextBackground != oldDelegate.nextBackground;
+      nextBackground != oldDelegate.nextBackground ||
+      format != oldDelegate.format ||
+      segmentOffset != oldDelegate.segmentOffset;
+}
+
+class _BranchSymbolPainter extends CustomPainter {
+  const _BranchSymbolPainter(this.color);
+  final Color color;
+  @override
+  void paint(Canvas canvas, Size size) => _paintBranchSymbol(
+    canvas,
+    Rect.fromLTWH(0, 0, size.width / 2, size.height),
+    color,
+  );
+  @override
+  bool shouldRepaint(_BranchSymbolPainter oldDelegate) =>
+      color != oldDelegate.color;
+}
+
+void _paintBranchSymbol(Canvas canvas, Rect rect, Color color) {
+  final paint = Paint()
+    ..color = color
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = rect.width * .14
+    ..strokeCap = StrokeCap.round;
+  final left = rect.left + rect.width * .25;
+  final right = rect.left + rect.width * .8;
+  final top = rect.top + rect.height * .15;
+  final bottom = rect.top + rect.height * .85;
+  final radius = rect.width * .16;
+  final path = Path()
+    ..moveTo(left, top + radius)
+    ..lineTo(left, bottom - radius)
+    ..moveTo(right, top + radius)
+    ..cubicTo(
+      right,
+      rect.center.dy,
+      left,
+      rect.center.dy,
+      left,
+      bottom - radius,
+    );
+  canvas.drawPath(path, paint);
+  for (final center in [
+    Offset(left, top),
+    Offset(right, top),
+    Offset(left, bottom),
+  ]) {
+    canvas.drawCircle(center, radius, paint);
+  }
 }
