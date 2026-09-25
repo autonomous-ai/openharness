@@ -36,7 +36,7 @@ void main() {
         expect(find.widgetWithText(ListTile, 'Agent 0'), findsNothing);
         expect(
           tester.widget<TextField>(_input).decoration!.hintText,
-          'Search commands…',
+          'Search commands',
         );
         expect(_results, findsOneWidget);
         await tester.enterText(_input, '> rename');
@@ -158,6 +158,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('harness-start-new-pane')));
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      expect(find.byType(AlertDialog), findsNothing);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
@@ -251,7 +253,7 @@ void main() {
       expect(tester.widget<TextField>(_input).controller!.text, '>');
       expect(
         tester.widget<TextField>(_input).decoration!.hintText,
-        'Search commands…',
+        'Search commands',
       );
       await tester.pumpWidget(const SizedBox());
       app.dispose();

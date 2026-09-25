@@ -11,10 +11,8 @@ import 'swarm_catalog.dart';
 import 'swarm_navigation.dart';
 import 'harness_sessions.dart';
 
-/// A compact hint for the shared search field outside the terminal picker.
-const kSwarmSearchHint =
-    'Search harnesses    @ machines    # projects    : models    * store';
-const kHarnessPickerHint = 'Find a harness…';
+const kSwarmSearchHint = 'Search harnesses';
+const kHarnessPickerHint = kSwarmSearchHint;
 
 const kSwarmCreateRowId = 'create:harness';
 
@@ -47,8 +45,10 @@ class SwarmSearchController extends ChangeNotifier {
     this.adding = false,
     this.navigating = false,
     this.activityFirst = false,
+    this.selectOnEmptyQuery = true,
     this.commandsOnly = false,
     this.offersCreate = false,
+    this.offersHarnessCreate = true,
     this.resultsFromBottom = false,
     this._placement,
     this._split,
@@ -88,6 +88,9 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// Open Harness filters by latest activity; commands and splits keep relevance order.
   final bool activityFirst;
+
+  /// Cmd-P starts without a choice; typing or navigating activates a result.
+  final bool selectOnEmptyQuery;
   bool get setupLayout => activityFirst && !isCommandMode && !isHelpMode;
   final bool commandsOnly;
   SessionFilter sessionFilter = SessionFilter.all;
@@ -149,9 +152,12 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Whether the list ends in a row that makes a harness instead of finding
-  /// one. What was typed becomes the new harness's first task.
+  /// Whether the list offers a creation row for its current resource type.
   final bool offersCreate;
+
+  /// Cmd-P finds existing harnesses; splits can also offer a new harness.
+  /// Machine, project, and model setup remain available in their own scopes.
+  final bool offersHarnessCreate;
 
   /// Docked pickers keep their best match next to the input at the bottom.
   /// Catalog ranking stays unchanged; rendering and spatial movement invert.
@@ -222,6 +228,13 @@ class SwarmSearchController extends ChangeNotifier {
       : isModelMode
       ? 'New Model'
       : 'New Harness';
+  String get createDescription => isMachineMode
+      ? 'Set up or link another computer.'
+      : isProjectMode
+      ? 'Choose a working folder for a project.'
+      : isModelMode
+      ? 'Add a local model or connect an API.'
+      : 'Choose a harness, machine, and project.';
   ({String id, String name, String query})? _groupScope;
   bool get canGoBack => _groupScope != null;
   String? get scopedMachineId => _groupScope == null
@@ -301,6 +314,8 @@ class SwarmSearchController extends ChangeNotifier {
   // Paging the preview must not rebuild the result list or its text editor.
   final _previewPage = ValueNotifier<int>(0);
   ValueListenable<int> get previewPage => _previewPage;
+  final _previewLine = ValueNotifier<int>(0);
+  ValueListenable<int> get previewLine => _previewLine;
   final _resultPage = ValueNotifier<int>(0);
   ValueListenable<int> get resultPage => _resultPage;
   void page(int pages) {
@@ -309,6 +324,12 @@ class SwarmSearchController extends ChangeNotifier {
     } else {
       _resultPage.value += pages;
     }
+  }
+
+  void pageResults(int pages) => _resultPage.value += pages;
+
+  void scrollPreview(int lines) {
+    if (hasPreview) _previewLine.value += lines;
   }
 
   String targetId, targetName;
@@ -366,23 +387,31 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool get canAccept => canSubmit(selected);
 
-  SwarmDestination? get selected => rows.isEmpty ? null : rows[cursor];
+  SwarmDestination? get selected =>
+      cursor < 0 || cursor >= rows.length ? null : rows[cursor];
+  bool get _emptyFinder =>
+      !selectOnEmptyQuery &&
+      setupLayout &&
+      !canGoBack &&
+      sessionFilter == SessionFilter.all &&
+      query.trim().isEmpty;
+  bool get showsTypeHints => _emptyFinder && selected == null;
   String get hint => isCommandMode
-      ? 'Search commands…'
+      ? 'Search commands'
       : isHelpMode
-      ? 'Choose a mode or search help…'
+      ? 'Search help'
       : _groupScope != null
-      ? 'Search agents in ${_groupScope!.name}…'
+      ? 'Search harnesses in ${_groupScope!.name}'
       : isProjectMode
-      ? 'Search projects…'
+      ? 'Search projects'
       : isMachineMode
-      ? 'Search machines…'
+      ? 'Search machines'
       : isModelMode
-      ? 'Search models…'
+      ? 'Search models'
       : isStoreMode
-      ? 'Search store…'
+      ? 'Search store'
       : history != null
-      ? 'Search history…'
+      ? 'Search history'
       : placement != null
       ? kHarnessPickerHint
       : kSwarmSearchHint;
@@ -413,6 +442,7 @@ class SwarmSearchController extends ChangeNotifier {
       !navigating &&
       !isCommandMode &&
       !isHelpMode &&
+      (offersHarnessCreate || isGroupMode || isModelMode) &&
       (_groupScope == null || scopedMachineId != null) &&
       (isGroupMode ||
           isModelMode ||
@@ -433,7 +463,8 @@ class SwarmSearchController extends ChangeNotifier {
           ? 'create:$scopePrefix'
           : kSwarmCreateRowId,
       title: title,
-      detail: name ?? 'use current defaults',
+      detail: name ?? createDescription,
+      terminalDetail: createDescription,
       swarmId: null,
       current: false,
       isCreate: true,
@@ -817,9 +848,7 @@ class SwarmSearchController extends ChangeNotifier {
         for (final row in rows)
           if (!row.isCreate) row,
       ];
-      // Navigating (⌘P) always leads with New Harness: the list below it is
-      // ordered by latest activity, so the one thing that is never a
-      // result needs a fixed home rather than a place in that order.
+      // When creation is available, keep its row outside the result order.
       rows =
           resultsFromBottom ||
               navigating ||
@@ -841,7 +870,10 @@ class SwarmSearchController extends ChangeNotifier {
               ).firstOrNull?.id
             : null);
     final index = rows.indexWhere((row) => row.id == preferred);
-    cursor = rows.isEmpty
+    final waitingForSelection = _emptyFinder && _selectedId == null;
+    cursor = waitingForSelection
+        ? -1
+        : rows.isEmpty
         ? 0
         : index >= 0
         ? index
@@ -851,13 +883,17 @@ class SwarmSearchController extends ChangeNotifier {
               rows.length > 1 &&
               rows.first.isCreate &&
               ((placement == null && split == null) ||
+                  !selectOnEmptyQuery ||
                   matchQuery.trim().isNotEmpty)
         ? 1
         : cursor.clamp(0, rows.length - 1);
     // Nor on a row Return cannot take: "Already added", dimmed, with its
     // reason stranded at the bottom. Only when the position is ours to pick —
     // a row somebody arrowed to stays theirs.
-    if (preferred == null && rows.isNotEmpty && !canSubmit(rows[cursor])) {
+    if (preferred == null &&
+        cursor >= 0 &&
+        rows.isNotEmpty &&
+        !canSubmit(rows[cursor])) {
       final first = rows.indexWhere(canSubmit);
       if (first >= 0) cursor = first;
     }
@@ -903,7 +939,7 @@ class SwarmSearchController extends ChangeNotifier {
 
   void move(int delta) {
     if (rows.isEmpty) return;
-    cursor = (cursor + delta) % rows.length;
+    cursor = ((cursor < 0 && delta < 0 ? 0 : cursor) + delta) % rows.length;
     _selectedId = selected!.id;
     notifyListeners();
   }
@@ -1041,6 +1077,7 @@ class SwarmSearchController extends ChangeNotifier {
     models?.removeListener(_modelsChanged);
     app.sessionPreviews.removeListener(_previewChanged);
     _previewPage.dispose();
+    _previewLine.dispose();
     _resultPage.dispose();
     super.dispose();
   }

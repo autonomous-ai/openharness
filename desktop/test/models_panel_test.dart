@@ -696,7 +696,7 @@ void main() {
     await selectResource(tester, 'model:local:qwen');
     await tester.pump();
     expect(find.text('Qwen3.8-27B'), findsWidgets);
-    expect(find.text('Search models…'), findsOneWidget);
+    expect(find.text('Search models'), findsOneWidget);
     expect(tester.getSize(resourceScope(':')).height, greaterThan(620));
     expect(tester.getRect(resourceScope(':')).bottom, lessThan(760));
     tester.view.physicalSize = const Size(1200, 480);
@@ -732,7 +732,7 @@ void main() {
     expect(panel.top, greaterThan(0));
     expect(panel.width, greaterThan(1000));
     expect(find.byType(Dialog), findsNothing);
-    expect(find.text('Search models…'), findsOneWidget);
+    expect(find.text('Search models'), findsOneWidget);
     expect(
       resourceSearch(tester).rows
           .any((row) => row.modelId == 'model:local:qwen'),

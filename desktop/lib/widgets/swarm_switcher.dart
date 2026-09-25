@@ -101,7 +101,7 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
                   controller: _query,
                   focusNode: _focus,
                   autofocus: true,
-                  hintText: 'Search history…',
+                  hintText: 'Search history',
                   onChanged: widget.search.setQuery,
                 ),
                 const SizedBox(height: 8),
@@ -210,6 +210,10 @@ class SwarmSearchKeys extends StatelessWidget {
             'picker.previous': () => move(-1),
             if (search != null) ...{
               'picker.toggle_preview': () => run(search.togglePreview),
+              'picker.page_up': () => run(() => search.pageResults(-1)),
+              'picker.page_down': () => run(() => search.pageResults(1)),
+              'picker.preview_up': () => run(() => search.scrollPreview(-1)),
+              'picker.preview_down': () => run(() => search.scrollPreview(1)),
               'picker.preview_page_up': () => run(() => search.page(-1)),
               'picker.preview_page_down': () => run(() => search.page(1)),
             },
@@ -335,9 +339,19 @@ class SwarmSearchKeys extends StatelessWidget {
                 ): () =>
                     run(search.togglePreview),
                 const SingleActivator(LogicalKeyboardKey.pageUp): () =>
-                    run(() => search.page(-1)),
+                    run(() => search.pageResults(-1)),
                 const SingleActivator(LogicalKeyboardKey.pageDown): () =>
-                    run(() => search.page(1)),
+                    run(() => search.pageResults(1)),
+                const SingleActivator(
+                  LogicalKeyboardKey.arrowUp,
+                  shift: true,
+                ): () =>
+                    run(() => search.scrollPreview(-1)),
+                const SingleActivator(
+                  LogicalKeyboardKey.arrowDown,
+                  shift: true,
+                ): () =>
+                    run(() => search.scrollPreview(1)),
               },
               const SingleActivator(
                 LogicalKeyboardKey.keyN,
@@ -651,6 +665,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 700 *
                     scale.scale(grid.AppType.monoSize) /
                     grid.AppType.monoSize;
+        final singleLine =
+            search.isCommandMode ||
+            (search.setupLayout && search.scopePrefix.isEmpty);
         _rowHeight = swarmSearchRowHeight(
           scale,
           commands: search.isCommandMode,
@@ -658,9 +675,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           stacked: stacked,
         );
         if (widget.bios) {
-          // A name, its context, then one blank terminal row. Only the name
-          // receives the selection bar, exactly as in New Harness.
-          _rowHeight = cell.height * (search.isCommandMode ? 1 : 3);
+          // Session context lives in the preview. Resource choices retain
+          // their description and one blank terminal row.
+          _rowHeight = cell.height * (singleLine ? 1 : 3);
         }
         final height = widget.fitRows
             ? _fittedHeight(
@@ -735,6 +752,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                       terminal: true,
                       stacked: true,
                       bios: true,
+                      singleLine: singleLine,
                       highlighted: highlighted,
                       enabled: canSubmit,
                       cellSize: cell,
@@ -1136,6 +1154,7 @@ class _SearchRowContent extends StatefulWidget {
     required this.terminal,
     required this.stacked,
     this.bios = false,
+    this.singleLine = false,
     this.highlighted = false,
     this.enabled = true,
     this.cellSize,
@@ -1147,6 +1166,7 @@ class _SearchRowContent extends StatefulWidget {
   final bool terminal;
   final bool stacked;
   final bool bios;
+  final bool singleLine;
   final bool highlighted;
   final bool enabled;
   final Size? cellSize;
@@ -1223,7 +1243,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
             ].where((part) => part.isNotEmpty).join('  ');
       return Semantics(
         label: row.isCreate
-            ? row.title
+            ? '${row.title}\n$detail'
             : '${row.title}\n${row.terminalDetail ?? row.detail}'
                   '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
         excludeSemantics: true,
@@ -1237,8 +1257,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
               padding: EdgeInsets.symmetric(horizontal: cell.width),
               child: Row(
                 children: [
-                  // Match Cmd-N's empty two-cell gutter. Agent identities are
-                  // text in the context line, never logos or icon-font glyphs.
+                  // Match Cmd-N's empty two-cell gutter.
                   SizedBox(width: cell.width * 2),
                   Expanded(
                     child: row.isCreate
@@ -1265,7 +1284,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ],
               ),
             ),
-            if (!row.isCreate && !row.isCommand && detail.isNotEmpty)
+            if (!widget.singleLine && !row.isCommand && detail.isNotEmpty)
               Padding(
                 padding: EdgeInsets.only(
                   left: cell.width * 3,

@@ -20,6 +20,7 @@ import 'machine_actions.dart';
 import 'machines_manager.dart' show showMachineRenameDialog;
 import 'link_another_machine_dialog.dart';
 import 'swarm_search_preview.dart';
+import 'swarm_preview_scroll.dart';
 
 const resourcePickerCommands = {
   'picker.resource_toggle',
@@ -89,18 +90,36 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   ModelSearchEntry? get model => widget.search.models?.entries[row?.modelId];
   final _pending = <String>{};
   final _errors = <String, String>{};
+  late SwarmPreviewScrollController _scroll;
 
   @override
   void initState() {
     super.initState();
+    _scroll = _scrollController();
     widget.controls.dispatch = _dispatch;
     widget.controls.commands = _commands;
+  }
+
+  SwarmPreviewScrollController _scrollController() =>
+      SwarmPreviewScrollController(
+        search: widget.search,
+        lineHeight: () => terminalCellSizeOf(context).height,
+      );
+
+  @override
+  void didUpdateWidget(SwarmResourcePreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.search != widget.search) {
+      _scroll.dispose();
+      _scroll = _scrollController();
+    }
   }
 
   @override
   void dispose() {
     widget.controls.dispatch = null;
     widget.controls.commands = null;
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -689,6 +708,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       terminalThemeStore.value,
     );
     return ListView(
+      controller: _scroll,
       padding: EdgeInsets.symmetric(
         horizontal: cell.width * 2,
         vertical: cell.height,
@@ -706,6 +726,30 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                     : theme.foreground.withValues(alpha: .54),
               ),
             ),
+      ],
+    );
+  }
+
+  Widget _typeHints() {
+    final cell = terminalCellSizeOf(context);
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
+    return ListView(
+      controller: _scroll,
+      padding: EdgeInsets.symmetric(
+        horizontal: cell.width * 2,
+        vertical: cell.height,
+      ),
+      children: [
+        Text(
+          '>  harnesses\n@  machines\n#  projects\n:  models\n*  store',
+          key: const ValueKey('swarm-search-type-hints'),
+          style: terminalContentStyle(
+            color: theme.foreground.withValues(alpha: .54),
+          ),
+        ),
       ],
     );
   }
@@ -759,14 +803,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               ),
             if (row?.isMachine == true) _machineDetails(),
             Expanded(
-              child: row?.isCreate == true
+              child: widget.search.showsTypeHints
+                  ? _typeHints()
+                  : row?.isCreate == true
                   ? _details([
-                      switch (widget.search.scopePrefix) {
-                        '@' => 'Set up or link another computer.',
-                        '#' => 'Choose a working folder for a project.',
-                        ':' => 'Add a local model or connect an API.',
-                        _ => 'Start a new harness.',
-                      },
+                      widget.search.createDescription,
                       if (widget.search.isModelMode)
                         ?widget.search.models?.manager.error,
                     ])

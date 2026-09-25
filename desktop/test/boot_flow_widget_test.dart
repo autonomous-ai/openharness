@@ -908,6 +908,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('harness-start-new-pane')));
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pumpAndSettle();
       // With no machine to open an agent on, the start page's New goes to
       // the Machines panel, with desktop and server instructions one click away.

@@ -96,6 +96,10 @@ void main() {
         expect(tester.widget<Container>(row).color, pane.theme.selection);
         final cell = terminalCellSizeOf(tester.element(input));
         expect(tester.getSize(row).height, closeTo(cell.height, .01));
+        expect(
+          tester.getSize(find.byKey(ValueKey(search.selected!.id))).height,
+          closeTo(cell.height, .01),
+        );
         expect(field.cursorWidth, closeTo(cell.width, .01));
         final rowTitles = tester.widgetList<SearchResultText>(
           find.byWidgetPredicate(
@@ -152,6 +156,34 @@ void main() {
       );
       await tester.pumpAndSettle();
       checkAppearance();
+      await tester.enterText(input, 'safe-retries');
+      await tester.pumpAndSettle();
+      expect(search.selected!.agentId, 'a0');
+      final preview = find.byKey(const ValueKey('swarm-search-preview'));
+      final title = find.descendant(
+        of: preview,
+        matching: find.text('Checkout retries'),
+      );
+      final context = find.text('Test host:storefront  (feat/safe-retries)');
+      expect(context, findsOneWidget);
+      expect(find.descendant(of: preview, matching: context), findsOneWidget);
+      final cell = terminalCellSizeOf(tester.element(input));
+      expect(
+        tester.getTopLeft(context).dy - tester.getTopLeft(title).dy,
+        closeTo(cell.height, .01),
+      );
+      expect(
+        tester
+            .widgetList<SearchResultText>(
+              find.descendant(
+                of: find.byKey(ValueKey(search.selected!.id)),
+                matching: find.byType(SearchResultText),
+              ),
+            )
+            .map((text) => text.text),
+        ['Checkout retries'],
+      );
+      expect(find.text('git: feat/safe-retries'), findsNothing);
       await tester.enterText(input, 'Workspace sync');
       await tester.pumpAndSettle();
       final waiting = tester.widget<Text>(find.text('Needs your input'));
@@ -283,6 +315,11 @@ void main() {
         closeTo(cell.height, .01),
         reason: 'Selection occupies exactly one terminal line.',
       );
+      expect(
+        tester.getSize(find.byKey(ValueKey(id))).height,
+        closeTo(cell.height, .01),
+        reason: 'The entire result occupies one line, with no spacer row.',
+      );
       final title = find
           .descendant(of: line, matching: find.byType(Text))
           .first;
@@ -291,6 +328,12 @@ void main() {
         closeTo(tester.getTopLeft(input).dx, .01),
       );
     }
+    final first = find.byKey(ValueKey(search.rows[0].id));
+    final second = find.byKey(ValueKey(search.rows[1].id));
+    expect(
+      tester.getTopLeft(second).dy - tester.getTopLeft(first).dy,
+      closeTo(cell.height, .01),
+    );
     for (final type in [ListTile, Icon, Image, EngineMark, PromptContextView]) {
       expect(
         find.descendant(of: results, matching: find.byType(type)),
@@ -298,7 +341,10 @@ void main() {
       );
     }
     expect(search.rows.length, greaterThan(50));
-    expect(rows.evaluate().length, lessThan(35));
+    final list = find.byKey(const ValueKey('swarm-search-result-list'));
+    final capacity = (tester.getSize(list).height / cell.height).ceil();
+    expect(rows.evaluate().length, lessThanOrEqualTo(capacity + 2));
+    expect(rows.evaluate().length, lessThan(search.rows.length));
     final visited = <String>{};
     for (var step = 0; step < 35; step++) {
       await key(tester, LogicalKeyboardKey.tab);

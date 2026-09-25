@@ -261,7 +261,8 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyS, ctrl: true);
     expect(connection.stops, isEmpty);
     await key(tester, LogicalKeyboardKey.keyP, ctrl: true);
-    expect(resourceSearch(tester).selected!.isCreate, isTrue);
+    expect(resourceSearch(tester).selected!.agentId, 'a0');
+    expect(resourceSearch(tester).rows.single.isCreate, isFalse);
     await key(tester, LogicalKeyboardKey.keyN, ctrl: true);
     expect(resourceSearch(tester).selected!.agentId, 'a0');
     final editing = tester.widget<TextField>(resourceField).controller!;

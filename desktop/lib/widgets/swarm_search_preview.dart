@@ -8,6 +8,7 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/app_type.dart';
+import '../shared/theme/status_line_style.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
@@ -15,6 +16,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 import 'engine_identity.dart';
+import 'swarm_preview_scroll.dart';
 
 typedef _PreviewAgent = ({MachineState machine, Agent agent});
 
@@ -65,31 +67,31 @@ class SwarmSearchPreview extends StatefulWidget {
 class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
   Timer? _warm;
   String? _selectedId;
-  final _scroll = ScrollController();
-  int _lastPage = 0;
-  int _pendingPages = 0;
-  String? _renderedId;
-  bool _pageScheduled = false;
+  late SwarmPreviewScrollController _scroll;
   AppNotifier get app => widget.search.app;
 
   @override
   void initState() {
     super.initState();
+    _scroll = _scrollController();
     widget.search.addListener(_changed);
-    _lastPage = widget.search.previewPage.value;
-    widget.search.previewPage.addListener(_pageChanged);
     _changed();
   }
+
+  SwarmPreviewScrollController _scrollController() =>
+      SwarmPreviewScrollController(
+        search: widget.search,
+        lineHeight: () => terminalCellSizeOf(context).height,
+      );
 
   @override
   void didUpdateWidget(SwarmSearchPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.search != widget.search) {
       oldWidget.search.removeListener(_changed);
-      oldWidget.search.previewPage.removeListener(_pageChanged);
+      _scroll.dispose();
+      _scroll = _scrollController();
       widget.search.addListener(_changed);
-      _lastPage = widget.search.previewPage.value;
-      widget.search.previewPage.addListener(_pageChanged);
       _selectedId = null;
       _changed();
     }
@@ -99,8 +101,6 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
     final row = widget.search.selected;
     if (_selectedId == row?.id) return;
     _selectedId = row?.id;
-    _pendingPages = 0;
-    if (_scroll.hasClients) _scroll.jumpTo(0);
     setState(() {});
     _warm?.cancel();
     _warm = Timer(const Duration(milliseconds: 140), () {
@@ -119,46 +119,10 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
     });
   }
 
-  void _pageChanged() {
-    final page = widget.search.previewPage.value;
-    _pendingPages += page - _lastPage;
-    _lastPage = page;
-    if (_renderedId == _selectedId &&
-        _scroll.hasClients &&
-        _scroll.position.hasContentDimensions) {
-      _applyPage();
-    } else if (!_pageScheduled) {
-      // A new result can be selected and paged before its first layout. Apply
-      // against its own dimensions; a later selection clears the pending move.
-      _pageScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _pageScheduled = false;
-        _applyPage();
-      });
-    }
-  }
-
-  void _applyPage() {
-    if (_pendingPages == 0 || !_scroll.hasClients) return;
-    final position = _scroll.position;
-    if (!position.hasContentDimensions) return;
-    final pages = _pendingPages;
-    _pendingPages = 0;
-    // Keep a little overlap for reading, and respond directly to held keys.
-    _scroll.jumpTo(
-      (position.pixels + pages * position.viewportDimension * .8).clamp(
-        position.minScrollExtent,
-        position.maxScrollExtent,
-      ),
-    );
-  }
-
   @override
   void dispose() {
     _warm?.cancel();
     widget.search.removeListener(_changed);
-    widget.search.previewPage.removeListener(_pageChanged);
     _scroll.dispose();
     super.dispose();
   }
@@ -182,7 +146,6 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
       builder: (context, _) {
         final row = widget.search.selected;
         if (row == null) return const SizedBox.shrink();
-        _renderedId = row.id;
         final agents = _agents(app, row);
         return Semantics(
           container: true,
@@ -378,6 +341,15 @@ class _AgentPreview extends StatelessWidget {
       children: [
         if (terminal) ...[
           Text(agent.displayName, style: body),
+          Text(
+            statusLineParts(
+              provider: '',
+              machine: machine.machine.displayName,
+              project: project?.label ?? '',
+              branch: project?.shownBranch,
+            ).text,
+            style: muted,
+          ),
           Text.rich(
             TextSpan(
               children: [
@@ -385,10 +357,7 @@ class _AgentPreview extends StatelessWidget {
                   text: '$state  ',
                   style: TextStyle(color: color),
                 ),
-                TextSpan(
-                  text:
-                      '${agentIdentity(agent).label}  @ ${machine.machine.name}',
-                ),
+                TextSpan(text: agentIdentity(agent).label),
               ],
             ),
             style: muted,
@@ -470,7 +439,7 @@ class _AgentPreview extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: excerpt == null ? muted : body,
           ),
-          if (project != null)
+          if (project != null && !terminal)
             Padding(
               padding: EdgeInsets.only(top: terminal ? cell.height : 8),
               child: Text(
@@ -577,10 +546,8 @@ class _AgentPreview extends StatelessWidget {
             ),
           if (!terminal) const SizedBox(height: 8),
           if (project?.cwd case final cwd?) Text(cwd, style: muted),
-          if (project?.branch case final branch?)
-            if (terminal)
-              Text('git: $branch', style: muted)
-            else
+          if (!terminal)
+            if (project?.branch case final branch?)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(

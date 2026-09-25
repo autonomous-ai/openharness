@@ -1472,6 +1472,8 @@ void main() {
       expect(find.text('Check retargeted keyboard input'), findsWidgets);
       expect(find.text('New Pane'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
+      expect(find.byType(NewHarnessForm), findsNothing);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(
         tester
@@ -1680,6 +1682,8 @@ void main() {
         task,
       );
       await key(tester, LogicalKeyboardKey.enter);
+      expect(find.byType(NewHarnessForm), findsNothing);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pump(const Duration(milliseconds: 80));
       expect(prompt().engine, 'codex');
       expect(prompt().machineId, 'm');
@@ -1750,8 +1754,7 @@ void main() {
 
       // Reopen from the same source. Escape kept the task and edited defaults
       // without creating a temporary tab.
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
-      await key(tester, LogicalKeyboardKey.enter);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pump(const Duration(milliseconds: 80));
       expect(prompt().engine, 'claude');
       expect(prompt().mode, 'plan');

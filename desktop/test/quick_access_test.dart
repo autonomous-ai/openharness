@@ -14,6 +14,55 @@ import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  test('Cmd-P never creates harnesses in root or scoped session lists', () {
+    final app = createApp();
+    seedMixedAgents(app);
+    addTearDown(app.dispose);
+    final search = SwarmSearchController(
+      app,
+      const [],
+      adding: true,
+      activityFirst: true,
+      offersCreate: true,
+      offersHarnessCreate: false,
+      selectOnEmptyQuery: false,
+      placement: HarnessPlacement.currentTab,
+    );
+    addTearDown(search.dispose);
+    expect(search.rows, isNotEmpty);
+    expect(search.rows.any((row) => row.isCreate), isFalse);
+    expect(search.selected, isNull);
+    expect(search.submit(), isNull);
+    for (final query in ['@ Office', '# openharness']) {
+      search.setQuery(query);
+      expect(search.rows.first.isCreate, isTrue);
+      expect(search.selected!.isCreate, isFalse);
+      expect(search.submit(), isNull);
+      expect(search.canGoBack, isTrue);
+      expect(search.rows, isNotEmpty);
+      expect(search.rows.any((row) => row.isCreate), isFalse);
+      search.setQuery('a harness that does not exist');
+      expect(search.rows, isEmpty);
+      expect(search.selected, isNull);
+      expect(search.submit(), isNull);
+      expect(search.back(), isTrue);
+    }
+    search.setQuery('a harness that does not exist');
+    expect(search.rows, isEmpty);
+    expect(search.submit(), isNull);
+    search.setQuery('');
+    for (final machine in app.machineStates.values) {
+      machine.agents = [];
+    }
+    app.notifyListeners();
+    expect(search.rows, isEmpty);
+    expect(search.showsTypeHints, isTrue);
+    search.move(1);
+    search.move(-1);
+    expect(search.selected, isNull);
+    expect(search.submit(), isNull);
+  });
+
   for (final placement in HarnessPlacement.values) {
     test('prefixes switch lists and retain $placement', () {
       final app = createApp();

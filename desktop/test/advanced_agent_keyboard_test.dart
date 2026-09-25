@@ -97,6 +97,31 @@ Future<_Connection> _open(WidgetTester tester, {MemoryKeymap? keymap}) async {
 }
 
 void main() {
+  testWidgets('configured page keys still scroll the agent preview', (
+    tester,
+  ) async {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    final connection = await _open(tester, keymap: map);
+    final input = tester.widget<TextField>(agentSearch);
+    final editing = input.controller!.value;
+    await key(tester, LogicalKeyboardKey.slash, ctrl: true);
+    final preview = find.byKey(const ValueKey('new-agent-agent-preview'));
+    final scroll = tester
+        .state<ScrollableState>(
+          find.descendant(of: preview, matching: find.byType(Scrollable)).first,
+        )
+        .position;
+    await key(tester, LogicalKeyboardKey.pageDown);
+    expect(scroll.pixels, greaterThan(0));
+    await key(tester, LogicalKeyboardKey.pageUp);
+    expect(scroll.pixels, 0);
+    expect(input.controller!.value, editing);
+    expect(input.focusNode!.hasFocus, isTrue);
+    expect(connection.launches, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   for (final mapped in [false, true]) {
     testWidgets(
       'modified Enter chooses the visible agent without launching the form (keymap: $mapped)',
@@ -231,8 +256,7 @@ void main() {
     app.adoptSessionForTest(terminal('a0', []));
     await mount(tester, app);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
-    await key(tester, LogicalKeyboardKey.enter);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await key(tester, LogicalKeyboardKey.period, cmd: true);
     await tester.pumpAndSettle();
     await openLaunchRow(tester, 'agent');

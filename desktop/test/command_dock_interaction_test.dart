@@ -53,7 +53,7 @@ void main() {
   });
 
   testWidgets(
-    'session context and activity are visible beside a distinct create action',
+    'session rows show activity and searchable context lives in the preview',
     (tester) async {
       final app = createApp();
       final map = MemoryKeymap();
@@ -83,32 +83,29 @@ void main() {
         find.descendant(of: row, matching: find.text('33m')),
         findsOneWidget,
       );
-      final detail = tester.widget<SearchResultText>(
-        find.descendant(
-          of: row,
-          matching: find.byWidgetPredicate(
-            (widget) =>
-                widget is SearchResultText &&
-                widget.text.contains('(feature/login-redirect)'),
-          ),
-        ),
-      );
-      expect(detail.text, 'M2:openharness  (feature/login-redirect)');
-      for (final label in ['M2', 'openharness', 'feature/login-redirect']) {
-        expect(detail.text, contains(label));
-      }
-      expect(detail.style.fontFamily, terminalFontStore.value.fontFamily);
-      expect(detail.style.fontSize, terminalFontStore.size);
-      expect(detail.style.height, terminalFontStore.value.height);
-      final create = find.byKey(const ValueKey(kSwarmCreateRowId));
       expect(
-        find.descendant(of: create, matching: find.text('New Harness')),
+        find.descendant(of: row, matching: find.byType(SearchResultText)),
         findsOneWidget,
       );
-      expect(
-        find.descendant(of: create, matching: find.byType(Icon)),
-        findsNothing,
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        'feature/login-redirect',
       );
+      await tester.pumpAndSettle();
+      final detail = tester.widget<Text>(
+        find.descendant(
+          of: find.byKey(const ValueKey('swarm-search-preview')),
+          matching: find.text('M2:openharness  (feature/login-redirect)'),
+        ),
+      );
+      for (final label in ['M2', 'openharness', 'feature/login-redirect']) {
+        expect(detail.data, contains(label));
+      }
+      expect(detail.style!.fontFamily, terminalFontStore.value.fontFamily);
+      expect(detail.style!.fontSize, terminalFontStore.size);
+      expect(detail.style!.height, terminalFontStore.value.height);
+      final create = find.byKey(const ValueKey(kSwarmCreateRowId));
+      expect(create, findsNothing);
       expect(find.text('Harness:'), findsNothing);
       expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
       expect(tester.takeException(), isNull);
@@ -152,16 +149,20 @@ void main() {
         final search = tester
             .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
             .search;
-        expect(search.rows.first.isCreate, isTrue);
+        expect(search.selected, isNull);
+        expect(search.rows.any((row) => row.isCreate), isFalse);
         await key(tester, LogicalKeyboardKey.tab);
+        expect(search.selected, search.rows.first);
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
         await tester.enterText(input, 'nothing-like-this');
         await tester.pump();
-        expect(search.rows.single.isCreate, isTrue);
+        expect(search.rows, isEmpty);
         expect(tester.getRect(panel), bounds);
         expect(count, findsNothing);
         expect(tester.getRect(find.byKey(pane.cellKey)), paneBounds);
-        expect(find.text('New Harness'), findsOneWidget);
+        expect(find.text('New Harness'), findsNothing);
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(tester.getRect(panel), bounds);
         await key(tester, LogicalKeyboardKey.escape);
         expect(panel, findsNothing);
         expect(tester.takeException(), isNull);

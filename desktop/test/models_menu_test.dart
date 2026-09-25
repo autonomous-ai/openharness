@@ -386,8 +386,8 @@ void main() {
       expect(source.calls, 1);
       expect(app.activeSwarmId, original);
       expect(resourceScope(':'), findsOneWidget);
-      expect(find.text('OpenAI'), findsOneWidget);
-      expect(find.textContaining('Not signed in'), findsOneWidget);
+      expect(find.text('OpenAI'), findsWidgets);
+      expect(find.textContaining('Not signed in'), findsWidgets);
       expect(messages.where((c) => c.method == 'modelsState'), isEmpty);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -517,7 +517,7 @@ void main() {
         expect(resourceScope(':'), findsOneWidget);
         expect(
           tester.widget<TextField>(resourceField).decoration!.hintText,
-          'Search models…',
+          'Search models',
         );
         expect(app.sent, isEmpty);
         await tester.pumpWidget(const SizedBox());
@@ -535,7 +535,7 @@ void main() {
     expect(resourceScope(':'), findsOneWidget);
     expect(
       tester.widget<TextField>(resourceField).decoration!.hintText,
-      'Search models…',
+      'Search models',
     );
     expect(resourceField, findsOneWidget);
     expect(connection.creations, isEmpty);

@@ -307,7 +307,7 @@ void main() {
     await tester.pump();
     await tester.tap(_newHarness);
     await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await chord(tester, LogicalKeyboardKey.keyN);
     await tester.pump();
     expect(picker.opened, 0);
     expect(find.byType(AlertDialog), findsOneWidget);
@@ -366,7 +366,7 @@ void main() {
       expect(find.text('Machines'), findsNothing);
       await tester.tap(_newHarness);
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       expect(picker.opened, 0);
       await _browseLocal(tester);
@@ -724,7 +724,7 @@ void main() {
     expect(tester.widget<TextField>(_startInput).focusNode!.hasFocus, isTrue);
     await tester.tap(_newHarness);
     await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await chord(tester, LogicalKeyboardKey.keyN);
     await tester.pump();
     final engine = tester.widget<AgentPicker>(
       find.byKey(const Key('new-agent-agent-picker')),
@@ -827,7 +827,7 @@ void main() {
 
       await tester.tap(_newHarness);
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       expect(find.byType(AlertDialog), findsOneWidget);
       await _browseLocal(tester);
@@ -876,7 +876,7 @@ void main() {
       await mount(tester, app);
       await tester.tap(_newHarness);
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       await _browseLocal(tester);
       await tester.pump();

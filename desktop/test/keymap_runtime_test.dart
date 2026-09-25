@@ -728,7 +728,7 @@ void main() {
       );
       expect(
         tester.widget<TextField>(commandField).decoration!.hintText,
-        'Search commands…',
+        'Search commands',
       );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pump();

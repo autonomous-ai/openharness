@@ -142,7 +142,7 @@ void main() {
       final zoom = app.zoomedPaneId;
       final panes = [...app.panes];
       final machine = app.machineStates['m']!;
-      for (var i = 0; i < 25; i++) {
+      for (var i = 0; i < 60; i++) {
         app.rememberOpenedHarness('m', 'a$i');
         machine.blockedAgents['a$i'] = waitingQuestion(
           'a$i',
@@ -158,9 +158,9 @@ void main() {
             .evaluate()
             .where((e) => (e.widget.key?.toString() ?? '').contains('agent:'))
             .length,
-        lessThan(25),
+        lessThan(60),
       );
-      for (var i = 0; i < 13; i++) {
+      for (var i = 0; i < 45; i++) {
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pump();
         expect(selectedHarness, findsOneWidget);
@@ -173,14 +173,14 @@ void main() {
       }
       await tester.pump();
       final selection = resourceSearch(tester).selected!.id;
-      expect(selection, agentDestinationId('m', 'a13'));
+      expect(selection, agentDestinationId('m', 'a45'));
       final list = tester.getRect(
         find.byKey(const ValueKey('swarm-search-result-list')),
       );
       final row = tester.getRect(selectedHarness);
       expect(row.top, greaterThanOrEqualTo(list.top));
       expect(row.bottom, lessThanOrEqualTo(list.bottom));
-      machine.blockedAgents['a30'] = waitingQuestion('a30', ageOrder: -1);
+      machine.blockedAgents['a65'] = waitingQuestion('a65', ageOrder: -1);
       app.dismissError();
       await tester.pump();
       await tester.pump();
@@ -189,15 +189,15 @@ void main() {
       await tester.pump();
       expect(
         resourceSearch(tester).selected!.id,
-        agentDestinationId('m', 'a14'),
+        agentDestinationId('m', 'a46'),
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
       expect(resourceSearch(tester).selected!.id, selection);
-      machine.blockedAgents.remove('a13');
+      machine.blockedAgents.remove('a45');
       app.dismissError();
       await tester.pump();
-      expect(find.text('Question 13?'), findsNothing);
+      expect(find.text('Question 45?'), findsNothing);
       expect(selectedHarness, findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();

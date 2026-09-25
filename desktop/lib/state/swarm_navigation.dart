@@ -567,7 +567,7 @@ class SwarmSearchCatalog {
           id: 'project:${group.id}',
           projectId: group.id,
           title: group.name,
-          detail: 'Project · ${_countLabel(members.length, 'harness')}',
+          detail: _countLabel(members.length, 'harness'),
           swarmId: null,
           current: false,
           members: Set.unmodifiable(members),
