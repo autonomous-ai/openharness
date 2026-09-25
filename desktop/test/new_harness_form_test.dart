@@ -103,6 +103,7 @@ void main() {
 
   Future<void> type(WidgetTester tester, String text) async {
     final input = find.byKey(const ValueKey('new-harness-query'));
+    if (input.evaluate().isEmpty) await press(tester, LogicalKeyboardKey.enter);
     final previous = tester.widget<TextField>(input).controller!.text;
     await tester.enterText(input, previous + text);
     await tester.pumpAndSettle();
@@ -112,35 +113,40 @@ void main() {
     tester,
   ) async {
     await mount(tester);
-    for (final label in [
-      'Harness',
-      'Agent',
-      'Machine',
-      'Project',
-      // Branch belongs to Project, so it is a core field, not an advanced one.
-      'Branch',
-      'Advanced',
-    ]) {
+    for (final label in ['Agent', 'Project', 'Options']) {
       expect(find.text(label), findsOneWidget);
     }
-    expect(find.text('Worktree'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('new-harness-field-worktree')),
+      findsNothing,
+    );
     await openLaunchRow(tester, 'advanced');
-    for (final label in ['Worktree', 'Approvals']) {
-      expect(find.text(label), findsOneWidget);
+    for (final label in ['worktree', 'approvals', 'model', 'branch']) {
+      expect(find.byKey(ValueKey('new-harness-field-$label')), findsOneWidget);
     }
   });
 
-  testWidgets('down and up walk the rows and wrap', (tester) async {
-    final box = await mount(tester, focus: 'harness');
+  testWidgets('down and up walk the core rows and wrap', (tester) async {
+    final box = await mount(tester, focus: 'agent');
     expect(box.field, NewHarnessField.harness);
     await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.agent);
+    expect(box.field, NewHarnessField.projectMenu);
     await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.model);
-    await press(tester, LogicalKeyboardKey.arrowUp);
-    expect(box.field, NewHarnessField.agent);
-    await press(tester, LogicalKeyboardKey.arrowUp);
+    expect(
+      tester
+          .widget<Semantics>(
+            find.byKey(const ValueKey('new-harness-field-advanced')),
+          )
+          .properties
+          .selected,
+      isTrue,
+    );
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.launch);
+    await press(tester, LogicalKeyboardKey.arrowDown);
     expect(box.field, NewHarnessField.harness);
+    await press(tester, LogicalKeyboardKey.arrowUp);
+    expect(box.field, NewHarnessField.launch);
   });
 
   // Page Up/Down are where stepping a value in place lives — the arrows are
@@ -149,9 +155,8 @@ void main() {
   testWidgets('page down walks every agent instead of bouncing between two', (
     tester,
   ) async {
-    final box = await mount(tester, focus: 'harness');
-    await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.agent);
+    final box = await mount(tester, focus: 'agent');
+    expect(box.field, NewHarnessField.harness);
     final seen = <String>{box.engine};
     for (var i = 0; i < 6; i++) {
       await press(tester, LogicalKeyboardKey.pageDown);
@@ -165,8 +170,7 @@ void main() {
   });
 
   testWidgets('the page keys step opposite ways and return', (tester) async {
-    final box = await mount(tester, focus: 'harness');
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    final box = await mount(tester, focus: 'agent');
     final first = box.engine;
     await press(tester, LogicalKeyboardKey.pageDown);
     expect(box.engine, isNot(first));
@@ -189,9 +193,8 @@ void main() {
   testWidgets('right hands the keys to the choices without taking a value', (
     tester,
   ) async {
-    final box = await mount(tester, focus: 'harness');
-    await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.agent);
+    final box = await mount(tester, focus: 'agent');
+    expect(box.field, NewHarnessField.harness);
     final engine = box.engine;
     expect(harnessChoicesActive(tester), isFalse);
     await press(tester, LogicalKeyboardKey.arrowRight);
@@ -200,14 +203,13 @@ void main() {
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(
       box.field,
-      NewHarnessField.agent,
+      NewHarnessField.harness,
       reason: 'The list owns the arrows now; the rows must not move.',
     );
   });
 
   testWidgets('left gives the keys back to the rows', (tester) async {
-    final box = await mount(tester, focus: 'harness');
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    final box = await mount(tester, focus: 'agent');
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(harnessChoicesActive(tester), isTrue);
     final engine = box.engine;
@@ -215,18 +217,17 @@ void main() {
     expect(harnessChoicesActive(tester), isFalse);
     expect(box.engine, engine, reason: 'Leaving is not choosing either.');
     expect(
-      find.byKey(const ValueKey('new-harness-choices')),
+      find.byKey(const ValueKey('new-harness-summary')),
       findsOneWidget,
-      reason: 'The choices stay on screen, they just stop holding the keys.',
+      reason: 'Leaving choices restores the launch summary.',
     );
     await press(tester, LogicalKeyboardKey.arrowDown);
     // Model sits between Agent and Machine on this form.
-    expect(box.field, NewHarnessField.model, reason: 'Rows move again.');
+    expect(box.field, NewHarnessField.projectMenu, reason: 'Rows move again.');
   });
 
   testWidgets('left edits the search text before it leaves it', (tester) async {
-    final box = await mount(tester, focus: 'harness');
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    final box = await mount(tester, focus: 'agent');
     await type(tester, 'cod');
     expect(harnessChoicesActive(tester), isTrue);
     await press(tester, LogicalKeyboardKey.arrowLeft);
@@ -235,12 +236,11 @@ void main() {
   });
 
   testWidgets('left on the rows changes nothing', (tester) async {
-    final box = await mount(tester, focus: 'harness');
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    final box = await mount(tester, focus: 'agent');
     final engine = box.engine;
     await press(tester, LogicalKeyboardKey.arrowLeft);
     expect(box.engine, engine);
-    expect(box.field, NewHarnessField.agent);
+    expect(box.field, NewHarnessField.harness);
     expect(harnessChoicesActive(tester), isFalse);
   });
 
@@ -279,6 +279,9 @@ void main() {
       await press(tester, LogicalKeyboardKey.arrowDown);
     }
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.project);
     expect(find.textContaining('Search'), findsNothing);
     expect(find.textContaining('path'), findsOneWidget);
@@ -296,8 +299,8 @@ void main() {
       reason: 'A subsequence search must find harness-app-landing-page.',
     );
     expect(
-      find.text('harness-app-landing-page'),
-      findsOneWidget,
+      find.text('M2:harness-app-landing-page'),
+      findsWidgets,
       reason: 'Hiding the list on one match made a hit look like a miss.',
     );
     expect(
@@ -339,6 +342,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await focusLaunchRow(tester, 'project');
     await type(tester, 'har');
     expect(box.query, 'har');
     await press(tester, LogicalKeyboardKey.backspace);
@@ -347,7 +351,9 @@ void main() {
     expect(box.query, isEmpty, reason: 'Escape gives the text back first.');
     expect(closed, isFalse);
     await press(tester, LogicalKeyboardKey.escape);
-    expect(closed, isTrue, reason: 'A second Escape closes.');
+    expect(closed, isFalse);
+    await press(tester, LogicalKeyboardKey.escape);
+    expect(closed, isTrue, reason: 'Escape backs out before dismissing.');
   });
 
   testWidgets('down moves the highlight in the list without resetting it', (
@@ -372,7 +378,7 @@ void main() {
   ) async {
     final box = await mount(tester);
     await type(tester, 'harness');
-    final wanted = box.selected?.title;
+    final wanted = box.selected?.project?.folder;
     await press(tester, LogicalKeyboardKey.enter);
     expect(box.query, isEmpty, reason: 'Taking a value ends the search.');
     if (wanted != null) {
@@ -386,8 +392,8 @@ void main() {
     final box = await mount(tester);
     await type(tester, 'harness');
     expect(
-      tester.getTopLeft(find.text('New Project')).dy,
-      lessThan(tester.getTopLeft(find.text('harness-monitor')).dy),
+      tester.getTopLeft(find.text('New Folder')).dy,
+      lessThan(tester.getTopLeft(find.text('M2:harness-monitor')).dy),
       reason: 'The three doors sit above the recents, not under them.',
     );
     expect(
@@ -399,7 +405,7 @@ void main() {
 
   testWidgets('Tab walks the rows and never escapes the form', (tester) async {
     final box = await mount(tester, focus: 'harness');
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < 1; i++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pumpAndSettle();
     }
@@ -413,7 +419,7 @@ void main() {
     await press(tester, LogicalKeyboardKey.arrowUp);
     expect(
       box.field,
-      NewHarnessField.machine,
+      NewHarnessField.harness,
       reason: 'Keys must still reach the form after Tab.',
     );
   });
@@ -424,8 +430,8 @@ void main() {
     final box = await mount(tester);
     await type(tester, 'harness');
     expect(
-      tester.getTopLeft(find.text('New Project')).dy,
-      lessThan(tester.getTopLeft(find.text('harness-monitor')).dy),
+      tester.getTopLeft(find.text('New Folder')).dy,
+      lessThan(tester.getTopLeft(find.text('M2:harness-monitor')).dy),
       reason: 'The three doors sit above the recents, not under them.',
     );
     expect(
@@ -454,10 +460,16 @@ void main() {
       await press(tester, LogicalKeyboardKey.arrowDown);
     }
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.projectName);
-    expect(find.text('New Project'), findsOneWidget);
+    expect(find.text('Project name'), findsOneWidget);
     // And Escape backs out of the door to the list it came from.
     await press(tester, LogicalKeyboardKey.escape);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.escape);
+    }
     expect(box.field, NewHarnessField.projectMenu);
   });
 
@@ -475,6 +487,9 @@ void main() {
       await press(tester, LogicalKeyboardKey.arrowDown);
     }
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.projectName);
     await press(tester, LogicalKeyboardKey.arrowLeft);
     expect(box.field, NewHarnessField.projectMenu);
@@ -490,10 +505,16 @@ void main() {
       await press(tester, LogicalKeyboardKey.arrowDown);
     }
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.projectName);
     await type(tester, 'blog');
     await press(tester, LogicalKeyboardKey.arrowLeft);
     expect(box.query, 'blog');
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.projectName);
   });
 
@@ -501,19 +522,17 @@ void main() {
     await mount(tester);
     await type(tester, 'harness');
     expect(find.text('Open Folder'), findsOneWidget);
-    expect(find.text('New Project'), findsOneWidget);
+    expect(find.text('New Folder'), findsOneWidget);
     expect(find.text('Clone Repository'), findsOneWidget);
   });
 
-  testWidgets('the choices are always listed, and Return makes them live', (
-    tester,
-  ) async {
+  testWidgets('Return replaces the summary with choices', (tester) async {
     final box = await mount(tester);
     expect(find.text('[ New Harness ]'), findsOneWidget);
     expect(
       find.text('Open Folder'),
-      findsOneWidget,
-      reason: 'The doors are on screen without being searched for.',
+      findsNothing,
+      reason: 'Choices appear only while editing.',
     );
 
     await press(tester, LogicalKeyboardKey.enter);
@@ -529,9 +548,9 @@ void main() {
 
     // Escape hands the arrows back to the rows; the list stays on screen.
     await press(tester, LogicalKeyboardKey.escape);
-    expect(find.text('Open Folder'), findsOneWidget);
-    await focusLaunchRow(tester, 'agent');
-    expect(box.field, NewHarnessField.agent);
+    expect(find.text('Open Folder'), findsNothing);
+    await openLaunchRow(tester, 'agent');
+    expect(box.field, NewHarnessField.harness);
   });
 
   testWidgets('the selection bar marks which column has the keys', (
@@ -573,39 +592,20 @@ void main() {
     expect(harnessChoicesActive(tester), isFalse);
   });
 
-  testWidgets('the list dims while the items hold the keys', (tester) async {
-    final box = await mount(tester);
-    final foreground = terminalThemeFor(
-      grid.AppTheme.palette.value,
-      terminalThemeStore.value,
-    ).foreground;
-    final faint = foreground.withValues(alpha: .54);
-    // The inactive column stays quieter than the one receiving input.
-    final other = box.options
-        .firstWhere((row) => !row.synthetic && !identical(row, box.selected))
-        .title;
-    Color? inkOf(String text) =>
-        tester.widget<Text>(find.text(text)).style?.color;
-
-    expect(
-      inkOf(other),
-      faint,
-      reason: 'The column the arrows are not in is grey.',
-    );
+  testWidgets('the summary returns when editing ends', (tester) async {
+    await mount(tester);
+    final summary = find.byKey(const ValueKey('new-harness-summary'));
+    expect(summary, findsOneWidget);
     await press(tester, LogicalKeyboardKey.enter);
-    expect(
-      inkOf(other),
-      foreground,
-      reason: 'Handing the arrows over brings the column up.',
-    );
+    expect(summary, findsNothing);
     await press(tester, LogicalKeyboardKey.escape);
-    expect(inkOf(other), faint);
+    expect(summary, findsOneWidget);
   });
 
   testWidgets('the right column follows the focused row', (tester) async {
     await mount(tester);
-    expect(find.text('Open Folder'), findsOneWidget);
-    await focusLaunchRow(tester, 'agent');
+    expect(find.text('Open Folder'), findsNothing);
+    await openLaunchRow(tester, 'agent');
     expect(
       find.text('Open Folder'),
       findsNothing,
@@ -634,16 +634,16 @@ void main() {
     tester,
   ) async {
     await mount(tester);
+    await press(tester, LogicalKeyboardKey.enter);
     expect(
-      find.text('Search project'),
+      find.text('Search projects'),
       findsOneWidget,
       reason: '"Type to search" in a key guide is a sentence nobody reads.',
     );
     // The caret belongs to the arrows: absent until they are handed over.
     EditableText input() =>
         tester.widget<EditableText>(find.byType(EditableText));
-    expect(input().showCursor, isFalse);
-    await press(tester, LogicalKeyboardKey.enter);
+    expect(input().showCursor, isTrue);
     expect(input().showCursor, isTrue);
     expect(input().focusNode.hasFocus, isTrue);
 
@@ -652,7 +652,7 @@ void main() {
     expect(input().controller.text, 'harn');
     await press(tester, LogicalKeyboardKey.escape);
     await press(tester, LogicalKeyboardKey.escape);
-    expect(input().showCursor, isFalse);
+    expect(find.byType(EditableText), findsNothing);
     // Worktree is a boolean: no list, so no prompt either.
     await press(tester, LogicalKeyboardKey.escape);
     await focusLaunchRow(tester, 'worktree');
@@ -664,7 +664,7 @@ void main() {
     final field = find.byKey(const ValueKey('new-harness-field-project'));
     final before = tester.getRect(field);
     await type(tester, 'harness');
-    expect(find.text('harness-monitor'), findsWidgets);
+    expect(find.text('M2:harness-monitor'), findsWidgets);
     expect(
       tester.getRect(field),
       before,
@@ -724,6 +724,9 @@ void main() {
       (row) => row.id == NewHarnessController.existingProjectId,
     );
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.project);
     await highlight(
       tester,
@@ -743,6 +746,9 @@ void main() {
       (row) => row.id == NewHarnessController.newProjectId,
     );
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.projectName);
     await type(tester, 'ledger');
     await press(tester, LogicalKeyboardKey.enter);
@@ -762,8 +768,11 @@ void main() {
       (row) => row.id == NewHarnessController.repositoryId,
     );
     await press(tester, LogicalKeyboardKey.enter);
+    if (box.field == NewHarnessField.machine) {
+      await press(tester, LogicalKeyboardKey.enter);
+    }
     expect(box.field, NewHarnessField.projectRepository);
-    expect(find.text('Repository'), findsOneWidget);
+    expect(find.text('GitHub URL'), findsOneWidget);
   });
 
   testWidgets('a new branch name can be created from the Branch row', (
@@ -789,7 +798,10 @@ void main() {
   testWidgets('the worktree row reads as a question', (tester) async {
     final box = await mount(tester);
     await focusLaunchRow(tester, 'worktree');
-    expect(find.text('Worktree'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('new-harness-field-worktree')),
+      findsOneWidget,
+    );
     expect(find.text('Yes'), findsOneWidget);
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(box.worktree, isFalse);
@@ -801,11 +813,17 @@ void main() {
   ) async {
     final box = await mount(tester, engine: 'codex');
     await openLaunchRow(tester, 'advanced');
-    expect(find.text('Profile'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('new-harness-field-profile')),
+      findsOneWidget,
+    );
     await focusLaunchRow(tester, 'agent');
     await type(tester, 'claude');
     expect(box.engine, 'codex');
-    expect(find.text('Profile'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('new-harness-field-profile')),
+      findsOneWidget,
+    );
     await press(tester, LogicalKeyboardKey.enter);
     expect(box.engine, 'claude');
     expect(find.text('Profile'), findsNothing);
@@ -838,7 +856,10 @@ void main() {
     expect(find.text('Profile'), findsNothing);
     await press(tester, LogicalKeyboardKey.enter);
     expect(box.engine, 'codex');
-    expect(find.text('Profile'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('new-harness-field-profile')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('typing moves keyboard focus from fields to choices', (

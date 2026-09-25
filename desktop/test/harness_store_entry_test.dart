@@ -176,7 +176,7 @@ void main() {
     await typeHarnessQuery(tester, 'a harness not in this catalog');
     await tester.pump();
     expect(box.selected?.id, NewHarnessController.storeId);
-    expect(find.text('Browse Harness Store…'), findsOneWidget);
+    expect(find.text('Browse Harness Store'), findsOneWidget);
     await acceptSetupOrSearch(tester);
     expect(app.activeSwarm.isStore, isTrue);
     expect(find.byType(NewHarnessForm), findsNothing);

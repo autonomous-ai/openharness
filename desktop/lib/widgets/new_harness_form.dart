@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../shortcuts/app_keymap.dart';
@@ -18,12 +17,12 @@ import '../state/new_harness.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 
-/// Every answer a new harness needs, on one screen, changed where it stands.
+/// Agent and Project are the main choices; Options holds the launch settings.
 ///
 /// Shares Open Harness's terminal typography and quiet selection treatment.
-/// ↑↓ walk the fields; ←→ change their values. Return opens the focused
-/// field's choices, and only the explicit New Harness action starts an agent.
-/// Typing filters the choices without changing the current value.
+/// ↑↓ walk fields or choices. Return edits or accepts, and the initially
+/// selected New Harness action launches. The right pane shows resolved
+/// settings until a field is edited. Typing filters without committing.
 ///
 /// Unavailable Git fields explain why they cannot be changed. Profile only
 /// appears for agents that use it.
@@ -51,15 +50,11 @@ class NewHarnessForm extends StatefulWidget {
 
 /// Core launch choices stay visible; less common settings expand in place.
 enum _Row {
-  harness,
   agent,
-  model,
-  machine,
   project,
-  // Branch belongs to Project — which line of it to start from — so it sits
-  // under it rather than behind Advanced.
-  branch,
   advanced,
+  model,
+  branch,
   worktree,
   approvals,
   profile,
@@ -73,11 +68,18 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   final _queryText = TextEditingController();
   final _fieldsScroll = ScrollController();
   final _choicesScroll = ScrollController();
-  _Row _row = _Row.harness;
+  _Row _row = _Row.start;
   final _itemKeys = {for (final row in _Row.values) row: GlobalKey()};
   final _choiceKey = GlobalKey();
+  final _searchKey = GlobalKey();
 
-  static const _advancedRows = {_Row.worktree, _Row.approvals, _Row.profile};
+  static const _advancedRows = {
+    _Row.model,
+    _Row.branch,
+    _Row.worktree,
+    _Row.approvals,
+    _Row.profile,
+  };
   List<_Row> get _rows => [
     for (final row in _Row.values)
       if ((!_advancedRows.contains(row) || box.advancedOpen) &&
@@ -85,13 +87,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         row,
   ];
 
-  /// Whether the focused field's choices own the keyboard. Wide windows also
-  /// preview them while the fields are active.
+  /// Whether the focused field's choices replace the launch summary.
   bool _listOpen = false;
+  String? _folderAction;
 
   @override
   void initState() {
     super.initState();
+    _observedField = box.field;
     box.addListener(_onBox);
     // The pane colours can change under an open dialog; it wears them too.
     terminalThemeStore.addListener(_onBox);
@@ -127,10 +130,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     if (_observedField != box.field) {
       _observedField = box.field;
       final next = switch (box.field) {
-        NewHarnessField.harness => _Row.harness,
+        NewHarnessField.harness => _Row.agent,
         NewHarnessField.agent => _Row.agent,
         NewHarnessField.model => _Row.model,
-        NewHarnessField.machine => _Row.machine,
+        NewHarnessField.machine => _Row.project,
         NewHarnessField.branch => _Row.branch,
         NewHarnessField.mode => _Row.approvals,
         NewHarnessField.profile => _Row.profile,
@@ -171,14 +174,16 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   };
 
   NewHarnessField? _fieldOf(_Row row) => switch (row) {
-    _Row.harness => NewHarnessField.harness,
     _Row.project =>
-      _projectFields.contains(box.field)
+      (_projectFields.contains(box.field) ||
+              box.field == NewHarnessField.machine)
           ? box.field
           : NewHarnessField.projectMenu,
-    _Row.agent => NewHarnessField.agent,
+    _Row.agent =>
+      box.field == NewHarnessField.agent
+          ? NewHarnessField.agent
+          : NewHarnessField.harness,
     _Row.model => NewHarnessField.model,
-    _Row.machine => NewHarnessField.machine,
     _Row.branch => NewHarnessField.branch,
     _Row.worktree => null,
     _Row.approvals => NewHarnessField.mode,
@@ -199,17 +204,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   };
 
   String _label(_Row row) => switch (row) {
-    _Row.harness => 'Harness',
-    _Row.advanced => 'Advanced',
-    _Row.project => switch (box.field) {
-      NewHarnessField.projectName => 'New Project',
-      NewHarnessField.projectRepository => 'Repository',
-      NewHarnessField.project => 'Folder',
-      _ => 'Project',
-    },
+    _Row.advanced => 'Options',
+    _Row.project => 'Project',
     _Row.agent => 'Agent',
     _Row.model => 'Model',
-    _Row.machine => 'Machine',
     _Row.branch => 'Branch',
     _Row.worktree => 'Worktree',
     _Row.approvals => 'Approvals',
@@ -222,14 +220,12 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   String _value(_Row row) => _valueOf(row);
 
   String _valueOf(_Row row) => switch (row) {
-    _Row.harness => box.harnessLabel,
-    _Row.advanced => box.advancedOpen ? 'Hide settings' : 'Show settings',
-    _Row.project => box.projectLabel,
-    _Row.agent => box.agentLabel,
+    _Row.advanced => box.advancedOpen ? '[-]' : '[+]',
+    _Row.project => box.launchProjectLabel,
+    _Row.agent => box.launchAgentLabel,
     _Row.model => box.modelLabel,
-    _Row.machine => box.machineLabel,
     _Row.branch => box.branchRowLabel,
-    _Row.worktree => box.worktree ? 'Yes' : 'No',
+    _Row.worktree => box.worktree ? '[x]' : '[ ]',
     _Row.approvals => box.modeLabel,
     _Row.profile => box.profileLabel ?? 'Default',
     _Row.start => '',
@@ -241,6 +237,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     final field = _fieldOf(_row);
     if (field == null) {
       _wheel = const [];
+      if (_row == _Row.start) box.focusField(NewHarnessField.launch);
       return;
     }
     box.focusField(field);
@@ -262,6 +259,27 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   void _revealRow() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (_picking &&
+          _choicesScroll.hasClients &&
+          box.cursor >= 0 &&
+          box.cursor < box.options.length) {
+        final top =
+            List.generate(
+              box.cursor,
+              _choiceLines,
+            ).fold<int>(0, (a, b) => a + b) *
+            _rowHeight;
+        final bottom = top + _choiceLines(box.cursor) * _rowHeight;
+        final position = _choicesScroll.position;
+        if (top < position.pixels ||
+            bottom > position.pixels + position.viewportDimension) {
+          _choicesScroll.jumpTo(
+            (top < position.pixels ? top : bottom - position.viewportDimension)
+                .clamp(0, position.maxScrollExtent),
+          );
+        }
+        return;
+      }
       final context = _picking
           ? _choiceKey.currentContext
           : _itemKeys[_row]?.currentContext;
@@ -321,8 +339,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// live list, and the narrow layout's back chevron. They used to be written
   /// twice, which is how a back button and a back key drift apart.
   void _backToRows() {
-    if (_prompts.contains(box.field)) {
+    _folderAction = null;
+    if (_prompts.contains(box.field) || box.field == NewHarnessField.machine) {
       box.focusField(NewHarnessField.projectMenu);
+    } else if (box.field == NewHarnessField.agent) {
+      box.focusField(NewHarnessField.harness);
     }
     box.setQuery('');
     setState(() => _listOpen = false);
@@ -401,6 +422,23 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     setState(() => box.move(delta));
   }
 
+  void _pageMatches(int direction) {
+    final height = _choicesScroll.hasClients
+        ? _choicesScroll.position.viewportDimension
+        : _rowHeight;
+    var covered = 0.0;
+    var count = 0;
+    for (
+      var i = box.cursor + direction;
+      i >= 0 && i < box.options.length && covered < height;
+      i += direction
+    ) {
+      covered += _choiceLines(i) * _rowHeight;
+      count++;
+    }
+    box.page(direction, count);
+  }
+
   /// The rows that open something instead of answering the row. Being
   /// synthetic is not enough to qualify — "Create branch x" is synthetic and
   /// is an answer — so they are named.
@@ -444,15 +482,30 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       return;
     }
     if (option.id == NewHarnessController.changeMachineId) {
-      _selectRow(_Row.machine);
-      setState(() => _listOpen = true);
+      _chooseFolderMachine(switch (box.field) {
+        NewHarnessField.projectName => NewHarnessController.newProjectId,
+        NewHarnessField.projectRepository => NewHarnessController.repositoryId,
+        _ => NewHarnessController.existingProjectId,
+      }, preferLocal: false);
       return;
     }
     if (option.id == NewHarnessController.browseId) {
       unawaited(_browse());
       return;
     }
-    setState(() => box.accept(option));
+    _chooseFolderMachine(option.id);
+  }
+
+  void _chooseFolderMachine(String action, {bool preferLocal = true}) {
+    _folderAction = action;
+    box.focusField(NewHarnessField.machine);
+    if (preferLocal) {
+      final local = box.options.indexWhere(
+        (option) => box.app.stateOf(option.id)?.isLocalMachine == true,
+      );
+      if (local >= 0) box.cursor = local;
+    }
+    setState(() => _listOpen = true);
   }
 
   Future<void> _browse() async {
@@ -494,11 +547,30 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     if (_isDoor(option)) {
       _openDoor(option);
     } else {
+      final field = box.field;
       final prompt = _prompts.contains(box.field);
       box.applyOption(option);
+      if (box.error != null) return;
       box.setQuery('');
-      if (prompt) box.focusField(NewHarnessField.projectMenu);
-      setState(() => _listOpen = false);
+      if (field == NewHarnessField.machine) {
+        box.focusField(switch (_folderAction) {
+          NewHarnessController.newProjectId => NewHarnessField.projectName,
+          NewHarnessController.repositoryId =>
+            NewHarnessField.projectRepository,
+          _ => NewHarnessField.project,
+        });
+        setState(() => _listOpen = true);
+      } else if (field == NewHarnessField.harness && box.harnessId != null) {
+        box.focusField(NewHarnessField.agent);
+        setState(() => _listOpen = true);
+      } else {
+        if (prompt) box.focusField(NewHarnessField.projectMenu);
+        if (field == NewHarnessField.agent) {
+          box.focusField(NewHarnessField.harness);
+        }
+        _folderAction = null;
+        setState(() => _listOpen = false);
+      }
     }
     _focusEditor();
     _revealRow();
@@ -510,14 +582,15 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// it — and a door's prompt is finished the way Return finishes it.
   void _go() {
     if (box.locked) return;
-    if (_prompts.contains(box.field)) {
-      box.accept();
-    } else if (_picking) {
+    if (_picking) {
       final option = box.selected;
-      if (option != null && option.enabled && !_isDoor(option)) {
-        box.applyOption(option);
-        box.setQuery('');
+      if (option == null || !option.enabled) {
+        _confirm();
+        return;
       }
+      _acceptChoice(option);
+      // Folder and specialized-agent steps must be finished before launch.
+      if (_picking || box.error != null) return;
     }
     setState(() => _listOpen = false);
     unawaited(_start());
@@ -548,14 +621,25 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _cancel() {
+    if (box.locked) {
+      if (box.requestDismiss()) widget.onClose();
+      return;
+    }
     // A filter first, the screen second: Escape gives back the typed
     // text before it closes anything, as vim's wildmenu does.
     if (box.query.isNotEmpty) {
       _onTyped('');
-    } else if (_prompts.contains(box.field)) {
+    } else if (box.field == NewHarnessField.agent && _picking) {
+      box.focusField(NewHarnessField.harness);
+      setState(() => _listOpen = true);
+    } else if (_prompts.contains(box.field) && _folderAction != null) {
+      _chooseFolderMachine(_folderAction!, preferLocal: false);
+    } else if (_prompts.contains(box.field) ||
+        box.field == NewHarnessField.machine) {
+      _folderAction = null;
       setState(() {
-        _listOpen = false;
         box.focusField(NewHarnessField.projectMenu);
+        _listOpen = true;
       });
     } else if (_listOpen) {
       setState(() => _listOpen = false);
@@ -630,9 +714,20 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       case LogicalKeyboardKey.pageDown:
         // The wheel's home now that the arrows have left it — as documented
         // long before this: hyphens are values, so - and + cannot serve.
-        if (!_picking) _stepValue(1);
+        if (!_picking) {
+          _stepValue(1);
+        } else {
+          _pageMatches(1);
+        }
       case LogicalKeyboardKey.pageUp:
-        if (!_picking) _stepValue(-1);
+        if (!_picking) {
+          _stepValue(-1);
+        } else {
+          _pageMatches(-1);
+        }
+      case LogicalKeyboardKey.space:
+        if (_picking || _row != _Row.worktree) return KeyEventResult.ignored;
+        _stepValue(1);
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
         // ⇧⏎ is `picker.start`, a keymap command so it can be remapped: let
@@ -716,12 +811,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   ///
   /// Both are measured through the text scaler, because that is what the
   /// glyphs are drawn at.
-  double _font = 13;
   double _cell = 8;
   double _rowHeight = 20;
 
   void _measureGrid(BuildContext context) {
-    _font = MediaQuery.textScalerOf(context).scale(terminalFontStore.size);
     final cell = terminalCellSizeOf(context);
     _cell = cell.width;
     _rowHeight = cell.height;
@@ -737,7 +830,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   /// A field's label is padded to this many cells, as `ls -l` pads a column,
   /// so every value on the left starts on the same column.
-  static const _labelCells = 12;
+  static const _labelCells = 10;
 
   /// One row, with its content sitting on the line.
   Widget _oneRow(Widget child) => SizedBox(
@@ -831,7 +924,9 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                       flex: 45,
                       child: _installing != null
                           ? _installPane(_installing!)
-                          : _sidePane(),
+                          : _picking
+                          ? _sidePane()
+                          : _summaryPane(),
                     ),
                   ],
                 );
@@ -870,8 +965,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   )) ...[
                     // Blank rows group the fields: what runs, where it
                     // runs, then the settings most people never open.
-                    if (row == _Row.machine || row == _Row.advanced)
-                      SizedBox(height: _rowHeight),
+                    if (row == _Row.advanced) SizedBox(height: _rowHeight),
                     _buildRow(row),
                   ],
                 ],
@@ -883,6 +977,48 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       ],
     ),
   );
+
+  Widget _summaryPane() {
+    final values = <(String, String)>[
+      ('Machine', box.machineLabel),
+      ('Folder', box.projectLabel),
+      if (!box.isTerminal) ('Model', box.modelLabel),
+      if (box.isGitProject) ...[
+        ('Branch', box.branchRowLabel),
+        ('Worktree', box.worktree ? 'Yes' : 'No'),
+      ],
+      if (box.hasModes) ('Approvals', box.modeLabel),
+      if (box.usesProfile) ('Profile', box.profileLabel ?? 'Default'),
+      if (box.task.isNotEmpty) ('Task', box.task),
+    ];
+    return SingleChildScrollView(
+      key: const ValueKey('new-harness-summary'),
+      padding: EdgeInsets.symmetric(
+        horizontal: _cell * 2,
+        vertical: _rowHeight,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final (label, value) in values)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: _cell * 11,
+                  child: Text(label, style: _ink(_faint)),
+                ),
+                Expanded(child: Text(value, style: _ink(_faint))),
+              ],
+            ),
+          if (box.error != null || box.status != null) ...[
+            SizedBox(height: _rowHeight),
+            _status(),
+          ],
+        ],
+      ),
+    );
+  }
 
   /// The only action that starts an agent, and the one thing on this form
   /// that is not a value. A terminal has no buttons, only text in cells, so
@@ -985,13 +1121,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   padding: EdgeInsets.symmetric(horizontal: _margin),
                   child: Row(
                     children: [
-                      _inGutter(
-                        Icon(
-                          LucideIcons.chevronLeft300,
-                          size: _font,
-                          color: _faint,
-                        ),
-                      ),
+                      _inGutter(Text('<', style: _ink(_faint))),
                       Text(_label(_row), style: _ink(_faint)),
                     ],
                   ),
@@ -999,6 +1129,28 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               ),
             ),
           if (_hasChoices) ...[
+            if (box.field == NewHarnessField.agent ||
+                box.field == NewHarnessField.machine ||
+                _prompts.contains(box.field)) ...[
+              _atTextColumn(
+                Text(
+                  box.field == NewHarnessField.agent
+                      ? 'Run ${box.harnessLabel} with'
+                      : box.field == NewHarnessField.machine
+                      ? switch (_folderAction) {
+                          NewHarnessController.newProjectId => 'New Folder',
+                          NewHarnessController.repositoryId =>
+                            'Clone Repository',
+                          _ => 'Open Folder',
+                        }
+                      : box.field == NewHarnessField.projectName
+                      ? '${box.machineLabel}:~/harnesses'
+                      : box.machineLabel,
+                  style: _ink(_faint),
+                ),
+              ),
+              SizedBox(height: _rowHeight),
+            ],
             _searchBar(),
             if (box.choicesStatus case final status?)
               _atTextColumn(
@@ -1012,10 +1164,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               child: Scrollbar(
                 controller: _choicesScroll,
                 thumbVisibility: true,
-                child: SingleChildScrollView(
-                  controller: _choicesScroll,
-                  child: _matchPane(),
-                ),
+                child: _matchPane(),
               ),
             ),
           ],
@@ -1154,20 +1303,25 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// doors first — New Project, Open Folder, Clone — then the recents and
   /// matches under a gap. The highlight opens on the first real project, the
   /// fourth row, so the doors are visible without being in the way.
+  bool _headingBefore(int i) =>
+      box.options[i].group != null &&
+      (i == 0 || box.options[i].group != box.options[i - 1].group);
+  bool _blankBefore(int i) =>
+      i > 0 &&
+      (_headingBefore(i) ||
+          _showsDetail(box.options[i - 1]) ||
+          (box.options[i - 1].synthetic && !box.options[i].synthetic));
+  int _choiceLines(int i) =>
+      1 +
+      (_headingBefore(i) ? 1 : 0) +
+      (_blankBefore(i) ? 1 : 0) +
+      (_showsDetail(box.options[i]) ? 1 : 0);
+
   Widget _matchPane() {
     final shown = box.options;
     // At most ONE blank row before an entry, whatever asks for it: a new
     // heading, the end of a two-row entry, or the doors giving way to the
     // projects. Adding each reason's own gap is how two blanks appeared.
-    bool blankBefore(int i) {
-      if (i == 0) return false;
-      final heading =
-          shown[i].group != null && shown[i].group != shown[i - 1].group;
-      return heading ||
-          _showsDetail(shown[i - 1]) ||
-          (shown[i - 1].synthetic && !shown[i].synthetic);
-    }
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1180,13 +1334,24 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             !_prompts.contains(box.field) &&
             !box.refreshingChoices)
           _atTextColumn(Text('No matches', style: _ink(_faint))),
-        for (var i = 0; i < shown.length; i++) ...[
-          if (blankBefore(i)) SizedBox(height: _rowHeight),
-          if (shown[i].group != null &&
-              (i == 0 || shown[i].group != shown[i - 1].group))
-            _atTextColumn(Text(shown[i].group!, style: _ink(_faint))),
-          _matchRow(shown[i]),
-        ],
+        Expanded(
+          child: ListView.builder(
+            controller: _choicesScroll,
+            itemCount: shown.length,
+            itemExtentBuilder: (i, _) => _choiceLines(i) * _rowHeight,
+            itemBuilder: (context, i) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_blankBefore(i)) SizedBox(height: _rowHeight),
+                if (_headingBefore(i))
+                  _oneRow(
+                    _atTextColumn(Text(shown[i].group!, style: _ink(_faint))),
+                  ),
+                _matchRow(shown[i]),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -1211,12 +1376,11 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// What the prompt is actually for. A path prompt is not a search — it
   /// wants a folder typed at it — so it borrows the controller's own words
   /// rather than calling everything "Search".
-  String get _promptHint => _prompts.contains(box.field)
-      ? box.hint
-      : 'Search ${_label(_row).toLowerCase()}';
+  String get _promptHint => box.hint;
 
   Widget _searchBar() {
     return Padding(
+      key: _searchKey,
       padding: EdgeInsets.symmetric(horizontal: _margin),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -1280,17 +1444,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           if (box.canRefreshChoices)
             // Held to two cells by one row: a Material button's 48px tap
             // target would make the prompt taller than every other line.
-            IconButton(
-              key: const ValueKey('new-harness-refresh'),
-              tooltip: 'Refresh results',
-              onPressed: box.refreshingChoices ? null : box.refreshChoices,
-              padding: EdgeInsets.zero,
-              constraints: BoxConstraints.tightFor(
-                width: _gutter,
-                height: _rowHeight,
+            Tooltip(
+              message: 'Refresh results',
+              child: InkWell(
+                key: const ValueKey('new-harness-refresh'),
+                canRequestFocus: false,
+                onTap: box.refreshingChoices ? null : box.refreshChoices,
+                child: Text('[ Refresh ]', style: _ink(_faint)),
               ),
-              iconSize: _font,
-              icon: Icon(LucideIcons.refreshCw300, color: _faint),
             ),
         ],
       ),
@@ -1315,10 +1476,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   /// Whether a choice carries a description under its name.
   bool _showsDetail(NewHarnessOption option) =>
-      (_row == _Row.harness ||
-          _row == _Row.agent ||
-          _row == _Row.model ||
-          _row == _Row.profile) &&
+      (_row == _Row.agent || _row == _Row.model || _row == _Row.profile) &&
       option.detail.isNotEmpty &&
       !_isDoor(option);
 
@@ -1332,12 +1490,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _matchRow(NewHarnessOption option) {
     final on = identical(option, box.selected);
-    final note = box.field == NewHarnessField.machine
+    final note = box.field == NewHarnessField.projectMenu && !option.enabled
+        ? option.why
+        : box.field == NewHarnessField.machine
         ? _machineNote(option.id)
         : null;
     final showDetail = _showsDetail(option);
     final unlinked = _unlinked(option);
-    final unavailable = box.field == NewHarnessField.machine && !option.enabled;
+    final unavailable = !option.enabled;
     final title = Text(
       option.title,
       maxLines: 1,
@@ -1469,43 +1629,36 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         behavior: HitTestBehavior.opaque,
         excludeFromSemantics: true,
         onTap: blocked == null && !box.locked ? () => _activateRow(row) : null,
-        // The width decision sits OUTSIDE the box it sizes. A narrow column
-        // stacks the label above its value, which needs two rows of the
-        // grid; measuring that inside a box already pinned to one is how the
-        // row overflowed at large text sizes.
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final stacked = constraints.maxWidth < 360 * _scale;
-            final label = Text(_label(row), style: _ink(_faint));
-            final content = Text(
-              value,
-              style: _ink(ink),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            );
-            return Container(
-              key: _itemKeys[row],
-              color: highlighted
-                  ? (_picking ? _idleFill : _activeFill)
-                  : Colors.transparent,
-              padding: EdgeInsets.symmetric(horizontal: _margin),
-              height: _rowHeight * (stacked ? 2 : 1),
-              alignment: Alignment.centerLeft,
-              child: stacked
-                  ? Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [_oneRow(label), _oneRow(content)],
-                    )
-                  : Row(
-                      children: [
-                        SizedBox(width: _cell * _labelCells, child: label),
-                        SizedBox(width: _cell * 2),
-                        Expanded(child: content),
-                      ],
-                    ),
-            );
-          },
+        child: MouseRegion(
+          cursor: blocked == null && !box.locked
+              ? SystemMouseCursors.click
+              : SystemMouseCursors.basic,
+          child: Container(
+            key: _itemKeys[row],
+            color: highlighted
+                ? (_picking ? _idleFill : _activeFill)
+                : Colors.transparent,
+            padding: EdgeInsets.symmetric(horizontal: _margin),
+            height: _rowHeight,
+            alignment: Alignment.centerLeft,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: _cell * _labelCells,
+                  child: Text(_label(row), style: _ink(_faint)),
+                ),
+                SizedBox(width: _cell * 2),
+                Expanded(
+                  child: Text(
+                    value,
+                    style: _ink(ink),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

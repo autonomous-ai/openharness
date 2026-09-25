@@ -455,6 +455,34 @@ describe('verified process adoption', () => {
   })
 })
 
+describe('start()', () => {
+  it('keeps scanning when the opening pass fails — the interval is armed before it runs', async () => {
+    // Awaiting first meant one bad probe left discovery unscheduled for the life of the daemon, and
+    // rejected the caller's start-up on the way: no agents, no liveness, `discoveryReady` never true.
+    vi.useFakeTimers()
+    try {
+      let pass = 0
+      const scan = vi.fn(async () => {
+        pass++
+        if (pass === 1) throw new Error('ps timed out')
+        return probe([])
+      })
+      const reconciler = new TerminalAgentReconciler({
+        current: () => [], backends: [], backendOrder: ['tmux'], herdrSessionOrder: [],
+        onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+        probe: scan,
+      })
+      await expect(reconciler.start(5_000)).resolves.toBeUndefined()
+      expect(scan).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(scan).toHaveBeenCalledTimes(2)
+      reconciler.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('a terminal pane (engine `terminal`)', () => {
   const live = [{ instanceId: 'tmux:default', result: { state: 'available' as const, roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }]
   function terminal(overrides: Partial<RegisteredSession> = {}): RegisteredSession {

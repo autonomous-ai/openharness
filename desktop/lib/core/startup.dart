@@ -3,6 +3,7 @@ import '../stats/harness_stats.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../notify/alert_sounds.dart';
+import '../notify/system_notifications.dart';
 
 /// Every preference that has to be in place BEFORE the first frame.
 ///
@@ -23,6 +24,7 @@ Future<void> loadPersistedSettings({
   HarnessStats? stats,
   AlertSoundStore? alertSounds,
   ScreenAlertStore? screenAlerts,
+  DesktopNotificationStore? desktopNotifications,
 }) async {
   // Independent stores may load together, but all must finish before runApp.
   // Font and appearance share a serialized file store; each reads its related
@@ -43,5 +45,6 @@ Future<void> loadPersistedSettings({
     // noise, and a late read would let one through on the default while the person had it off.
     (alertSounds ?? alertSoundStore).load(),
     (screenAlerts ?? screenAlertStore).load(),
+    (desktopNotifications ?? desktopNotificationStore).load(),
   ]);
 }

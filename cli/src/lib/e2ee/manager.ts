@@ -350,10 +350,11 @@ export class E2eeManager {
 
   // ── inbound down `message` decryption ────────────────────────────────────────────────────────────
 
-  /** Decrypt an encrypted down `message`; plaintext passes through; undecryptable → null (drop). */
+  /** Decrypt a sealed down-frame. Plaintext or undecryptable → null (drop): a frame that reaches here
+   *  came from the relay, and the relay is not trusted to speak for any client. */
   unwrapDown(connId: string, frame: Frame): Frame | null {
     const payload = frame.payload as Record<string, unknown> | undefined
-    if (!payload || !C.isWrapped(payload)) return frame // plaintext (device/transition path)
+    if (!payload || !C.isWrapped(payload)) return null
     const s = this.sessions.get(connId)
     if (!s) return null
     const env = (payload as C.WrappedPayload).__e2e
@@ -742,7 +743,9 @@ export class E2eeManager {
     const enc = C.aeadSeal(keys.s2c, 0, C.utf8('e2e-welcome'), C.utf8(JSON.stringify({
       groupKey: C.b64e(this.groupKey),
       epoch: this.epoch,
-      features: { terminalP2p: 1, viewerForwarding: 1 },
+      // strictDown: this daemon opens a sealed frame of ANY type and refuses unsealed ones from the relay,
+      // so a client may seal the types older daemons took in the clear (STRICT_DOWN_TYPES).
+      features: { terminalP2p: 1, viewerForwarding: 1, strictDown: 1 },
     })))
     this.deps.sendTo(connId, {
       type: 'e2e_welcome',

@@ -13,7 +13,7 @@ bool harnessChoicesActive(WidgetTester tester) {
 /// Open a launch row through the same navigation keys as the visible menu.
 Future<void> openLaunchRow(WidgetTester tester, String name) async {
   await focusLaunchRow(tester, name);
-  if (name != 'start' && name != 'create') {
+  if (name != 'start' && name != 'create' && name != 'machine') {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
   }
@@ -24,15 +24,30 @@ Future<void> focusLaunchRow(WidgetTester tester, String name) async {
   final target = switch (name) {
     'create' => 'start',
     'mode' => 'approvals',
+    'harness' => 'agent',
     _ => name,
   };
-  for (var i = 0; i < 3 && harnessChoicesActive(tester); i++) {
+  for (var i = 0; i < 5 && harnessChoicesActive(tester); i++) {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
   }
+  if (target == 'machine') {
+    await openLaunchRow(tester, 'project');
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-option-project:existing')),
+    );
+    await tester.pumpAndSettle();
+    return;
+  }
   final row = find.byKey(ValueKey('new-harness-field-$target'));
   if (row.evaluate().isEmpty &&
-      {'branch', 'worktree', 'approvals', 'profile'}.contains(target)) {
+      {
+        'model',
+        'branch',
+        'worktree',
+        'approvals',
+        'profile',
+      }.contains(target)) {
     await openLaunchRow(tester, 'advanced');
   }
   for (var i = 0; i < 12; i++) {

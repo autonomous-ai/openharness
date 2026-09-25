@@ -8,30 +8,29 @@ Escape leaves that tab open. The command dock opens only after an explicit
 Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
 opening or cancelling the dock never starts a harness.
 
-The launch form starts on Harness, followed by Agent and Model, then Machine,
-Project and Branch; a blank row separates each group and Advanced. Machine
-always stays visible. Advanced expands Worktree, Approvals, and Profile for
-Codex subscription sessions. Its expanded state is remembered. The
-`[ New Harness ]` action stays pinned below the scrolling fields, prints the
-key bound to `picker.start` (⇧⏎ by default), and submits the draft; that key
-starts from any field, taking a value highlighted in an open list first. Plain
-Return on a value row never starts. The machine list puts this computer first,
-then usable machines, then unlinked or offline ones in dark grey. There is no heading,
-Task row, or Open In row. Cmd-O and Cmd-P also omit headings and counts.
-Tasks carried from search or Store examples remain part of the draft.
+The launch form starts with `[ New Harness ]` selected. Agent, Project, and
+Options are the only main rows. Enter launches using the displayed settings;
+Enter on a field edits it. Options starts collapsed on a fresh draft and expands
+Model, Branch, Worktree, Approvals, and applicable Profile settings. Resumed
+drafts retain their expansion state. The launch action stays pinned below the
+scrolling fields and prints the live `picker.start` shortcut (⇧⏎ by default).
+That shortcut accepts the highlighted value before starting; it cannot skip an
+unfinished machine or specialized-agent choice. Carried tasks remain in the draft.
 
-Values and search use the terminal's selected font, size, and line height, on a
-character grid: one cell wide and one row tall, with every margin, column and
-gap a whole number of them, and text whose line height is the row.
-The right pane previews choices without a selection highlight while the left
-has focus. Right arrow, Return, or typing activates the list, and Left arrow
-gives the keys back to the rows once the search is empty; accepting a value
-returns to its field. The three project actions have icons. Clone, folder path, and new
-project prompts return to Project after acceptance; only New Harness starts.
-Project, machine, branch, and approval options occupy one line. Only the local
-machine has a note, **This machine**. Approvals come from the chosen agent's
-supported modes, and Profile disappears for agents or model routes that do not use it.
-Narrow windows show the active list full-width with a back action.
+The right pane shows resolved launch settings until a field is edited. Enter,
+Right, or typing replaces the summary with choices; accepting returns to the
+field. Agent combines coding agents and specialized harnesses in one list.
+Choosing Blender opens a compatible coding-agent list in the same pane. Project
+searches all machine/folder pairs, local first, with unavailable destinations
+dimmed. Choosing a pair sets both the machine and project. New Folder, Open
+Folder, and Clone Repository first ask for a machine, with local preselected,
+then show their name, path/browser, or URL prompt. Escape retraces these steps.
+There is no permanent Machine field or machine scope selector.
+
+Use the terminal's selected font and measured cells. All controls are plain
+text, with one-row highlights. Worktree uses `[x]` / `[ ]`. Narrow windows show
+the active list full-width with a back action. Opening, searching, and cancelling
+never send input to an existing harness or start one.
 
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
@@ -63,38 +62,30 @@ as a terminal session, and API configuration uses the existing edit dialog.
 
 ## Harness and agent choices
 
-Harness lists every harness in the selected machine's catalog, installed or
-not, in this order: recent harnesses, Coding, installed harnesses, then the rest
-of the Store, followed by Browse Harness Store. All of them are searchable. The
-form opens on the last harness used with the last agent used on it; with no
-history it opens on Coding and Claude Code. Once the machine's catalog has
-answered, a remembered harness it no longer lists (or a viewer package) is not
-offered as recent and does not open; the form falls back to Coding. A harness
-opened by name, from a pane or the Store, keeps its row. A harness that is not installed
-installs when it starts. While it installs, and after a failed install, the
-right pane shows the machine's fetch / set up / check steps on the form's grid.
-Choosing another harness or machine clears it; an open list covers it while
-choosing. Agent
-contains compatible engines only. Coding sends no `dsh` and does not remove any
-existing instructions or skills from the project. Changing an engine preserves
-the selected harness and its generated project name. Machine changes re-evaluate
-compatibility; an incompatible selection cannot start, and is never silently
-replaced at launch. The selected machine's installed-package compatibility wins
-over a newer catalog listing. Current daemons expose every integrated agent
-engine; older daemons without compatibility metadata offer the manifest default.
-Wide pickers use the available height and show a scrollbar when choices overflow.
+Agent lists recent specialized harnesses, direct coding agents, installed
+harnesses, and the rest of the machine's catalog, followed by Browse Harness
+Store. All are searchable. Codex, Claude Code, and Terminal are direct choices;
+there is no separate Coding category. A specialized harness asks which compatible
+coding agent should run it, preselecting its remembered choice. The form's value
+then reads `Blender · Codex`. Choosing a direct agent removes the package choice
+and sends no `dsh`; it does not remove project instructions or skills.
 
-The existing local state store keeps `new_harness_preferences_v1`: separate
-engine and harness recents, the last successful engine per harness (including
-Coding), and Advanced's expanded state. Legacy `new_agent_engine` and
-`new_agent_recent` are read and split by identity; package ids never appear in
-Agent history. Legacy keys and the app data directory stay in place. Explicit
-entry choices and pending receipts take priority over remembered defaults.
+Explicit entry choices and pending receipts win over remembered defaults. A
+remembered package no longer offered by the machine falls back to a direct
+coding agent. A package requested explicitly keeps its identity. Missing packages
+install when started; the right pane narrates the machine's installation and
+failure details. Another agent or project machine clears that narration.
+Machine changes re-evaluate compatibility and never silently substitute at
+launch. The installed package's compatibility takes precedence over a newer
+catalog listing.
+
+The existing local state store retains separate engine and harness recents and
+the last successful engine per harness. Legacy preference keys and the app data
+directory stay in place. Fresh forms no longer inherit an expanded Options panel.
 
 ## Model selection
 
-Agent and Model are adjacent because the agent determines which model routes
-are supported. The Model picker reuses the Models menu's subscription usage
+Model lives under Options and uses the chosen agent’s supported routes. Its picker reuses the Models menu's subscription usage
 source and the selected machine's model catalog. It shows the relevant
 subscription/default login, running models on the person's machines, and shared
 models grouped by grid. Each model identifies its serving machine; search matches
@@ -118,8 +109,8 @@ is needed while continuing to allow ordinary subscription launches.
 ## Git projects
 
 Git projects enable Branch and Worktree. Worktree defaults to **Yes** for a
-repository with a commit; Enter, Left/Right, Page Up/Down, or a click toggles
-**Yes** and **No**. Folders without Git keep both rows visible but disabled. Discovery runs on the selected machine
+repository with a commit; Enter, Space, Left/Right, Page Up/Down, or a click toggles
+`[x]` and `[ ]`. Folders without Git keep both Options rows disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 
@@ -220,8 +211,8 @@ worktree: the retry selects that worktree's branch with Worktree off.
 
 Suggested projects display the existing `<agent>-YYYY-MM-DD-HH-MM` naming
 convention. Untouched suggestions follow agent changes; a user's edited name
-does not. The suggestion is frozen while reviewed. Project → New Project
-opens the name prompt; accepting a name returns to the Project field.
+does not. The suggestion is frozen while reviewed. Project → New Folder
+asks for a machine, then opens the name prompt; accepting a name returns to the Project field.
 
 Each machine retains its own project choice. A folder on one machine is never
 silently reused on another. Generated folders use exclusive reservation and

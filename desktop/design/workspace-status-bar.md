@@ -112,43 +112,73 @@ name; outside Git, use the ordinary folder name. A worktree follows exactly the
 same rule. Its generated path and `[worktree]` marker do not belong in the bar.
 Keep the full actual path in the tooltip and accessibility detail.
 
-A focused viewer shows its owning harness's context. Omit absent project or Git
-metadata; detached commits say `detached:<commit>`. Clear it for an empty tab.
+A focused viewer shows its owning harness's context. Show only named branches;
+omit detached commit hashes and absent project or Git metadata. Clear it for an
+empty tab.
+
+![Detached checkout showing its model, machine, and project, rendered with synthetic data](images/workspace-detached-status.png)
+
 Each field is independently clickable, with the same bold hover/keyboard-focus
 text and hand cursor as the status symbols. Machine opens the shared picker scoped by machine
 identity; project opens its harnesses across matching remote checkouts; branch
-opens that project filtered by its exact branch or detached commit. Escape returns
+opens that project filtered by its exact branch. Escape returns
 from branch to project, then to project search. Names never establish identity.
 Branch navigation does not check out or create a branch.
 
-Customize Harness → Status offers six saved themes with a colored preview of
-the same sample pane beneath each choice. Selection covers only the name row.
-The selected theme also previews PR status. Previews inherit the terminal font,
-cell size, and ANSI palette; the workspace bar uses the fixed 13 pt bar font.
-Controls keep the plain terminal design.
+Customize Harness → Status offers twelve saved themes, grouped into Minimal
+and Powerline, with a preview of the same sample pane beneath each choice.
+Selection covers only the name row. Tab and Shift-Tab move between choices;
+Enter or Space selects, scrolls the choice into view, and saves it. The selected
+theme also previews PR status. Previews inherit the terminal font and cell size;
+the workspace bar uses the fixed 13 pt bar font. Controls keep the plain terminal design.
 
 | Theme | Treatment |
 | --- | --- |
 | Plain (default) | Monochrome `machine  project  (branch)`, including the PR |
 | Robbyrussell | Green arrow, cyan project, blue `git:(` with red branch |
 | Pure | Blue project, muted machine/branch, magenta prompt mark |
+| Powerlevel10k Lean | Unboxed yellow machine, blue project, green branch symbol and ASCII `>` |
+| Spaceship | Cyan project and magenta branch symbol, with `in` / `on` separators |
+| Starship | Muted machine, cyan project, `on` and a magenta branch symbol, green prompt mark |
 | Agnoster | Joined black context, blue project, and green branch segments |
-| Powerlevel10k Lean | Unboxed yellow machine, blue project, green branch and ASCII `>` |
-| Spaceship | Cyan project and magenta branch, with `in` / `on` separators |
+| Powerlevel10k Rainbow | Light context, blue project, green branch, angular joins |
+| Pastel Powerline | Plum, rose, and peach segments, rounded leading cap and angular joins |
+| Catppuccin Powerline | Mocha red, peach, and yellow segments, rounded outside caps |
+| Tokyo Night | Cool gray, blue, and indigo segments, rounded joins and outside caps |
+| Gruvbox Rainbow | Warm orange, gold, and moss segments, rounded outside caps |
 
-![Six status presets and project hover, rendered by AppKit with synthetic data](images/terminal-status-presets.png)
+![Twelve status presets, rendered by AppKit with synthetic data](images/terminal-status-presets.png)
 
-These are one-line visual adaptations, not installed shell themes. Powerline
-separators are drawn one-cell shapes and do not require patched fonts. Prompt
-marks and segment colors are decorative; they never invent dirty, ahead/behind,
-privilege, or exit-status readings. Plain retains familiar parenthesized branch notation; Zsh's actual stock prompt is `%m%# ` (host and prompt character).
+These are one-line visual adaptations, not installed shell themes or a ranking.
+The catalog covers established Oh My Zsh themes plus Pure, Spaceship,
+Powerlevel10k, and Starship's official presets. Starship is a separate prompt
+engine that works with Zsh. Its named color presets are useful here because
+they offer distinct palettes beyond changes to separators and spacing.
+
+Powerline separators and branch symbols are drawn one-cell shapes and do not
+require patched fonts. The branch symbol appears only with a real named branch;
+it does not alter the branch's accessible name, tooltip, search, or click target.
+At tight widths, segmented fields drop the decorative symbol and can fall back
+to plain text. Prompt
+marks and segment colors never invent dirty, ahead/behind, privilege, runtime,
+clock, or exit-status readings. Plain retains familiar parenthesized branch
+notation; Zsh's actual stock prompt is `%m%# ` (host and prompt character).
+
+Minimal themes, Agnoster, and Powerlevel10k Rainbow use the terminal ANSI ramp.
+Pastel Powerline, Catppuccin Powerline, Tokyo Night, and Gruvbox Rainbow carry
+status-only palettes adapted from the linked Starship presets below. They do
+not recolor terminal output or change the workspace palette. Keep these tokens
+in the shared formatter, never duplicated in native code. Choose a readable
+ink from the named palette (or black/white where necessary) so small text on
+these filled segments has at least 4.5:1 contrast. Preserve the terminal font,
+the existing bold-only hover cue, and stable field widths.
 
 The rightmost PR label belongs to the focused harness, including when its viewer
 has focus. Display `#298 Merged` (or Draft/Open/Closed), with a separate link
 to that PR. Plain themes leave one text cell before the label. Segmented themes
 connect it directly to the preceding arrow, making one continuous bar while
 retaining the PR click target. The selected-theme preview
-shows that same joined line. State colors come from the terminal palette:
+shows that same joined line. State colors come from the selected status palette:
 muted for Draft, green for Open, magenta for Merged, and red for Closed. Turning
 Color off applies a monochrome treatment to context and PR together. Plain always
 uses the terminal foreground even when Color is enabled. Existing `standard`
@@ -157,7 +187,13 @@ settings resolve to Plain; existing `powerlevel10k` settings resolve to Lean.
 References: [Oh My Zsh themes](https://github.com/ohmyzsh/ohmyzsh/wiki/Themes),
 [Pure](https://github.com/sindresorhus/pure),
 [Powerlevel10k Lean](https://github.com/romkatv/powerlevel10k/blob/master/config/p10k-lean-8colors.zsh),
-and [Spaceship](https://github.com/spaceship-prompt/spaceship-prompt).
+[Powerlevel10k Rainbow](https://github.com/romkatv/powerlevel10k/blob/master/config/p10k-rainbow.zsh),
+[Spaceship](https://github.com/spaceship-prompt/spaceship-prompt),
+[Starship](https://starship.rs/),
+[Pastel Powerline](https://starship.rs/presets/pastel-powerline),
+[Catppuccin Powerline](https://starship.rs/presets/catppuccin-powerline),
+[Tokyo Night](https://starship.rs/presets/tokyo-night), and
+[Gruvbox Rainbow](https://starship.rs/presets/gruvbox-rainbow).
 These are compact adaptations; machine/project/branch/PR remain real Harness data.
 
 Read PR status through the owning machine's existing `git_pull_request` RPC.
@@ -205,3 +241,10 @@ preferences. `WorkspacePullRequest` owns focused PR state; the native and Flutte
 bars receive the same validated label and URL. Checks live in
 `workspace_status_test.dart`, `workspace_pull_request_test.dart`,
 `status_line_test.dart`, and `tool/swarm_titlebar_checks.swift`.
+
+To regenerate the synthetic native catalog image, set
+`HARNESS_NATIVE_STATUS_CAPTURE_DIR` to a temporary directory when running
+`flutter test test/workspace_status_test.dart`. With the same variable, run
+`bash tool/check_swarm_titlebar.sh /path/to/flutter --status-preview`;
+`native-themes.png` is drawn by the production AppKit controls from the real
+Dart payloads. No live window, account data, or saved appearance is used.

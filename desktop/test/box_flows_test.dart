@@ -85,6 +85,8 @@ void main() {
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
     controller.move(
       controller.options.indexWhere(
             (row) => row.id == NewHarnessController.browseId,
@@ -133,6 +135,8 @@ void main() {
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
     controller.move(
       controller.options.indexWhere(
             (row) => row.id == NewHarnessController.browseId,
@@ -178,6 +182,8 @@ void main() {
           ) -
           controller.cursor,
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     controller.move(

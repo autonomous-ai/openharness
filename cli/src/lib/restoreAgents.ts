@@ -139,7 +139,11 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
   const summary: RestoreSummary = { restored: [], skipped: [], failed: [] }
   const missing: Array<{ entry: RegisteredSession; runtime: TmuxRuntimeRef }> = []
 
+  // Per row, because a survey that gives up on the first bad one gives up on every row behind it —
+  // one pane whose `tmux list-panes` timed out, or one archive that could not be written, and the
+  // whole desk comes back empty. A row that cannot be surveyed is reported and the rest go on.
   for (const entry of deps.registry.list()) {
+   try {
     const runtime = tmuxRuntime(entry)
     if (!runtime) { summary.skipped.push({ agentId: entry.agentId, reason: 'no tmux pane' }); continue }
     if (entry.launch?.state === 'failed') { summary.skipped.push({ agentId: entry.agentId, reason: 'last launch failed' }); continue }
@@ -208,6 +212,11 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
       continue
     }
     missing.push({ entry, runtime })
+   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    summary.failed.push({ agentId: entry.agentId, reason })
+    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${reason}`)
+   }
   }
   if (!missing.length) return summary
 

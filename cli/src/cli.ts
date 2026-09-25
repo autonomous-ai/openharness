@@ -28,7 +28,7 @@ import { readFileSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, s
 import { join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
-import { createServer } from 'http'
+import { createServer, type Server } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
 import { homedir, hostname } from 'os'
 import { env } from './config/env.js'
@@ -50,12 +50,13 @@ import { registry, projectDisplayName, sessionDisplayTitle, type RegisteredSessi
 import { engineSessionTitle } from './lib/sessionTitle.js'
 import { installAmpPlugin, installCodexHooks, installCommandCodeHooks, installCursorHooks, installDevinHooks, installGrokHooks, installAgyHooks, installCopilotHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension, installSessionHooks } from './lib/hooks.js'
 import { PID_FILE, daemonPort, isAlive, isDaemonRunning, readPid } from './lib/daemonState.js'
+import { clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition, safeModeStatusBody, writeSafeModeMarker } from './lib/daemonSafeMode.js'
 import {
   BIND_WAIT_MS, connectFailure, defaultLaunchDeps, removePidFileIf, waitForBind, waitForReady,
 } from './lib/daemonLaunch.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { stopDaemonProcess } from './lib/daemonStop.js'
-import { ensureTmuxOnPath, requireTmuxAvailable } from './lib/tmuxOnPath.js'
+import { ensureTmuxOnPath } from './lib/tmuxOnPath.js'
 import { flashCommand } from './lib/flash.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './lib/loginCallback.js'
@@ -432,6 +433,82 @@ function tildify(p: string): string {
 
 /** The currently-running script — dist/cli.js when built, src/cli.ts under tsx. */
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
+
+/**
+ * Start the daemon that succeeds this one, on whatever bytes are in `~/.harness/cli` right now.
+ *
+ * Extracted from `restartForUpdate`'s own closure so the update handoff, the rollback respawn and the
+ * BOOT handoff below all spawn the same way. Not to be confused with the module's `spawnDaemon`: that
+ * one serves `harness start`, reads the pid file, finds THIS daemon in it and exits — called from
+ * inside the daemon it would quietly do nothing and lose the update.
+ *
+ * `managedNodePath()` is re-read here rather than captured at boot, so a runtime provisioned during
+ * this process's lifetime is the one the next daemon runs on.
+ */
+function spawnDaemonChild(extraEnv: Record<string, string>): ReturnType<typeof spawn> {
+  prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // before the fd, so the caller's sinceOffset sees one size
+  const fd = openSync(LOG_FILE, 'a')
+  const child = spawn(managedNodePath(), [SCRIPT_PATH, '__run'], {
+    detached: true, env: { ...process.env, ...extraEnv }, stdio: ['ignore', fd, fd],
+  })
+  // A spawn failure (e.g. EMFILE) emits 'error' on the child; with no listener that is an
+  // uncaughtException. Catch it so a failed restart can't take the daemon that asked for it down.
+  child.on('error', (e) => console.error('[update] daemon spawn error:', e instanceof Error ? e.message : e))
+  return child
+}
+
+/**
+ * What a staged update does while the daemon is still starting up — and the little the boot needs to
+ * know about itself to do it.
+ *
+ * The self-updater is started in `runForeground`'s prologue, before anything that can throw or hang,
+ * because a daemon that cannot finish booting is a daemon that can never be fixed: there is no
+ * supervisor, and the desktop app only re-runs `harness start` on the same broken bytes, once a
+ * minute, for ever. Its `onStaged` therefore has to mean something LONG before `restartForUpdate`
+ * exists — hence the indirection: `applyStagedUpdate` is `bootHandoff` until the body has built
+ * everything `restartForUpdate` tears down, and is swapped for it at that one line.
+ */
+const daemonBoot: {
+  updater: Poller | null
+  /** The hook server, once bound — the only thing a mid-boot handoff has to release. */
+  hookServer: Server | null
+  /** Set by the body so a failed boot can flip its own `/api/status` to not-ready. */
+  markNotReady: ((reason: string) => void) | null
+  /** Why this daemon is in safe mode, or null while it is healthy. Read by `/api/status`. */
+  safeMode: string | null
+  handingOff: boolean
+  applyStagedUpdate: (version: string) => void | Promise<void>
+} = { updater: null, hookServer: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
+
+/**
+ * Hand the machine to a newer build without finishing start-up.
+ *
+ * SYNCHRONOUS END TO END, and that is the whole safety argument: never awaiting means the half-built
+ * `runForeground` body cannot interleave between the port closing and the exit, so it can never
+ * reach the code that would bind the port the successor is about to take, and two daemons are
+ * impossible by construction. That is also why it does not supervise the child the way
+ * `restartForUpdate` does — waiting would leave this process running alongside the new one for up to
+ * a minute, both reconciling tmux and writing the registry.
+ *
+ * It spawns rather than merely exiting because on a machine with no desktop app nothing else would
+ * ever start the successor, and even with one the next spawn window is up to ~70s away.
+ */
+function bootHandoff(version: string): void {
+  if (daemonBoot.handingOff) return
+  daemonBoot.handingOff = true
+  runBootHandoff(VERSION, version, {
+    // The hook port has no fallback: a successor that cannot bind it is a daemon that does not come up.
+    closeServer: () => {
+      try { (daemonBoot.hookServer as unknown as { closeAllConnections?: () => void } | null)?.closeAllConnections?.() } catch { /* already gone */ }
+      try { daemonBoot.hookServer?.close() } catch { /* already gone */ }
+    },
+    // Only if it still names us — a no-op when start-up never got as far as claiming it.
+    removePidFile: () => { removePidFileIf(process.pid) },
+    spawn: (extraEnv) => spawnDaemonChild(extraEnv),
+    exit: (code) => process.exit(code),
+    log: (message) => console.log(message),
+  })
+}
 
 /** This computer's identity — see lib/computerIdentity.ts. Sent on connect so the backend can enforce
  *  one machine per computer, and used by `harness start` to reconnect to the machine already
@@ -1292,15 +1369,15 @@ async function statBirthMs(path: string): Promise<number> {
 /** The daemon body: hooks + watcher + process discovery + backend socket. */
 async function runForeground(session: AuthSession | null): Promise<void> {
   installTimestampedConsole() // daemon-only: every harness.log line gets a wall-clock timestamp
-  const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
-  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
-    if (!cwd) return
-    try { prepareApiInstructions(savedApis, cwd, engine) }
-    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
-  }
   const startedAt = Date.now()
+  // Set when the restore pass could not run. The reconciler reads it at call time (its deps are built
+  // long before this is decided) and keeps rows it would otherwise retire — see `onRemoved`.
+  let restoreDegraded = false
   let discoveryReady = false
   let discoveryError: string | null = null
+  // How a boot that failed AFTER this server bound turns its own status not-ready: the app reads
+  // `discoveryReady: false` as "alive, not ready" and stops respawning over it (`enterSafeMode`).
+  daemonBoot.markNotReady = (reason) => { discoveryReady = false; discoveryError = reason }
 
   // The pid file is claimed further down, the moment the control port is bound — not here, and not
   // by whoever spawned us. See the comment at that claim.
@@ -1314,6 +1391,59 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   process.on('uncaughtException', (err) => {
     console.error('[fatal-guard] uncaughtException:', err instanceof Error ? (err.stack ?? err.message) : err)
   })
+
+  // ── THE UPDATER GOES FIRST. Everything below this point can throw, hang, or wait on a vendor file,
+  // a port, or tmux — and a daemon that never finishes starting is a daemon that can never be fixed:
+  // there is no supervisor, and the desktop app only re-runs `harness start` on the same broken bytes.
+  // Started here, a published fix lands on its own however badly the rest of the boot goes.
+  //
+  // `onStaged` is one indirection on purpose: `restartForUpdate` does not exist yet and must not move
+  // (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
+  // applied by `bootHandoff`, which hands the machine over without finishing start-up.
+  // Update-handoff state, declared here — ahead of the /api/status handler that reads `restarting` —
+  // rather than beside the updater that writes it, so the closure never reaches a `let` in its TDZ.
+  let restarting = false
+  // The child a handoff is supervising, so a signal that lands mid-handoff can take it down with us
+  // rather than leaving two daemons — see shutdown(). Cleared the moment the handoff is CONFIRMED:
+  // from then on that child is the daemon, and a signal must not take it down with the old one.
+  let handoffChild: ReturnType<typeof spawn> | null = null
+
+  // Self-update ONLY manages the INSTALLED copy (`~/.harness/cli/cli.js`). A dev/repo run — `tsx`
+  // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
+  // the published bundle into ~/.harness/cli and restart, hijacking the version you're developing.
+  // Match by inode so symlinks/realpath don't fool it; fall back to a path compare.
+  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
+  let isInstalledCopy = SCRIPT_PATH === installedCli
+  try { isInstalledCopy = statSync(SCRIPT_PATH).ino === statSync(installedCli).ino } catch { /* keep path compare */ }
+  if (isInstalledCopy && !env.ADAPTER_UPDATE_DISABLE) {
+    daemonBoot.updater = startSelfUpdater({
+      currentVersion: VERSION,
+      url: env.ADAPTER_UPDATE_URL,
+      key: env.ADAPTER_UPDATE_KEY,
+      dir: env.ADAPTER_CLI_DIR,
+      intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
+      slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
+      // The lock spans the byte swap AND the handoff it triggers, as one critical section: a
+      // `harness start` that lands between the two would otherwise stage over our .prev, and one
+      // that lands during the handoff would spawn a second daemon.
+      withLock: (fn) => withSpawnLock('handoff', fn, {
+        onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
+      }),
+      onStaged: (v) => daemonBoot.applyStagedUpdate(v),
+    })
+    const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
+    console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`
+      + (slotted ? ` at :${String(env.ADAPTER_UPDATE_SLOT_SEC % 60).padStart(2, '0')}` : ''))
+  } else if (!env.ADAPTER_UPDATE_DISABLE) {
+    console.log(`[update] self-update off · running a dev/repo build (v${VERSION}), not the installed copy`)
+  }
+
+  const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
+  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
+    if (!cwd) return
+    try { prepareApiInstructions(savedApis, cwd, engine) }
+    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
+  }
 
   // The managed grid follows its pin on EVERY daemon start — this one, and the restart a self-update
   // ends in — not only on `--repair`: the pin is expected to move, and a machine installed last month
@@ -1366,9 +1496,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // `loginShellEnvPromise` is awaited later, near the existing `[env]` log line.
   const tmuxPathPromise = terminalConfig.backends.includes('tmux') ? ensureTmuxOnPath() : null
   const loginShellEnvPromise = warmLoginShellEnvironment()
+  // Missing tmux is a STATE, not a reason to refuse to start. The daemon already models a machine
+  // without it — `tmuxBackend` is null whenever the config omits tmux, every caller tests it, and the
+  // create/restart/resume paths answer `TMUX_UNAVAILABLE` — so it can still serve its status, the
+  // local socket, the backend link and its updater, and say what is missing. Refusing instead left a
+  // machine whose PATH lost tmux with a daemon that could not start and therefore could not be fixed.
+  let tmuxUnavailable: string | null = null
   if (tmuxPathPromise) {
-    const tmuxPath = requireTmuxAvailable(await tmuxPathPromise)
-    if (tmuxPath.state === 'adopted') {
+    const tmuxPath = await tmuxPathPromise
+    if (tmuxPath.state === 'absent') {
+      tmuxUnavailable = tmuxPath.reason
+      console.error(`[tmux] unavailable: ${tmuxPath.reason} · install tmux and verify \`tmux -V\`,`
+        + ' then restart — agents cannot be created or restored until then')
+    } else if (tmuxPath.state === 'adopted') {
       console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.from} from the user's login shell`)
     }
   }
@@ -1376,7 +1516,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // sent, or its stock dark palette until it says otherwise. Read through a closure so a change
   // reaches sessions created after it without rebuilding the backend.
   let hostTheme: HostTheme = loadHostTheme() ?? DEFAULT_HOST_THEME
-  const tmuxBackend = terminalConfig.backends.includes('tmux') ? new TmuxBackend(() => hostTheme) : null
+  const tmuxBackend = terminalConfig.backends.includes('tmux') && !tmuxUnavailable ? new TmuxBackend(() => hostTheme) : null
   const herdrTargets = await resolveHerdrTargets()
   activeHerdrSessions = herdrTargets.map((target) => target.sessionName)
   const resolvedHerdrPaths = herdrTargets.flatMap((target) => target.state === 'available' ? [target.endpoint.socketPath] : [])
@@ -3307,6 +3447,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       announceSession(agent)
     },
     onRemoved: (agent, reason) => {
+      // A pane absent because RESTORE never ran is not a pane the person closed. Retiring it here
+      // would archive a row whose tmux pane was simply never rebuilt, and the person would have to
+      // Open each one by hand; keeping it dormant leaves the next daemon — the fixed one — something
+      // to restore.
+      if (restoreDegraded) {
+        console.log(`[discovery] ${sid(agent.agentId)} kept · restore did not run this boot · ${reason}`)
+        registry.setActive(agent.agentId, false)
+        announceSession(agent)
+        return
+      }
       console.log(`[discovery] ${sid(agent.agentId)} removed · ${reason}`)
       forgetSession(agent.agentId, { force: true })
     },
@@ -3482,13 +3632,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return { status: 200, body: withStaleMarker(cached.body, cached.fetchedAt) }
   }
 
-  // Update-handoff state, declared here — ahead of the /api/status handler that reads `restarting` —
-  // rather than beside the updater that writes it, so the closure never reaches a `let` in its TDZ.
-  let restarting = false
-  // The child a handoff is supervising, so a signal that lands mid-handoff can take it down with us
-  // rather than leaving two daemons — see shutdown(). Cleared the moment the handoff is CONFIRMED:
-  // from then on that child is the daemon, and a signal must not take it down with the old one.
-  let handoffChild: ReturnType<typeof spawn> | null = null
 
   const { server: hookServer, port: hookPort } = await startHookServer(env.PORT, {
     onCommandBar: commandBarService,
@@ -3826,7 +3969,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
       restarting,
       discoveryReady,
-      discoveryError,
+      discoveryError: discoveryError ?? (tmuxUnavailable ? `tmux unavailable: ${tmuxUnavailable}` : null),
+      // Present only when start-up failed and this daemon is holding the machine open for its
+      // updater. Clients key on `discoveryReady`; this says WHY, in one word, for a person reading it.
+      ...(daemonBoot.safeMode ? { safeMode: true } : {}),
       // Agents whose history is being read right now, and how many wait their turn. Normally empty or
       // gone in a second; one that stays here names the store that is slow, which no other field does.
       attaching: attaches.attaching(),
@@ -3892,6 +4038,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // process that is running AND holds the port is the only honest author of its own pid; that claim
   // is also the signal `harness start` and the update handoff wait on to know the bind succeeded.
   try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
+  // The one thing a handoff that happens before start-up finishes has to release: the port has no
+  // fallback, so a successor that cannot bind it is a daemon that does not come up (see bootHandoff).
+  daemonBoot.hookServer = hookServer
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
   // Same on-disk identity `harness remote-password set`/`link connect` use (E2eeStore.init() is
   // idempotent per file, so a separate in-memory instance here just reads the one this machine
@@ -4143,28 +4292,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     localClient: () => ({ kind: 'desktop', name: terminalHintMachineName().slice(0, 64), machineId: backend.machineId }),
   })
   // Install both CLI hooks with the port the local server actually bound.
+  //
+  // One vendor at a time, each behind its own guard: these write into thirteen different settings
+  // files owned by thirteen different CLIs, and one that is malformed, read-only or mid-write is not
+  // a reason for the other twelve to go uninstalled — let alone for the daemon not to come up.
+  const hookStep = (vendor: string, install: () => void): void => {
+    try { install() } catch (error) {
+      console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
+    }
+  }
   if (!env.DISABLE_HOOK_INSTALL) {
-    installSessionHooks(hookPort)
-    installCodexHooks(hookPort)
-    installCursorHooks(hookPort)
-    installOpencodePlugin(hookPort)
+    hookStep('claude', () => installSessionHooks(hookPort))
+    hookStep('codex', () => installCodexHooks(hookPort))
+    hookStep('cursor', () => installCursorHooks(hookPort))
+    hookStep('opencode', () => installOpencodePlugin(hookPort))
     // The `grid` CLI the Grid harness shells out to, for a machine that signed in before this
     // existed or whose sign-in could not fetch it. In the background: a download must not hold
     // the daemon's own start, and nothing here waits on it.
     void ensureGridInstalled().then((result) => {
       if (result.status !== 'present') console.log(`[grid] ${result.message}`)
     })
-    installKiloPlugin(hookPort)
-    installPiExtension(hookPort)
+    hookStep('kilo', () => installKiloPlugin(hookPort))
+    hookStep('pi', () => installPiExtension(hookPort))
     // A self-update refreshes plugin files here; running engine processes pick them up according to each
     // vendor's own plugin reload lifecycle.
-    installAmpPlugin(hookPort)
-    installHermesHooks(hookPort)
-    installDevinHooks(hookPort)
-    installCommandCodeHooks(hookPort)
-    installGrokHooks(hookPort)
-    installAgyHooks(hookPort)
-    installCopilotHooks(hookPort)
+    hookStep('amp', () => installAmpPlugin(hookPort))
+    hookStep('hermes', () => installHermesHooks(hookPort))
+    hookStep('devin', () => installDevinHooks(hookPort))
+    hookStep('commandcode', () => installCommandCodeHooks(hookPort))
+    hookStep('grok', () => installGrokHooks(hookPort))
+    hookStep('agy', () => installAgyHooks(hookPort))
+    hookStep('copilot', () => installCopilotHooks(hookPort))
   }
   backend.setDashboardPort(hookPort) // surfaced to the web (e2e_status) so it can link here to approve
   console.log(`[cli] local dashboard → http://127.0.0.1:${hookPort}`)
@@ -4407,6 +4565,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (saved && !isTerminalEngine(saved.engine)) retainExitedSession(entry, true)
   }
   if (tmuxBackend) {
+   // Best effort, like the cwd repair above it: panes that cannot be rebuilt cost this boot its
+   // tiles, not the daemon. `restoreDegraded` then stops discovery retiring the rows whose panes
+   // restore never got to, so the next daemon can put them back.
+   try {
     const backend = tmuxBackend
     let paneInventory: ReturnType<typeof listTmuxPanes> | null = null
     const summary = await restoreAgents({
@@ -4491,12 +4653,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.log(`[restore] restored ${summary.restored.length} · skipped ${summary.skipped.length} · failed ${summary.failed.length}`
         + (registry.rebootedSinceLastRun ? ' · after reboot' : ''))
     }
+   } catch (error) {
+    restoreDegraded = true
+    console.warn(`[restore] skipped · ${error instanceof Error ? error.message : error}`
+      + ' · agents keep their rows and come back on the next start')
+   }
   }
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
-  for (const task of await loadCursorPendingTasks(env.ADAPTER_DATA_DIR)) {
+  // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
+  // pending Cursor tasks this boot, not no daemon.
+  const pendingCursorTasks = await loadCursorPendingTasks(env.ADAPTER_DATA_DIR).catch((error) => {
+    console.warn(`[cursor] pending tasks skipped · ${error instanceof Error ? error.message : error}`)
+    return []
+  })
+  for (const task of pendingCursorTasks) {
     onCursorTaskStart(task.sessionId, task.toolUseId, task.input)
   }
 
@@ -5494,7 +5667,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   //
   // The cost is real and accepted: a turn streaming at that moment loses the rest of its events, and its
   // clients see no turn_end for it until the new daemon re-attaches the session and the next turn runs.
-  let updater: Poller | null = null
 
   // Hand off to a freshly-spawned daemon running the just-swapped cli.js, then SUPERVISE it and roll
   // back to the .prev bytes if it fails to come up. NOT launch() — that refuses while a daemon is alive.
@@ -5507,7 +5679,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     restarting = true
     console.log(`[update] applying ${VERSION} → ${newVersion} — restarting daemon`)
     registry.flush()
-    updater?.stop()
+    daemonBoot.updater?.stop()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
@@ -5538,23 +5710,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await backend.stop() // graceful WS close → releases the Redis machine-owner claim
     await new Promise((r) => setTimeout(r, 1000)) // grace before the same-machine reclaim
 
-    const spawnDaemon = (extraEnv: Record<string, string>): ReturnType<typeof spawn> => {
-      prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // before the fd + the sinceOffset below, so both see one size
-      const fd = openSync(LOG_FILE, 'a')
-      // Serves the update restart AND the rollback respawn. managedNodePath() is re-read here rather
-      // than captured at boot, so a runtime provisioned during this process's lifetime is the one the
-      // next daemon runs on.
-      const c = spawn(managedNodePath(), [SCRIPT_PATH, '__run'], {
-        detached: true, env: { ...process.env, ...extraEnv }, stdio: ['ignore', fd, fd],
-      })
-      // A spawn failure (e.g. EMFILE) emits 'error' on the child; with no listener that is an
-      // uncaughtException. Catch it so a failed update-restart can't take the old daemon down.
-      c.on('error', (e) => console.error('[update] daemon spawn error:', e instanceof Error ? e.message : e))
-      return c
-    }
-
     const sinceOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
-    const child = spawnDaemon({ ADAPTER_UPDATED_TO: newVersion })
+    const child = spawnDaemonChild({ ADAPTER_UPDATED_TO: newVersion })
     handoffChild = child
     let childExited = false
     child.on('exit', () => { childExited = true })
@@ -5586,7 +5743,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     }
     removePidFileIf(child.pid)
     restoreUpdate(env.ADAPTER_CLI_DIR) // restore .prev → cli.js/notify.mjs
-    const good = spawnDaemon({})
+    const good = spawnDaemonChild({})
     handoffChild = good
     let goodExited = false
     good.on('exit', () => { goodExited = true })
@@ -5600,41 +5757,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     process.exit(0)
   }
 
-  // Self-update ONLY manages the INSTALLED copy (`~/.harness/cli/cli.js`). A dev/repo run — `tsx`
-  // (`npm run dev`) OR `node dist/cli.js` from the checkout — must NEVER self-update: it would swap
-  // the published bundle into ~/.harness/cli and restart, hijacking the version you're developing.
-  // Match by inode so symlinks/realpath don't fool it; fall back to a path compare.
-  const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
-  let isInstalledCopy = SCRIPT_PATH === installedCli
-  try { isInstalledCopy = statSync(SCRIPT_PATH).ino === statSync(installedCli).ino } catch { /* keep path compare */ }
-  if (isInstalledCopy && !env.ADAPTER_UPDATE_DISABLE) {
-    updater = startSelfUpdater({
-      currentVersion: VERSION,
-      url: env.ADAPTER_UPDATE_URL,
-      key: env.ADAPTER_UPDATE_KEY,
-      dir: env.ADAPTER_CLI_DIR,
-      intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
-      slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
-      // The lock spans the byte swap AND the handoff it triggers, as one critical section: a
-      // `harness start` that lands between the two would otherwise stage over our .prev, and one
-      // that lands during the handoff would spawn a second daemon.
-      withLock: (fn) => withSpawnLock('handoff', fn, {
-        onWaiting: (owner) => console.log(`[update] waiting — the daemon is ${describeSpawnLockOwner(owner)}`),
-      }),
-      onStaged: (v) => restartForUpdate(v).catch((err) => {
-        // If the restart handoff itself throws/rejects (I/O fault during teardown), don't let it
-        // become an unhandledRejection — log, un-latch `restarting`, and stay on the current build.
-        console.error('[update] restart failed — staying on current build:', err instanceof Error ? err.message : err)
-        restarting = false
-        handoffChild = null
-      }),
-    })
-    const slotted = env.ADAPTER_UPDATE_SLOT_SEC >= 0 && 60_000 % env.ADAPTER_UPDATE_CHECK_MS === 0
-    console.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`
-      + (slotted ? ` at :${String(env.ADAPTER_UPDATE_SLOT_SEC % 60).padStart(2, '0')}` : ''))
-  } else if (!env.ADAPTER_UPDATE_DISABLE) {
-    console.log(`[update] self-update off · running a dev/repo build (v${VERSION}), not the installed copy`)
-  }
+  // The handoff handler stops being `bootHandoff` HERE, and not a line earlier: everything
+  // `restartForUpdate` tears down — the hook server, the reconciler, the three interval timers, the
+  // watcher, the backend socket — exists by now. A straight-line assignment, never a wait: if the
+  // body never reaches this line the handler stays `bootHandoff`, and the fix still lands.
+  daemonBoot.applyStagedUpdate = (v) => restartForUpdate(v).catch((err) => {
+    // If the restart handoff itself throws/rejects (I/O fault during teardown), don't let it become
+    // an unhandledRejection — log, un-latch `restarting`, and stay on the current build.
+    console.error('[update] restart failed — staying on current build:', err instanceof Error ? err.message : err)
+    restarting = false
+    handoffChild = null
+  })
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\n[cli] ${signal} — shutting down`)
@@ -5655,7 +5788,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // esptool fail in a way that reads exactly like dead hardware.
     void cableRef?.stop()
     deviceLinkRef?.stop()
-    updater?.stop()
+    daemonBoot.updater?.stop()
     agentReconciler.stop()
     clearInterval(logTrimTimer)
     clearInterval(runtimeReconcileTimer)
@@ -6793,6 +6926,9 @@ async function status(): Promise<void> {
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
   if (!alive) registry.load()
+  // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
+  // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
+  const safeMode = alive ? readSafeModeMarker(env.ADAPTER_DATA_DIR, isAlive) : null
   printInfoBlock({
     // The backend link is the daemon's own business, so `status` is where it is read — `start` no
     // longer waits to see it, and a daemon with no backend is still serving every local agent.
@@ -6800,6 +6936,8 @@ async function status(): Promise<void> {
     // and `machine: not signed in` in place of the whole block hid a running daemon and its agents.
     status: !alive
       ? '○ stopped'
+      : safeMode
+        ? `◍ safe mode · start-up failed on v${safeMode.version} — waiting for a fixed build (${safeMode.error.split('\n')[0]})`
       : !session
         ? '● running · this computer only (not signed in)'
         : daemonStatus == null
@@ -6879,6 +7017,73 @@ const onError = (err: unknown): never => {
   process.exit(1)
 }
 
+/**
+ * The daemon's start-up threw. STAY UP anyway, running nothing but the updater.
+ *
+ * Exiting here is what made one bad build unrecoverable: nothing supervises this process, the desktop
+ * app answers a dead port by running `harness start` again — the same bytes, about once a minute, for
+ * ever — and the updater that could have fixed it lives most of the way down a body that never
+ * finished. The updater is started in the prologue now (see `runForeground`), so by the time this
+ * runs it is already polling; all this has to do is keep the process alive long enough for a
+ * published fix to land, and tell everyone what state the machine is in.
+ *
+ * Three ways it earns its keep, in order: the bound control port answers `discoveryReady: false`, so
+ * the app reads the machine as not-ready instead of dead and STOPS respawning; the pid file stays
+ * ours, so `harness start` is a cheap no-op rather than a zombie factory; and the marker file lets
+ * `harness status` say what happened. `harness stop` still works throughout — it kills by pid.
+ */
+const enterSafeMode = (err: unknown): void => {
+  const disposition = safeModeDisposition(err, { selfPid: process.pid, readPid, isAlive })
+  if (!disposition.stay) {
+    console.error(`[safe-mode] not staying up — ${disposition.reason}`)
+    onError(err)
+  }
+  const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+  console.error('Failed to start adapter:', err)
+  console.error(`[safe-mode] staying up on v${VERSION} with the updater only — a published fix will be`
+    + ' applied on its own. Nothing else on this machine works until then.')
+  writeSafeModeMarker(env.ADAPTER_DATA_DIR, { pid: process.pid, version: VERSION, at: Date.now(), error: detail })
+  daemonBoot.safeMode = disposition.reason
+  daemonBoot.markNotReady?.(disposition.reason)
+
+  const leave = (why: string, code: number): never => {
+    clearSafeModeMarker(env.ADAPTER_DATA_DIR)
+    removePidFileIf(process.pid)
+    console.log(`[safe-mode] ${why}`)
+    process.exit(code)
+  }
+  process.on('SIGINT', () => leave('SIGINT — leaving safe mode', 0))
+  process.on('SIGTERM', () => leave('SIGTERM — leaving safe mode', 0))
+
+  // The bound control port is a ref'd handle and holds the loop on its own. Without one — the bind
+  // itself was what failed, or we never got that far — take the port for the status alone, so the app
+  // still reads not-ready rather than down. A port we cannot take at all leaves only a ticking clock.
+  if (!daemonBoot.hookServer) {
+    const status = createServer((req, res) => {
+      const body = safeModeStatusBody({
+        version: VERSION, pid: process.pid, startedAt: Date.now(),
+        computerId: computerId(), error: disposition.reason,
+      })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(body))
+    })
+    status.on('error', (e) => {
+      console.error(`[safe-mode] could not serve status on ${env.PORT}: ${e instanceof Error ? e.message : e}`)
+      // A ref'd timer, unlike the updater's: something has to hold the event loop open.
+      setInterval(() => console.log(`[safe-mode] still waiting for a fixed build · v${VERSION}`), 10 * 60_000)
+    })
+    status.listen(env.PORT, '127.0.0.1')
+  }
+
+  // Bounded on purpose. A cause that has since cleared — tmux not yet on PATH after a reboot, a lock
+  // file, a port held for a moment — would otherwise leave the machine wedged in a state nobody
+  // respawns over, because not-ready is exactly what stops the app trying again.
+  if (env.ADAPTER_SAFE_MODE_MS > 0) {
+    setTimeout(() => leave(`no fix arrived within ${Math.round(env.ADAPTER_SAFE_MODE_MS / 60_000)}m — letting a clean start try`, 1),
+      env.ADAPTER_SAFE_MODE_MS).unref?.()
+  }
+}
+
 switch (cmd) {
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -6904,7 +7109,8 @@ switch (cmd) {
     console.error('`harness join` has been removed. Run `harness login`, then `harness start`.')
     process.exit(1)
   case '__run': // internal: the detached daemon child reads the durable SSO session — or runs without one
-    runForeground(readAuthSession()).catch(onError)
+    // NOT `onError`: a daemon that dies here can never be updated. See `enterSafeMode`.
+    runForeground(readAuthSession()).catch(enterSafeMode)
     break
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, env.PORT).then(code => { process.exitCode = code }).catch(onError)

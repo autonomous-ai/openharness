@@ -90,6 +90,16 @@ class PromptCustomize extends StatelessWidget {
               Text('Status line', style: style),
               SizedBox(height: cell.height),
               for (final format in StatusLineStyle.values) ...[
+                if (format == StatusLineStyle.standard ||
+                    format == StatusLineStyle.agnoster) ...[
+                  Text(
+                    format.segmented ? 'Powerline' : 'Minimal',
+                    style: style.copyWith(
+                      color: theme.foreground.withValues(alpha: .6),
+                    ),
+                  ),
+                  SizedBox(height: cell.height),
+                ],
                 SizedBox(
                   height: cell.height,
                   child: TextButton(

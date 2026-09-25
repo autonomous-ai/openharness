@@ -79,13 +79,127 @@ void main() {
             isEmpty,
           );
         }
-        expect(designs, hasLength(6));
+        expect(designs, hasLength(StatusLineStyle.values.length));
       }
-      expect(StatusLineStyle.fromId('starship'), StatusLineStyle.standard);
+      expect(StatusLineStyle.fromId('unknown'), StatusLineStyle.standard);
       expect(fitStatusLineWidths([10, 80, 40], 90), [
         10,
         closeTo(40, .01),
         closeTo(40, .01),
+      ]);
+    },
+  );
+
+  test(
+    'branch symbols follow real branches without changing searchable text',
+    () {
+      for (final style in StatusLineStyle.values) {
+        for (var mask = 0; mask < 8; mask++) {
+          final branch = mask & 4 == 0 ? null : 'feature/日本語';
+          final parts = statusLineParts(
+            provider: '',
+            machine: mask & 1 == 0 ? '' : 'M2',
+            project: mask & 2 == 0 ? '' : 'app',
+            branch: branch,
+            style: style,
+          );
+          final icons = parts.segments.where((part) => part.branchSymbol);
+          expect(icons.length, branch != null && style.branchSymbol ? 1 : 0);
+          if (icons.isNotEmpty) {
+            expect(icons.single.text, branch);
+            expect(icons.single.field, StatusLineField.branch);
+          }
+          expect(
+            parts.text.runes.any((rune) => rune >= 0xe000 && rune <= 0xf8ff),
+            isFalse,
+          );
+          for (final color in [true, false]) {
+            final whole = statusLinePaintSegments(
+              parts,
+              darkTerminalTheme,
+              color: color,
+            );
+            final split = [
+              for (final component in parts.components)
+                ...statusLinePaintSegments(
+                  component.parts,
+                  darkTerminalTheme,
+                  color: color,
+                  segmentOffset: component.offset,
+                ),
+            ];
+            expect(split.map((p) => p.toJson()), whole.map((p) => p.toJson()));
+          }
+        }
+      }
+    },
+  );
+
+  test(
+    'named palettes keep their identity and readable context and PR text',
+    () {
+      for (final style in [
+        StatusLineStyle.pastelPowerline,
+        StatusLineStyle.catppuccinPowerline,
+        StatusLineStyle.tokyoNight,
+        StatusLineStyle.gruvboxRainbow,
+      ]) {
+        final context = statusLineParts(
+          provider: '',
+          machine: 'M2',
+          project: 'app',
+          branch: 'main',
+          style: style,
+        );
+        for (final parts in [
+          context,
+          for (final state in ['Open', 'Merged', 'Closed', 'Draft'])
+            pullRequestStatusLineParts(number: 298, state: state, style: style),
+        ]) {
+          final paint = statusLinePaintSegments(parts, darkTerminalTheme);
+          expect(
+            paint.map((p) => p.toJson()),
+            statusLinePaintSegments(
+              parts,
+              tangoTerminalTheme,
+            ).map((p) => p.toJson()),
+          );
+          for (final segment in paint) {
+            final a = segment.foreground.computeLuminance();
+            final b = segment.background!.computeLuminance();
+            final contrast = a > b
+                ? (a + .05) / (b + .05)
+                : (b + .05) / (a + .05);
+            expect(
+              contrast,
+              greaterThanOrEqualTo(4.5),
+              reason: '${style.name}: ${segment.text}',
+            );
+          }
+          expect(
+            statusLinePaintSegments(
+              parts,
+              tangoTerminalTheme,
+              color: false,
+            ).map((s) => s.foreground),
+            everyElement(tangoTerminalTheme.foreground),
+          );
+        }
+      }
+      final catppuccin = statusLinePaintSegments(
+        statusLineParts(
+          provider: '',
+          machine: 'M2',
+          project: 'app',
+          branch: 'main',
+          style: StatusLineStyle.catppuccinPowerline,
+        ),
+        darkTerminalTheme,
+      );
+      expect(catppuccin.map((s) => s.background), const [
+        Color(0xfff38ba8),
+        Color(0xfffab387),
+        Color(0xfff9e2af),
       ]);
     },
   );
@@ -118,55 +232,57 @@ void main() {
                             grid.AppTheme.palette.value,
                             choice,
                           ).background,
-                          body: Align(
-                            alignment: Alignment.topLeft,
-                            child: RepaintBoundary(
-                              key: boundary,
-                              child: SizedBox(
-                                width: width,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    for (final style
-                                        in StatusLineStyle.values) ...[
-                                      Text(
-                                        style.label,
-                                        style: terminalContentStyle(
-                                          color: Colors.grey,
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        height: cell.height,
-                                        child: StatusLine(
-                                          key: ValueKey(
-                                            'context-${style.name}',
-                                          ),
-                                          textAlign: TextAlign.left,
-                                          parts: statusLineParts(
-                                            provider: 'OpenAI',
-                                            machine: 'M2',
-                                            project: 'openharness',
-                                            branch: 'feature/日本語',
-                                            style: style,
+                          body: SingleChildScrollView(
+                            child: Align(
+                              alignment: Alignment.topLeft,
+                              child: RepaintBoundary(
+                                key: boundary,
+                                child: SizedBox(
+                                  width: width,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      for (final style
+                                          in StatusLineStyle.values) ...[
+                                        Text(
+                                          style.label,
+                                          style: terminalContentStyle(
+                                            color: Colors.grey,
                                           ),
                                         ),
-                                      ),
-                                      SizedBox(
-                                        height: cell.height,
-                                        child: StatusLine(
-                                          textAlign: TextAlign.left,
-                                          parts: pullRequestStatusLineParts(
-                                            number: 298,
-                                            state: 'Merged',
-                                            style: style,
+                                        SizedBox(
+                                          height: cell.height,
+                                          child: StatusLine(
+                                            key: ValueKey(
+                                              'context-${style.name}',
+                                            ),
+                                            textAlign: TextAlign.left,
+                                            parts: statusLineParts(
+                                              provider: 'OpenAI',
+                                              machine: 'M2',
+                                              project: 'openharness',
+                                              branch: 'feature/日本語',
+                                              style: style,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      SizedBox(height: cell.height),
+                                        SizedBox(
+                                          height: cell.height,
+                                          child: StatusLine(
+                                            textAlign: TextAlign.left,
+                                            parts: pullRequestStatusLineParts(
+                                              number: 298,
+                                              state: 'Merged',
+                                              style: style,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(height: cell.height),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),

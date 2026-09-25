@@ -145,6 +145,35 @@ describe('startSelfUpdater', () => {
     expect(events).toEqual(['lock', 'staged:9.9.9', 'handoff-done', 'unlock'])
   })
 
+  it('is already stopped when onStaged runs — a handler that defers loses the updater for good', async () => {
+    // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
+    // the machine over leaves no timer and no way back. This is why the daemon's boot-time handler
+    // always takes over and exits rather than waiting for start-up to finish (`runBootHandoff`).
+    serveUpdate()
+    const dir = tempDir()
+    let staged = 0
+    let checks = 0
+    const counted = globalThis.fetch as typeof fetch
+    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+      if (String(args[0]).endsWith('metadata.json')) checks++
+      return counted(...args)
+    })
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0',
+      url: 'https://updates.test/metadata.json',
+      key: 'adapter',
+      dir,
+      intervalMs: 20,
+      onStaged: () => { staged++ },   // deliberately does NOT exit or restart
+    })
+    await vi.waitFor(() => expect(staged).toBe(1))
+    const after = checks
+    await new Promise((r) => setTimeout(r, 120)) // six intervals' worth
+    poller.stop()
+    expect(staged).toBe(1)
+    expect(checks, 'the poller never ticks again once a staged build has been handed over').toBe(after)
+  })
+
   it('does not check on start; the first check lands on the slot, the next on the following one', async () => {
     vi.useFakeTimers()
     try {

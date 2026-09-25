@@ -41,7 +41,7 @@ void main() {
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller
           .field,
-      NewHarnessField.agent,
+      NewHarnessField.harness,
     );
     expect(input, isEmpty);
     // Pointer users can open the same choices and return to field navigation.
@@ -56,7 +56,7 @@ void main() {
     expect(box.engine, 'claude');
     expect(harnessChoicesActive(tester), isFalse);
     await key(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.model);
+    expect(box.field, NewHarnessField.projectMenu);
     expect(input, isEmpty);
     semantics.dispose();
     await tester.pumpWidget(const SizedBox());

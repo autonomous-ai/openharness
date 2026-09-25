@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import * as C from './core.js'
 import type { Rng } from './core.js'
+import { STRICT_DOWN_TYPES, encryptDownFrameFor } from './applicationFrames.js'
 
 // Deterministic RNG for reproducible key material in tests.
 function seeded(seed: number): Rng {
@@ -161,6 +162,16 @@ describe('e2ee core — codes + fingerprint + classification', () => {
     // like a completely unrelated image/file-drop action.
     expect(C.isEncryptedDownType('terminal_chunked_upload_begin')).toBe(true)
     expect(C.isEncryptedDownType('terminal_chunked_upload_cancel')).toBe(true)
+  })
+
+  it('seals the formerly-plaintext RPCs only for a daemon that opens them', () => {
+    // A daemon older than strictDown checks a type list before unwrapping; sealed, `dsh_list` would reach
+    // it as an empty {__e2e} request. A strictDown daemon refuses these unsealed. Both must keep working.
+    for (const type of STRICT_DOWN_TYPES) {
+      expect(encryptDownFrameFor(type, { strictDown: false })).toBe(false)
+      expect(encryptDownFrameFor(type, { strictDown: true })).toBe(true)
+    }
+    expect(encryptDownFrameFor('message', { strictDown: false })).toBe(true)
   })
 
   it('gates question_response, which the device encrypts', () => {

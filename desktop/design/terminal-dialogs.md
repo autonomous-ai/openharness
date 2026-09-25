@@ -140,12 +140,48 @@ Page Up/Down pages the result list; Shift-Up/Down scrolls the preview by one
 measured terminal row. These keys preserve the input's focus and query. Preview
 scrolling keeps the selected result and result-list scroll position unchanged.
 
+Cmd-Shift-P opens this same picker with editable `>` text. Commands and `?` help
+keep the same input, frame, terminal metrics, and two-pane arrangement as Cmd-P;
+changing a prefix must not replace the editor or move it. Command names occupy
+one row with their live shortcut aligned right. The preview shows the selected
+command's name, category, and shortcut, without session-text placeholders. Empty
+matches clear the preview. Omit the older title/count row and key-hint footer.
+
+![Commands in the shared terminal picker](images/terminal-search-commands.png)
+
 Open dialogs must follow live terminal font and theme changes while preserving
 the input controller, query, selection, focus, and scroll state. Wire the font,
 palette, and terminal-theme dependencies as the reference dialogs do. Settings
 come from Harness's own Terminal preferences, not Apple Terminal or iTerm.
 
 ## Keep the terminal interaction
+
+Cmd-N opens with **Agent**, **Project**, **Options**, and the selected
+`[ New Harness ]` action. Enter launches with the displayed settings. Options
+starts collapsed on a fresh draft and expands Model, Branch, Worktree,
+Approvals, and Profile in place. Keep Worktree as `[x]` / `[ ]`.
+
+![Cmd-N with two main fields and a launch summary](images/terminal-new-harness-minimal.png)
+
+The right pane shows the resolved machine, full folder, model, and applicable
+Git and agent settings. Enter or typing on a field replaces that summary with
+its searchable choices; accepting a value restores the summary. Narrow windows
+show the active choices in place of the form. No permanent Machine field or
+additional top-level Harness field.
+
+Agent offers Codex, Claude Code, Terminal, and specialized harnesses together.
+A direct agent completes the choice. A specialized harness such as Blender
+opens `Run Blender with` in the same pane, offering compatible coding agents
+with its remembered choice selected. The left value then reads
+`Blender · Codex`.
+
+Project searches existing `machine:project` pairs across the inventory; names,
+machine names, and paths are searchable. Put local projects first before a
+search, and dim unavailable destinations with a short reason. Selecting a
+project commits both its machine and folder. New Folder, Open Folder, and Clone
+Repository first ask for a machine (local selected), then a name, path/browser,
+or repository URL. Escape retraces these steps. Searching or moving the
+highlight never creates a folder or starts a harness.
 
 Arrows navigate the active choices; Enter accepts the current choice; Escape
 goes back or dismisses according to the existing workflow. An editor still

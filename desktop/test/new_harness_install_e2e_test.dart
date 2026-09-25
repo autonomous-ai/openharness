@@ -342,11 +342,7 @@ void main() {
     );
     expect(
       box.options.map((o) => o.id),
-      containsAllInOrder([
-        NewHarnessController.codingId,
-        'autonomous/autonomous-blender',
-        _circuit,
-      ]),
+      containsAllInOrder(['claude', 'autonomous/autonomous-blender', _circuit]),
     );
     await settle(tester);
   });

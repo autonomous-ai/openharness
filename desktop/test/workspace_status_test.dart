@@ -354,6 +354,27 @@ void main() {
             expect(pr['text'], '#298 Merged');
             expect(pr['url'], 'https://github.com/acme/repo/pull/298');
             expect(pr['segmented'], style.segmented);
+            expect(pr['roundedEnd'], style.roundedEnd);
+            // PR follows the context: it must not restart a rounded capsule.
+            expect(pr['roundedStart'], isFalse);
+            final context = updates.last['focusedContext'] as Map;
+            final fields = context['fields'] as List;
+            expect((fields.first as Map)['roundedStart'], style.roundedStart);
+            expect(
+              fields
+                  .skip(1)
+                  .every((field) => (field as Map)['roundedStart'] == false),
+              isTrue,
+            );
+            final branch = fields.cast<Map>().singleWhere(
+              (field) => field['field'] == 'branch',
+            );
+            expect(
+              (branch['segments'] as List)
+                  .where((s) => (s as Map)['branchSymbol'] == true)
+                  .length,
+              style.branchSymbol ? 1 : 0,
+            );
             final capture =
                 Platform.environment['HARNESS_NATIVE_STATUS_CAPTURE_DIR'];
             if (capture != null) {
@@ -361,6 +382,14 @@ void main() {
                 await Directory(capture).create(recursive: true);
                 await File('$capture/${style.name}.json')
                     .writeAsString(jsonEncode(updates.last));
+                if (style == StatusLineStyle.standard) {
+                  await File('$capture/catalog.json').writeAsString(
+                    jsonEncode([
+                      for (final choice in StatusLineStyle.values)
+                        {'id': choice.name, 'label': choice.label},
+                    ]),
+                  );
+                }
               });
             }
 
@@ -684,6 +713,12 @@ void main() {
       StatusLineStyle.agnoster: 'OpenAI M2  app  main',
       StatusLineStyle.powerlevel10k: 'OpenAI  M2  app  main >',
       StatusLineStyle.spaceship: 'OpenAI  M2 in app on main',
+      StatusLineStyle.starship: 'OpenAI  M2 app on main ❯',
+      StatusLineStyle.powerlevel10kRainbow: 'OpenAI M2  app  main',
+      StatusLineStyle.pastelPowerline: 'OpenAI M2  app  main',
+      StatusLineStyle.catppuccinPowerline: 'OpenAI M2  app  main',
+      StatusLineStyle.tokyoNight: 'OpenAI M2  app  main',
+      StatusLineStyle.gruvboxRainbow: 'OpenAI M2  app  main',
     };
     for (final format in StatusLineStyle.values) {
       expect(
