@@ -55,6 +55,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         match modal {
             Modal::Picker { picker, .. } => { picker_box(buf, area, picker); cursor = picker.cursor_pos }
             Modal::Prompt(prompt) => cursor = Some(prompt_box(buf, area, prompt)),
+            Modal::Copy { pane } => {
+                let rect = rects.iter().find(|(id, _)| id == pane).map(|(_, r)| *r).unwrap_or(body);
+                let label = " COPY  hjkl w b 0 $ g G · v select · y copy · / find · q leave ";
+                let x = rect.x + rect.width.saturating_sub(label.width() as u16 + 1);
+                buf.set_string(x, rect.y, label, Style::default().bg(theme::WARN).fg(Color::Black).add_modifier(Modifier::BOLD));
+            }
             Modal::Find { pane, query, found } => {
                 let rect = rects.iter().find(|(id, _)| id == pane).map(|(_, r)| *r).unwrap_or(body);
                 cursor = Some(find_bar(buf, rect, query, *found));
@@ -267,6 +273,14 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool) -> Opt
                 target.set_symbol(&s).set_style(style);
             }
             _ => { target.set_char(cell.c).set_style(style); }
+        }
+    }
+    // Copy mode's cursor: a block over the cell it is on.
+    if let Some(copy) = pane.copy {
+        let row = copy.point.line.0 + pane.term.grid().display_offset() as i32;
+        let col = copy.point.column.0 as u16;
+        if row >= 0 && (row as u16) < area.height && col < area.width {
+            if let Some(cell) = buf.cell_mut((area.x + col, area.y + row as u16)) { let st = cell.style(); cell.set_style(st.bg(theme::WARN).fg(Color::Black)); }
         }
     }
     // Local echo, drawn over the grid: underlined until the far side confirms it.

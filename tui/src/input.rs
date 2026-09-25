@@ -65,6 +65,7 @@ fn chord(key: &KeyEvent) -> Option<&'static str> {
             '=' => "equalize",
             'g' | 'G' => "send",
             'F' => "find",
+            '[' | 'v' => "copy-mode",
             'q' | 'Q' => "quit",
             'a' | 'A' => "next-waiting",
             '`' => "last-tab",
@@ -593,6 +594,11 @@ pub fn run(app: &mut App, command: &str) {
             if let Some(root) = app.tab_mut().root.as_mut() { root.resize(focus, dir, delta); }
             app.fit_panes();
         }
+        "copy-mode" => {
+            let Some(pane) = app.focused() else { return };
+            if let Some(p) = app.panes.get_mut(&pane) { p.copy_start() }
+            app.modal = Some(Modal::Copy { pane });
+        }
         "find" => {
             let Some(pane) = app.focused() else { return };
             app.modal = Some(Modal::Find { pane, query: String::new(), found: None });
@@ -687,6 +693,46 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 fn modal_key(app: &mut App, key: KeyEvent) {
     let Some(modal) = app.modal.take() else { return };
     match modal {
+        Modal::Copy { pane } => {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let Some(p) = app.panes.get_mut(&pane) else { return };
+            let half = (p.rows as i32 / 2).max(1);
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => { p.copy_end(); return }
+                KeyCode::Char('c') if ctrl => { p.copy_end(); return }
+                KeyCode::Char('h') | KeyCode::Left => p.copy_move(-1, 0),
+                KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
+                KeyCode::Char('k') | KeyCode::Up => p.copy_move(0, -1),
+                KeyCode::Char('j') | KeyCode::Down => p.copy_move(0, 1),
+                KeyCode::Char('u') if ctrl => p.copy_move(0, -half),
+                KeyCode::Char('d') if ctrl => p.copy_move(0, half),
+                KeyCode::Char('b') if ctrl => p.copy_move(0, -2 * half),
+                KeyCode::Char('f') if ctrl => p.copy_move(0, 2 * half),
+                KeyCode::PageUp => p.copy_move(0, -2 * half),
+                KeyCode::PageDown => p.copy_move(0, 2 * half),
+                KeyCode::Char('w') => p.copy_word(true),
+                KeyCode::Char('b') => p.copy_word(false),
+                KeyCode::Char('0') | KeyCode::Home => p.copy_line_edge(false),
+                KeyCode::Char('$') | KeyCode::End => p.copy_line_edge(true),
+                KeyCode::Char('g') => p.copy_to(true),
+                KeyCode::Char('G') => p.copy_to(false),
+                KeyCode::Char('v') | KeyCode::Char(' ') => p.copy_toggle(false),
+                KeyCode::Char('V') => p.copy_toggle(true),
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    let text = p.selection_text();
+                    p.copy_end();
+                    if let Some(text) = text {
+                        crate::clipboard::store(&text);
+                        let n = text.chars().count();
+                        app.say(format!("Copied {n} character{}", if n == 1 { "" } else { "s" }), theme::ONLINE);
+                    }
+                    return;
+                }
+                KeyCode::Char('/') | KeyCode::Char('?') => { p.copy_end(); app.modal = Some(Modal::Find { pane, query: String::new(), found: None }); return }
+                _ => {}
+            }
+            app.modal = Some(Modal::Copy { pane });
+        }
         Modal::Find { pane, mut query, mut found } => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let Some(p) = app.panes.get_mut(&pane) else { return };
