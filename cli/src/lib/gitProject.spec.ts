@@ -132,21 +132,21 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(worktreeFolderName('deehw/brave-otter')).toBe('brave-otter')
     expect(worktreeFolderName('fix/login page')).toBe('loginpage')
     // Two words when both carry the meaning.
-    expect(sessionBranchNames('Worktree and branches organization')).toEqual(['worktree-branches'])
-    expect(sessionBranchNames('Fix the harness list order')).toEqual(['harness-list'])
-    expect(sessionBranchNames('Add dark mode to settings')).toEqual(['dark-mode'])
+    expect(sessionBranchNames('Worktree and branches organization')).toEqual(['worktree-branches', 'worktree-branches-organization'])
+    expect(sessionBranchNames('Fix the harness list order')).toEqual(['harness-list', 'harness-list-order'])
+    expect(sessionBranchNames('Add dark mode to settings')).toEqual(['dark-mode', 'dark-mode-settings'])
     expect(sessionBranchNames('Review and fix flaky tests')).toEqual(['flaky-tests'])
-    expect(sessionBranchNames('Portable harnesses, launch models')).toEqual(['portable-harnesses'])
+    expect(sessionBranchNames('Portable harnesses, launch models')).toEqual(['portable-harnesses', 'portable-harnesses-launch'])
     expect(sessionBranchNames('Release 0.3.1 notes')).toEqual(['release-notes'])
     expect(sessionBranchNames('Café résumé')).toEqual(['cafe-resume'])
     // One word when the second is generic, the two-word name kept for a clash.
-    expect(sessionBranchNames('✳ Fix: the login page — redirects twice?')).toEqual(['login', 'login-page'])
+    expect(sessionBranchNames('✳ Fix: the login page — redirects twice?')).toEqual(['login', 'login-page', 'login-page-redirects'])
     expect(sessionBranchNames('Onboarding experience')).toEqual(['onboarding', 'onboarding-experience'])
     expect(sessionBranchNames('UI polish')).toEqual(['ui', 'ui-polish'])
     // One word when that is all the title has.
     expect(sessionBranchNames('Onboarding')).toEqual(['onboarding'])
     expect(sessionBranchNames('Fix')).toEqual(['fix'])
-    expect(sessionBranchNames('0.3.1')).toEqual(['0-3'])
+    expect(sessionBranchNames('0.3.1')).toEqual(['0-3', '0-3-1'])
     expect(sessionBranchNames('a'.repeat(30) + ' ' + 'b'.repeat(30))).toEqual(['a'.repeat(24) + '-' + 'b'.repeat(24)])
     // Real session titles from Claude Code, Codex and this repository's PRs (2026-09-25).
     for (const [title, name] of [
@@ -173,7 +173,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       ['App auto-opening extra tabs', 'app-auto'],
       ['Explore print-in-place uses', 'print-place'],
       ['desktop: an on-screen banner for the same two moments', 'desktop'],
-      ['Harness on-off switch', 'harness'],
+      ['Harness on-off switch', 'harness-switch'],
       ['Simplify Cmd-P with single-line results', 'cmd-p'],
       ['Give Harness Monitor its stacked-terminal identity', 'harness-monitor'],
       ['ci: CI and release workflows', 'ci-release'],
@@ -226,16 +226,29 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await git('config', '--get', 'branch.worktree-branches.harness')).toBe('created')
     expect(await nameBranchAfterSession(path, 'A later name')).toBeNull()
     expect(await current(path)).toBe('worktree-branches')
-    // Taken: a number, never a third word.
+    // Taken, with no third word to add: a number.
     const second = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'calm-fox', branchMode: 'placeholder' })
     expect(await nameBranchAfterSession(second, 'Fix the worktree branches')).toBe('worktree-branches-2')
-    // One word when the second is generic; the two-word name when the one is taken; then a number.
-    const login = []
-    for (const branchName of ['keen-lynx', 'tidy-heron', 'rosy-finch']) {
-      const at = await prepare('worktree', 'refs/heads/feature', repo, { branchName, branchMode: 'placeholder' })
-      login.push(await nameBranchAfterSession(at, 'Fix the login page'))
+    // A clash takes the fuller name, then a third word, then numbers the shortest.
+    const named = async (title: string, placeholders: string[]) => {
+      const out = []
+      for (const branchName of placeholders) {
+        const at = await prepare('worktree', 'refs/heads/feature', repo, { branchName, branchMode: 'placeholder' })
+        out.push(await nameBranchAfterSession(at, title))
+      }
+      return out
     }
-    expect(login).toEqual(['login', 'login-page', 'login-page-2'])
+    expect(await named('Fix the login page', ['keen-lynx', 'tidy-heron', 'rosy-finch']))
+      .toEqual(['login', 'login-page', 'login-2'])
+    expect(await named('Harness monitor DDOS requests', ['warm-ibis', 'glad-crane', 'bold-lark']))
+      .toEqual(['harness-monitor', 'harness-monitor-ddos', 'harness-monitor-2'])
+    // A repository's own names are never taken, whatever the title says.
+    // This repository has no `master`: only the reserved list keeps a session from taking it.
+    expect(await git('branch', '--list', 'master')).toBe('')
+    expect(await named('Master', ['sunny-moose'])).toEqual(['master-2'])
+    // Case does not tell names apart: on macOS `Deploy` and `deploy` are one ref file.
+    await git('update-ref', 'refs/remotes/origin/Deploy', 'main')
+    expect(await named('Deploy', ['noble-reef'])).toEqual(['deploy-2'])
     // A name a remote has is taken too.
     const third = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'quiet-fox', branchMode: 'placeholder' })
     await git('update-ref', 'refs/remotes/origin/onboarding', 'main')

@@ -145,10 +145,11 @@ const BRANCH_GENERIC = new Set([
 ])
 
 /** The names a session's branch may take, best first: as few words as carry the meaning — one or two
- *  — then, only for a clash, the fuller two-word name. `Fix the harness list order` → `harness-list`;
- *  `Fix the login page` → `login`, then `login-page`; `Onboarding` → `onboarding`. Filler words, a
- *  leading verb and lone numbers go first (a title that is only a verb keeps it). Each word is capped
- *  at 24 characters. Empty when nothing meaningful is left, and the placeholder branch stays. */
+ *  — then, only for a clash, the fuller two-word name and then a third word of the title.
+ *  `Harness monitor DDOS requests` → `harness-monitor`, then `harness-monitor-ddos`; `Fix the login
+ *  page` → `login`, then `login-page`; `Onboarding` → `onboarding`. Filler words, a leading verb and
+ *  lone numbers go first (a title that is only a verb keeps it). Each word is capped at 24
+ *  characters. Empty when nothing meaningful is left, and the placeholder branch stays. */
 export function sessionBranchNames(title: string | null | undefined): string[] {
   // NFKD splits `é` into `e` and its accent; the accent goes, or it would split the word in two.
   // A commit-style `feat(desktop):` names the kind of change, which the branch leaves to the PR.
@@ -168,16 +169,23 @@ export function sessionBranchNames(title: string | null | undefined): string[] {
   // A lone number (`0` of 0.3.1, `2` of "Part 2") says nothing beside a word that does.
   const worded = meaningful.filter(word => !/^\d+$/.test(word))
   const cap = (word: string) => word.split('-').map(part => part.slice(0, 24)).join('-')
-  const picked = (worded.length ? worded : meaningful).slice(0, 2).map(cap)
+  const source = (worded.length ? worded : meaningful).map(cap)
+  if (!source.length) return []
+  const first = source[0]!
+  // The words after the first, one at a time: `app auto-opening` goes on with `auto`, and `desktop
+  // on-screen` with `screen` — never a filler half.
+  const after = source.slice(1).flatMap(word => word.split('-')).filter(part => !BRANCH_FILLER.has(part))
+  // A clash's third word says what sets this session apart, so a generic one is passed over.
+  const third = (base: string, rest: string[]) => {
+    const word = rest.find(part => !BRANCH_GENERIC.has(part))
+    return word ? [`${base}-${word}`] : []
+  }
   // A hyphenated pair already is two words.
-  if (picked.length < 2 || picked[0]!.includes('-')) return picked.slice(0, 1)
-  // Two words, never three: `app auto-opening` is `app-auto`, and `desktop on-screen` is `desktop-screen`
-  // — never a filler half.
-  const second = picked[1]!.split('-').find(part => !BRANCH_FILLER.has(part))
-  if (!second) return picked.slice(0, 1)
-  picked[1] = second
-  const two = picked.join('-')
-  return BRANCH_GENERIC.has(picked[1]!) ? [picked[0]!, two] : [two]
+  if (first.includes('-')) return [first, ...third(first, after)]
+  const [second, ...more] = after
+  if (!second) return [first]
+  const two = `${first}-${second}`
+  return [...BRANCH_GENERIC.has(second) ? [first] : [], two, ...third(two, more)]
 }
 
 /** A name Git might accept for a new branch, checked before Git is asked. */
