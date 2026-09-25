@@ -85,8 +85,13 @@ singular fields require semantic checks in addition to JSON schema validation.
 
 ## Engine consumption evidence
 
-The Device observer reads raw transcript records alongside existing normalizers. It does
-not change shared chat/orchestrator scheduling. A reservation is durably saved before
+The Device observer reads raw transcript records only while that agent has dispatched,
+unresolved native Device input in the matching engine session. Both history and live hooks
+check this boundary before forwarding records. Ordinary app/orchestrator agents bypass
+Device transcript parsing and evidence allocation; queued-but-not-dispatched requests do
+not enable it. Completed/rejected or revoked work stops observation, and agent removal
+clears it. Restored receipts do not activate observation or resend input after restart.
+This does not change shared chat/orchestrator scheduling. A reservation is durably saved before
 engine dispatch. Matching requires one exact normalized input hash, a dispatch marker,
 a record timestamp at or after dispatch, and the same bound engine session. Duplicate
 unresolved identical text is ambiguous and is not guessed FIFO. Slash commands use the

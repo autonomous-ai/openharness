@@ -95,12 +95,32 @@ export class AutonomousDeviceService {
   private sequence = 0
   private readonly results = new Map<string, ResultRecord>()
   private readonly transcriptSessions = new Map<string, string>()
+  private readonly transcriptAgents = new Set<string>()
   private readonly evidence = new DeviceResultEvidence(
     (agent, text, at) => this.consumeInput(agent, text, at),
     (agent, evidence) => this.recordResult(agent, evidence),
     (agent, ids) => this.evidenceUnknown(agent, ids),
   )
+  /** Cheap no-op for ordinary app/orchestrator agents; only dispatched Device work opts in. */
+  needsTranscript(agentId: string, sessionId: string, engine: string): boolean {
+    if (!this.transcriptAgents.has(agentId) || !['claude', 'codex'].includes(engine)) return false
+    let pending = false
+    for (const entry of this.deliveries.values()) {
+      if (!entry.evidenceManaged || entry.receipt.agentId !== agentId
+        || entry.receipt.serverInstanceId !== this.serverInstanceId || entry.dispatchedAt === undefined
+        || ['completed', 'rejected'].includes(entry.receipt.state)) continue
+      pending = true
+      if (!entry.sessionId || entry.sessionId === sessionId) return true
+    }
+    if (!pending) {
+      this.transcriptAgents.delete(agentId)
+      this.transcriptSessions.delete(agentId)
+      this.evidence.forget(agentId)
+    }
+    return false
+  }
   observeTranscript(agentId: string, sessionId: string, engine: string, line: string): void {
+    if (!this.needsTranscript(agentId, sessionId, engine)) return
     if (this.transcriptSessions.get(agentId) !== sessionId) {
       this.evidence.forget(agentId)
       this.transcriptSessions.set(agentId, sessionId)
@@ -114,6 +134,7 @@ export class AutonomousDeviceService {
     entry.dispatchedAt = this.now()
     entry.sessionId = sessionId || this.transcriptSessions.get(agentId)
     this.persist()
+    this.transcriptAgents.add(agentId)
   }
   private consumeInput(agentId: string, text: string, timestamp: number): string | null {
     if (!Number.isFinite(timestamp)) return null
@@ -362,6 +383,7 @@ export class AutonomousDeviceService {
     this.event('receipt.updated', entry.receipt.agentId, { receipt: structuredClone(entry.receipt), idempotencyKey: entry.receipt.idempotencyKey })
   }
   agentGone(agentId: string): void {
+    this.transcriptAgents.delete(agentId)
     this.evidence.forget(agentId)
     this.transcriptSessions.delete(agentId)
     this.turns.delete(agentId)

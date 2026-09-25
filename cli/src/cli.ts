@@ -2156,7 +2156,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       || (session.engine === 'cursor' && replayCursorFromStart)
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
-    for (const line of lines) autonomousDeviceService?.observeTranscript(session.agentId, session.sessionId, session.engine, line)
+    if (autonomousDeviceService?.needsTranscript(session.agentId, session.sessionId, session.engine)) {
+      for (const line of lines) autonomousDeviceService.observeTranscript(session.agentId, session.sessionId, session.engine, line)
+    }
     runtimeProfiles.hydrate(session, lines)
     await runtimeProfiles.ingestConfig(session, true)
     // Returns `turnOpen` rather than assigning it: every engine folds exactly once, and a second call
@@ -4170,7 +4172,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const session = registry.bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
     agentTokenUsage.changed(session)
-    autonomousDeviceService?.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
+    if (autonomousDeviceService?.needsTranscript(session.agentId, evt.sessionId, session.engine)) {
+      autonomousDeviceService.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
+    }
     runtimeProfiles.ingest(session, evt.text)
     let events
     if (session.engine === 'codex') {

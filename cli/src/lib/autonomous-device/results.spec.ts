@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceService, type AutonomousDeviceServiceOptions } from './service.js'
 import { DeviceResultJournal } from './resultJournal.js'
+import { DeviceResultEvidence } from './resultEvidence.js'
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../../docs/contracts/autonomous-device-summary-correlation/${name}.json`, import.meta.url), 'utf8'))
 const claude = fixture('claude-native-queue'), codex = fixture('codex-steering')
@@ -34,6 +35,36 @@ function setup(engine = 'claude', overrides: Partial<AutonomousDeviceServiceOpti
 }
 
 describe('Device result membership from captured engine evidence', () => {
+  it('only parses transcripts for dispatched Device work in its bound session', async () => {
+    const spy = vi.spyOn(DeviceResultEvidence.prototype, 'ingest')
+    try {
+      const f = setup()
+      f.ingest(claude.records[0])
+      expect(spy).not.toHaveBeenCalled()
+      await f.service.request('owner', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine',
+        agentId: 'agent', idempotencyKey: 'A', text: claude.inputs[0] })
+      f.ingest(claude.records[0]) // reserved/daemon queued is not dispatched
+      expect(spy).not.toHaveBeenCalled()
+      f.service.inputDispatched('agent', f.service.receipt('owner', 'A')!.deliveryId, claude.inputs[0], 'session')
+      f.service.observeTranscript('other-agent', 'session', 'claude', JSON.stringify(claude.records[0]))
+      f.service.observeTranscript('agent', 'other-session', 'claude', JSON.stringify(claude.records[0]))
+      expect(spy).not.toHaveBeenCalled()
+      f.ingest(claude.records[0])
+      expect(spy).toHaveBeenCalledTimes(1)
+      f.ingest({ type: 'assistant', uuid: 'scoped-final', parentUuid: claude.records[0].uuid,
+        message: { id: 'scoped-message', stop_reason: 'end_turn', content: [{ type: 'text', text: 'A done' }] } })
+      expect(f.service.receipt('owner', 'A')?.state).toBe('completed')
+      spy.mockClear()
+      f.ingest(claude.records[0])
+      expect(spy).not.toHaveBeenCalled()
+      await f.send('B', claude.inputs[1])
+      expect(f.service.needsTranscript('agent', 'session', 'claude')).toBe(true)
+      f.service.revoke('owner')
+      f.ingest(claude.records[0])
+      expect(spy).not.toHaveBeenCalled()
+    } finally { spy.mockRestore() }
+  })
+
   it.each(['claude', 'codex'])('%s produces one immutable result for consumed A/B, never queued C', async engine => {
     const capture = engine === 'claude' ? claude : codex
     const f = setup(engine)
