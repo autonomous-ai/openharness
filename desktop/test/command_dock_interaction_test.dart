@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -132,17 +133,8 @@ void main() {
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final count = find.byKey(const ValueKey('swarm-search-count'));
         final bounds = tester.getRect(panel);
-        expect(tester.widget<TextField>(input).cursorWidth, greaterThan(2));
-        expect(
-          find.byKey(const ValueKey('swarm-search-prompt')),
-          findsOneWidget,
-        );
-        expect(
-          tester
-              .widget<Text>(find.byKey(const ValueKey('swarm-search-prompt')))
-              .data,
-          '>',
-        );
+        expect(tester.widget<TextField>(input).cursorWidth, 2);
+        expect(find.byKey(const ValueKey('swarm-search-prompt')), findsNothing);
         expect(find.text('Harness:'), findsNothing);
         expect(find.text('[ New Harness ]'), findsNothing);
         expect(find.text('Select Item'), findsNothing);

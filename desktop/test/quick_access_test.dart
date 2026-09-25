@@ -226,11 +226,11 @@ void main() {
         expect(search.rows.every((row) => row.agentId != null), isTrue);
         expect(app.swarms, hasLength(tabs));
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field.controller!.text, 'openharness');
+        expect(field.controller!.text, '# openharness');
         expect(search.isProjectMode, isTrue);
         await type('? @');
         await key(tester, LogicalKeyboardKey.enter);
-        expect(field.controller!.text, isEmpty);
+        expect(field.controller!.text, '@ ');
         expect(search.isMachineMode, isTrue);
         await type('@ Office');
         await key(tester, LogicalKeyboardKey.enter);
@@ -242,14 +242,14 @@ void main() {
         );
         expect(field.focusNode!.hasFocus, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field.controller!.text, 'Office');
+        expect(field.controller!.text, '@ Office');
         expect(search.isMachineMode, isTrue);
         await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         expect(
           find.byKey(const ValueKey('resource-command-input')),
           findsOneWidget,
         );
-        expect(field.controller!.text, 'Office');
+        expect(field.controller!.text, '@ Office');
         await key(tester, LogicalKeyboardKey.escape);
         expect(field.focusNode!.hasFocus, isTrue);
         await type('? >');

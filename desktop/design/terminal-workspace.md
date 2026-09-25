@@ -13,7 +13,8 @@ are the detailed implementation references for this system.
 
 Use meaningful names and familiar terminal punctuation. Prefer `[ New Harness ]`
 and `[ Customize Harness ]` to rounded buttons with pictograms. A checkbox is
-`[x]` or `[ ]`. Search starts with `>`. Small, established actions may use `+`,
+`[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
+commands as editable text. Small, established actions may use `+`,
 `@`, `:`, and `*`, with a descriptive tooltip and accessible name.
 
 There is no broadly understood ASCII pencil. Keep `[ Customize Harness ]` after
@@ -29,6 +30,8 @@ Every workspace action needs an existing command or a clear keyboard interaction
 Resolve shortcut hints from the live keymap. Cmd-N creates a harness, Cmd-O opens projects (`#`), Cmd-P searches harnesses, and Cmd-Shift-P opens
 commands (`>`) in the shared picker. Cmd-T opens a tab, Cmd-W closes a tab, and
 Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates, Space toggles, and Escape backs out or dismisses.
+
+Closing a pane removes its view immediately, without a minimize animation.
 
 Keep mouse access useful without adding duplicate floating controls. Clickable
 text shows a hand cursor and a flat rectangular terminal-selection tint on hover,

@@ -60,7 +60,10 @@ when using custom row widgets.
 
 - No provider logos, avatars, decorative emoji, image assets, or icon-font
   glyphs in dialog chrome. Write `Codex`, `Claude`, or the harness name.
-- Use `>` for the search prompt. Cmd-P session results occupy one row: title
+- Keep Cmd-O and Cmd-P search prefixes editable: Cmd-P opens an empty field and
+  Cmd-O inserts `#`. Deleting a prefix returns to harness search.
+  Do not draw a separate prompt character beside these inputs.
+  Cmd-P session results occupy one row: title
   on the left and activity age on the right. The preview puts the compact
   Standard context `machine:project  (branch)` directly below the session title,
   followed by status and harness type. Omit missing fields and preserve
@@ -76,7 +79,7 @@ when using custom row widgets.
 For example, Cmd-P session results are consecutive single lines:
 
 ```text
-> Search harnesses
+  Search harnesses
 
   Checkout retries                         5m
   Search experience                        1h
@@ -107,12 +110,13 @@ Use the same thin frame as an active pane:
 [`box_chrome.dart`](../lib/widgets/box_chrome.dart). Keep the surface flat, with
 no elevated cards, pill controls, or decorative shadows inside it.
 
-Search is one unfilled, borderless text line with a block caret one measured
-cell wide. Its prompt occupies the shared gutter. Previews use the same text
+Cmd-O and Cmd-P use one unfilled, borderless text line with a thin, two-pixel caret.
+Align its editable text with the result titles. Previews use the same text
 metrics and blank-row spacing; warnings are readable text in semantic colors.
 
 Cmd-P opens with no selected row. The preview area shows the type hints as plain,
-muted text: `> harnesses`, `@ machines`, `# projects`, `: models`, and `* store`.
+muted text: unprefixed harnesses, `@ machines`, `# projects`, `: models`,
+`* store`, and `> commands`.
 Typing selects the first match and replaces the hints with its preview. Arrows,
 Tab, and pointer movement can also select a row. Clearing the root search returns
 to the hints; live inventory updates must not choose a row for the user. Enter

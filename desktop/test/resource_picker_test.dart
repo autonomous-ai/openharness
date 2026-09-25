@@ -19,7 +19,6 @@ import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/swarm_resource_preview.dart';
-import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 
@@ -113,10 +112,20 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyO, cmd: mac, ctrl: !mac);
         expect(field, findsOneWidget);
         expect(search(tester).scopePrefix, '#');
+        final editor = tester.widget<TextField>(field).controller!;
+        expect(editor.text, '#');
+        expect(editor.selection, const TextSelection.collapsed(offset: 1));
+        await key(tester, LogicalKeyboardKey.backspace);
+        expect(editor.text, isEmpty);
+        expect(search(tester).scopePrefix, '');
+        expect(search(tester).hint, 'Search harnesses');
         expect(search(tester).rows.any((row) => row.isCreate), isFalse);
         await key(tester, LogicalKeyboardKey.escape);
         await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
         expect(search(tester).scopePrefix, '');
+        expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+        expect(tester.widget<TextField>(field).cursorWidth, 2);
+        expect(find.byKey(const ValueKey('swarm-search-prompt')), findsNothing);
         final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
         expect(hints, findsOneWidget);
         expect(search(tester).selected, isNull);
@@ -173,7 +182,7 @@ void main() {
         find.byKey(const ValueKey('swarm-search-result-list')),
       );
       const fullHint =
-          '>  harnesses\n@  machines\n#  projects\n:  models\n*  store';
+          '   harnesses\n@  machines\n#  projects\n:  models\n*  store\n>  commands';
       expect(tester.widget<Text>(hints).data, fullHint);
       final controller = search(tester);
       expect(controller.selected, isNull);
@@ -345,9 +354,72 @@ void main() {
     );
   }
 
+  testWidgets('prefix editing preserves the full query and IME composition', (
+    tester,
+  ) async {
+    final app = await fixture();
+    final keymap = MemoryKeymap();
+    await configured.mount(tester, app, keymap);
+    await openHarnessPicker(tester);
+    final editor = tester.widget<TextField>(field).controller!;
+    final editable = find.descendant(
+      of: field,
+      matching: find.byType(EditableText),
+    );
+    final originalEditor = tester.state<EditableTextState>(editable);
+
+    await tester.enterText(field, '#openharness');
+    await tester.pump();
+    expect(editor.text, '#openharness');
+    expect(search(tester).isProjectMode, isTrue);
+    editor.selection = const TextSelection(baseOffset: 0, extentOffset: 1);
+    await key(tester, LogicalKeyboardKey.backspace);
+    expect(editor.text, 'openharness');
+    expect(search(tester).query, 'openharness');
+    expect(search(tester).scopePrefix, '');
+
+    await tester.enterText(field, '  # openharness');
+    await tester.pump();
+    expect(editor.text, '  # openharness');
+    expect(search(tester).isProjectMode, isTrue);
+    await tester.enterText(field, '>');
+    await tester.pump();
+    expect(search(tester).isCommandMode, isTrue);
+    expect(tester.state<EditableTextState>(editable), same(originalEditor));
+    await key(tester, LogicalKeyboardKey.backspace);
+    expect(editor.text, isEmpty);
+    expect(search(tester).isCommandMode, isFalse);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    expect(tester.state<EditableTextState>(editable), same(originalEditor));
+
+    const composing = TextEditingValue(
+      text: '#日本',
+      selection: TextSelection.collapsed(offset: 3),
+      composing: TextRange(start: 1, end: 3),
+    );
+    tester.testTextInput.updateEditingValue(composing);
+    await tester.pump();
+    app.notifyListeners();
+    await tester.pump();
+    expect(editor.value, composing);
+    expect(search(tester).query, '#日本');
+    expect(search(tester).isProjectMode, isTrue);
+    tester.testTextInput.updateEditingValue(
+      composing.copyWith(composing: TextRange.empty),
+    );
+    await tester.pump();
+    expect(editor.text, '#日本');
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+    keymap.dispose();
+  });
+
   for (final withKeymap in [false, true]) {
     testWidgets(
-      'prefix changes prompt and creation without leaking into query ($withKeymap)',
+      'editable prefixes change scope and backspace returns to harnesses ($withKeymap)',
       (tester) async {
         final app = await fixture();
         if (withKeymap) {
@@ -365,30 +437,24 @@ void main() {
           await tester.pump();
           expect(search(tester).rows.first.title, label);
           expect(search(tester).selected!.isCreate, isFalse);
-          expect(
-            tester
-                .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
-                .prompt,
-            prefix,
-          );
-          expect(tester.widget<TextField>(field).controller!.text, '');
-          await tester.enterText(field, 'missing');
+          expect(tester.widget<TextField>(field).controller!.text, prefix);
+          await tester.enterText(field, '${prefix}missing');
           expect(search(tester).scopePrefix, prefix);
-          await tester.enterText(field, '');
+          await tester.enterText(field, prefix);
           await key(tester, LogicalKeyboardKey.backspace);
           expect(search(tester).scopePrefix, '');
         }
         await tester.enterText(field, '#');
         await tester.pump();
         expect(search(tester).rows.any((row) => row.isCreate), isFalse);
-        await tester.enterText(field, 'missing-project');
+        await tester.enterText(field, '#missing-project');
         await tester.pump();
         expect(search(tester).rows, isEmpty);
         expect(search(tester).canAccept, isFalse);
         await tester.enterText(field, '*blender');
         await tester.pump();
         expect(search(tester).selected!.storeId, 'blender');
-        expect(tester.widget<TextField>(field).controller!.text, 'blender');
+        expect(tester.widget<TextField>(field).controller!.text, '*blender');
         expect(find.byKey(const ValueKey('search-action-list')), findsNothing);
         expect(
           app.localReads,
