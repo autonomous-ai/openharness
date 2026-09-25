@@ -592,3 +592,18 @@ fn toast(buf: &mut Buffer, area: Rect, text: &str, color: Color) {
     Paragraph::new(Line::from(vec![Span::styled(format!("  {text}  "), Style::default().fg(color).bg(theme::PANEL).add_modifier(Modifier::BOLD))])).render(rect, buf);
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backdrop_dims_styled_cells() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.cell_mut((0, 0)).unwrap().set_char('x').set_style(Style::default().fg(Color::Indexed(208)).add_modifier(Modifier::BOLD));
+        dim_backdrop(&mut buf, Rect::new(0, 0, 4, 1));
+        let cell = &buf[(0, 0)];
+        assert_eq!(cell.fg, theme::MUTED);
+        assert!(cell.modifier.contains(Modifier::DIM));
+    }
+}
