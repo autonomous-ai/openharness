@@ -66,6 +66,7 @@ fn chord(key: &KeyEvent) -> Option<&'static str> {
             'g' | 'G' => "send",
             'f' | 'F' => "find",
             'q' | 'Q' => "quit",
+            'a' | 'A' => "next-waiting",
             '1' => "tab-1", '2' => "tab-2", '3' => "tab-3", '4' => "tab-4", '5' => "tab-5",
             '6' => "tab-6", '7' => "tab-7", '8' => "tab-8", '9' => "tab-9",
             _ => return None,
@@ -590,6 +591,17 @@ pub fn run(app: &mut App, command: &str) {
         "find" => {
             let Some(pane) = app.focused() else { return };
             app.modal = Some(Modal::Find { pane, query: String::new(), found: None });
+        }
+        "next-waiting" => {
+            // Oldest question first; the one in front of you counts as handled, so repeated presses walk the queue.
+            let current = focused_agent(app);
+            let mut waiting: Vec<_> = app.fleet.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").map(|a| (a.question.as_ref().unwrap().since, a.machine_id.clone(), a.id.clone())).collect();
+            waiting.sort();
+            let next = waiting.iter().find(|(_, m, a)| current.as_ref() != Some(&(m.clone(), a.clone()))).or(waiting.first());
+            match next {
+                Some((_, m, a)) => { let (m, a) = (m.clone(), a.clone()); app.open_agent(&m, &a, Placement::Tab) }
+                None => app.say("Nobody is waiting on you", theme::MUTED),
+            }
         }
         "quit" => app.quit = true,
         c if c.starts_with("tab-") => { let n: usize = c[4..].parse().unwrap_or(1); app.select_tab(n - 1) }

@@ -31,6 +31,7 @@ works in every terminal, including ones where `⌥` types accented letters.
 | `⌥S` / `*` | the Harness Store |
 | `?` | what the launcher can do |
 | `⌥⇧I` | agents needing input — `⌥1…9` answers without opening the pane |
+| `⌥A` | jump to the next harness waiting on you (oldest question first) |
 | `⌥N` / `⌥⇧T` | new harness / new terminal |
 | `⌥T` `⌥1…9` `⌥{` `⌥}` `⌥⇧R` `⌥⇧W` | new, go to, previous/next, rename, close tab |
 | `⌥\` `⌥-` `⌥h/j/k/l` `⌥H/J/K/L` `⌥Z` `⌥W` `⌥L` `⌥=` | split right/down, focus, grow, zoom, close, layout, equalize |
