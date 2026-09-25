@@ -148,6 +148,37 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(sessionBranchNames('Fix')).toEqual(['fix'])
     expect(sessionBranchNames('0.3.1')).toEqual(['0-3'])
     expect(sessionBranchNames('a'.repeat(30) + ' ' + 'b'.repeat(30))).toEqual(['a'.repeat(24) + '-' + 'b'.repeat(24)])
+    // Real session titles from Claude Code, Codex and this repository's PRs (2026-09-25).
+    for (const [title, name] of [
+      ['Catch up on autonomous-grid', 'autonomous-grid'],
+      ['ok catch up on this landing page. we', 'landing'],
+      ['Look at my Chrome. Open the file, au', 'chrome'],
+      ['What time is it', 'time'],
+      ['Build simple Pacman game', 'pacman-game'],
+      ['Respond to greeting', 'greeting'],
+      ['Define GPU Pod concept', 'gpu-pod'],
+      ['Research roleplay app names', 'roleplay-app'],
+      ['Device stuck issue', 'device-stuck'],
+      ['Harness landing page redesign', 'harness-landing'],
+      ['Review inventory protection', 'inventory-protection'],
+      ['Remove Grid desktop app', 'grid-desktop'],
+      ['feat(cli): add a Requesty preset to saved APIs', 'requesty-preset'],
+      ['perf(desktop): redraw only terminal lines that changed', 'redraw-terminal'],
+      ['fix(cli): unlink a linked dsh on remove instead of rmSync', 'unlink-linked'],
+      ['feat(harnesses): add eight interactive experiences', 'interactive-experiences'],
+      ['feat(login): record whether a sign-in came from the terminal', 'sign-in'],
+      ['Study autonomous-code repo', 'autonomous-code'],
+      ['8-bit CPU Fibonacci on iCEBreaker', '8-bit'],
+      ['Restore split-right and split-down pane controls', 'split-right'],
+      ['App auto-opening extra tabs', 'app-auto'],
+      ['Explore print-in-place uses', 'print-place'],
+      ['desktop: an on-screen banner for the same two moments', 'desktop'],
+      ['Harness on-off switch', 'harness'],
+      ['Simplify Cmd-P with single-line results', 'cmd-p'],
+      ['Give Harness Monitor its stacked-terminal identity', 'harness-monitor'],
+      ['ci: CI and release workflows', 'ci-release'],
+      ['catch up', 'catch'],
+    ] as const) expect(sessionBranchNames(title)[0], title).toBe(name)
     expect(sessionBranchNames('The and of')).toEqual([])
     expect(sessionBranchNames('✳ ✳')).toEqual([])
     expect(sessionBranchNames(null)).toEqual([])
