@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/swarm.dart';
@@ -83,14 +84,20 @@ class _PaneModelConnection extends _PRConnection {
   }
 }
 
-Future<void> captureControls(WidgetTester tester, String name) async {
+Future<void> captureControls(
+  WidgetTester tester,
+  String name, {
+  double? height,
+}) async {
   final directory =
       Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'];
   if (directory == null) return;
   final view = tester.binding.renderViews.first;
   final layer = view.debugLayer! as OffsetLayer;
   await tester.runAsync(() async {
-    final image = await layer.toImage(Offset.zero & view.size);
+    final image = await layer.toImage(
+      Rect.fromLTWH(0, 0, view.size.width, height ?? view.size.height),
+    );
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     final file = File('$directory/$name.png');
     await file.parent.create(recursive: true);
@@ -264,6 +271,23 @@ void main() {
     for (var i = 0; i < 2; i++) {
       expect(tester.getRect(titles.at(i)), titleRects[i]);
     }
+    await mouse.moveTo(tester.getCenter(close.hitTestable()));
+    await tester.pump();
+    final closeText = find.descendant(
+      of: close.hitTestable(),
+      matching: find.text('x'),
+    );
+    expect(tester.widget<Text>(closeText).style?.fontWeight, FontWeight.bold);
+    expect(
+      find.descendant(
+        of: close.hitTestable(),
+        matching: find.byType(ColoredBox),
+      ),
+      findsNothing,
+    );
+    for (var i = 0; i < 2; i++) {
+      expect(tester.getRect(titles.at(i)), titleRects[i]);
+    }
     await tester.pump(const Duration(milliseconds: 100));
     await captureControls(tester, 'pane-hover-close');
     await tester.tap(close.hitTestable());
@@ -366,7 +390,78 @@ void main() {
                     ? closeTo(contextRight, .01)
                     : greaterThan(contextRight),
               );
+              if (style.segmented) {
+                final ribbon = find.descendant(
+                  of: badge,
+                  matching: find.byType(CustomPaint),
+                );
+                expect(
+                  tester.getRect(ribbon).left,
+                  closeTo(tester.getRect(badge).left, .01),
+                );
+                expect(
+                  tester.getRect(ribbon).right,
+                  closeTo(tester.getRect(badge).right, .01),
+                );
+              }
             }
+            final controls = find.descendant(
+              of: find.byKey(const ValueKey('workspace-status-bar')),
+              matching: find.byType(WorkspaceBarControl),
+            );
+            final controlsBefore = controls
+                .evaluate()
+                .map((element) => tester.getRect(find.byWidget(element.widget)))
+                .toList();
+            final mouse = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+            );
+            await mouse.addPointer(location: Offset.zero);
+            for (final key in [
+              'workspace-context-project',
+              'workspace-pull-request',
+            ]) {
+              final target = find.byKey(ValueKey(key));
+              await mouse.moveTo(tester.getCenter(target));
+              await tester.pump();
+              final lines = find.descendant(
+                of: target,
+                matching: find.byType(StatusLine),
+              );
+              expect(tester.widget<StatusLine>(lines).emphasized, isTrue);
+              expect(
+                find.descendant(of: target, matching: find.byType(ColoredBox)),
+                findsNothing,
+              );
+              expect(
+                controls.evaluate().map(
+                  (element) => tester.getRect(find.byWidget(element.widget)),
+                ),
+                controlsBefore,
+              );
+              if (key == 'workspace-pull-request') {
+                expect(
+                  tester
+                      .widget<StatusLine>(
+                        find.descendant(
+                          of: find.byKey(
+                            const ValueKey('workspace-context-project'),
+                          ),
+                          matching: find.byType(StatusLine),
+                        ),
+                      )
+                      .emphasized,
+                  isFalse,
+                );
+                await captureControls(
+                  tester,
+                  'bar-hover-${style.name}',
+                  height: 100,
+                );
+              }
+            }
+            await mouse.removePointer();
+            await tester.pump();
           }
         }
         expect(connection.reads, 1);
@@ -732,8 +827,26 @@ void main() {
       );
       final secondTab = find.byKey(ValueKey(app.activeSwarmId));
       final barControls = find.byType(WorkspaceBarControl);
+      final bar = find.byKey(const ValueKey('workspace-status-bar'));
       for (final element in barControls.evaluate()) {
-        expect(tester.getSize(find.byWidget(element.widget)).height, 28);
+        final control = element.widget as WorkspaceBarControl;
+        final rect = tester.getRect(find.byWidget(control));
+        expect(
+          rect.height,
+          control.selected == null ? 28 : tester.getSize(bar).height,
+        );
+        if (control.selected == true) {
+          final fill = find.descendant(
+            of: find.byWidget(control),
+            matching: find.byType(ColoredBox),
+          );
+          expect(
+            tester.widget<ColoredBox>(fill).color,
+            grid.AppPalette.swarmWelcome,
+          );
+          expect(tester.getRect(fill).top, tester.getRect(bar).top);
+          expect(tester.getRect(fill).bottom, tester.getRect(bar).bottom);
+        }
       }
       expect(tester.getSize(secondTab).width, lessThan(150));
       final harnesses = find.byKey(const ValueKey('swarm-harnesses-button'));
@@ -819,20 +932,24 @@ void main() {
       final symbol = find.descendant(of: machines, matching: find.text('@'));
       Color? color() => DefaultTextStyle.of(tester.element(symbol)).style.color;
       final resting = color();
+      FontWeight? weight() => tester.widget<Text>(symbol).style?.fontWeight;
+      expect(weight(), FontWeight.normal);
       final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await pointer.addPointer(location: Offset.zero);
       await pointer.moveTo(tester.getCenter(machines));
       await tester.pump(const Duration(milliseconds: 800));
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.text('Machines'), findsOneWidget);
-      expect(color(), isNot(resting));
+      expect(color(), resting);
+      expect(weight(), FontWeight.bold);
       await pointer.removePointer();
       await tester.pumpAndSettle();
       final focus = Focus.of(tester.element(symbol));
       focus.requestFocus();
       await tester.pumpAndSettle();
       expect(focus.hasFocus, isTrue);
-      expect(color(), isNot(resting));
+      expect(color(), resting);
+      expect(weight(), FontWeight.bold);
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
     },

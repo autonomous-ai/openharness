@@ -6,6 +6,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/prompt_style.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/state/swarm_navigation.dart';
@@ -338,7 +339,7 @@ void main() {
   }
 
   testWidgets(
-    'status links highlight only their own rectangle and activate from keyboard',
+    'status links emphasize text without a fill and activate from keyboard',
     (tester) async {
       final previousHighlight = FocusManager.instance.highlightStrategy;
       FocusManager.instance.highlightStrategy =
@@ -357,12 +358,14 @@ void main() {
                 rebuild = setState;
                 return WorkspaceBarControl(
                   label: 'Find harnesses on M2',
-                  selection: Colors.grey,
                   onPressed: enabled ? () => calls++ : null,
-                  child: const SizedBox(
+                  builder: (context, emphasized) => SizedBox(
                     width: 100,
                     height: 28,
-                    child: Text('M2'),
+                    child: Text(
+                      'M2',
+                      style: workspaceBarTextStyle(emphasized: emphasized),
+                    ),
                   ),
                 );
               },
@@ -374,24 +377,36 @@ void main() {
       Finder highlights() =>
           find.descendant(of: control, matching: find.byType(ColoredBox));
       expect(highlights(), findsNothing);
+      FontWeight? weight() =>
+          tester.widget<Text>(find.text('M2')).style?.fontWeight;
+      expect(weight(), FontWeight.normal);
+      final rect = tester.getRect(control);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(tester.getCenter(control));
       await tester.pump();
-      expect(highlights(), findsOneWidget);
-      expect(tester.getSize(highlights()), const Size(100, 28));
+      expect(highlights(), findsNothing);
+      expect(weight(), FontWeight.bold);
+      expect(tester.getRect(control), rect);
       await mouse.moveTo(const Offset(400, 400));
       await tester.pump();
       expect(highlights(), findsNothing);
+      expect(weight(), FontWeight.normal);
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pump();
-      expect(highlights(), findsOneWidget);
+      expect(highlights(), findsNothing);
+      expect(weight(), FontWeight.bold);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(calls, 1);
       rebuild(() => enabled = false);
       await tester.pump();
       expect(highlights(), findsNothing);
+      expect(weight(), FontWeight.normal);
+      await mouse.moveTo(tester.getCenter(control));
+      await tester.pump();
+      expect(weight(), FontWeight.normal);
+      expect(tester.getRect(control), rect);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       expect(calls, 1);
       await mouse.removePointer();

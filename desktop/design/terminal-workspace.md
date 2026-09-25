@@ -34,8 +34,10 @@ Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates, 
 Closing a pane removes its view immediately, without a minimize animation.
 
 Keep mouse access useful without adding duplicate floating controls. Clickable
-text shows a hand cursor and a flat rectangular terminal-selection tint on hover,
-press, and keyboard focus. Resting controls stay unboxed. Tooltips describe the
+text shows a hand cursor and bold text on hover, press, and keyboard focus.
+Preserve the underlying colors, including filled status segments. Reserve both
+text weights during layout so emphasis never shifts neighboring controls.
+Resting controls stay unboxed. Tooltips describe the
 action, not merely the text. Omit a tooltip that repeats the visible name;
 show the full name when truncated, or a different underlying name. A model
 selector says `Switch model · Subscription or local models`; include its full
@@ -54,9 +56,11 @@ gets tight; truncate long values or reduce the number of visible columns.
 Persistent tab, status, and pane bars use `workspaceBarTextStyle()` and
 `workspaceBarCellSizeOf(context)`: 13 pt SF Mono regular on macOS and the platform
 monospace stack on Linux, independent of terminal zoom. Every bar control uses
-the same flat rectangle: `workspaceBarControlHeight()` (28 pt minimum), terminal
-selection at 50% opacity on hover/press/focus, and full selection color for the
-active tab. No rounded corners, ripple, or separate model-label well. Dialogs and welcome
+same minimum click height: `workspaceBarControlHeight()` (28 pt). The active tab
+fills the entire bar height with the workspace background color, joining the
+content below; selection keeps regular text and adds no `*` marker. Hovering a
+tab uses bold text like other bar controls. No rounded corners, ripple, or
+separate model-label well. Dialogs and welcome
 actions use `terminalContentStyle()` and follow the terminal font preference.
 
 ## Keep surfaces quiet

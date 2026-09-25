@@ -16,13 +16,11 @@ class WorkspaceStatusLine extends StatelessWidget {
     super.key,
     required this.parts,
     required this.links,
-    required this.selection,
     required this.color,
     this.nextBackground,
   });
   final StatusLineParts parts;
   final Map<StatusLineField, StatusLineLink> links;
-  final Color selection;
   final bool color;
   final Color? nextBackground;
 
@@ -37,24 +35,14 @@ class WorkspaceStatusLine extends StatelessWidget {
     final components = parts.components;
     final widths = [
       for (final component in components)
-        (() {
-          final painter = TextPainter(
-            text: TextSpan(
-              text: component.parts.segments.map((s) => s.text).join(),
-              style: workspaceBarTextStyle(),
-            ),
-            textDirection: TextDirection.ltr,
-            textScaler: TextScaler.noScaling,
-            maxLines: 1,
-          )..layout();
-          final width =
-              painter.width +
-              (parts.style.segmented
-                  ? component.parts.segments.length * cell.width * 3
-                  : 0);
-          painter.dispose();
-          return width;
-        })(),
+        component.parts.segments.fold(
+              0.0,
+              (width, segment) =>
+                  width + workspaceBarTextSizeOf(context, segment.text).width,
+            ) +
+            (parts.style.segmented
+                ? component.parts.segments.length * cell.width * 3
+                : 0),
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -66,7 +54,7 @@ class WorkspaceStatusLine extends StatelessWidget {
               (() {
                 final component = components[i];
                 final link = links[component.field];
-                final body = SizedBox(
+                Widget body(BuildContext context, bool emphasized) => SizedBox(
                   width: fitted[i],
                   height: height,
                   child: Center(
@@ -74,6 +62,7 @@ class WorkspaceStatusLine extends StatelessWidget {
                       parts: component.parts,
                       color: color,
                       workspaceBar: true,
+                      emphasized: emphasized,
                       textAlign: TextAlign.left,
                       segmentOffset: component.offset,
                       nextBackground: i == components.length - 1
@@ -88,16 +77,15 @@ class WorkspaceStatusLine extends StatelessWidget {
                   ),
                 );
                 return link == null
-                    ? body
+                    ? body(context, false)
                     : WorkspaceBarControl(
                         key: ValueKey(
                           'workspace-context-${component.field!.name}',
                         ),
                         label: link.label,
                         tooltip: link.label,
-                        selection: selection,
                         onPressed: link.onPressed,
-                        child: body,
+                        builder: body,
                       );
               })(),
           ],
