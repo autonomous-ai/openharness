@@ -50,7 +50,7 @@ import { readMachineResources } from './lib/machineResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
-import { preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
+import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
 import { agentFrame, lastActivityAt, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
@@ -2359,10 +2359,16 @@ export class BackendSocket {
                     return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
                       detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
                   }
-                  // A folder this daemon just made is one Claude Code need not ask about.
+                  // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
+                  // the person's own repo is theirs to answer for (lib/claudeTrust.ts); a worktree gets only
+                  // the answer its source repo already has. `branch` IS the source folder: nothing to record.
                   try {
-                    if (input.engine === 'claude') preTrustClaudeProject(preparedFolder)
-                    if (input.engine === 'codex') preTrustCodexProject(preparedFolder)
+                    const engineTrust = input.engine === 'claude' ? { trusts: claudeTrusts, record: preTrustClaudeProject }
+                      : input.engine === 'codex' ? { trusts: codexTrusts, record: preTrustCodexProject } : null
+                    if (engineTrust && (projectFolder.source === 'new'
+                      || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
+                      engineTrust.record(preparedFolder)
+                    }
                   } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
                 }
                 const result = await create(preparedFolder ? { ...input, cwd: preparedFolder } : input)
