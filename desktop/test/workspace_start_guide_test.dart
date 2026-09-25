@@ -155,6 +155,22 @@ Future<void> _mount(
 }
 
 void main() {
+  Future<void> chooseProject(WidgetTester tester) async {
+    await openLaunchRow(tester, 'agent');
+    await typeHarnessQuery(tester, 'Codex');
+    await key(tester, LogicalKeyboardKey.enter);
+    await openLaunchRow(tester, 'project');
+    await tester.tap(
+      find.byKey(
+        ValueKey('new-harness-option-${NewHarnessController.newProjectId}'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.enter);
+    await typeHarnessQuery(tester, 'first-project');
+    await key(tester, LogicalKeyboardKey.enter);
+  }
+
   setUp(() {
     newHarnessOpensInBox = true;
   });
@@ -183,6 +199,7 @@ void main() {
         expect(find.byType(NewHarnessForm), findsOneWidget);
         expect(app.launches, isEmpty);
         expect(journey.completed(OnboardingStep.harnesses), isFalse);
+        await chooseProject(tester);
         if (keyboard) {
           await startHarness(tester);
         } else {
@@ -192,7 +209,7 @@ void main() {
         }
         await tester.pumpAndSettle();
         expect(app.launches, hasLength(1));
-        expect(app.launches.single.project?.isGenerated, isTrue);
+        expect(app.launches.single.project?.folderName, 'first-project');
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(find.byType(TerminalView), findsOneWidget);
         expect(
@@ -241,6 +258,7 @@ void main() {
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     final start = find.byKey(const ValueKey('new-harness-field-start'));
+    await chooseProject(tester);
     await startHarness(tester);
     await tester.pump();
     expect(find.text('Starting harness…'), findsOneWidget);
@@ -268,6 +286,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
     await tester.pumpAndSettle();
     app.creation = null;
+    await chooseProject(tester);
     await tester.tap(start);
     await tester.pumpAndSettle();
     expect(app.launches, hasLength(2));

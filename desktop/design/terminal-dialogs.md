@@ -166,11 +166,13 @@ Project shows the committed machine and full path, such as
 `M2:~/code/autonomous-harness`. Browsing the chooser never changes this value
 until a choice is accepted.
 
+![Compact New Harness form](images/terminal-new-harness-compact.png)
+
 Reserve nine columns for labels and two blank columns before values. The launch
 action follows the last visible field with exactly one blank row; never pin it
 to the bottom with a flexible spacer. The form and chooser use whole character
 columns and rows. The form fits its visible rows, stays centered, and keeps its
-geometry when choices appear. The chooser starts directly with its search line;
+geometry when choices appear beside it. The chooser starts directly with its search line;
 omit a redundant back/title row such as `< Agent`.
 
 Up/Down selects a field and automatically reveals its small chooser to the
@@ -180,8 +182,9 @@ closes the chooser, and selects New Harness, ready for the next Enter to launch.
 A held Enter must not accept and launch in one keypress. Escape discards the
 search and returns to the form in one step; Left also returns when the search
 is empty. Nested project and specialized-agent steps retrace their choices.
-On narrow windows, the active chooser replaces the form inside the same frame.
-There is no duplicate summary pane.
+On narrow windows, the active chooser replaces the form on the same column with
+enough rows for its list. Returning restores the compact form. Validation messages
+get whole rows of their own so neither the explanation nor the choices are clipped.
 
 Fresh Cmd-N uses the last successfully launched agent, the last used project
 on the local machine, the local machine, branch `main`, and Worktree Yes for a
@@ -198,6 +201,8 @@ Keep agent choices to one line. A direct agent completes the choice. A specializ
 uses `Run Blender with` as the search hint, offering compatible coding agents
 with its remembered choice selected. The Agent value then reads
 `Blender · Codex`.
+
+![Blender runner chooser](images/terminal-new-harness-runner.png)
 
 Project searches existing `machine:project` pairs across the inventory; names,
 machine names, and paths are searchable. Put local projects first before a

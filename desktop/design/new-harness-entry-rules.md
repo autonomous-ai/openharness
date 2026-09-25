@@ -12,7 +12,7 @@ The compact, centered launch form starts with `New Harness` selected.
 Agent, Project, and collapsed Options are the main rows. Options expands Model,
 Approvals, applicable Profile, Branch, and Worktree in consecutive rows. Enter launches
 using the displayed settings. The launch action follows the fields with one blank row
-with no extra shortcut hint. Enter on the selected action launches; there is no
+and no extra shortcut hint. Enter on the selected action launches; there is no
 Shift-Enter shortcut. Carried tasks remain in the draft.
 
 Up/Down moves between fields and automatically reveals that field's chooser to
@@ -30,7 +30,8 @@ Project displays `machine:full-path`; there is no separate Machine row.
 
 Use the terminal's selected font and measured cells. All controls are plain
 text, with one-row highlights. Worktree uses `[x]` / `[ ]`. Narrow windows show
-the active list inside the same frame. The chooser starts with search, without
+the active list on the same column with its own height. Validation messages have
+their own whole rows. The chooser starts with search, without
 a back/title row; Left or Escape returns to the form. Opening, searching, and cancelling
 never send input to an existing harness or start one.
 
@@ -227,6 +228,21 @@ advance to seconds/a suffix only on a confirmed collision. Explicit names are
 never silently renamed, and existing files are never overwritten.
 
 ## Regression coverage
+
+`tool/check_new_harness_coverage.mjs` requires 100% executable-line coverage of
+the complete `lib/state/new_harness.dart` and `lib/widgets/new_harness_form.dart`
+modules, including the install clock. Neither module excludes lines from coverage.
+After running tests with `flutter test --coverage --branch-coverage`, run
+`node tool/check_new_harness_coverage.mjs coverage/lcov.info`. This is a line
+coverage gate; branch coverage and the native fixtures provide additional evidence,
+not a guarantee about every possible external machine or agent failure.
+
+- `test/new_harness_controller_edges_test.dart`: late discovery, unavailable
+  main, conflicting worktrees, profile validation/link errors, stale choices,
+  generated-name collisions, bounded folder caches, and lost creation receipts.
+- `test/new_harness_scenarios_test.dart`: keyboard and pointer parity, Unicode
+  editing and composition, unavailable replacements, long errors, small windows,
+  delayed folder/browser/launch replies, and callbacks after form disposal.
 
 - `test/new_harness_git_test.dart`, `test/git_worktree_test.dart`, and
   `test/git_worktree_failures_test.dart`: Git defaults, disabled non-Git rows,

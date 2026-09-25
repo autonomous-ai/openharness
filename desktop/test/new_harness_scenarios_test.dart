@@ -593,12 +593,25 @@ void main() {
         ('studio', 'not linked'),
         ('build', 'offline'),
       ]) {
+        await tester.scrollUntilVisible(
+          _option(id),
+          40,
+          scrollable: find.descendant(
+            of: find.byKey(const ValueKey('new-harness-choices')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down,
+            ),
+          ),
+        );
         await tester.tap(_option(id));
         await tester.pump();
         expect(scenario.box.machineId, 'm');
         expect(scenario.box.error, contains(message));
         expect(harnessChoicesActive(tester), isTrue);
       }
+      await typeHarnessQuery(tester, 'M2');
       await tester.tap(_option('m'));
       await tester.pump();
       expect(scenario.box.machineId, 'm');
@@ -1286,6 +1299,15 @@ void main() {
       expect(scenario.box.selected!.id, isNot(first));
       await key(tester, LogicalKeyboardKey.tab);
       expect(scenario.box.selected!.id, first);
+      for (
+        var i = 0;
+        scenario.box.selected?.id != NewHarnessController.changeMachineId &&
+            i < 10;
+        i++
+      ) {
+        await key(tester, LogicalKeyboardKey.arrowDown);
+      }
+      await tester.pump();
       await tester.tap(_option(NewHarnessController.changeMachineId));
       await tester.pump();
       expect(scenario.box.field, NewHarnessField.machine);
@@ -1315,6 +1337,230 @@ void main() {
       expect(connection.starts, hasLength(2));
     },
   );
+
+  testWidgets(
+    'a launch reply after the form is removed cannot run its old callback',
+    (tester) async {
+      final scenario = await _mount(tester, git: false, editProject: false);
+      final connection = scenario.connections['m']!;
+      connection.starting = Completer();
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(connection.starts, hasLength(1));
+      await tester.pumpWidget(const SizedBox());
+      connection.starting!.complete(
+        connection.created(connection.starts.single),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(scenario.creates, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'a missing branch discovered during launch opens the branch chooser',
+    (tester) async {
+      final git = Completer<Map<String, dynamic>>();
+      final scenario = await _mount(
+        tester,
+        editProject: false,
+        gitReply: git.future,
+      );
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(scenario.box.busy, isTrue);
+      git.complete({
+        'isGit': true,
+        'branch': 'trunk',
+        'branches': [
+          {'ref': 'refs/heads/trunk', 'name': 'trunk'},
+        ],
+      });
+      await tester.pumpAndSettle();
+      expect(scenario.box.field, NewHarnessField.branch);
+      expect(harnessChoicesActive(tester), isTrue);
+      expect(scenario.box.error, contains('Choose a branch'));
+      expect(scenario.box.worktree, isTrue);
+      expect(scenario.connections['m']!.starts, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'pointer toggles Options and a carried task survives returning to launch',
+    (tester) async {
+      final scenario = await _mount(tester, editProject: false, git: false);
+      await tester.tap(_field('advanced'));
+      await tester.pumpAndSettle();
+      expect(scenario.box.advancedOpen, isTrue);
+      expect(_field('model'), findsOneWidget);
+      await tester.tap(_field('advanced'));
+      await tester.pumpAndSettle();
+      expect(scenario.box.advancedOpen, isFalse);
+      expect(_field('model'), findsNothing);
+      await focusLaunchRow(tester, 'start');
+      scenario.box.task = 'Keep this carried task';
+      scenario.box.focusField(NewHarnessField.task);
+      await tester.pumpAndSettle();
+      expect(find.text('Keep this carried task'), findsOneWidget);
+      await startHarness(tester);
+      await tester.pumpAndSettle();
+      expect(
+        scenario.connections['m']!.starts.single['prompt'],
+        'Keep this carried task',
+      );
+      expect(scenario.creates, 1);
+    },
+  );
+
+  testWidgets(
+    'Enter opens the required replacement chooser without launching',
+    (tester) async {
+      final scenario = await _mount(tester, git: false, editProject: false);
+      scenario.app.machineStates['m']!.needsLink = true;
+      scenario.app.notifyListeners();
+      await tester.pump(const Duration(milliseconds: 200));
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(scenario.box.field, NewHarnessField.machine);
+      expect(harnessChoicesActive(tester), isTrue);
+      expect(scenario.box.error, contains('Choose a machine'));
+      expect(scenario.creates, 0);
+      expect(scenario.connections['m']!.starts, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'controller-selected Model opens its row and Manage Models uses the app door',
+    (tester) async {
+      final scenario = await _mount(tester, git: false, editProject: false);
+      var requests = 0;
+      final subscription = scenario.app.modelsRequests.listen(
+        (_) => requests++,
+      );
+      addTearDown(subscription.cancel);
+      scenario.box.focusField(NewHarnessField.model);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Semantics>(_field('model')).properties.selected,
+        isTrue,
+      );
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.tap(_option(NewHarnessController.manageModelsId));
+      await tester.pump();
+      expect(requests, 1);
+      expect(scenario.creates, 0);
+    },
+  );
+
+  testWidgets(
+    'fallback Backspace retains Unicode clusters and selected text after focus moves',
+    (tester) async {
+      final scenario = await _mount(tester);
+      await typeHarnessQuery(tester, 'a👩🏽‍💻b');
+      final editor = tester.widget<TextField>(
+        find.byKey(const ValueKey('new-harness-query')),
+      );
+      final parent = tester
+          .widget<Focus>(find.byKey(const ValueKey('new-harness-form')))
+          .focusNode!;
+      Future<void> backspace(TextSelection selection) async {
+        parent.requestFocus();
+        await tester.pump();
+        editor.controller!.selection = selection;
+        await key(tester, LogicalKeyboardKey.backspace);
+      }
+
+      await backspace(TextSelection.collapsed(offset: 'a👩🏽‍💻'.length));
+      expect(scenario.box.query, 'ab');
+      await backspace(const TextSelection(baseOffset: 0, extentOffset: 1));
+      expect(scenario.box.query, 'b');
+      await backspace(const TextSelection.collapsed(offset: -1));
+      expect(scenario.box.query, 'b');
+      await backspace(const TextSelection.collapsed(offset: 0));
+      expect(scenario.box.query, 'b');
+      await backspace(const TextSelection.collapsed(offset: 1));
+      expect(scenario.box.query, isEmpty);
+      await backspace(const TextSelection.collapsed(offset: 0));
+      expect(scenario.box.query, isEmpty);
+      expect(scenario.creates, 0);
+    },
+  );
+
+  testWidgets(
+    'a late browser return cannot change the focused row during launch',
+    (tester) async {
+      final browsing = Completer<void>();
+      final scenario = await _mount(
+        tester,
+        git: false,
+        onBrowse: (_) => browsing.future,
+      );
+      await tester.tap(_option(NewHarnessController.existingProjectId));
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.tap(_option(NewHarnessController.browseId));
+      await tester.pump();
+      scenario.box.focusField(NewHarnessField.launch);
+      final connection = scenario.connections['m']!;
+      connection.starting = Completer();
+      final creating = scenario.box.create();
+      await tester.pump();
+      expect(scenario.box.busy, isTrue);
+      browsing.complete();
+      await tester.pump();
+      expect(scenario.box.field, NewHarnessField.launch);
+      connection.starting!.complete(
+        connection.created(connection.starts.single),
+      );
+      await tester.pump();
+      expect(await creating, NewHarnessOutcome.created);
+      expect(connection.starts, hasLength(1));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  for (final (size, scale) in [
+    (const Size(1000, 700), 1.0),
+    (const Size(520, 700), 1.0),
+    (const Size(800, 1000), 2.0),
+  ]) {
+    testWidgets('wrapped launch errors remain visible at $size, $scale', (
+      tester,
+    ) async {
+      final scenario = await _mount(
+        tester,
+        git: false,
+        editProject: false,
+        size: size,
+        scale: scale,
+      );
+      scenario.box.warn(
+        'Could not create this worktree. The selected folder is not writable. Choose another project or repair its permissions before trying again.',
+      );
+      await tester.pumpAndSettle();
+      final notice = find.byKey(const ValueKey('new-harness-status'));
+      final surface = tester.getRect(
+        find.byKey(const ValueKey('new-harness-surface')),
+      );
+      final bounds = tester.getRect(notice);
+      expect(notice.hitTestable(), findsOneWidget);
+      expect(bounds.bottom, lessThanOrEqualTo(surface.bottom));
+      expect(bounds.top, greaterThan(surface.top));
+      expect(scenario.creates, 0);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('expanded fields scroll into view in a short window', (
+    tester,
+  ) async {
+    await _mount(tester, editProject: false, size: const Size(760, 180));
+    await openLaunchRow(tester, 'advanced');
+    await focusLaunchRow(tester, 'start');
+    await tester.pumpAndSettle();
+    expect(_field('start').hitTestable(), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(_field('agent').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   for (final (size, scale) in [
     (const Size(520, 520), 1.0),

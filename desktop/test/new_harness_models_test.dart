@@ -57,6 +57,7 @@ class _Connection extends WsConn {
   Map<String, dynamic> answer = catalog();
   Future<Map<String, dynamic>>? waiting;
   bool loseReply = false;
+  int modelReads = 0;
   final creates = <Map<String, dynamic>>[];
   @override
   Future<Map<String, dynamic>> request(
@@ -66,6 +67,7 @@ class _Connection extends WsConn {
   }) async {
     switch (type) {
       case 'grid_models_list':
+        modelReads++;
         return waiting ?? answer;
       case 'git_project_info':
         return {'isGit': false};
@@ -619,8 +621,12 @@ void main() {
             ),
           ),
         );
+        await tester.pumpAndSettle();
+        expect(find.text('Refresh models').hitTestable(), findsOneWidget);
+        final beforeRefresh = connections['m']!.modelReads;
         await tester.tap(find.text('Refresh models'));
         await tester.pumpAndSettle();
+        expect(connections['m']!.modelReads, greaterThan(beforeRefresh));
         await tester.scrollUntilVisible(
           find.text('Manage Models…'),
           60,

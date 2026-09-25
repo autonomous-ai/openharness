@@ -252,7 +252,12 @@ void main() {
     final connection = _Connection();
     final app = createApp(connectionForTest: (_) => connection);
     addTearDown(app.dispose);
-    app.machineStates['m']!.nodeOnline = true;
+    app.machineStates['m']!
+      ..nodeOnline = true
+      ..localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     app.adoptSessionForTest(terminal('a0', []));
     await mount(tester, app);
     await key(tester, LogicalKeyboardKey.keyT, cmd: true);

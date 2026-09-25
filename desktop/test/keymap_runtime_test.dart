@@ -110,6 +110,10 @@ void main() {
       final app = createApp();
       addTearDown(map.dispose);
       addTearDown(app.dispose);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       await mount(tester, app, map);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final box = tester
@@ -156,6 +160,10 @@ void main() {
       final app = createApp();
       addTearDown(map.dispose);
       addTearDown(app.dispose);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       await mount(tester, app, map, native: true);
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final form = find.byType(NewHarnessForm);

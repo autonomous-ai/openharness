@@ -33,10 +33,14 @@ void main() {
       tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
 
   testWidgets(
-    'edited defaults and a carried task survive closing and reopening',
+    'canceled edits and tasks do not replace successful launch defaults',
     (tester) async {
       final app = createApp();
       seedMixedAgents(app);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       app.adoptSessionForTest(terminal('a0', []));
       addTearDown(app.dispose);
       await mount(tester, app);
@@ -51,9 +55,9 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       await chord(tester, LogicalKeyboardKey.keyN);
-      expect(box(tester).task, 'Review this project');
-      expect(box(tester).engine, 'opencode');
-      expect(box(tester).project.folder, '/work/selected-before-task');
+      expect(box(tester).task, '');
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).project.folder, '/work/openharness');
       expect(app.panes, hasLength(1));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -168,12 +172,13 @@ void main() {
   ) async {
     final app = createApp();
     seedMixedAgents(app);
-    app.machineStates['m']!.localOnly = false;
+    app.machineStates['m']!.localOnly = true;
     app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
     app.adoptSessionForTest(terminal('a0', []));
     addTearDown(app.dispose);
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyN);
+    app.machineStates['m']!.localOnly = false;
     await openLaunchRow(tester, 'project');
     final controller = box(tester);
     controller.move(
@@ -216,11 +221,15 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('different source panes retain separate setup drafts', (
+  testWidgets('changing source panes never changes fresh launch defaults', (
     tester,
   ) async {
     final app = createApp();
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     final first = app.adoptSessionForTest(terminal('a0', []));
     await app.addAgentToSwarm('m', 'a1');
     addTearDown(app.dispose);
@@ -235,14 +244,14 @@ void main() {
     app.focusPane(other.id);
     await tester.pump();
     await chord(tester, LogicalKeyboardKey.keyN);
-    expect(box(tester).project.folder, isNot('/work/first-draft'));
+    expect(box(tester).project.folder, '/work/openharness');
     box(tester).setFolder('/work/second-draft');
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     app.focusPane(first.id);
     await tester.pump();
     await chord(tester, LogicalKeyboardKey.keyN);
-    expect(box(tester).project.folder, '/work/first-draft');
+    expect(box(tester).project.folder, '/work/openharness');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

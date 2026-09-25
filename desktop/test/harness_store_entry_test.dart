@@ -55,7 +55,7 @@ void main() {
         await openStore();
         expect(app.activeSwarm, same(store));
         expect(app.swarms, hasLength(2));
-        await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
         expect(app.activeSwarm, same(work));
         expect(tester.state(view), same(terminalState));
         await key(tester, LogicalKeyboardKey.arrowLeft);
@@ -150,12 +150,16 @@ void main() {
     );
   }
 
-  testWidgets('browsing from harness choices retains the task and defaults', (
+  testWidgets('fresh creation after browsing uses successful launch defaults', (
     tester,
   ) async {
     newHarnessOpensInBox = true;
     addTearDown(() => newHarnessOpensInBox = false);
     final app = createApp();
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/saved');
     final map = MemoryKeymap();
     addTearDown(app.dispose);
     addTearDown(map.dispose);
@@ -187,10 +191,10 @@ void main() {
     final resumed = tester
         .widget<NewHarnessForm>(find.byType(NewHarnessForm))
         .controller;
-    expect(resumed.task, draft.task);
+    expect(resumed.task, '');
     expect(resumed.engine, draft.engine);
     expect(resumed.machineId, draft.machineId);
-    expect(resumed.project, draft.project);
+    expect(resumed.project.folder, '/work/saved');
     await key(tester, LogicalKeyboardKey.escape);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

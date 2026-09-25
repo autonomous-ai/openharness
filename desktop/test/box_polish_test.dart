@@ -19,6 +19,10 @@ void main() {
     (tester) async {
       final app = createApp();
       seedMixedAgents(app);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       app.adoptSessionForTest(terminal('a0', []));
       addTearDown(app.dispose);
       await mount(tester, app);
@@ -30,6 +34,7 @@ void main() {
       await tester.pump();
       final status = find.byKey(const ValueKey('new-harness-status'));
       expect(find.text('The selected folder is unavailable.'), findsOneWidget);
+      expect(status.hitTestable(), findsOneWidget);
       final semantics = tester.widget<Semantics>(
         find.ancestor(of: status, matching: find.byType(Semantics)).first,
       );
@@ -48,8 +53,6 @@ void main() {
       await tester.pump();
       // Clearing the filter clears its warning. Check the field view too.
       box.warn('The selected folder is unavailable.');
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(status.hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);

@@ -7,7 +7,6 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
-import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
@@ -194,8 +193,6 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _Row.branch when !box.isGitProject => 'Not a Git repository',
     _Row.worktree when box.gitError != null => box.gitError,
     _Row.worktree when !box.canUseWorktree => 'Not a Git repository',
-    _Row.approvals when !box.hasModes => 'Not used by this agent',
-    _Row.model when box.isTerminal => 'Not used by Terminal',
     _ => null,
   };
 
@@ -224,7 +221,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _Row.worktree => box.worktree ? '[x]' : '[ ]',
     _Row.approvals => box.modeLabel,
     _Row.profile => box.profileLabel ?? 'Default',
-    _Row.start => '',
+    _Row.start => box.checking ? 'Check status' : _label(row),
   };
 
   /// Focusing a row focuses the field it edits, so the controller's option
@@ -537,12 +534,13 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _revealRow();
       return;
     }
-    switch (await box.create()) {
+    final outcome = await box.create();
+    if (!mounted) return;
+    switch (outcome) {
       case NewHarnessOutcome.created:
         widget.onCreated();
       case NewHarnessOutcome.failed:
         // The controller has said why on the line; keep the keys live.
-        if (!mounted) return;
         if (box.requiredChoice != null) {
           setState(() => _listOpen = true);
           _focusEditor();
@@ -840,6 +838,35 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// Geometry follows the same size, so the columns keep their proportions.
   double _scale = 1;
 
+  /// Notices need real rows too; otherwise a compact frame clips the reason
+  /// a launch was refused below its last action.
+  int _noticeRows(BuildContext context, int columns) {
+    if (_picking) return 0;
+    final required = box.requiredChoice?.message;
+    final messages = [
+      ?required,
+      if ((box.error != null || box.status != null) &&
+          (box.error == null || box.error != required))
+        box.error ?? box.status!,
+    ];
+    var rows = 0;
+    for (final message in messages) {
+      rows += 1 + _textRows(context, message, columns - 4);
+    }
+    return rows;
+  }
+
+  int _textRows(BuildContext context, String text, int columns) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: _ink()),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(maxWidth: columns.clamp(1, 1000) * _cell);
+    final rows = (painter.height / _rowHeight).ceil();
+    painter.dispose();
+    return rows;
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -878,27 +905,41 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             final rows = (constraints.maxHeight / _rowHeight).floor();
             final mainColumns = columns.clamp(1, 56);
             final contentRows =
-                _rows.length + 5 + (box.task.isNotEmpty ? 1 : 0);
+                _rows.length +
+                5 +
+                (box.task.isNotEmpty ? 1 : 0) +
+                _noticeRows(context, mainColumns);
             final mainRows = rows.clamp(1, contentRows);
             final left = (columns - mainColumns) ~/ 2;
             final top = (rows - mainRows) ~/ 2;
             final available = columns - left - mainColumns - 1;
             final beside = available >= 28;
             final showChoices = _hasChoices && (_picking || !_hideChoices);
-            final pickerRows = rows.clamp(1, 16);
+            final pickerColumns = beside
+                ? available.clamp(28, 40)
+                : mainColumns;
+            final notice = _picking ? box.error ?? box.status : null;
+            final pickerRows = rows.clamp(
+              1,
+              16 +
+                  (notice == null
+                      ? 0
+                      : 1 + _textRows(context, notice, pickerColumns - 6)),
+            );
             final pickerTop = top.clamp(0, rows - pickerRows);
+            final replaceForm = _picking && !beside;
             return Stack(
               children: [
                 Positioned(
                   left: left * _cell,
-                  top: top * _rowHeight,
+                  top: (replaceForm ? pickerTop : top) * _rowHeight,
                   width: mainColumns * _cell,
-                  height: mainRows * _rowHeight,
+                  height: (replaceForm ? pickerRows : mainRows) * _rowHeight,
                   child: _surface(
                     const ValueKey('new-harness-surface'),
                     _installing != null
                         ? _installPane(_installing!)
-                        : _picking && !beside
+                        : replaceForm
                         ? _sidePane()
                         : _items(),
                   ),
@@ -907,7 +948,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   Positioned(
                     left: (left + mainColumns + 1) * _cell,
                     top: pickerTop * _rowHeight,
-                    width: available.clamp(28, 40) * _cell,
+                    width: pickerColumns * _cell,
                     height: pickerRows * _rowHeight,
                     child: _surface(
                       const ValueKey('new-harness-chooser-surface'),
@@ -1015,7 +1056,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// single-row highlight as the fields. It is selected when the form opens.
   Widget _buildButton() {
     final on = _row == _Row.start && !_picking;
-    final label = box.checking ? 'Check status' : 'New Harness';
+    final label = _value(_Row.start);
     return Semantics(
       key: const ValueKey('new-harness-field-start'),
       container: true,
@@ -1614,7 +1655,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
 }
 
 /// An install's running clock, ticking itself so the form does not rebuild
-/// every second. Frozen under test, where a periodic timer never settles.
+/// every second. Disposed with the install pane.
 class _Elapsed extends StatefulWidget {
   const _Elapsed({required this.run, required this.style});
 
@@ -1631,15 +1672,10 @@ class _ElapsedState extends State<_Elapsed> {
   @override
   void initState() {
     super.initState();
-    _tick = kUnderTest ? null : _startClock();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.run.inProgress) setState(() {});
+    });
   }
-
-  // coverage:ignore-start
-  // Never runs under flutter test (see initState), where coverage is measured.
-  Timer _startClock() => Timer.periodic(const Duration(seconds: 1), (_) {
-    if (mounted && widget.run.inProgress) setState(() {});
-  });
-  // coverage:ignore-end
 
   @override
   void dispose() {

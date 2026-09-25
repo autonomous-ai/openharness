@@ -664,18 +664,25 @@ void main() {
     expect(find.textContaining('Search '), findsNothing);
   });
 
-  testWidgets('the compact box stays put when choices open', (tester) async {
-    await mount(tester);
-    final field = find.byKey(const ValueKey('new-harness-surface'));
-    final before = tester.getRect(field);
-    await type(tester, 'harness');
-    expect(find.byKey(const ValueKey('new-harness-choices')), findsOneWidget);
-    expect(
-      tester.getRect(field),
-      before,
-      reason: 'Editing preserves the same box position and size.',
-    );
-  });
+  testWidgets(
+    'a narrow chooser keeps the column and restores the compact form',
+    (tester) async {
+      await mount(tester);
+      final field = find.byKey(const ValueKey('new-harness-surface'));
+      final before = tester.getRect(field);
+      await type(tester, 'harness');
+      expect(find.byKey(const ValueKey('new-harness-choices')), findsOneWidget);
+      expect(
+        tester.getRect(field).topLeft,
+        before.topLeft,
+        reason: 'The chooser keeps the same column and has room for its list.',
+      );
+      expect(tester.getRect(field).width, before.width);
+      expect(tester.getRect(field).height, greaterThan(before.height));
+      await press(tester, LogicalKeyboardKey.escape);
+      expect(tester.getRect(field), before);
+    },
+  );
 
   /// Walk the highlight in the open list until [wanted] holds, so a test
   /// asserts on the row it meant rather than on a position.

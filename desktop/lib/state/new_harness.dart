@@ -631,12 +631,6 @@ class NewHarnessController extends ChangeNotifier {
   bool refreshingBranches = false;
   String? branchRefreshError;
   DateTime? _branchesCheckedAt;
-  Future<void> waitForGitProject() async {
-    while (checkingGit && !_disposed) {
-      await _gitFuture;
-    }
-  }
-
   bool get isGitProject => _gitProject.isGit && !isTerminal;
   bool get canUseWorktree => isGitProject && !checkingGit;
   bool get worktree =>
@@ -707,28 +701,6 @@ class NewHarnessController extends ChangeNotifier {
   bool get opensWorktree => worktree
       ? worktreePlan?.kind == WorktreeStart.openWorktree
       : _branchHere == null && _worktreeOf(branchRef) != null;
-
-  /// What Start does with Git, in words for the summary and screen readers.
-  String get gitSummary {
-    if (!isGitProject) return '';
-    final plan = worktreePlan;
-    if (plan == null) {
-      final here = _branchHere;
-      return here != null
-          ? ', on a new branch $here'
-          : opensWorktree
-          ? ', in the worktree of $branchLabel'
-          : ', on $branchLabel';
-    }
-    return switch (plan.kind) {
-      WorktreeStart.newBranch =>
-        ', in a new worktree on ${plan.branch == placeholder ? 'a branch named after the session' : plan.branch} from ${_refName(plan.base) ?? 'HEAD'}',
-      WorktreeStart.existingBranch => ', in a new worktree on ${plan.branch}',
-      WorktreeStart.openWorktree => ', in the worktree of ${plan.branch}',
-      WorktreeStart.unavailable =>
-        ', but ${plan.branch} is the project folder’s branch',
-    };
-  }
 
   void toggleWorktree() {
     if (locked || !canUseWorktree) return;
@@ -1094,7 +1066,6 @@ class NewHarnessController extends ChangeNotifier {
   // engine while its settings are open in a child picker.
   String? _agentPreview;
   String get _settingsEngine => _agentPreview ?? _engine;
-  String get agentSettingsLabel => labelOf(_settingsEngine);
   LocalCodexProfile? get _settingsProfile =>
       _settingsEngine == _engine ? _profile : null;
   List<PermissionMode> get _settingsModes =>
@@ -1111,7 +1082,6 @@ class NewHarnessController extends ChangeNotifier {
       _modes.any((mode) => mode.id == _mode) ? _mode : kDefaultPermissionMode;
   String get modeLabel =>
       _modes.where((m) => m.id == mode).firstOrNull?.label ?? mode;
-  bool get riskyMode => _modes.any((m) => m.id == mode && m.risky);
   bool get usesProfile => _base == 'codex' && _model == null;
   bool get hasProfile => _baseOf(_settingsEngine) == 'codex';
   bool get supportsProfiles =>
@@ -1192,9 +1162,6 @@ class NewHarnessController extends ChangeNotifier {
       (value == NewHarnessField.mode && _settingsModes.isNotEmpty) ||
       (value == NewHarnessField.profile && hasProfile);
 
-  NewHarnessField get nextMainField => field == NewHarnessField.machine
-      ? NewHarnessField.projectMenu
-      : fields[(fields.indexOf(field) + 1) % fields.length];
   int cursor = 0;
   List<NewHarnessOption> options = const [];
 
@@ -3122,10 +3089,6 @@ class NewHarnessController extends ChangeNotifier {
     if (requiredChoice case final choice?) {
       focusField(choice.field);
       return _fail(choice.message);
-    }
-    if (needsProject && !checking) {
-      focusField(NewHarnessField.projectMenu);
-      return _fail('Choose a project, or create a new one.');
     }
     if (!checking) {
       _syncGitProject();
