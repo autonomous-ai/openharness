@@ -48,9 +48,11 @@ test('a grid too old for --no-wake leaves the last reading, stale, and is never 
   assert.equal(first.nodes.length,earlier.nodes.length);assert.ok(first.nodes.every(n=>n.stale));
   assert.match(first.notice,/^Test workstation is being updated — showing the reading from \d{2}:\d{2}$/);
   assert.equal(first.readingFrom,'2026-09-24T08:05:00Z');
+  assert.equal(first.sources.stats,undefined,'the refused read is told once, as the notice — not beside it as a raw usage line');
+  assert.equal(first.sources.engines?.error,first.notice);
   assert.ok(!first.events.some(e=>e.kind==='offline'));
   const firstCalls=(await logged(log)).filter(c=>READS.includes(verbOf(c.argv)));
-  assert.deepEqual(firstCalls.map(c=>verbOf(c.argv)),['engines'],'one refused read, then nothing — no retry and no models/stats');
+  assert.deepEqual(firstCalls.map(c=>verbOf(c.argv)),['stats'],'one refused read, then nothing — no retry and no engines/models');
 
   process.env.HARNESS_GRID_BIN=current;
   const second=await collect();
@@ -96,10 +98,10 @@ test('the first reading after a sleep does not call a node that has not rejoined
   assert.ok(!woken.events.some(e=>e.kind==='offline'),'a cold wake is not every other engine leaving');
 });
 
-test('a member grid is asleep when engines answers grid_asleep, and models and stats are skipped',async t=>{
+test('a member grid is asleep when its first grid read answers grid_asleep, and nothing else is asked',async t=>{
   const dir=await temporary(t),log=join(dir,'calls.json');
   const verbs={...awakeVerbs,info:{stdout:{grid:'test-grid',type:'domain-restricted',status:null,grid_url:'https://relay.example'}},
-    engines:{stderr:`${asleepEnvelope}\nGrid test-grid is asleep: this grid is resting\n`,exit:1}};
+    stats:{stderr:`${asleepEnvelope}\nGrid test-grid is asleep: this grid is resting\n`,exit:1}};
   const binary=await fakeGrid(dir,'grid-0.3.49',{verbs},log);
   const workspace=join(dir,'ws');await atomicJson(join(workspace,'grid-fleet.json'),{...config,machines:[{...config.machines[0],gridBinary:binary}]});
   const earlier=assemble(config,reads,null,'2026-09-24T08:05:00Z');
@@ -108,9 +110,9 @@ test('a member grid is asleep when engines answers grid_asleep, and models and s
   assert.equal(snapshot.status,'asleep');assert.equal(snapshot.pollIntervalMs,30_000);
   assert.ok(snapshot.nodes.length>0&&snapshot.nodes.every(n=>n.stale));
   assert.ok(!snapshot.events.some(e=>e.kind==='offline'));
-  assert.equal(snapshot.sources.engines?.ok,true,'asleep is an answer, not a failed read');
+  assert.equal(snapshot.sources.stats?.ok,true,'asleep is an answer, not a failed read');
   const read=(await logged(log)).map(c=>c.argv).filter(a=>READS.includes(verbOf(a)));
-  assert.deepEqual(read,[['--remote','engines','test-grid','--no-wake','--json']]);
+  assert.deepEqual(read,[['--remote','stats','test-grid','--no-wake','--json']]);
 });
 
 test('the viewer books its next read 30 s out while the grid is asleep, and at its own interval otherwise',async t=>{
