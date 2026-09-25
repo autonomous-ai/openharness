@@ -88,8 +88,9 @@ shared app bar. A dependent viewer uses its owner's context. Keep internal
 worktree paths and machinery out of everyday labels.
 
 Machine opens the shared picker scoped to that machine. Project opens its harnesses across
-known checkouts and machines. Branch narrows that project to the exact branch or
-detached commit. These are navigation actions; they do not check out a branch.
+known checkouts and machines. Branch narrows that project to the exact named
+branch. Hide detached commit hashes from the bar. These are navigation actions;
+they do not check out a branch.
 The PR label opens that PR. Each field gets its own accessible link, tooltip, and
 the shared hover treatment, including in joined Agnoster segments.
 
