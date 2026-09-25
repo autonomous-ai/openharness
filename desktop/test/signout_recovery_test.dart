@@ -69,7 +69,6 @@ AppNotifier signOutApp(SignOutFixture cli, {bool local = false}) => AppNotifier(
           apiKey: 'fixture',
           machineId: 'fixture',
           machineName: 'Fixture',
-          setupToken: 'fixture',
         )
       : null,
 )..status = AppStatus.authenticated;

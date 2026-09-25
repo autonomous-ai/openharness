@@ -57,9 +57,8 @@ browser's copy, with a drift-guard test and committed self-vectors.
   and hands out STUN/TURN, and persists machines, agent names and counters. `npm install && npm run
   dev` on `:8085`; [`backend/README.md`](backend/README.md) and `.env.example` for the rest.
   `harness-api.autonomous.ai` is the hosted instance.
-- **The web client** at [harness.autonomous.ai](https://harness.autonomous.ai) reaches the same
-  machines from a browser after `harness pair <code>` or a `harness browser-link`. It is not in this
-  repository; it also hosts the CLI installer and the desktop downloads.
+- **[harness.autonomous.ai](https://harness.autonomous.ai)** is the download page: it hosts the CLI
+  installer and the desktop downloads. It is not in this repository.
 
 ## The Harness device
 
