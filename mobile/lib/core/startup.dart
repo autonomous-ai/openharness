@@ -7,7 +7,6 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_theme_store.dart';
-import 'background_hold.dart';
 import 'device_name.dart';
 
 /// Every preference that has to be in place BEFORE the first frame.
@@ -29,7 +28,6 @@ Future<void> loadPersistedSettings({
   HarnessStats? stats,
   VoiceLanguageStore? voiceLanguage,
   PhoneNameStore? phoneName,
-  BackgroundHoldStore? backgroundHold,
 }) async {
   // What the OS calls this phone, asked now so it is on hand by the first
   // `terminal_open`; not awaited — a slow answer must not hold the first frame,
@@ -77,14 +75,5 @@ Future<void> loadPersistedSettings({
     // The person's own name for this phone; read late, the first terminal it
     // took would introduce it by the OS's name instead.
     StartupTrace.time('prefs.phoneName', (phoneName ?? phoneNameStore).load),
-    // Read before the first frame like the rest, and for a sharper reason than
-    // flicker: the shell asks this store on the very first time the app leaves
-    // the foreground, which can be seconds after launch. Loaded late, that first
-    // switch away would be read as "off" and drop the connection the person had
-    // turned the setting on to keep.
-    StartupTrace.time(
-      'prefs.backgroundHold',
-      (backgroundHold ?? backgroundHoldStore).load,
-    ),
   ]);
 }
