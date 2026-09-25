@@ -75,6 +75,7 @@ class AgentPicker extends StatefulWidget {
     this.height = 64,
     this.width,
     this.terminalStyle = false,
+    this.label = 'Agent',
   });
 
   final String value;
@@ -108,6 +109,7 @@ class AgentPicker extends StatefulWidget {
   /// dialog, and Flutter orders Tab by when a focus node attached.
   final double? width;
   final bool terminalStyle;
+  final String label;
 
   /// What the search input says before anything is typed.
   static const hint = 'Choose an agent for what you’d like to make';
@@ -126,6 +128,8 @@ class AgentPicker extends StatefulWidget {
 }
 
 class _AgentPickerState extends State<AgentPicker> {
+  String get _hint =>
+      widget.label == 'Agent' ? AgentPicker.hint : 'Search harnesses';
   final _portal = OverlayPortalController();
   final _query = TextEditingController();
   final _inputFocus = FocusNode(debugLabel: 'Agent search input');
@@ -359,7 +363,7 @@ class _AgentPickerState extends State<AgentPicker> {
   /// section's line above it says what the box is for (owner, 2026-09-17:
   /// "in the search box, just the agent name").
   Widget _chosen(AgentChoice? choice) => KeyedSubtree(
-    key: const Key('new-agent-agent-choice'),
+    key: Key('new-agent-${widget.label.toLowerCase()}-choice'),
     child: Text(
       choice?.label ?? 'Choose an agent',
       maxLines: 1,
@@ -381,11 +385,11 @@ class _AgentPickerState extends State<AgentPicker> {
       child: Semantics(
         button: true,
         label: choice == null
-            ? AgentPicker.hint
-            : 'Agent: ${choice.label}. Search agents',
+            ? _hint
+            : '${widget.label}: ${choice.label}. Search ${widget.label.toLowerCase()}s',
         excludeSemantics: true,
         child: Material(
-          key: const Key('new-agent-agent-field'),
+          key: Key('new-agent-${widget.label.toLowerCase()}-field'),
           color: grid.AppPalette.swarmSearchSurface,
           surfaceTintColor: Colors.transparent,
           elevation: 2,
@@ -468,6 +472,8 @@ class _AgentPickerState extends State<AgentPicker> {
           'picker.cancel': () => run(_close),
           if (widget.terminalStyle)
             'picker.toggle_preview': () => run(_togglePreview),
+          'picker.page_down': () => run(() => _page(1)),
+          'picker.page_up': () => run(() => _page(-1)),
           'picker.preview_page_down': () => run(() => _page(1)),
           'picker.preview_page_up': () => run(() => _page(-1)),
           // Tab is a picker command now (the box completes paths with it); a
@@ -583,7 +589,7 @@ class _AgentPickerState extends State<AgentPicker> {
     final sideBySide = showPreview && width >= 760;
     final preview = showPreview
         ? _AgentPreview(
-            key: const ValueKey('new-agent-agent-preview'),
+            key: ValueKey('new-agent-${widget.label.toLowerCase()}-preview'),
             choice: highlighted,
             status: widget.statusOf?.call(highlighted.id),
             current: highlighted.id == widget.value,
@@ -593,14 +599,16 @@ class _AgentPickerState extends State<AgentPicker> {
         : null;
     final results = ExcludeFocus(
       child: ListView.builder(
-        key: const ValueKey('new-agent-agent-list'),
+        key: ValueKey('new-agent-${widget.label.toLowerCase()}-list'),
         controller: _scroll,
         padding: const EdgeInsets.all(8),
         itemExtent: rowHeight,
         itemCount: lines,
         itemBuilder: (context, index) => empty
             ? Padding(
-                key: const Key('new-agent-agent-search-empty'),
+                key: Key(
+                  'new-agent-${widget.label.toLowerCase()}-search-empty',
+                ),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -623,7 +631,7 @@ class _AgentPickerState extends State<AgentPicker> {
       child: TextFieldTapRegion(
         groupId: _tapGroup,
         child: Material(
-          key: const Key('new-agent-agent-panel'),
+          key: Key('new-agent-${widget.label.toLowerCase()}-panel'),
           color: grid.AppPalette.swarmSearchSurface,
           surfaceTintColor: Colors.transparent,
           // Lifted off the dialog it covers, lightly: on the dialog's dark
@@ -643,12 +651,14 @@ class _AgentPickerState extends State<AgentPicker> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Semantics(
-                    label: 'Search agents',
+                    label: 'Search ${widget.label.toLowerCase()}s',
                     child: ReadlineKeys(
                       controller: _query,
                       onChanged: _queryChanged,
                       child: SwarmSearchInput(
-                        inputKey: const Key('new-agent-agent-search'),
+                        inputKey: Key(
+                          'new-agent-${widget.label.toLowerCase()}-search',
+                        ),
                         controller: _query,
                         focusNode: _inputFocus,
                         groupId: _tapGroup,
@@ -657,7 +667,7 @@ class _AgentPickerState extends State<AgentPicker> {
                         onChanged: _queryChanged,
                         autofocus: false,
                         showClose: !widget.terminalStyle,
-                        hintText: AgentPicker.hint,
+                        hintText: _hint,
                         rounded: !widget.terminalStyle,
                         prominent: !widget.terminalStyle,
                         prompt: widget.terminalStyle ? '>' : null,
@@ -765,7 +775,9 @@ class _AgentPickerState extends State<AgentPicker> {
         }
       },
       child: ListTile(
-        key: ValueKey('new-agent-agent-row-${choice.id}'),
+        key: ValueKey(
+          'new-agent-${widget.label.toLowerCase()}-row-${choice.id}',
+        ),
         minTileHeight: rowHeight,
         selected: highlighted,
         textColor: Colors.white,
@@ -811,7 +823,9 @@ class _AgentPickerState extends State<AgentPicker> {
               Flexible(
                 child: Text(
                   'by $creator',
-                  key: ValueKey('new-agent-agent-row-by-${choice.id}'),
+                  key: ValueKey(
+                    'new-agent-${widget.label.toLowerCase()}-row-by-${choice.id}',
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: widget.terminalStyle
@@ -842,7 +856,9 @@ class _AgentPickerState extends State<AgentPicker> {
                       grid.AppType.bodySize,
                 ),
                 child: TextButton(
-                  key: const ValueKey('new-agent-agent-row-action'),
+                  key: ValueKey(
+                    'new-agent-${widget.label.toLowerCase()}-row-action',
+                  ),
                   onPressed: () => _choose(choice),
                   style: TextButton.styleFrom(foregroundColor: Colors.white),
                   child: SwarmSearchActionLabel(
@@ -889,7 +905,7 @@ class _AgentPickerState extends State<AgentPicker> {
             // nothing else: the sections under the panel are not the target.
             Positioned.fill(
               child: GestureDetector(
-                key: const Key('new-agent-agent-barrier'),
+                key: Key('new-agent-${widget.label.toLowerCase()}-barrier'),
                 behavior: HitTestBehavior.opaque,
                 onTap: _close,
               ),

@@ -142,6 +142,43 @@ class _CreationConnection extends WsConn {
   }
 }
 
+/// A machine that lacks one harness and installs it when asked, narrating
+/// through `dsh_install_status` pushes the test sends while the request is
+/// held. The first install fails in setup; the second lands.
+class _InstallingConnection extends _CreationConnection {
+  _InstallingConnection()
+    : super(
+        products: [
+          {
+            'id': 'autonomous/circuit',
+            'name': 'Autonomous Circuit',
+            'engine': 'claude',
+            'engines': ['claude', 'codex'],
+            'installed': false,
+          },
+        ],
+      );
+
+  final installs = <String>[];
+  Completer<Map<String, dynamic>>? reply;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'dsh_install') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    installs.add(payload['id'] as String);
+    reply = Completer();
+    final answer = await reply!.future;
+    if (answer['ok'] == true) products.single['installed'] = true;
+    return answer;
+  }
+}
+
 class _FirstCreationApp extends AppNotifier {
   _FirstCreationApp(WsConn connection)
     : super(
@@ -893,6 +930,96 @@ void main() {
   );
 
   testWidgets(
+    'native New Harness installs a missing harness, retries a failure, then starts',
+    (tester) async {
+      final connection = _InstallingConnection();
+      final app = _FirstCreationApp(connection);
+      addTearDown(app.dispose);
+      addTearDown(connection.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: SwarmScreen(notifier: app, nativeTabs: true),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      Future<void> settle() async {
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      Future<void> say(Map<String, Object?> progress) => app.handleEventForTest(
+        'm',
+        {'type': 'dsh_install_status', 'payload': progress},
+      );
+      final pane = find.byKey(const ValueKey('new-harness-install'));
+      Finder inPane(String text) =>
+          find.descendant(of: pane, matching: find.text(text));
+
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      await settle();
+      await focusLaunchRow(tester, 'harness');
+      await key(tester, LogicalKeyboardKey.enter);
+      await settle();
+      await tester.enterText(
+        find.byKey(const ValueKey('new-harness-query')),
+        'circuit',
+      );
+      await settle();
+      await key(tester, LogicalKeyboardKey.enter);
+      await settle();
+      final box = tester
+          .widget<NewHarnessForm>(find.byType(NewHarnessForm))
+          .controller;
+      expect(box.harnessId, 'autonomous/circuit');
+
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await settle();
+      expect(connection.installs, ['autonomous/circuit']);
+      expect(
+        inPane('Installing Autonomous Circuit on This Mac'),
+        findsOneWidget,
+      );
+      await say({
+        'id': 'autonomous/circuit',
+        'phase': 'setup',
+        'line': 'npm ci',
+      });
+      await settle();
+      expect(inPane('✓'), findsOneWidget);
+      expect(inPane('npm ci'), findsWidgets);
+      await say({
+        'id': 'autonomous/circuit',
+        'phase': 'failed',
+        'error': 'DSH_SETUP_FAILED',
+        'detail': 'setup exited 1',
+      });
+      connection.reply!.complete({
+        'ok': false,
+        'error': 'DSH_SETUP_FAILED',
+        'detail': 'setup exited 1',
+      });
+      await settle();
+      expect(inPane('✗'), findsOneWidget);
+      expect(connection.creates, isEmpty);
+
+      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await settle();
+      expect(connection.installs, hasLength(2));
+      expect(inPane('✗'), findsNothing);
+      await say({'id': 'autonomous/circuit', 'phase': 'done'});
+      connection.reply!.complete({'ok': true});
+      await settle();
+      await settle();
+      expect(connection.creates, hasLength(1));
+      expect(connection.creates.single['dsh'], 'autonomous/circuit');
+      expect(find.byType(NewHarnessForm), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 100));
+    },
+  );
+
+  testWidgets(
     'native first workspace stays quiet until New Harness is requested',
     (tester) async {
       final connection = _CreationConnection();
@@ -1042,7 +1169,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
 
       Future<void> command(String name) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> $name',
@@ -1238,7 +1365,7 @@ void main() {
 
       final search = find.byKey(const ValueKey('swarm-search-input'));
       Future<void> command(String query) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(search, '> $query');
         await tester.pump();
         await key(tester, LogicalKeyboardKey.enter);
@@ -1247,7 +1374,7 @@ void main() {
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(search, 'login claude M2');
       await tester.pump();
       await key(tester, LogicalKeyboardKey.enter);
@@ -1307,7 +1434,7 @@ void main() {
 
   for (final (label, shortcut) in [
     ('New Tab', LogicalKeyboardKey.keyT),
-    ('Open Harness', LogicalKeyboardKey.keyO),
+    ('Open Harness', LogicalKeyboardKey.keyP),
   ]) {
     testWidgets('native created $label gets terminal input without a click', (
       tester,
@@ -1336,15 +1463,17 @@ void main() {
         expect(find.byType(WorkspaceWelcome), findsOneWidget);
         expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
       }
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, 'Check retargeted keyboard input');
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final destination = app.activeSwarm;
       expect(find.text('Check retargeted keyboard input'), findsWidgets);
       expect(find.text('New Pane'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
+      expect(find.byType(NewHarnessForm), findsNothing);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(
         tester
@@ -1547,12 +1676,14 @@ void main() {
       NewHarnessController prompt() =>
           tester.widget<NewHarnessForm>(find.byType(NewHarnessForm)).controller;
       const task = 'Refine terminal workspace; keep running sessions attached';
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         task,
       );
       await key(tester, LogicalKeyboardKey.enter);
+      expect(find.byType(NewHarnessForm), findsNothing);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pump(const Duration(milliseconds: 80));
       expect(prompt().engine, 'codex');
       expect(prompt().machineId, 'm');
@@ -1623,8 +1754,7 @@ void main() {
 
       // Reopen from the same source. Escape kept the task and edited defaults
       // without creating a temporary tab.
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
-      await key(tester, LogicalKeyboardKey.enter);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pump(const Duration(milliseconds: 80));
       expect(prompt().engine, 'claude');
       expect(prompt().mode, 'plan');
@@ -1647,7 +1777,7 @@ void main() {
 
       // The just-created agent is immediately searchable and names a new tab.
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Refine terminal workspace',
@@ -1923,7 +2053,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       Future<void> command(String query) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> $query',
@@ -2014,7 +2144,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       Future<void> openStop() async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> stop',
@@ -2087,7 +2217,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       Future<void> openFork() async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> fork',
@@ -2173,7 +2303,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       Future<void> openRestart() async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> restart',

@@ -15,11 +15,13 @@ status`, then a live read where the request needs one) and the one thing named d
 questions exist for facts you don't have; they are never a script to run from the top. "Raise it to
 more memory", "make it two at once", "turn vision off", "stop it", "what's running" are about a
 model already there — read its settings, change or report that one thing, and never re-ask what the
-person already said. A request that carries its answers ("a coding model, just for me") skips every
-question those answers cover.
+person already said. Starting a model asks no setup questions: the skill picks the model, the
+longest context this machine can give (never under 64K), concurrency and vision for coding on this
+machine, and says what it picked and what it costs in memory. A person who wants something
+different says so, and that one thing changes.
 
 **Ask through a tool, not prose.** Every "ask" means the question tool with real options — the
-intent questions, the model shortlist, every go-ahead before a slow step. A question mark in a
+model shortlist when they ask for other options, every go-ahead before a slow step. A question mark in a
 paragraph is not a stop. **Talk the way Harness talks:** short, declarative, second person; say what
 is true and what happens next; no "I'd be happy to", no exclamation marks; a thing that is not set
 up is said plainly and stopped at, the way a failed build is reported.

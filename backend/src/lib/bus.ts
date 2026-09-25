@@ -288,12 +288,28 @@ export async function setAgentPresence(machineId: string, managerId: string, ttl
 }
 
 export async function getAgentPresence(machineId: string): Promise<string | null> {
+  return (await presenceValue(machineId)) ?? null
+}
+
+/** The presence key's value, or undefined when the store could not be read (logged). */
+async function presenceValue(machineId: string): Promise<string | null | undefined> {
   try {
     return await pub.get(presenceKey(machineId))
   } catch (err) {
-    logger.error('[bus] getAgentPresence failed', err, { machineId })
-    return null
+    logger.error('[bus] presence read failed', err, { machineId })
+    return undefined
   }
+}
+
+/**
+ * Whether the machine's daemon is connected: true present, false absent — and null when the presence store
+ * could not be READ, which [getAgentPresence] folds into "absent". A reader that turns absence into a
+ * verdict (the machine list's `offline`, which a daemon labels models "seems offline" by) must not also
+ * turn an outage of this store into one.
+ */
+export async function readAgentPresence(machineId: string): Promise<boolean | null> {
+  const value = await presenceValue(machineId)
+  return value === undefined ? null : !!value
 }
 
 /** One MGET for a whole machine list (the watchers seed N machines at once). Missing/failed → null. */

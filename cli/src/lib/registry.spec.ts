@@ -1197,6 +1197,19 @@ describe('agent identity: the process owns the agent, the session is bound to it
     expect(reloaded.byAgent(plain.agentId)!.agent).toBeNull()
   })
 
+  it('keeps the selected harness runtime through process binding and disk reload', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'opencode', runtimes: [{ backend: 'tmux', paneId: '%70' }],
+      cwd: '/tmp/drawing', dsh: 'acme/drawing', dshRuntime: 'harness-opencode-original' })!
+    expect(pending.dshRuntime).toBe('harness-opencode-original')
+    const bound = registry.register({ engine: 'opencode', sessionId: 'drawing-session', tmuxPane: '%70' })!.entry
+    expect(bound).toMatchObject({ engine: 'opencode', dsh: 'acme/drawing', dshRuntime: 'harness-opencode-original' })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)).toMatchObject({ engine: 'opencode', dsh: 'acme/drawing', dshRuntime: 'harness-opencode-original' })
+  })
+
   it('persists a failed launch for reconnect while keeping its terminal route', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

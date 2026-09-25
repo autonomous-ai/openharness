@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
@@ -207,13 +208,13 @@ void main() {
       }
 
       final search = find.byKey(const ValueKey('swarm-search-input'));
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await shot('01-new-pane-empty');
       await type(search, 'age');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await shot('02-new-pane-typed');
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await shot('03-new-tab-empty');
       await type(search, 'Agent 12');
       await shot('04-new-tab-typed');
@@ -382,7 +383,7 @@ void main() {
       await tester.pump();
       expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);
 
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await shot('13-command-open');
       await type(search, '> spl');
       await shot('13-command-palette');
@@ -392,7 +393,7 @@ void main() {
       await seedPreviews(app);
       final previousAppearance = appearancePrefsStore.value;
       addTearDown(() => appearancePrefsStore.value = previousAppearance);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       for (final style in PromptStyle.values) {
         appearancePrefsStore.value = previousAppearance.copyWith(
           prompt: PromptPrefs(style: style),
@@ -407,7 +408,7 @@ void main() {
       appearancePrefsStore.value = previousAppearance;
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await type(search, 'Checkout');
       await shot('14-search-preview');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -416,7 +417,7 @@ void main() {
       tester.platformDispatcher.textScaleFactorTestValue = 1.7;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       final largeBox = tester
@@ -503,7 +504,7 @@ void main() {
       seedMixedAgents(catalogApp);
       catalogApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, catalogApp);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await key(tester, LogicalKeyboardKey.slash, ctrl: true);
       await shot('25-mixed-catalog');
       await type(search, '?');
@@ -543,7 +544,7 @@ void main() {
       pendingApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, pendingApp);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -553,7 +554,7 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       tester.view.physicalSize = const Size(600, 800);
@@ -580,7 +581,7 @@ void main() {
         session.terminal.write('\x1b[36m❯\x1b[0m ');
       }
 
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await type(search, '> resize panes');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
@@ -706,7 +707,7 @@ void main() {
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
       linkApp.machineStates['m']!.localOnly = true;
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> link machine',
@@ -731,7 +732,7 @@ void main() {
       await tester.pumpAndSettle();
       tester.view.physicalSize = const Size(1280, 800);
       tester.platformDispatcher.clearTextScaleFactorTestValue();
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> link machine',
@@ -806,7 +807,7 @@ void main() {
         ..nodeOnline = true;
       managerApp.machines.add(shared);
       await mount(tester, managerApp);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> machines',
@@ -887,7 +888,7 @@ void main() {
       renameApp.adoptSessionForTest(terminal('a0', []));
       await mount(tester, renameApp);
       Future<void> renameCommand(String query) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> $query',

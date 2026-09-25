@@ -105,6 +105,7 @@ class _Notifier extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -193,8 +194,8 @@ void main() {
   /// A harness is found by typing its name into the agent search, and taken
   /// by clicking its row.
   Future<void> pick(WidgetTester tester, String label) async {
-    await openAgentSearch(tester);
-    await tester.enterText(agentSearch, label);
+    await openHarnessSearch(tester);
+    await tester.enterText(harnessSearch, label);
     await tester.pumpAndSettle();
     await tester.tap(
       find
@@ -212,8 +213,9 @@ void main() {
     await tester.pump();
   }
 
-  String engineField(WidgetTester tester) =>
-      tester.widget<AgentPicker>(find.byType(AgentPicker)).value;
+  String engineField(WidgetTester tester) => tester
+      .widget<AgentPicker>(find.byKey(const Key('new-agent-harness-picker')))
+      .value;
 
   testWidgets(
     'Circuit is one click, says what it runs on, and creates on its base engine',
@@ -229,17 +231,17 @@ void main() {
         reason: 'asked once on open, so the agent search is never stale',
       );
       await pick(tester, 'Autonomous Circuit');
-      expect(app.harnessProbes, 2);
+      expect(app.harnessProbes, 1);
       expect(engineField(tester), 'autonomous/autonomous-circuit');
       // Chosen, the bar shows it and the search is closed.
       expect(
         find.descendant(
-          of: agentBar,
+          of: harnessBar,
           matching: find.text('Autonomous Circuit'),
         ),
         findsOneWidget,
       );
-      expect(agentSearch, findsNothing);
+      expect(harnessSearch, findsNothing);
       await tester.ensureVisible(find.byKey(const Key('new-agent-advanced')));
       await tester.tap(find.byKey(const Key('new-agent-advanced')));
       await tester.pumpAndSettle();
@@ -356,6 +358,7 @@ void main() {
       isNotNull,
       reason: 'An unsupported CLI must release the form for retry or another harness.',
     );
+    await chooseHarness(tester, 'harness:coding');
     await chooseAgent(tester, 'claude');
     await tester.pumpAndSettle();
     await create(tester);
@@ -377,34 +380,30 @@ void main() {
           ),
         ]),
       );
-      await openAgentSearch(tester);
+      await openHarnessSearch(tester);
       // Nothing typed: the choice, then what the machine has — Circuit, the
       // harness it installed, ahead of Codex, an engine it has, and the
       // terminal, which every machine has — then the familiar engines, and
       // the Store last. Robot Arm, which it lacks, is not listed.
-      expect(agentRows(tester), [
-        'claude',
+      expect(harnessRows(tester), [
+        'harness:coding',
         'autonomous/autonomous-circuit',
-        'codex',
-        'terminal',
-        'opencode',
       ]);
-      await tester.enterText(agentSearch, 'robot');
+      await tester.enterText(harnessSearch, 'robot');
       await tester.pumpAndSettle();
-      expect(agentRows(tester), ['someone/robot-arm']);
+      expect(harnessRows(tester), ['someone/robot-arm']);
       expect(find.text('on Codex'), findsNothing, reason: 'backend detail');
       await tester.tap(
-        find.byKey(const ValueKey('new-agent-agent-row-someone/robot-arm')),
+        find.byKey(const ValueKey('new-agent-harness-row-someone/robot-arm')),
       );
       await tester.pumpAndSettle();
       expect(engineField(tester), 'someone/robot-arm');
-      expect(agentSearch, findsNothing, reason: 'a choice closes the search');
+      expect(harnessSearch, findsNothing, reason: 'a choice closes the search');
       // Chosen, it leads the list; what the machine has still follows.
-      await openAgentSearch(tester);
-      expect(agentRows(tester).take(3), [
+      await openHarnessSearch(tester);
+      expect(harnessRows(tester).take(2), [
         'someone/robot-arm',
         'autonomous/autonomous-circuit',
-        'claude',
       ]);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -425,11 +424,8 @@ void main() {
     // Hermes is not installed, so only having used it lists it this early.
     await app.agentPreference.remember('hermes');
     await openAgentSearch(tester);
-    expect(agentRows(tester).take(3), [
-      'claude',
-      'hermes',
-      'autonomous/autonomous-circuit',
-    ]);
+    expect(agentRows(tester).take(2), ['claude', 'hermes']);
+    expect(agentRows(tester).any((id) => id.contains('/')), isFalse);
     expect(tester.takeException(), isNull);
   });
 
@@ -447,32 +443,32 @@ void main() {
         ),
       ]),
     );
-    await openAgentSearch(tester);
-    await tester.enterText(agentSearch, 'robot');
+    await openHarnessSearch(tester);
+    await tester.enterText(harnessSearch, 'robot');
     await tester.pumpAndSettle();
-    expect(agentRows(tester), ['someone/robot-arm']);
+    expect(harnessRows(tester), ['someone/robot-arm']);
     // Return takes the highlighted row, the first match.
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(engineField(tester), 'someone/robot-arm');
-    expect(agentSearch, findsNothing);
+    expect(harnessSearch, findsNothing);
     // The words under a name count: "PCB" is what Circuit makes.
-    await openAgentSearch(tester);
-    await tester.enterText(agentSearch, 'pcb');
+    await openHarnessSearch(tester);
+    await tester.enterText(harnessSearch, 'pcb');
     await tester.pumpAndSettle();
-    expect(agentRows(tester), ['autonomous/autonomous-circuit']);
+    expect(harnessRows(tester), ['autonomous/autonomous-circuit']);
     // Nothing matching says so.
-    await tester.enterText(agentSearch, 'welding');
+    await tester.enterText(harnessSearch, 'welding');
     await tester.pumpAndSettle();
-    expect(agentRows(tester), isEmpty);
+    expect(harnessRows(tester), isEmpty);
     expect(
-      find.byKey(const Key('new-agent-agent-search-empty')),
+      find.byKey(const Key('new-agent-harness-search-empty')),
       findsOneWidget,
     );
     // Escape closes the search and keeps the choice; the dialog stays.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(agentSearch, findsNothing);
+    expect(harnessSearch, findsNothing);
     expect(find.byType(AlertDialog), findsOneWidget);
     expect(engineField(tester), 'someone/robot-arm');
     expect(tester.takeException(), isNull);

@@ -1449,7 +1449,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);
       expect(
-        tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+        tester
+            .widget<AgentPicker>(
+              find.byKey(const Key('new-agent-harness-picker')),
+            )
+            .value,
         'autonomous/blender',
       );
       expect(app.swarms.length, count + 1);

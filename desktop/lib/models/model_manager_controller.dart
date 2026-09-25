@@ -94,10 +94,15 @@ class ModelManagerController extends ChangeNotifier {
     if (_started || _disposed) return;
     _started = true;
     app.addListener(_observe);
+    app.foreground.addListener(_foregroundChanged);
+    app.gridPictures.addListener(_pictureChanged);
     unawaited(_loadPreferences());
     _observe();
     if (poll) {
       _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+        // A minimised or background app reads nothing, busy or not: the daemon owns the operation
+        // either way, and the one refresh on return ([_foregroundChanged]) catches up.
+        if (!app.inForeground) return;
         if (busy ||
             _panelVisible ||
             _lastLocalRead == null ||
@@ -155,8 +160,30 @@ class ModelManagerController extends ChangeNotifier {
         !_autoPrepared) {
       _autoPrepared = true;
       unawaited(prepare());
-      unawaited(refresh());
+      // In the background the first read waits for the app to come back ([_foregroundChanged]).
+      if (app.inForeground) unawaited(refresh());
     }
+    _changed();
+  }
+
+  /// Back in front of the person: exactly one refresh, whatever the background skipped.
+  void _foregroundChanged() {
+    if (_disposed || !app.inForeground) return;
+    final owner = machine;
+    if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
+      return;
+    }
+    unawaited(refresh());
+  }
+
+  /// Another surface's read, or the daemon's `grid_models_changed` push, changed the app's picture
+  /// of this machine's grids: take it, with no read of our own.
+  void _pictureChanged() {
+    final owner = machine;
+    if (_disposed || owner == null) return;
+    final picture = app.gridPictures[owner.machine.machineId];
+    if (picture == null || identical(picture, models)) return;
+    models = picture;
     _changed();
   }
 
@@ -330,9 +357,14 @@ class ModelManagerController extends ChangeNotifier {
             const Duration(seconds: 20);
     await Future.wait([
       if (readShared)
-        app.gridModels(owner.machine.machineId).then((answer) {
+        app.refreshGridModels(owner.machine.machineId).then((answer) {
           if (_current(owner)) {
-            models = answer;
+            // The panel says so when ITS read could not reach the machine ("Shared models are
+            // unavailable." with Try again) — that failure is kept out of the shared picture, so no
+            // other surface blanks. Answered, it shows the picture: a push that landed meanwhile is newer.
+            models = answer.reachable
+                ? app.gridPictures[owner.machine.machineId] ?? answer
+                : answer;
             _lastModelsRead = DateTime.now();
           }
         }),
@@ -344,7 +376,11 @@ class ModelManagerController extends ChangeNotifier {
             refresh: force,
           );
           if (!_current(owner) || revision != _actionRevision) return;
-          error = answer['error'] as String?;
+          // `notice` is a sentence BESIDE the list. A reply carrying `error` never reaches here:
+          // the RPC layer fails it whole and keeps nothing, which is how a daemon that sent its
+          // warning in `error` once emptied this list. `error` is still read for a daemon too old
+          // to send models at all.
+          error = (answer['notice'] ?? answer['error']) as String?;
           if (answer['models'] is! List) {
             inventoryAvailable = false;
             return;
@@ -384,6 +420,23 @@ class ModelManagerController extends ChangeNotifier {
       scanning = false;
       _changed();
     }
+  }
+
+  /// "Show models" on a resting shared section: ask this computer's daemon to wake [sectionName]
+  /// (see [AppNotifier.wakeGridModels]) and show its answer — the section starting up — at once.
+  /// What follows lands through the app's picture, as every other change does.
+  Future<void> wake(String sectionName) async {
+    final owner = machine;
+    if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
+      return;
+    }
+    final answer = await app.wakeGridModels(
+      owner.machine.machineId,
+      sectionName,
+    );
+    if (!_current(owner) || !answer.reachable) return;
+    models = app.gridPictures[owner.machine.machineId] ?? answer;
+    _changed();
   }
 
   Future<void> toggle(LocalModel model) async {
@@ -427,7 +480,11 @@ class ModelManagerController extends ChangeNotifier {
     _disposed = true;
     _apis?.dispose();
     _timer?.cancel();
-    if (_started) app.removeListener(_observe);
+    if (_started) {
+      app.removeListener(_observe);
+      app.foreground.removeListener(_foregroundChanged);
+      app.gridPictures.removeListener(_pictureChanged);
+    }
     super.dispose();
   }
 }

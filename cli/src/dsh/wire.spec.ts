@@ -1,3 +1,4 @@
+import { dshSupportedEngines } from './manifest.js'
 // The DSH wire contract (store/spec/README.md § Wire): what dsh_list rows say, and what dsh_install and
 // dsh_remove accept from a payload and answer.
 import { describe, expect, it, vi } from 'vitest'
@@ -15,6 +16,13 @@ const installed = (manifest: InstalledDsh['manifest'], linked = false): Installe
 })
 
 describe('dshListRows', () => {
+  it('advertises installed compatibility ahead of newer catalog compatibility', () => {
+    const manifest = { spec: 1 as const, id: 'acme/thing', name: 'Thing', engine: 'claude' as const }
+    const catalog: DshRegistryEntry[] = [{ ...manifest, repo: 'https://example.com/thing', engines: ['claude', 'codex'] }]
+    expect(dshListRows([], catalog)[0].engines).toEqual(dshSupportedEngines(manifest))
+    expect(dshListRows([installed(manifest)], catalog)[0].engines).toEqual(dshSupportedEngines(manifest))
+    expect(dshListRows([installed({ ...manifest, agent: { env: { DSH_SUPPORTED_ENGINES: 'claude,codex' } } })], catalog)[0].engines).toEqual(dshSupportedEngines(manifest))
+  })
   const registry: DshRegistryEntry[] = [
     {
       id: 'autonomous/typst', name: 'Typst', category: 'Documents', author: 'Autonomous', description: 'Typeset.', engine: 'claude',
@@ -33,7 +41,7 @@ describe('dshListRows', () => {
     ], registry)
     expect(rows).toEqual([
       {
-        id: 'autonomous/typst', kind: 'agent', name: 'Typst (local)', description: null, category: null, author: null, engine: 'claude',
+        id: 'autonomous/typst', kind: 'agent', name: 'Typst (local)', description: null, category: null, author: null, engine: 'claude', engines: dshSupportedEngines({ engine: 'claude' }),
         installedCommit: null, availableCommit: null, updateAvailable: false,
         installed: true, linked: true, viewer: true, viewerUse: 'autonomous/doc-viewer', tier: 2,
         verified: true, repo: `${HARNESS_MONOREPO}/tree/main/store/agents/typst`, homepage: 'https://typst.example.com',
@@ -41,18 +49,18 @@ describe('dshListRows', () => {
         examples: [{ prompt: 'A spec sheet for an M3 standoff.', image: 'https://example.com/spec.jpg', caption: 'Spec sheet · PDF' }],
       },
       {
-        id: 'acme/private', kind: 'viewer', name: 'Private', description: null, category: null, author: null, engine: null,
+        id: 'acme/private', kind: 'viewer', name: 'Private', description: null, category: null, author: null, engine: null, engines: [],
         installedCommit: null, availableCommit: null, updateAvailable: false,
         installed: true, linked: false, viewer: true, viewerUse: null, tier: 2,
         verified: false, repo: null, homepage: null, upstream: null, license: null, tagline: null, screenshots: [], examples: [],
       },
       {
-        id: 'autonomous/doc-viewer', kind: 'viewer', name: 'Doc Viewer', description: null, category: null, author: null, engine: null,
+        id: 'autonomous/doc-viewer', kind: 'viewer', name: 'Doc Viewer', description: null, category: null, author: null, engine: null, engines: [],
         installed: false, linked: false, viewer: true, viewerUse: null, tier: 2,
         verified: true, repo: `${HARNESS_MONOREPO}/tree/main/store/viewers/doc-viewer`, homepage: null, upstream: null, license: null, tagline: null, screenshots: [], examples: [],
       },
       {
-        id: 'acme/bare', kind: 'agent', name: 'Bare', description: null, category: null, author: null, engine: 'codex',
+        id: 'acme/bare', kind: 'agent', name: 'Bare', description: null, category: null, author: null, engine: 'codex', engines: dshSupportedEngines({ engine: 'codex' }),
         installed: false, linked: false, viewer: false, viewerUse: null, tier: 0,
         verified: false, repo: 'https://example.com/bare.git', homepage: null, upstream: null, license: null, tagline: null, screenshots: [], examples: [],
       },

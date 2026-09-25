@@ -282,6 +282,8 @@ export interface CableHost {
   listModels(agentId: string): Promise<string[]>
   /** One agent's last turn summaries, newest first — what a reattached dial needs to redraw its tiles. */
   recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string }>>
+  /** What the window still has unread, newest first — replayed to a dial that has just attached. */
+  listUnread(): Array<{ agentId: string; machineId: string; question: boolean; text: string }>
   /**
    * The image to offer a dial running `runningVersion`, or null for "nothing to do" — which covers a
    * dial that is current, a dev build that must not be touched, and an unreachable manifest.
@@ -1261,6 +1263,9 @@ export class CableSession {
       this.restoring = false
     }
     await this.pushRestores()
+    // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
+    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
+    await this.replaceNotifications(this.host.listUnread())
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -1407,9 +1412,63 @@ export class CableSession {
   private whoIs(agentId: string): { name: string; engine: string; machine: string } {
     return this.host.describe(agentId) ?? { name: '', engine: '', machine: '' }
   }
+  /**
+   * Replace the dial's whole drawer with what the window still has unread.
+   *
+   * Sent once per attach, because that is the one moment the dial is known to have nothing: its rows
+   * live in RAM and an OTA, a replug or a flash takes them. Measured on a flash: a turn ended at
+   * 17:46:19, the dial came back at 17:46:26, a question arrived at 17:46:28 — and the pill read 1
+   * against the window's 2 from then on, with nothing to bring them back together.
+   *
+   * The window sends ids and kinds; the name, machine and recap are filled in HERE, from what this
+   * daemon already knows, so those never have a second source that can disagree.
+   */
+  async replaceNotifications(
+    items: Array<{ agentId: string; machineId: string; question: boolean; text: string }>,
+  ): Promise<void> {
+    const rows = await Promise.all(items.slice(0, 8).map(async (item) => {
+      const who = this.whoIs(item.agentId)
+      // A QUESTION BRINGS ITS OWN WORDS; a finished turn takes the recap this daemon summarised. The
+      // dial cannot supply either after a reboot, and a row with neither renders as the word its type
+      // used to assume — "done", on a question nobody has answered.
+      let summary = item.text
+      if (!item.question && !summary) {
+        try { summary = (await this.host.recentSummaries(item.agentId))[0]?.recap ?? '' } catch { summary = '' }
+      }
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary, question: item.question }
+    }))
+    await this.send({ t: 'notif.replace', items: rows })
+  }
+
+  /**
+   * A harness the window has now looked at — drop its drawer row on the dial.
+   *
+   * The dial's own gesture is a tap, which already reaches the window as
+   * `agent.open`. This is the other direction, and without it the two counts
+   * separate the moment somebody switches to the tab a notification was about.
+   *
+   * Fire and forget, like every other card: a dial that predates the message
+   * counts it as unknown and drops it, which is the behaviour it has today.
+   */
+  async agentSeen(agentId: string): Promise<void> {
+    if (!agentId) return
+    await this.send({ t: 'notif.seen', agentId })
+  }
   async turnError(agentId: string, message: string): Promise<void> {
     await this.send({ t: 'turn.error', agentId, message })
   }
+  /**
+   * An agent stopped to ask.
+   *
+   * NO `quiet` HERE, and the reason is that a question is a job rather than news. A summary's `quiet`
+   * asks "is somebody looking at this right now" and that is the whole of what a finished turn needed.
+   * A question outlives the glance: it is answered or it is not, and until it is answered it is still
+   * owed (owner, 2026-09-24).
+   *
+   * Asking it anyway was self-defeating besides. Showing a question asks the window to bring that agent
+   * forward, so by the time anyone could answer "is it on screen" the answer was yes — every question
+   * came through quiet, no row was ever recorded, and looking away later left nothing behind.
+   */
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }

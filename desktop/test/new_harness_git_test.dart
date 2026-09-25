@@ -1076,7 +1076,7 @@ void main() {
       );
       await tester.pump();
       await openLaunchRow(tester, 'start');
-      expect(find.text('New Harness').hitTestable(), findsOneWidget);
+      expect(find.text('[ New Harness ]').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
       if (renderDir != null) {
         await expectLater(
@@ -1104,6 +1104,9 @@ void main() {
       find.byKey(const ValueKey('new-harness-field-branch')),
       findsOneWidget,
     );
+    // Branch no longer lives behind Advanced, so reaching it opened nothing;
+    // Worktree still does, and is opened here to be checked.
+    await openLaunchRow(tester, 'advanced');
     expect(
       find.byKey(const ValueKey('new-harness-field-worktree')),
       findsOneWidget,

@@ -1470,6 +1470,9 @@ describe('BackendSocket outbound queue', () => {
 })
 
 describe('desk_changed relay', () => {
+  // Other suites can leave closed sockets in the shared mock inventory. A
+  // shuffled run must send to this test's connection, not an earlier one.
+  beforeEach(() => { wsMock.instances.length = 0 })
   afterEach(() => {
     wsMock.instances.length = 0
     vi.restoreAllMocks()
@@ -2255,6 +2258,24 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     await socket.stop()
   })
 
+  it("keeps the machine's own name, for the models it serves — a rename updates it, a frame without one does not", async () => {
+    const socket = new BackendSocket('token')
+    const namesSeen: Array<string | null> = []
+    socket.onMachineMeta = (n) => { namesSeen.push(n) }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    expect(socket.machineName()).toBeNull()
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: ' M2 ', gridName: 'someone-7f3a91c4' } } })
+    await vi.waitFor(() => expect(socket.machineName()).toBe('M2'))
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'Studio' } } })
+    await vi.waitFor(() => expect(socket.machineName()).toBe('Studio'))
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { gridName: 'someone-7f3a91c4' } } })
+    await vi.waitFor(() => expect(namesSeen).toHaveLength(3))
+    expect(socket.machineName()).toBe('Studio')
+    await socket.stop()
+  })
+
   it('refuses a machine_meta that arrived over the LOCAL socket — only the backend may name the grid', async () => {
     const socket = new BackendSocket('token')
     const namesSeen: Array<string | null> = []
@@ -2412,6 +2433,28 @@ describe('machines_changed relay', () => {
     ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 42, extra: 'x' } } })
     await vi.waitFor(() => expect(frames).toContainEqual({ type: 'machines_changed', payload: { reason: 'updated' } }))
     await socket.unregisterLocalClient('local:machines')
+    await socket.stop()
+  })
+})
+
+describe('local terminal focus', () => {
+  it('passes a registered window\'s focus to its terminals, and ignores a connection it never registered', async () => {
+    const socket = new BackendSocket('token')
+    const setFocusedAgent = vi.fn()
+    socket.setTerminalStreamManager({
+      setFocusedAgent,
+      closeConnection: vi.fn(async () => undefined),
+      closeConnectionsWhere: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    } as unknown as TerminalStreamManager)
+    socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
+
+    socket.setLocalTerminalFocus('local:window', 'agent-1')
+    socket.setLocalTerminalFocus('local:window', null)
+    socket.setLocalTerminalFocus('local:stranger', 'agent-1')
+    expect(setFocusedAgent.mock.calls).toEqual([['local:window', 'agent-1'], ['local:window', null]])
+
+    await socket.unregisterLocalClient('local:window')
     await socket.stop()
   })
 })

@@ -151,6 +151,14 @@ class AgentAlerts extends ChangeNotifier {
 /// until somebody goes looking. Somebody who turned the noisy halves off still
 /// wants the window to be able to say which agent moved while they were away.
 class AgentUnread extends ChangeNotifier {
+  /// As many agents as the dial's drawer holds rows (`NOTIF_MAX`), and dropped
+  /// the same way: oldest first.
+  ///
+  /// A window with no ceiling and a dial with one are two different numbers the
+  /// moment a ninth agent has news, whatever else agrees. Dart's map keeps
+  /// insertion order, and [mark] re-inserts, so the first key is the oldest.
+  static const capacity = 8;
+
   final _unread = <String, AlertKind>{};
 
   static String keyFor(String machineId, String agentId) =>
@@ -163,6 +171,22 @@ class AgentUnread extends ChangeNotifier {
 
   bool get isEmpty => _unread.isEmpty;
 
+  /// Every mark, NEWEST FIRST — the order the dial's drawer keeps.
+  ///
+  /// The key is `machineId/agentId`; [keyFor] made it and this is the one place
+  /// that has to take it apart, so the split lives here rather than at the call
+  /// site. A machine id never contains a slash (it is hex or a uuid).
+  List<({String machineId, String agentId, AlertKind kind})> get newestFirst =>
+      [
+        for (final key in _unread.keys.toList().reversed)
+          if (key.indexOf('/') > 0)
+            (
+              machineId: key.substring(0, key.indexOf('/')),
+              agentId: key.substring(key.indexOf('/') + 1),
+              kind: _unread[key]!,
+            ),
+      ];
+
   /// What this agent's mark says, or null when it has none.
   AlertKind? kindFor(String machineId, String agentId) =>
       _unread[keyFor(machineId, agentId)];
@@ -173,7 +197,16 @@ class AgentUnread extends ChangeNotifier {
   void mark(String machineId, String agentId, AlertKind kind) {
     final key = keyFor(machineId, agentId);
     if (_unread[key] == kind) return;
-    _unread[key] = kind;
+    // Re-inserted, not updated in place: an agent that moved is the newest
+    // again, which is what makes the first key the oldest for the eviction
+    // below. `notif_push` on the dial does exactly this — it lifts an existing
+    // row out before putting it back on top.
+    _unread
+      ..remove(key)
+      ..[key] = kind;
+    while (_unread.length > capacity) {
+      _unread.remove(_unread.keys.first);
+    }
     notifyListeners();
   }
 

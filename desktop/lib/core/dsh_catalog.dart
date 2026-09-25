@@ -68,6 +68,7 @@ class DshEntry {
     required this.id,
     required this.name,
     required this.engine,
+    this.engines = const [],
     this.description,
     this.category,
     this.installed = false,
@@ -95,8 +96,10 @@ class DshEntry {
   /// The tile's name, as the manifest or the registry spells it.
   final String name;
 
-  /// The base engine the harness runs on: what `agent_create` must be sent.
+  /// Default engine. Older daemons only advertise this one engine.
   final String engine;
+  final List<String> engines;
+  List<String> get supportedEngines => engines.isEmpty ? [engine] : engines;
   final String? description;
 
   /// The kind of thing it makes, in a word or two — the picker's second line.
@@ -191,6 +194,15 @@ class DshEntry {
           ? name.trim().substring(0, name.trim().length.clamp(0, 40))
           : id.substring(id.indexOf('/') + 1),
       engine: engine is String ? engine : '',
+      engines: raw['engines'] is List
+          ? (raw['engines'] as List)
+                .whereType<String>()
+                .where(
+                  (id) => id.isNotEmpty && id.length <= 64 && !id.contains('/'),
+                )
+                .toSet()
+                .toList(growable: false)
+          : const [],
       kind: kind,
       description: description is String && description.trim().isNotEmpty
           ? description.trim().substring(

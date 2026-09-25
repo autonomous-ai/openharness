@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/box_chrome.dart';
+import 'package:harness/terminal/terminal_theme.dart';
+import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/mixed_agents.dart';
-import 'support/launch_menu.dart' show harnessChoicesActive;
+import 'support/launch_menu.dart'
+    show harnessChoicesActive, focusLaunchRow, openLaunchRow;
 import 'swarm_state_test.dart' show createApp;
 
 /// The setup form is driven by six keys and nothing else, so every one of
@@ -55,6 +58,7 @@ void main() {
     WidgetTester tester, {
     bool created = false,
     String? engine,
+    String focus = 'project',
   }) async {
     final app = createApp(connectionForTest: (_) => _Git());
     seedMixedAgents(app);
@@ -88,6 +92,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await focusLaunchRow(tester, focus);
     return box;
   }
 
@@ -103,33 +108,39 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('shared setup fields stay available for every agent', (
+  testWidgets('core fields stay visible and advanced fields expand', (
     tester,
   ) async {
     await mount(tester);
     for (final label in [
-      'Project',
+      'Harness',
       'Agent',
       'Machine',
+      'Project',
+      // Branch belongs to Project, so it is a core field, not an advanced one.
       'Branch',
-      'Worktree',
-      'Approvals',
+      'Advanced',
     ]) {
-      expect(find.text(label), findsOneWidget, reason: '$label must not go');
+      expect(find.text(label), findsOneWidget);
+    }
+    expect(find.text('Worktree'), findsNothing);
+    await openLaunchRow(tester, 'advanced');
+    for (final label in ['Worktree', 'Approvals']) {
+      expect(find.text(label), findsOneWidget);
     }
   });
 
   testWidgets('down and up walk the rows and wrap', (tester) async {
-    final box = await mount(tester);
-    expect(box.field, NewHarnessField.projectMenu);
+    final box = await mount(tester, focus: 'harness');
+    expect(box.field, NewHarnessField.harness);
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(box.field, NewHarnessField.agent);
     await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.machine);
+    expect(box.field, NewHarnessField.model);
     await press(tester, LogicalKeyboardKey.arrowUp);
     expect(box.field, NewHarnessField.agent);
     await press(tester, LogicalKeyboardKey.arrowUp);
-    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.field, NewHarnessField.harness);
   });
 
   // Page Up/Down are where stepping a value in place lives — the arrows are
@@ -138,7 +149,7 @@ void main() {
   testWidgets('page down walks every agent instead of bouncing between two', (
     tester,
   ) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(box.field, NewHarnessField.agent);
     final seen = <String>{box.engine};
@@ -154,7 +165,7 @@ void main() {
   });
 
   testWidgets('the page keys step opposite ways and return', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     final first = box.engine;
     await press(tester, LogicalKeyboardKey.pageDown);
@@ -178,7 +189,7 @@ void main() {
   testWidgets('right hands the keys to the choices without taking a value', (
     tester,
   ) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(box.field, NewHarnessField.agent);
     final engine = box.engine;
@@ -195,7 +206,7 @@ void main() {
   });
 
   testWidgets('left gives the keys back to the rows', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(harnessChoicesActive(tester), isTrue);
@@ -209,11 +220,12 @@ void main() {
       reason: 'The choices stay on screen, they just stop holding the keys.',
     );
     await press(tester, LogicalKeyboardKey.arrowDown);
-    expect(box.field, NewHarnessField.machine, reason: 'Rows move again.');
+    // Model sits between Agent and Machine on this form.
+    expect(box.field, NewHarnessField.model, reason: 'Rows move again.');
   });
 
   testWidgets('left edits the search text before it leaves it', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     await type(tester, 'cod');
     expect(harnessChoicesActive(tester), isTrue);
@@ -223,7 +235,7 @@ void main() {
   });
 
   testWidgets('left on the rows changes nothing', (tester) async {
-    final box = await mount(tester);
+    final box = await mount(tester, focus: 'harness');
     await press(tester, LogicalKeyboardKey.arrowDown);
     final engine = box.engine;
     await press(tester, LogicalKeyboardKey.arrowLeft);
@@ -236,9 +248,7 @@ void main() {
   // browse, so there is no column to go to.
   testWidgets('worktree flips on its own row, without a list', (tester) async {
     final box = await mount(tester);
-    for (var i = 0; i < 4; i++) {
-      await press(tester, LogicalKeyboardKey.arrowDown);
-    }
+    await focusLaunchRow(tester, 'worktree');
     final was = box.worktree;
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(box.worktree, !was);
@@ -388,12 +398,16 @@ void main() {
   });
 
   testWidgets('Tab walks the rows and never escapes the form', (tester) async {
-    final box = await mount(tester);
-    for (var i = 0; i < 3; i++) {
+    final box = await mount(tester, focus: 'harness');
+    for (var i = 0; i < 4; i++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await tester.pumpAndSettle();
     }
-    expect(box.field, NewHarnessField.branch, reason: 'Tab walks the rows.');
+    expect(
+      box.field,
+      NewHarnessField.projectMenu,
+      reason: 'Tab walks the rows.',
+    );
     // The real bug: traversal moved focus out and the form went deaf. Up
     // rather than down, since the row under Branch edits no field at all.
     await press(tester, LogicalKeyboardKey.arrowUp);
@@ -495,7 +509,7 @@ void main() {
     tester,
   ) async {
     final box = await mount(tester);
-    expect(find.text('New Harness'), findsOneWidget);
+    expect(find.text('[ New Harness ]'), findsOneWidget);
     expect(
       find.text('Open Folder'),
       findsOneWidget,
@@ -516,14 +530,17 @@ void main() {
     // Escape hands the arrows back to the rows; the list stays on screen.
     await press(tester, LogicalKeyboardKey.escape);
     expect(find.text('Open Folder'), findsOneWidget);
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    await focusLaunchRow(tester, 'agent');
     expect(box.field, NewHarnessField.agent);
   });
 
   testWidgets('the selection bar marks which column has the keys', (
     tester,
   ) async {
-    final bright = Colors.white.withValues(alpha: .12);
+    final bright = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).selection;
     int barsOn() => tester
         .widgetList<Container>(find.byType(Container))
         .where((box) => box.color == bright)
@@ -558,7 +575,12 @@ void main() {
 
   testWidgets('the list dims while the items hold the keys', (tester) async {
     final box = await mount(tester);
-    // An unselected option stays quieter than the active choice.
+    final foreground = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).foreground;
+    final faint = foreground.withValues(alpha: .54);
+    // The inactive column stays quieter than the one receiving input.
     final other = box.options
         .firstWhere((row) => !row.synthetic && !identical(row, box.selected))
         .title;
@@ -567,23 +589,23 @@ void main() {
 
     expect(
       inkOf(other),
-      kBoxFaint,
+      faint,
       reason: 'The column the arrows are not in is grey.',
     );
     await press(tester, LogicalKeyboardKey.enter);
     expect(
       inkOf(other),
-      Colors.white70,
+      foreground,
       reason: 'Handing the arrows over brings the column up.',
     );
     await press(tester, LogicalKeyboardKey.escape);
-    expect(inkOf(other), kBoxFaint);
+    expect(inkOf(other), faint);
   });
 
   testWidgets('the right column follows the focused row', (tester) async {
     await mount(tester);
     expect(find.text('Open Folder'), findsOneWidget);
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    await focusLaunchRow(tester, 'agent');
     expect(
       find.text('Open Folder'),
       findsNothing,
@@ -596,7 +618,7 @@ void main() {
     tester,
   ) async {
     await mount(tester);
-    expect(find.text('New Harness'), findsOneWidget);
+    expect(find.text('[ New Harness ]'), findsOneWidget);
     expect(
       tester
           .widget<Semantics>(
@@ -633,9 +655,7 @@ void main() {
     expect(input().showCursor, isFalse);
     // Worktree is a boolean: no list, so no prompt either.
     await press(tester, LogicalKeyboardKey.escape);
-    for (var i = 0; i < 4; i++) {
-      await press(tester, LogicalKeyboardKey.arrowDown);
-    }
+    await focusLaunchRow(tester, 'worktree');
     expect(find.textContaining('Search '), findsNothing);
   });
 
@@ -694,6 +714,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await focusLaunchRow(tester, 'project');
     await type(tester, 'harness');
     // "Open Folder" in the menu opens a path prompt; the chooser itself is
     // a row inside THAT list, which must be on screen before anything typed.
@@ -749,9 +770,7 @@ void main() {
     tester,
   ) async {
     final box = await mount(tester);
-    for (var i = 0; i < 3; i++) {
-      await press(tester, LogicalKeyboardKey.arrowDown);
-    }
+    await focusLaunchRow(tester, 'branch');
     expect(box.field, NewHarnessField.branch);
     await type(tester, 'spike');
     await highlight(
@@ -769,11 +788,9 @@ void main() {
 
   testWidgets('the worktree row reads as a question', (tester) async {
     final box = await mount(tester);
+    await focusLaunchRow(tester, 'worktree');
     expect(find.text('Worktree'), findsOneWidget);
     expect(find.text('Yes'), findsOneWidget);
-    for (var i = 0; i < 4; i++) {
-      await press(tester, LogicalKeyboardKey.arrowDown);
-    }
     await press(tester, LogicalKeyboardKey.arrowRight);
     expect(box.worktree, isFalse);
     expect(find.text('No'), findsOneWidget);
@@ -783,8 +800,9 @@ void main() {
     tester,
   ) async {
     final box = await mount(tester, engine: 'codex');
+    await openLaunchRow(tester, 'advanced');
     expect(find.text('Profile'), findsOneWidget);
-    await press(tester, LogicalKeyboardKey.arrowDown);
+    await focusLaunchRow(tester, 'agent');
     await type(tester, 'claude');
     expect(box.engine, 'codex');
     expect(find.text('Profile'), findsOneWidget);
@@ -792,9 +810,7 @@ void main() {
     expect(box.engine, 'claude');
     expect(find.text('Profile'), findsNothing);
 
-    for (var i = 0; i < 4; i++) {
-      await press(tester, LogicalKeyboardKey.arrowDown);
-    }
+    await focusLaunchRow(tester, 'approvals');
     expect(box.field, NewHarnessField.mode);
     await press(tester, LogicalKeyboardKey.tab);
     expect(
@@ -817,9 +833,7 @@ void main() {
       isTrue,
     );
 
-    for (var i = 0; i < 4; i++) {
-      await press(tester, LogicalKeyboardKey.arrowUp);
-    }
+    await focusLaunchRow(tester, 'agent');
     await type(tester, 'codex');
     expect(find.text('Profile'), findsNothing);
     await press(tester, LogicalKeyboardKey.enter);

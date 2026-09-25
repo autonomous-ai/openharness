@@ -40,9 +40,7 @@ void main() {
           if (native) {
             await configured.native(tester, 'store');
           } else {
-            final button = find.byKey(const ValueKey('swarm-store-button'));
-            expect(tester.getRect(button).bottom, lessThanOrEqualTo(40));
-            await tester.tap(button);
+            await key(tester, LogicalKeyboardKey.keyS, cmd: true);
           }
           await tester.pump();
         }
@@ -57,7 +55,7 @@ void main() {
         await openStore();
         expect(app.activeSwarm, same(store));
         expect(app.swarms, hasLength(2));
-        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
         expect(app.activeSwarm, same(work));
         expect(tester.state(view), same(terminalState));
         await key(tester, LogicalKeyboardKey.arrowLeft);
@@ -84,7 +82,7 @@ void main() {
       'browse harnesses',
       'extensions',
     ]) {
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> $query',
@@ -135,7 +133,7 @@ void main() {
         final box = tester
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;
-        expect(box.engine, 'studio/arm');
+        expect(box.harnessId, 'studio/arm');
         expect(box.task, prompt ?? '');
         expect(box.projectLabel, startsWith('~/harnesses/robot-studio-'));
         expect(box.projectFolderRequest!.isGenerated, isTrue);
@@ -152,7 +150,7 @@ void main() {
     );
   }
 
-  testWidgets('browsing from agent choices retains the task and defaults', (
+  testWidgets('browsing from harness choices retains the task and defaults', (
     tester,
   ) async {
     newHarnessOpensInBox = true;
@@ -174,11 +172,11 @@ void main() {
     box.task = 'Finish the login feature';
     await tester.pump();
     final draft = box.draft;
-    await openLaunchRow(tester, 'agent');
+    await openLaunchRow(tester, 'harness');
     await typeHarnessQuery(tester, 'a harness not in this catalog');
     await tester.pump();
     expect(box.selected?.id, NewHarnessController.storeId);
-    expect(find.text('Browse more harnesses…'), findsOneWidget);
+    expect(find.text('Browse Harness Store…'), findsOneWidget);
     await acceptSetupOrSearch(tester);
     expect(app.activeSwarm.isStore, isTrue);
     expect(find.byType(NewHarnessForm), findsNothing);

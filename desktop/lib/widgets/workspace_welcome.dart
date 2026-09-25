@@ -4,6 +4,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/harness_background.dart';
 import 'swarm_wallpaper.dart';
+import 'terminal_text_action.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
@@ -17,8 +18,7 @@ class WorkspaceWelcome extends StatelessWidget {
 
   static const _actions = [
     ('agent.new', 'New Harness', 'to start a new harness'),
-    ('agent.open', 'Open Harness', 'to open a harness'),
-    ('machines.list', 'Machines', 'to connect your machines'),
+    ('harnesses.list', 'Open Harness', 'to open a harness'),
     ('app.store', 'Harness Store', 'to browse the harness store'),
   ];
 
@@ -82,6 +82,7 @@ class WorkspaceWelcome extends StatelessWidget {
         .map((row) => widthOf(row.description))
         .reduce((a, b) => a > b ? a : b);
     final line = MediaQuery.textScalerOf(context).scale(style.fontSize!) * 1.5;
+    final footerInset = line + 52;
     return Material(
       key: const ValueKey('workspace-welcome'),
       color: grid.AppPalette.swarmWelcome,
@@ -93,72 +94,78 @@ class WorkspaceWelcome extends StatelessWidget {
             child: SwarmWallpaper(background: background),
           ),
           LayoutBuilder(
-            builder: (context, constraints) => SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: (constraints.maxHeight - 48).clamp(
-                    0,
-                    double.infinity,
+            // Keep the text centered when it fits, but let large text scroll
+            // above the fixed Customize button rather than underneath it.
+            builder: (context, constraints) => Padding(
+              padding: EdgeInsets.only(bottom: footerInset),
+              child: SingleChildScrollView(
+                key: const ValueKey('welcome-scroll'),
+                padding: EdgeInsets.fromLTRB(24, footerInset + 24, 24, 24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: (constraints.maxHeight - footerInset * 2 - 48)
+                        .clamp(0, double.infinity),
                   ),
-                ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: prefixWidth + keyWidth + descriptionWidth,
-                    ),
-                    child: DefaultTextStyle(
-                      style: style,
-                      textAlign: TextAlign.center,
-                      child: Column(
-                        key: const ValueKey('workspace-welcome-text'),
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('HARNESS'),
-                          SizedBox(height: line),
-                          const Text('Follow your curiosity.'),
-                          SizedBox(height: line),
-                          for (final row in rows)
-                            TextButton(
-                              key: ValueKey('welcome-${row.command}'),
-                              onPressed: () => onCommand(row.command),
-                              style: TextButton.styleFrom(
-                                foregroundColor: ink,
-                                textStyle: style,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 2,
-                                ),
-                                minimumSize: Size.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                shape: const RoundedRectangleBorder(),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  SizedBox(
-                                    width: prefixWidth,
-                                    child: Text(
-                                      row.hint == null ? 'click' : 'press',
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: keyWidth,
-                                    child: Text(
-                                      row.hint ?? row.label,
-                                      style: TextStyle(color: accent),
-                                      textAlign: TextAlign.left,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      row.description,
-                                      textAlign: TextAlign.left,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: prefixWidth + keyWidth + descriptionWidth,
+                      ),
+                      child: DefaultTextStyle(
+                        style: style,
+                        textAlign: TextAlign.center,
+                        child: Column(
+                          key: const ValueKey('workspace-welcome-text'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Follow your curiosity.',
+                              key: const ValueKey('welcome-tagline'),
                             ),
-                        ],
+                            SizedBox(height: line),
+                            for (final row in rows)
+                              TextButton(
+                                key: ValueKey('welcome-${row.command}'),
+                                onPressed: () => onCommand(row.command),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: ink,
+                                  textStyle: style,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 2,
+                                  ),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  shape: const RoundedRectangleBorder(),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: prefixWidth,
+                                      child: Text(
+                                        row.hint == null ? 'click' : 'press',
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: keyWidth,
+                                      child: Text(
+                                        row.hint ?? row.label,
+                                        style: TextStyle(color: accent),
+                                        textAlign: TextAlign.left,
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        row.description,
+                                        textAlign: TextAlign.left,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -169,23 +176,11 @@ class WorkspaceWelcome extends StatelessWidget {
           Positioned(
             right: 20,
             bottom: 16,
-            child: TextButton.icon(
+            child: TerminalTextAction(
               key: const ValueKey('welcome-customize'),
               onPressed: () => onCommand('app.customize'),
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              label: const Text('Customize Harness'),
-              style: TextButton.styleFrom(
-                foregroundColor: ink,
-                backgroundColor: hasArtwork
-                    ? const Color(0xcc242424)
-                    : grid.AppPalette.swarmTabBar,
-                textStyle: terminalTextStyle(),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                shape: const StadiumBorder(),
-              ),
+              label: 'Customize Harness',
+              overArtwork: hasArtwork,
             ),
           ),
         ],

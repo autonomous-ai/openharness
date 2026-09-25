@@ -1,3 +1,4 @@
+import { prepareHarnessLaunch } from './runtime.js'
 // Explicit opt-in: these checks run the real package installers and native local simulations.
 // All index entries and workspaces stay in disposable directories.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -55,8 +56,9 @@ describe.runIf(process.env.HARNESS_STUDIO_INTEGRATION === '1')('specialist studi
     mkdirSync(workspace)
     const materialized = await materializeWorkspace(result.installed, workspace)
     expect(materialized.warnings).toEqual([])
-    expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8')).toContain(`autonomous/${name}`)
-    expect(lstatSync(join(workspace, '.agents/skills', name)).isSymbolicLink()).toBe(true)
+    const launch = prepareHarnessLaunch(result.installed, workspace, 'codex', name)
+    expect(readFileSync(launch.env.HARNESS_CONTEXT_FILE!, 'utf8')).toContain(`autonomous/${name}`)
+    expect(lstatSync(join(launch.env.HARNESS_SKILLS_DIR!, name)).isSymbolicLink()).toBe(true)
     const verdict = JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))
     expect(verdict.ready).toBe(true)
     expect(existsSync(join(workspace, verdict.artifact))).toBe(true)

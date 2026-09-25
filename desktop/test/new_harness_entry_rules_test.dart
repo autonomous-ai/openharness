@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
 import 'dart:async';
@@ -169,14 +170,23 @@ void main() {
     await acceptSetupOrSearch(tester);
   }
 
-  for (final shortcut in [LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyO]) {
+  for (final shortcut in [LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP]) {
     testWidgets(
-      '${shortcut.keyLabel} starts a pane with no extra launch controls',
+      '${shortcut.keyLabel == 'N' ? 'Cmd-N' : 'command palette'} starts a pane with no extra launch controls',
       (tester) async {
         await mount(tester, store: false);
         final origin = app.activeSwarm;
-        await key(tester, shortcut, cmd: true);
+        await key(
+          tester,
+          shortcut,
+          cmd: true,
+          shift: shortcut == LogicalKeyboardKey.keyP,
+        );
         if (shortcut != LogicalKeyboardKey.keyN) {
+          await tester.enterText(
+            find.byKey(const ValueKey('swarm-search-input')),
+            '> New Harness',
+          );
           await acceptSetupOrSearch(tester);
         }
         final controller = box(tester);
@@ -188,7 +198,7 @@ void main() {
             findsNothing,
           );
         }
-        expect(find.text('New Harness'), findsOneWidget);
+        expect(find.text('[ New Harness ]'), findsOneWidget);
         expect(connections['m']!.starts, isEmpty);
         await acceptSetupOrSearch(tester);
         expect(connections['m']!.starts, hasLength(1));
@@ -223,14 +233,14 @@ void main() {
           box(tester).task = 'Workshop task';
           if (closeFirst) await dismiss(tester);
           await product(tester, 'autonomous/blender', task: task);
-          expect(box(tester).engine, 'autonomous/blender');
+          expect(box(tester).harnessId, 'autonomous/blender');
           expect(box(tester).projectLabel, startsWith('~/harnesses/blender-'));
           expect(box(tester).project.generated, isNotNull);
           expect(box(tester).task, task ?? '');
           expect(box(tester).placement, HarnessPlacement.newTab);
           await dismiss(tester);
           await product(tester, 'autonomous/workshop');
-          expect(box(tester).engine, 'autonomous/workshop');
+          expect(box(tester).harnessId, 'autonomous/workshop');
           expect(box(tester).projectLabel, '~/harnesses/workshop-design');
           expect(box(tester).task, 'Workshop task');
           expect(connections.values.expand((c) => c.starts), isEmpty);
@@ -276,7 +286,7 @@ void main() {
     'product entry from a pane does not inherit workspace projects or search tasks',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Review the API',
@@ -331,21 +341,53 @@ void main() {
     );
   }
 
-  testWidgets('Store Open overrides an agent changed inside its saved draft', (
+  testWidgets('Store Open restores its harness after switching to Code', (
     tester,
   ) async {
     await mount(tester);
     await product(tester, 'autonomous/blender');
+    box(tester).focusField(NewHarnessField.harness);
+    box(tester).accept(
+      const NewHarnessOption(id: NewHarnessController.codingId, title: 'Code'),
+    );
     box(tester).focusField(NewHarnessField.agent);
     box(tester).accept(const NewHarnessOption(id: 'codex', title: 'Codex'));
     expect(box(tester).engine, 'codex');
     await dismiss(tester);
     await product(tester, 'autonomous/blender');
-    expect(box(tester).engine, 'autonomous/blender');
+    expect(box(tester).harnessId, 'autonomous/blender');
     expect(box(tester).projectLabel, startsWith('~/harnesses/blender-'));
     await dismiss(tester);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'an explicit coding engine reopens its draft and overrides a different harness',
+    (tester) async {
+      await mount(tester);
+      await product(tester, 'codex');
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).harnessId, isNull);
+      box(tester).setFolder('/work/explicit-code');
+      await dismiss(tester);
+      await product(tester, 'codex');
+      expect(box(tester).project.folder, '/work/explicit-code');
+      box(tester).focusField(NewHarnessField.harness);
+      box(tester).applyOption(
+        box(tester).options
+            .singleWhere((option) => option.id == 'autonomous/blender'),
+      );
+      await dismiss(tester);
+      await product(tester, 'codex');
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).harnessId, isNull);
+      expect(
+        connections.values.expand((connection) => connection.starts),
+        isEmpty,
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'an in-flight or uncertain Store start cannot be replaced or retried as a new task',
@@ -370,7 +412,7 @@ void main() {
       expect(original.error, contains('Check the pending start'));
       await dismiss(tester);
       await product(tester, 'autonomous/blender');
-      expect(box(tester).engine, 'autonomous/blender');
+      expect(box(tester).harnessId, 'autonomous/blender');
       await dismiss(tester);
       await product(tester, 'autonomous/workshop', task: 'A different example');
       expect(box(tester).checking, isTrue);
@@ -386,7 +428,7 @@ void main() {
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(search, 'login');
     final picker = tester
@@ -400,7 +442,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.arrowUp);
     }
     expect(picker.selected?.agentId, 'a1');
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     final updated = tester
         .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
         .search!;
@@ -414,12 +456,13 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('Cmd-O repeats without losing the search task', (tester) async {
+  testWidgets('an unmatched search query waits for explicit Cmd-N creation', (
+    tester,
+  ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyO;
 
-    await key(tester, shortcut, cmd: true);
+    await openHarnessPicker(tester);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(search, 'Check the keyboard workflow');
     final editor = tester.widget<SwarmSearchInput>(
@@ -429,7 +472,7 @@ void main() {
       baseOffset: 6,
       extentOffset: 18,
     );
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     final updated = tester.widget<SwarmSearchInput>(
       find.byType(SwarmSearchInput),
     );
@@ -443,6 +486,10 @@ void main() {
     expect(app.swarms.first, same(origin));
     expect(app.swarms.length, 1);
     await acceptSetupOrSearch(tester);
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(updated.search!.rows, isEmpty);
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     expect(box(tester).task, 'Check the keyboard workflow');
     expect(box(tester).placement, HarnessPlacement.currentTab);
     await acceptSetupOrSearch(tester);
@@ -459,31 +506,28 @@ void main() {
   });
 
   testWidgets(
-    'Cmd-O keeps drafts separate when the focused source pane changes',
+    'Cmd-N keeps drafts separate when the focused source pane changes',
     (tester) async {
       await mount(tester, store: false);
       final first = app.focusedPane!;
       final other = app.adoptSessionForTest(terminal('a2', []));
       app.focusPane(first.id);
       await tester.pump();
-      final shortcut = LogicalKeyboardKey.keyO;
+      final shortcut = LogicalKeyboardKey.keyN;
       await key(tester, shortcut, cmd: true);
-      await acceptSetupOrSearch(tester);
       await nameProject(tester, 'keyboard-review');
       box(tester).task = 'Review this project';
       await dismiss(tester);
       app.focusPane(other.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
-      await acceptSetupOrSearch(tester);
-      expect(box(tester).engine, 'autonomous/typst');
+      expect(box(tester).harnessId, 'autonomous/typst');
       expect(box(tester).project.folder, '/work/release-notes');
       expect(box(tester).task, isEmpty);
       await dismiss(tester);
       app.focusPane(first.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
-      await acceptSetupOrSearch(tester);
       expect(box(tester).engine, 'codex');
       expect(box(tester).project.name, 'keyboard-review');
       expect(box(tester).task, 'Review this project');
@@ -494,14 +538,13 @@ void main() {
     },
   );
 
-  testWidgets('Cmd-O inherits its source and resumes edits via Open Harness', (
+  testWidgets('Cmd-N inherits its source and resumes edits after finding', (
     tester,
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyO;
+    final shortcut = LogicalKeyboardKey.keyN;
     await key(tester, shortcut, cmd: true);
-    await acceptSetupOrSearch(tester);
     var draft = box(tester);
     expect(draft.engine, 'codex');
     expect(draft.machineId, 'm');
@@ -513,8 +556,11 @@ void main() {
     await dismiss(tester);
     expect(app.swarms, [origin]);
     expect(app.activeSwarm, same(origin));
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     await acceptSetupOrSearch(tester);
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     draft = box(tester);
     expect(draft.task, 'Check keyboard focus');
     expect(draft.project.name, 'keyboard-review');
@@ -540,7 +586,7 @@ void main() {
     'switching the picker keeps its project scope and Escape goes back',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, '# openharness');
       await acceptSetupOrSearch(tester);
@@ -551,7 +597,7 @@ void main() {
       expect(before.canGoBack, isTrue);
       final selected = before.selected?.id;
       final results = before.rows.map((row) => row.id).toList();
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       final picker = tester
           .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
           .search!;
@@ -560,7 +606,11 @@ void main() {
       expect(picker.rows.any((row) => row.isCreate), isFalse);
       expect(picker.selected?.id, selected);
       expect(picker.rows.map((row) => row.id), results);
-      expect(find.text('Harnesses · openharness'), findsOneWidget);
+      expect(find.text('Harnesses · openharness'), findsNothing);
+      expect(
+        tester.widget<TextField>(search).decoration!.hintText,
+        'Search harnesses in openharness',
+      );
       await key(tester, LogicalKeyboardKey.escape);
       expect(picker.query, '# openharness');
       expect(picker.canGoBack, isFalse);

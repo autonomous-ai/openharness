@@ -98,11 +98,11 @@ uses its original voice request key and focus revision. The supplied OS patch on
 `30e034f84` adds single-input correlation and avoids agent/latest recap fallback after
 overlap. It does not support merged results or consume receipt.input yet.
 
-The concrete handoff is [Grouped result contract: turn.correlation.v2](autonomous-device-result-correlation.md).
-It defines the event schema, evidence requirements, run closure, result/TTS dedupe,
-compatibility and joint rollout tests. This is the Harness-side contract decision, not an
-implemented or advertised capability. No OS repository changes are included. PR #294 fixes
-input delivery; the complete overlapping-result → Lamp flow remains follow-up work.
+The current handoff is [Device summary correlation](autonomous-device-result-correlation.md).
+It adds explicit membership and durable result identity to the existing turn.summary path,
+by default. It specifies dedupe, replay, restart and compatibility; no separate result
+protocol or opt-in remains. OS must implement the metadata before grouped Lamp TTS can be
+validated. No OS repository changes are included.
 
 ## Validation (2026-09-24)
 

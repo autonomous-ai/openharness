@@ -541,7 +541,7 @@ void main() {
     (tester) async {
       final (app, controller) = await mount(tester);
       expect(find.text('APIs 0'), findsOneWidget);
-      expect(find.text('Search APIs…'), findsOneWidget);
+      expect(find.text('Search APIs'), findsOneWidget);
       await tester.tap(find.byTooltip('Add OpenRouter'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('models-search')), findsNothing);
@@ -657,7 +657,7 @@ void main() {
       await tester.enterText(field('API key'), 'not-saved');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.text('Search APIs…'), findsOneWidget);
+      expect(find.text('Search APIs'), findsOneWidget);
       expect(
         app.requests.where((request) => request['action'] == 'save'),
         isEmpty,
@@ -706,7 +706,7 @@ void main() {
     await tester.tap(find.text('Explore local models'));
     await tester.pumpAndSettle();
     expect(find.text('Explore local models'), findsNothing);
-    expect(find.text('Search models…'), findsOneWidget);
+    expect(find.text('Search models'), findsOneWidget);
     expect(field('API key'), findsNothing);
     expect(find.byTooltip('Add OpenRouter'), findsNothing);
     expect(tester.takeException(), isNull);

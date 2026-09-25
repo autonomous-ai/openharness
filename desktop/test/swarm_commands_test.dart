@@ -15,7 +15,7 @@ import 'swarm_state_test.dart' show createApp;
 void main() {
   for (final pointer in [false, true]) {
     testWidgets(
-      'Cmd-P hands New Harness focus to the form without launching (pointer=$pointer)',
+      'Cmd-Shift-P hands New Harness focus to the form without launching (pointer=$pointer)',
       (tester) async {
         final previousEntry = newHarnessOpensInBox;
         newHarnessOpensInBox = true;
@@ -27,7 +27,7 @@ void main() {
         await mount(tester, app);
         final original = app.activeSwarm;
         final input = find.byKey(const ValueKey('swarm-search-input'));
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
         await tester.enterText(input, '> New Harness');
         await tester.pump();
         final command = find.byKey(const ValueKey('command:agent.new'));
@@ -70,7 +70,7 @@ void main() {
     addTearDown(app.dispose);
     await mount(tester, app);
     final input = find.byKey(const ValueKey('swarm-search-input'));
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await chord(tester, LogicalKeyboardKey.keyP, shift: true);
     await tester.enterText(input, '> pin');
     await tester.pump();
     expect(find.byKey(const ValueKey('command:pane.pin')), findsOneWidget);
@@ -155,7 +155,7 @@ void main() {
       final pane = app.adoptSessionForTest(terminal('a0', frames));
       final original = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(input, '> pin');
       await tester.pump();
@@ -184,7 +184,7 @@ void main() {
         isTrue,
       );
       // The approved command shortcut opens command mode and leaves pinning alone.
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       expect(app.isPanePinned(pane), isTrue);
       expect(tester.widget<TextField>(input).controller!.text, '>');
       await tester.enterText(input, '> unpin');
@@ -204,7 +204,7 @@ void main() {
       final app = createApp();
       await mount(tester, app);
       final input = find.byKey(const ValueKey('swarm-search-input'));
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await chord(tester, LogicalKeyboardKey.keyP, shift: true);
       await tester.enterText(input, '> rename');
       await tester.pump();
       expect(

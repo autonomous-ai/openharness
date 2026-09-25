@@ -1,3 +1,6 @@
+import 'support/workspace_tools.dart';
+import 'support/resource_picker.dart';
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -401,7 +404,7 @@ void main() {
   });
 
   testWidgets(
-    'the one-time invitation leads to discovery and verified readiness explains selection',
+    'the one-time invitation leads to discovery, and a started model gets no toast',
     (tester) async {
       final app = ModelManagerTestApp(ModelManagerConnection());
       app.stateOf('m')!.agents = [
@@ -432,17 +435,24 @@ void main() {
       await tester.tap(find.byTooltip('Dismiss'));
       await tester.pump();
       expect(find.text('Run AI on this computer'), findsNothing);
+      // A model that has just started gets no toast — its row in the Models
+      // overview is where it is shown.
       app.localInventory = modelInventory(scenario: 'ready');
       await controller.refresh();
       await tester.pump();
-      expect(find.text('Qwen3.8-27B is running'), findsOneWidget);
+      expect(controller.readyModel?.name, 'Qwen3.8-27B');
+      expect(find.text('Qwen3.8-27B is running'), findsNothing);
       expect(
         find.text('Select it from the model picker in a session.'),
-        findsOneWidget,
+        findsNothing,
       );
-      await tester.tap(find.byTooltip('Dismiss'));
-      await tester.pump();
-      expect(find.text('Qwen3.8-27B is running'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(LocalModelInvitation),
+          matching: find.byType(Material),
+        ),
+        findsNothing,
+      );
       expect(app.sent, isEmpty);
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
@@ -677,29 +687,28 @@ void main() {
     );
     final tab = app.activeSwarmId;
     final panes = app.panes.map((pane) => pane.id).toList();
-    final button = find.byKey(const ValueKey('swarm-models-button'));
     app.modelManager.start();
     await app.modelManager.refresh();
     await tester.pump();
     expect(find.text('Explore models'), findsNothing);
-    await tester.tap(button);
+    await openWorkspaceTool(tester, 'models');
     await tester.pump();
-    await tester.tap(find.textContaining('Local').first);
+    await selectResource(tester, 'model:local:qwen');
     await tester.pump();
-    expect(find.text('Qwen3.8-27B'), findsOneWidget);
-    expect(find.text('Search models…'), findsOneWidget);
-    expect(tester.getSize(find.byType(ModelsPanel)).height, greaterThan(620));
-    expect(tester.getRect(find.byType(ModelsPanel)).bottom, lessThan(760));
+    expect(find.text('Qwen3.8-27B'), findsWidgets);
+    expect(find.text('Search models'), findsOneWidget);
+    expect(tester.getSize(resourceScope(':')).height, greaterThan(620));
+    expect(tester.getRect(resourceScope(':')).bottom, lessThan(760));
     tester.view.physicalSize = const Size(1200, 480);
     await tester.pump();
-    expect(tester.getRect(find.byType(ModelsPanel)).bottom, lessThan(480));
-    expect(find.text('Manage models').hitTestable(), findsOneWidget);
+    expect(tester.getRect(resourceScope(':')).bottom, lessThan(480));
+    expect(find.byKey(const ValueKey('search-action-list')), findsNothing);
     expect(tester.takeException(), isNull);
     tester.view.physicalSize = const Size(1200, 760);
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    await tester.tap(button);
+    await openWorkspaceTool(tester, 'models');
     await tester.pump();
     await tester.runAsync(() async {
       for (final asset in [
@@ -713,24 +722,22 @@ void main() {
       ]) {
         await precacheImage(
           AssetImage(asset),
-          tester.element(find.byType(ModelsPanel)),
+          tester.element(resourceScope(':')),
         );
       }
     });
     await tester.pump(const Duration(milliseconds: 300));
-    final panel = tester.getRect(find.byType(ModelsPanel));
-    expect(panel.right, 1190);
-    expect(panel.top, greaterThan(tester.getRect(button).bottom));
-    expect(panel.width, 640);
-    expect(
-      tester.getRect(button).right,
-      lessThan(tester.getRect(find.byTooltip('Harnesses')).left),
-    );
+    final panel = tester.getRect(resourceScope(':'));
+    expect(panel.right, lessThanOrEqualTo(1200));
+    expect(panel.top, greaterThan(0));
+    expect(panel.width, greaterThan(1000));
     expect(find.byType(Dialog), findsNothing);
-    expect(find.text('Search models…'), findsOneWidget);
-    expect(find.text('All 14'), findsOneWidget);
-    expect(find.text('Subscriptions'), findsOneWidget);
-    expect(find.text('Qwen3.8-27B'), findsOneWidget);
+    expect(find.text('Search models'), findsOneWidget);
+    expect(
+      resourceSearch(tester).rows
+          .any((row) => row.modelId == 'model:local:qwen'),
+      isTrue,
+    );
     expect(find.text('Run AI on this computer'), findsNothing);
     expect(app.activeSwarmId, tab);
     expect(app.panes.map((pane) => pane.id), panes);
@@ -751,12 +758,12 @@ void main() {
     }
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    expect(find.byType(ModelsPanel), findsNothing);
-    await tester.tap(button);
+    expect(resourceScope(':'), findsNothing);
+    await openWorkspaceTool(tester, 'models');
     await tester.pump();
-    await tester.tapAt(const Offset(50, 400));
+    await tester.tapAt(const Offset(3, 400));
     await tester.pump();
-    expect(find.byType(ModelsPanel), findsNothing);
+    expect(resourceScope(':'), findsNothing);
     expect(app.activeSwarmId, tab);
     expect(app.panes.map((pane) => pane.id), panes);
     await tester.pumpWidget(const SizedBox());

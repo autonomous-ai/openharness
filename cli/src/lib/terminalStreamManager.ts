@@ -78,6 +78,13 @@ const PROTOCOL_VERSION = 3
 const HEARTBEAT_TIMEOUT_MS = 30_000
 const SYNC_INTERVAL_MS = 5_000
 const OUTPUT_FLUSH_MS = 8
+// The terminal the person is typing into on the loopback desktop gains nothing from the 8ms window:
+// a frame across 127.0.0.1 costs tens of microseconds, and the app already folds every write between
+// two vsyncs into one paint. What the window did cost it was a keystroke echo held up to 8ms whenever
+// a TUI was redrawing — a quarter of them in the benchmark. Only the FOCUSED one, though: every frame
+// costs the app a decode and a write, and four streaming tiles all on 2ms took its CPU from 15% to
+// 18% for background tiles that repaint every 80ms anyway. Those, and the relay, keep 8ms.
+const LOOPBACK_OUTPUT_FLUSH_MS = 2
 const OUTPUT_CHUNK_BYTES = 32 * 1024
 const INPUT_MAX_BYTES = 64 * 1024
 const PAUSE_HIGH_WATERMARK_BYTES = 384 * 1024
@@ -105,6 +112,11 @@ interface ActiveStream {
   placementKey: string
   handle: TerminalStreamHandle
   compression: 'none' | 'zlib'
+  /** Whether this stream serves the desktop on this computer (see `TerminalStreamManagerDeps.isLoopback`). */
+  loopback: boolean
+  /** The output coalescing window: LOOPBACK_OUTPUT_FLUSH_MS for the window's focused terminal on this
+   *  computer, OUTPUT_FLUSH_MS for everything else. Follows `setFocusedAgent`. */
+  flushMs: number
   expiresAt: number
   lastSyncAt: number
   nextSeq: number
@@ -151,6 +163,13 @@ export interface TerminalStreamManagerDeps {
   streamingAvailable: boolean
   now?: () => number
   diagnostic?: (event: string, fields: Record<string, unknown>) => void
+  /**
+   * An agent's terminal just took input (a keystroke or a paste) from the stream that holds it — never
+   * from a watcher, whose input is refused before it gets here. Called on every accepted frame, so it
+   * must be cheap and must not throw; the daemon starts a sleeping grid from it (the keystroke prewarm,
+   * grid-reads-without-waking issue 03), which is why it lives here, below every client that types.
+   */
+  onInput?: (agentId: string) => void
 }
 
 function sizeFrom(payload: FramePayload): TerminalStreamSize | null {
@@ -187,6 +206,9 @@ export class TerminalStreamManager {
   // Terminal opens from different backend connections can arrive concurrently. Serialize opens for
   // the same tmux placement so takeover is deterministic and never leaves two live controllers.
   private readonly leaseLocks = new Map<string, Promise<void>>()
+  // The agent each loopback window last said it has focused (`app_focus`), null for none. A window that
+  // never said is absent, and all its terminals keep the short window, as before focus was followed.
+  private readonly focusByConn = new Map<string, string | null>()
   private readonly now: () => number
   private readonly expiryTimer: ReturnType<typeof setInterval>
 
@@ -489,7 +511,8 @@ export class TerminalStreamManager {
       // every TUI redraw for nothing. Decided here rather than in the app because the app cannot
       // tell this daemon's own machine from one it reaches through the relay — where the same
       // frames DO cross the internet and zlib still earns its keep.
-      const wantsZlib = requestedCompression.includes('zlib') && !this.deps.isLoopback?.(connId)
+      const loopback = this.deps.isLoopback?.(connId) ?? false
+      const wantsZlib = requestedCompression.includes('zlib') && !loopback
       state = {
         connId,
         ...(client ? { client } : {}),
@@ -500,6 +523,8 @@ export class TerminalStreamManager {
         placementKey,
         handle: opened.value,
         compression: wantsZlib ? 'zlib' : 'none',
+        loopback,
+        flushMs: this.flushWindow(connId, session.agentId, loopback),
         expiresAt: this.now() + HEARTBEAT_TIMEOUT_MS,
         lastSyncAt: this.now(),
         nextSeq: 0,
@@ -605,6 +630,7 @@ export class TerminalStreamManager {
     }
     state.lastInputSeq = inputSeq
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
+    this.tookInput(state)
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
     // keystroke order is already fixed by the time it returns its promise — and the seq above is
     // spent, so the next frame cannot race this one. Awaiting the reply held the whole local
@@ -629,6 +655,13 @@ export class TerminalStreamManager {
       // surface only as a process-level unhandledRejection.
       this.diagnostic(state, 'input_report_failed', { reason: error instanceof Error ? error.message : String(error) })
     })
+  }
+
+  /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
+  private tookInput(state: ActiveStream): void {
+    try { this.deps.onInput?.(state.agentId) } catch (error) {
+      this.diagnostic(state, 'input_listener_failed', { reason: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   private async resize(connId: string, payload: FramePayload): Promise<void> {
@@ -671,6 +704,7 @@ export class TerminalStreamManager {
       return
     }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
+    this.tookInput(state)
     const result = await state.handle.pasteRaw(text)
     if (result.state !== 'succeeded') {
       this.sendError(state.connId, 'TERMINAL_PASTE_FAILED', { streamId: state.streamId, message: result.reason })
@@ -956,14 +990,14 @@ export class TerminalStreamManager {
       return
     }
     // Leading edge: the first output after a quiet gap goes out immediately, which is what a
-    // keystroke echo is. Waiting the full window for it cost every echo 8ms for no benefit —
+    // keystroke echo is. Waiting the full window for it cost every echo the window for no benefit —
     // there was nothing else to coalesce it with. A burst still lands on the trailing timer
-    // below, so the frame rate ceiling is unchanged.
-    if (!state.flushTimer && this.now() - state.lastFlushAt >= OUTPUT_FLUSH_MS) {
+    // below, so the frame rate stays capped at one frame per `state.flushMs`.
+    if (!state.flushTimer && this.now() - state.lastFlushAt >= state.flushMs) {
       this.flushOutput(state)
       return
     }
-    state.flushTimer ??= setTimeout(() => this.flushOutput(state), OUTPUT_FLUSH_MS)
+    state.flushTimer ??= setTimeout(() => this.flushOutput(state), state.flushMs)
   }
 
   private flushOutput(state: ActiveStream): void {
@@ -1258,7 +1292,27 @@ export class TerminalStreamManager {
     })
   }
 
+  /**
+   * The loopback window on `connId` focused `agentId` (null: no terminal). That agent's terminal gets the
+   * short output window and the window's other terminals go back to the long one. Applied to open
+   * streams, so a focus move takes effect from the next flush rather than the next open; a batch already
+   * waiting on the long window still waits it out, once.
+   */
+  setFocusedAgent(connId: string, agentId: string | null): void {
+    this.focusByConn.set(connId, agentId)
+    for (const state of this.streams.values()) {
+      if (state.connId === connId) state.flushMs = this.flushWindow(connId, state.agentId, state.loopback)
+    }
+  }
+
+  private flushWindow(connId: string, agentId: string, loopback: boolean): number {
+    if (!loopback) return OUTPUT_FLUSH_MS
+    const focused = this.focusByConn.get(connId)
+    return focused === undefined || focused === agentId ? LOOPBACK_OUTPUT_FLUSH_MS : OUTPUT_FLUSH_MS
+  }
+
   async closeConnection(connId: string, reason = 'connection closed', notify = false): Promise<void> {
+    this.focusByConn.delete(connId)
     const states = [...this.streams.values()].filter((state) => state.connId === connId)
     await Promise.all(states.map((state) => this.closeStream(state, reason, notify)))
   }
@@ -1279,6 +1333,7 @@ export class TerminalStreamManager {
 
   async stop(): Promise<void> {
     clearInterval(this.expiryTimer)
+    this.focusByConn.clear()
     await this.closeAll('terminal manager stopped')
   }
 }

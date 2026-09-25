@@ -1,16 +1,21 @@
+import 'support/workspace_tools.dart';
+import 'support/resource_picker.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
-import 'package:harness/models/models_panel.dart';
 import 'package:harness/models/local_model.dart';
+import 'package:harness/models/models_panel.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/harness_session_manager.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:xterm/xterm.dart';
 
@@ -36,107 +41,161 @@ class _MachineApi extends ApiClient {
   }
 }
 
+class _ToolbarApp extends ModelManagerTestApp {
+  _ToolbarApp() : super(ModelManagerConnection());
+
+  @override
+  Future<RemotePasswordStatus> remotePasswordStatus() async =>
+      const RemotePasswordStatus(hasPassword: false);
+}
+
 void main() {
-  testWidgets('machine and model badges acknowledge independently', (
-    tester,
-  ) async {
-    final app = ModelManagerTestApp(ModelManagerConnection());
-    app.stateOf('m')!.nodeOnline = true;
-    app.stateOf('other')!
-      ..nodeOnline = true
-      ..needsLink = true;
-    app.machineStates['offline'] =
-        MachineState(
-            const Machine(
-              machineId: 'offline',
-              name: 'Offline',
-              authMode: MachineAuthMode.remote,
-            ),
-          )
-          ..nodeOnline = false
-          ..needsLink = true;
-    app.machineStates['shared'] =
-        MachineState(
-            const Machine(
-              machineId: 'shared',
-              name: 'Shared',
-              authMode: MachineAuthMode.remote,
-              isShared: true,
-            ),
-          )
+  for (final nativeTabs in [false, true]) {
+    testWidgets(
+      'status symbols open management panels and Store (native=$nativeTabs)',
+      (tester) async {
+        final app = _ToolbarApp();
+        app.stateOf('m')!.nodeOnline = true;
+        app.stateOf('other')!
           ..nodeOnline = true
           ..needsLink = true;
-    final ready = <String, dynamic>{
-      'id': 'ready',
-      'name': 'Ready model',
-      'state': 'running',
-      'operation': <String, dynamic>{
-        'id': 'download-1',
-        'modelId': 'ready',
-        'action': 'start',
-        'stage': 'verifying',
-        'phase': 'done',
+        app.adoptSessionForTest(terminal('a0', []));
+        await app.modelManager.refresh();
+        await mount(tester, app, nativeTabs: nativeTabs);
+
+        Future<void> open(String name, String action) async {
+          if (nativeTabs) {
+            final dispatched = native(tester, action);
+            await tester.pumpAndSettle();
+            await dispatched;
+          } else {
+            await tester.tap(find.byKey(ValueKey('swarm-$name-button')));
+            await tester.pumpAndSettle();
+          }
+        }
+
+        await open('harnesses', 'harnessControls');
+        expect(find.byType(HarnessSessionManager), findsOneWidget);
+        expect(resourceField, findsNothing);
+        await open('harnesses', 'harnessControls');
+        expect(find.byType(HarnessSessionManager), findsNothing);
+        await open('harnesses', 'harnessControls');
+        await open('machines', 'machineControls');
+        expect(find.byType(HarnessSessionManager), findsNothing);
+        expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+        expect(find.text('Set password'), findsOneWidget);
+        expect(find.text('Connect'), findsOneWidget);
+        expect(resourceScope('@'), findsNothing);
+        await open('models', 'modelControls');
+        expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+        expect(find.byType(ModelsPanel), findsOneWidget);
+        expect(find.byKey(const ValueKey('model-action-qwen')), findsOneWidget);
+        expect(resourceScope(':'), findsNothing);
+        expect(app.actions, isEmpty);
+        await open('store', 'store');
+        expect(find.byType(ModelsPanel), findsNothing);
+        expect(app.activeSwarm.isStore, isTrue);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
       },
-    };
-    app.localInventory = {
-      'models': [ready],
-    };
-    app.modelManager
-      ..localModels = [LocalModel.fromJson(ready)]
-      ..loaded = true;
-    await mount(tester, app);
-    await tester.pumpAndSettle();
-    Badge badge(String name) =>
-        tester.widget<Badge>(find.byKey(ValueKey('swarm-$name-badge')));
-    expect(badge('machines').isLabelVisible, isTrue);
-    expect((badge('machines').label as Text).data, '1');
-    expect(badge('models').isLabelVisible, isTrue);
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
-    await tester.pumpAndSettle();
-    expect(badge('machines').isLabelVisible, isFalse);
-    expect(badge('models').isLabelVisible, isTrue);
-    await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
-    await tester.pumpAndSettle();
-    expect(badge('models').isLabelVisible, isFalse);
-    expect(find.text('Models'), findsOneWidget);
-    await key(tester, LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    app.localInventory = {
-      'models': [
-        ready,
-        {'id': 'release', 'name': 'New release'},
-      ],
-    };
-    await app.modelManager.refresh();
-    await tester.pumpAndSettle();
-    expect(badge('models').isLabelVisible, isFalse);
-    await tester.tap(find.byKey(const ValueKey('swarm-models-button')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Local').first);
-    await tester.pumpAndSettle();
-    expect(find.text('New'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-    app.dispose();
-  });
+    );
+  }
+
+  testWidgets(
+    'machine and model tools remain available without toolbar badges',
+    (tester) async {
+      final app = ModelManagerTestApp(ModelManagerConnection());
+      app.stateOf('m')!.nodeOnline = true;
+      app.stateOf('other')!
+        ..nodeOnline = true
+        ..needsLink = true;
+      app.machineStates['offline'] =
+          MachineState(
+              const Machine(
+                machineId: 'offline',
+                name: 'Offline',
+                authMode: MachineAuthMode.remote,
+              ),
+            )
+            ..nodeOnline = false
+            ..needsLink = true;
+      app.machineStates['shared'] =
+          MachineState(
+              const Machine(
+                machineId: 'shared',
+                name: 'Shared',
+                authMode: MachineAuthMode.remote,
+                isShared: true,
+              ),
+            )
+            ..nodeOnline = true
+            ..needsLink = true;
+      final ready = <String, dynamic>{
+        'id': 'ready',
+        'name': 'Ready model',
+        'state': 'running',
+        'operation': <String, dynamic>{
+          'id': 'download-1',
+          'modelId': 'ready',
+          'action': 'start',
+          'stage': 'verifying',
+          'phase': 'done',
+        },
+      };
+      app.localInventory = {
+        'models': [ready],
+      };
+      app.modelManager
+        ..localModels = [LocalModel.fromJson(ready)]
+        ..loaded = true;
+      await mount(tester, app);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('swarm-machines-badge')), findsNothing);
+      expect(find.byKey(const ValueKey('swarm-models-badge')), findsNothing);
+      await openWorkspaceTool(tester, 'machines');
+      await tester.pumpAndSettle();
+      expect(resourceScope('@'), findsOneWidget);
+      await openWorkspaceTool(tester, 'models');
+      await tester.pumpAndSettle();
+      expect(resourceScope(':'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      app.localInventory = {
+        'models': [
+          ready,
+          {'id': 'release', 'name': 'New release'},
+        ],
+      };
+      await app.modelManager.refresh();
+      await tester.pumpAndSettle();
+      await openWorkspaceTool(tester, 'models');
+      await tester.pumpAndSettle();
+      await tester.enterText(resourceField, ':local');
+      await tester.pumpAndSettle();
+      expect(
+        resourceSearch(tester).rows
+            .any((row) => row.modelId == 'model:local:release'),
+        isTrue,
+      );
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   for (final nativeTabs in [false, true]) {
     testWidgets(
-      'toolbar panels switch in one click without stacking (native=$nativeTabs)',
+      'workspace tools switch without stacking (native=$nativeTabs)',
       (tester) async {
         final app = createApp();
         app.stateOf('m')!.nodeOnline = true;
         final input = <TerminalBinaryFrame>[];
         app.adoptSessionForTest(terminal('a0', input));
         await mount(tester, app, nativeTabs: nativeTabs);
-        final buttons = {
-          'machineList': find.byKey(const ValueKey('swarm-machines-button')),
-          'models': find.byKey(const ValueKey('swarm-models-button')),
-          'sessions': find.byTooltip('Harnesses'),
-        };
         final panels = {
-          'machineList': find.byKey(const ValueKey('machines-panel')),
-          'models': find.byType(ModelsPanel),
-          'sessions': find.byKey(const ValueKey('session-manager')),
+          'machineList': resourceScope('@'),
+          'models': resourceScope(':'),
+          'sessions': resourceScope(''),
         };
         Future<void> open(String command) async {
           if (nativeTabs) {
@@ -144,7 +203,14 @@ void main() {
             await tester.pumpAndSettle();
             await action;
           } else {
-            await tester.tap(buttons[command]!);
+            await openWorkspaceTool(
+              tester,
+              {
+                'machineList': 'machines',
+                'models': 'models',
+                'sessions': 'harnesses',
+              }[command]!,
+            );
             await tester.pumpAndSettle();
           }
         }
@@ -156,11 +222,13 @@ void main() {
             for (final entry in panels.entries) {
               expect(
                 entry.value,
-                from != to && entry.key == to ? findsOneWidget : findsNothing,
+                (from != to || to == 'sessions') && entry.key == to
+                    ? findsOneWidget
+                    : findsNothing,
                 reason: '$from → $to should leave only the chosen panel open',
               );
             }
-            if (from != to) {
+            if (from != to || to == 'sessions') {
               await key(tester, LogicalKeyboardKey.escape);
               await tester.pumpAndSettle();
             }
@@ -205,73 +273,63 @@ void main() {
     var action = native(tester, 'machineList');
     await tester.pumpAndSettle();
     await action;
-    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+    expect(resourceScope('@'), findsOneWidget);
     expect(updates.last['enabled'], isTrue);
     expect(updates.last['machinesOpen'], isTrue);
     action = native(tester, 'machineList');
     await tester.pumpAndSettle();
     await action;
-    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
+    expect(resourceScope('@'), findsNothing);
     action = native(tester, 'machineList');
     await tester.pumpAndSettle();
     await action;
     action = native(tester, 'models');
     await tester.pumpAndSettle();
     await action;
-    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
-    expect(find.byType(ModelsPanel), findsOneWidget);
+    expect(resourceScope('@'), findsNothing);
+    expect(resourceScope(':'), findsOneWidget);
     expect(updates.last['machinesOpen'], isFalse);
     expect(updates.last['modelsOpen'], isTrue);
     action = native(tester, 'machineList');
     await tester.pumpAndSettle();
     await action;
-    expect(find.byType(ModelsPanel), findsNothing);
-    expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);
+    expect(resourceScope(':'), findsNothing);
+    expect(resourceScope('@'), findsOneWidget);
     expect(updates.last['modelsOpen'], isFalse);
     action = native(tester, 'sessions');
     await tester.pumpAndSettle();
     await action;
-    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
-    expect(find.byKey(const ValueKey('session-manager')), findsOneWidget);
+    expect(resourceScope('@'), findsNothing);
+    expect(resourceScope(''), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
 
-  testWidgets(
-    'Cmd M and the toolbar open Machines and restore terminal input',
-    (tester) async {
-      final app = createApp();
-      app.stateOf('m')!.nodeOnline = true;
-      final input = <TerminalBinaryFrame>[];
-      app.adoptSessionForTest(terminal('a0', input));
-      await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyM, cmd: true);
-      await tester.pumpAndSettle();
-      expect(find.text('Machines'), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      final machines = find.byKey(const ValueKey('swarm-machines-button'));
-      final models = find.byKey(const ValueKey('swarm-models-button'));
-      expect(
-        tester.getCenter(machines).dx,
-        lessThan(tester.getCenter(models).dx),
-      );
-      expect(
-        tester.getCenter(models).dx,
-        lessThan(tester.getCenter(find.byTooltip('Harnesses')).dx),
-      );
-      await tester.tap(machines);
-      await tester.pumpAndSettle();
-      expect(find.text('Machines'), findsOneWidget);
-      await key(tester, LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      tester.testTextInput.enterText('x');
-      await tester.idle();
-      expect(String.fromCharCodes(input.single.bytes), 'x');
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    },
-  );
+  testWidgets('Cmd M opens Machines and restores terminal input', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.stateOf('m')!.nodeOnline = true;
+    final input = <TerminalBinaryFrame>[];
+    app.adoptSessionForTest(terminal('a0', input));
+    await mount(tester, app);
+    await key(tester, LogicalKeyboardKey.keyM, cmd: true);
+    await tester.pumpAndSettle();
+    expect(resourceScope('@'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('swarm-machines-button')), findsOneWidget);
+    await openWorkspaceTool(tester, 'machines');
+    await tester.pumpAndSettle();
+    expect(resourceScope('@'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    tester.testTextInput.enterText('x');
+    await tester.idle();
+    expect(String.fromCharCodes(input.single.bytes), 'x');
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   testWidgets(
     'clicking a linked machine scopes work by ID even when names match',
@@ -296,16 +354,16 @@ void main() {
             ];
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+      await openWorkspaceTool(tester, 'machines');
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('machine-m')));
+      await tester.tap(find.byKey(const ValueKey('machine:m')));
       await tester.pumpAndSettle();
-      expect(find.text('Machines'), findsNothing);
+      expect(resourceScope('@'), findsNothing);
       final search = tester.widget<TextField>(
         find.byKey(const ValueKey('swarm-search-input')),
       );
       expect(search.controller!.text, isEmpty);
-      expect(find.text('Harnesses · Test host'), findsOneWidget);
+      expect(search.decoration!.hintText, 'Search harnesses in Test host');
       expect(find.text('Task from another Test host'), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -355,7 +413,7 @@ void main() {
     );
   }
 
-  testWidgets('a fresh machine opens creation with that machine selected', (
+  testWidgets('an empty machine session list waits for Cmd-N to create there', (
     tester,
   ) async {
     final previous = newHarnessOpensInBox;
@@ -373,9 +431,15 @@ void main() {
       ..connectionStatus = ConnectionStatus.connected;
     app.adoptSessionForTest(terminal('a0', []));
     await mount(tester, app);
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceTool(tester, 'machines');
     await tester.pumpAndSettle();
-    await tester.tap(find.text('New harness'));
+    await tester.tap(find.byKey(const ValueKey('machine:fresh')));
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byType(NewHarnessForm), findsNothing);
+    expect(find.text('New Harness'), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     final box = tester.widget<NewHarnessForm>(find.byType(NewHarnessForm));
     expect(box.controller.machineId, 'fresh');
@@ -417,13 +481,13 @@ void main() {
         final opened = native(tester, 'machineList');
         await tester.pumpAndSettle();
         await opened;
-        expect(find.text('Machines'), findsOneWidget);
-        await tester.tap(find.byTooltip('Options for Test host'));
+        expect(resourceScope('@'), findsOneWidget);
+        await selectResource(tester, 'machine:m');
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Rename'));
+        await runResourceCommand(tester, 'Rename');
         await tester.pumpAndSettle();
         expect(find.text('Rename Machine'), findsOneWidget);
-        final field = find.byType(TextField);
+        final field = find.byType(TextField).last;
         await tester.enterText(field, '   ');
         await tester.testTextInput.receiveAction(TextInputAction.done);
         await tester.pump();
@@ -444,7 +508,7 @@ void main() {
         expect(find.text('Rename Machine'), findsNothing);
         expect(
           find.descendant(
-            of: find.byKey(const ValueKey('machine-m')),
+            of: find.byKey(const ValueKey('machine:m')),
             matching: find.text('Office Mac'),
           ),
           findsOneWidget,
@@ -453,7 +517,7 @@ void main() {
         expect((updates.last['machines'] as List).single['name'], 'Office Mac');
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        expect(find.text('Machines'), findsNothing);
+        expect(resourceScope('@'), findsNothing);
         expect(
           tester
               .widget<TerminalView>(find.byType(TerminalView))

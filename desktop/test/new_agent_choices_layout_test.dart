@@ -69,6 +69,7 @@ class _ChoicesApp extends AppNotifier {
     String? swarmId,
     PaneSplitRequest? split,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -209,6 +210,8 @@ void main() {
       }
 
       await capture('initial');
+      expect(find.byKey(const Key('new-agent-machine-field')), findsOneWidget);
+      await expandNewAgentAdvanced(tester);
       for (final id in ['local', 'office', 'studio']) {
         expect(find.byKey(ValueKey('new-agent-machine-$id')), findsOneWidget);
       }
@@ -281,19 +284,22 @@ void main() {
       await tester.pumpAndSettle();
 
       if (size.width >= 900 && size.height >= 720 && scale == 1) {
-        // The common desktop sizes should show every choice before scrolling.
+        // Expanded settings remain reachable without overflowing the form.
         final form = find.ancestor(
           of: agentBar,
           matching: find.byType(SingleChildScrollView),
         );
-        final visible = tester.getRect(form);
         for (final key in [
+          'new-agent-harness-field',
           'new-agent-agent-field',
           'new-agent-machine-local',
           'new-agent-folder-newProject',
           'new-agent-project-recent',
         ]) {
           final choice = find.byKey(ValueKey(key));
+          await tester.ensureVisible(choice);
+          await tester.pumpAndSettle();
+          final visible = tester.getRect(form);
           final bounds = tester.getRect(choice);
           expect(bounds.top, greaterThanOrEqualTo(visible.top));
           expect(bounds.bottom, lessThanOrEqualTo(visible.bottom));
@@ -348,7 +354,7 @@ void main() {
       expect(find.byKey(const ValueKey('create-agent-submit')), findsOneWidget);
       final advanced = find.byKey(const Key('new-agent-advanced'));
       await tester.ensureVisible(advanced);
-      await tester.tap(advanced);
+      await expandNewAgentAdvanced(tester);
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Auto-approve'));
       expect(find.text('Permissions'), findsNothing);
@@ -392,6 +398,7 @@ void main() {
 
       // Help is a separate route: it must keep the current choices and scroll
       // position, contain keyboard shortcuts, and return focus to its trigger.
+      await expandNewAgentAdvanced(tester);
       for (final (topic, lastTitle) in [
         ('machine', 'Remote machine'),
         ('project', 'Recent'),
@@ -441,7 +448,11 @@ void main() {
         expect(selected.selected, isTrue);
         expect(selected.detail, 'repo');
         expect(
-          tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+          tester
+              .widget<AgentPicker>(
+                find.byKey(const Key('new-agent-agent-picker')),
+              )
+              .value,
           'codex',
         );
         expect(
@@ -467,7 +478,11 @@ void main() {
       await chooseAgent(tester, 'kilo');
       await tester.pumpAndSettle();
       expect(
-        tester.widget<AgentPicker>(find.byType(AgentPicker)).value,
+        tester
+            .widget<AgentPicker>(
+              find.byKey(const Key('new-agent-agent-picker')),
+            )
+            .value,
         'kilo',
       );
       expect(

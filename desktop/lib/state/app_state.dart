@@ -51,6 +51,8 @@ import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
+import 'grid_pictures.dart';
+import 'model_start_watch.dart';
 import 'harness_placement.dart';
 import 'desk_sync.dart';
 import 'pane_layout_store.dart';
@@ -67,6 +69,7 @@ import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'pending_question.dart';
 import 'session_preview.dart';
+import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
@@ -558,6 +561,30 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
   final Map<String, Timer> _turnActivityWatchdogs = {};
+
+  /// What each machine's daemon last said the account's grids serve — the one list the pane
+  /// picker, the macOS Models menu and the Model Manager all read. See [GridPictures].
+  final GridPictures gridPictures = GridPictures();
+
+  /// Which agents were sent a message while their model's computer was resting and have not
+  /// answered yet — the pane chip's "Starting up…". Fed by [_watchModelStart] and ended with every
+  /// turn ([_cancelTurnActivity]). See [ModelStartWatch] for why these signals and not others.
+  final ModelStartWatch modelStarts = ModelStartWatch();
+
+  /// Whether the app is in front of the person (`AppLifecycleState.resumed`). The three surfaces
+  /// that refresh [gridPictures] on their own — the Model Manager's timer, the macOS menu's refresh
+  /// and the pane picker's prefetch — run only while this is true, and each refreshes once when it
+  /// turns true again. A minimised or background app asks nothing. True until the platform says
+  /// otherwise, so a state nobody reported (a test, the first frame) behaves as it always did.
+  final ValueNotifier<bool> foreground = ValueNotifier(true);
+
+  bool get inForeground => foreground.value;
+
+  /// Fed by the workspace's [AppLifecycleListener]. A null state is unknown, read as foreground.
+  void appLifecycleChanged(AppLifecycleState? state) {
+    if (_disposed) return;
+    foreground.value = state == null || state == AppLifecycleState.resumed;
+  }
 
   late final sessionPreviews = SessionPreviewStore(
     canFetch: _canFetchPreview,
@@ -1700,6 +1727,12 @@ class AppNotifier extends ChangeNotifier {
     // closing a tab, a restored layout, a reveal. Listening here catches all of
     // them, and a clear that finds nothing to clear notifies nobody.
     addListener(seeWatchedAgents);
+    // The dial is told the whole list whenever it changes, so a cable attaching
+    // later is handed it without asking. See [_announceUnreadToDial].
+    //
+    // `this.` because the constructor's own parameter of the same name is in
+    // scope here and is the nullable one.
+    this.agentUnread.addListener(_announceUnreadToDial);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -2078,6 +2111,7 @@ class AppNotifier extends ChangeNotifier {
     // the dial goes back to beeping about tiles in plain sight until the
     // next time a pane happens to change.
     _announceOpenPanesToDial();
+    _announceUnreadToDial();
     // ...nor which tile this window is looking at. The daemon repeats that to the dial after every
     // list push, which is what keeps the two screens from drifting apart — but it can only repeat
     // something it has been told, and until now the first telling waited for the focus to CHANGE.
@@ -2168,6 +2202,54 @@ class AppNotifier extends ChangeNotifier {
   /// The dial belongs to whichever daemon owns the cable, and only a complete
   /// roster lets that one judge; the others store a list they never use, which
   /// costs nothing and saves the window from having to know which is which.
+  /// THE WHOLE UNREAD LIST, for a dial that has just lost its own.
+  ///
+  /// The dial keeps its drawer in RAM, so a reboot — an OTA, a replug, a flash —
+  /// wipes it while this window still holds every mark. Measured: a turn ended
+  /// at 17:46:19, the dial came back at 17:46:26, a question arrived at
+  /// 17:46:28, and the two screens then read 2 and 1 forever.
+  ///
+  /// Sent on every change rather than asked for: the daemon holds the latest and
+  /// can hand it over the moment a cable attaches, without a round trip to a
+  /// window that may be busy. Ids and kinds only — the daemon already knows each
+  /// agent's name, machine and last recap, and re-deriving them here would be a
+  /// second place for them to be wrong.
+  void _announceUnreadToDial() {
+    final pool = _pool;
+    if (pool == null) return;
+    final items = [
+      for (final mark in agentUnread.newestFirst)
+        {
+          'agentId': mark.agentId,
+          'machineId': mark.machineId,
+          'question': mark.kind == AlertKind.needsYou,
+          // A QUESTION'S OWN WORDS, because nobody else has them. The daemon
+          // fills in the recap for a finished turn from what it summarised, but
+          // an open question lives here — in `blockedAgents` — and a dial that
+          // rebooted has no memory of having asked it. Without this its drawer
+          // row arrives blank and falls back to the word the row type used to
+          // assume: "done", on a question nobody has answered.
+          if (mark.kind == AlertKind.needsYou)
+            'text':
+                machineStates[mark.machineId]
+                    ?.blockedAgents[mark.agentId]
+                    ?.prompt ??
+                '',
+        },
+    ];
+    for (final machineId in pool.machineIds) {
+      pool[machineId]
+          ?.sendTerminalFrame('app_unread', {'items': items})
+          .catchError((_) => false)
+          .ignore();
+    }
+  }
+
+  /// Re-send the tile roster because the WINDOW moved, not because the tiles
+  /// did. Public so the lifecycle listener can say so; the roster itself is
+  /// unchanged and the `foreground` flag riding with it is the point.
+  void announceWindowForeground() => _announceOpenPanesToDial();
+
   void _announceOpenPanesToDial() {
     final pool = _pool;
     if (pool == null) return;
@@ -2219,7 +2301,23 @@ class AppNotifier extends ChangeNotifier {
       if (connection == null) continue;
       unawaited(
         connection
-            .sendTerminalFrame('app_panes', {'agentIds': agentIds})
+            .sendTerminalFrame('app_panes', {
+              'agentIds': agentIds,
+              // WHETHER THESE TILES ARE ACTUALLY IN FRONT OF ANYBODY.
+              //
+              // The daemon decides from this list whether a finished turn is
+              // already on screen, and the list alone cannot say: every pane
+              // keeps its place on the tab while this window sits behind a
+              // browser. The dial therefore stayed quiet about work nobody
+              // could see, which is the one case the notification exists for —
+              // and this window, which DOES check (see `_visibleOnTab`), spoke
+              // up. Two screens, two answers, from the same tab.
+              //
+              // Sent with the roster rather than on its own so the pair can
+              // never be read half-updated. An older daemon ignores it and
+              // behaves as it does today.
+              'foreground': lifecycle() == AppLifecycleState.resumed,
+            })
             .catchError((_) => false),
       );
       unawaited(
@@ -2955,6 +3053,8 @@ class AppNotifier extends ChangeNotifier {
     machinesAreStale = false;
     machineStates.clear();
     sessionPreviews.clear();
+    gridPictures.clear();
+    _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;
     _ensurePool();
@@ -3294,6 +3394,8 @@ class AppNotifier extends ChangeNotifier {
     machinesAreStale = false;
     machineStates.clear();
     sessionPreviews.clear();
+    gridPictures.clear();
+    _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;
     _closedHistory.clear();
@@ -4457,6 +4559,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
+          prev.modelName != agent.modelName ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.lastActivityAt != agent.lastActivityAt ||
@@ -5025,62 +5128,35 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Live models on the account's private harness grid, for the pane header's picker.
+  /// One `grid_models_list` read of [machineId]'s daemon, as it answered — the raw read behind
+  /// [refreshGridModels], which keeps the result as the app's one picture ([gridPictures]).
   ///
-  /// Asked of the machine the pane belongs to rather than kept in app state: the answer is whatever
-  /// that machine's `grid` reports at this moment (an engine can join or leave between two opens),
-  /// and a cached list would offer a model nobody is serving any more.
+  /// The daemon answers from ITS picture of each grid, read without waking any of them, so a sleeping
+  /// grid keeps its last known models. Surfaces read [readGridPicture]; a caller that must know this
+  /// machine answered right now (the creation check) reads [refreshGridModels].
   ///
   /// Never throws — a machine whose daemon is too old to know the RPC, one with no grid, and one
   /// that timed out are all "nothing to offer", which is what the picker shows.
-  Future<GridModels> gridModels(String machineId) async {
+  Future<GridModels> gridModels(String machineId) =>
+      _askGridModels(machineId, const {'rowState': true});
+
+  /// One `grid_models_list` ask with [payload].
+  ///
+  /// `rowState: true` on every ask this app makes: every surface here draws row state, so rows
+  /// come back with `unavailable` beside a plain `node` rather than the old build's
+  /// `<computer> · seems offline` folded into it — and a loopback window that asked this way gets
+  /// its `grid_models_changed` pushes in the same form. An older daemon ignores the field.
+  Future<GridModels> _askGridModels(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
     try {
-      final response = await _conn(machineId)
-          .request('grid_models_list', timeout: const Duration(seconds: 12));
-      final models = (response['models'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(
-            (m) => GridModel(
-              id: (m['id'] as String?) ?? '',
-              node: (m['node'] as String?) ?? '',
-            ),
-          )
-          .where((m) => m.id.isNotEmpty)
-          .toList();
-      final capable = response['localModelEngines'];
-      List<GridModel> parseModels(Object? raw) => (raw as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(
-            (m) => GridModel(
-              id: (m['id'] as String?) ?? '',
-              node: (m['node'] as String?) ?? '',
-            ),
-          )
-          .where((m) => m.id.isNotEmpty)
-          .toList();
-      final grids = (response['grids'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .where((g) => (g['name'] as String?)?.isNotEmpty == true)
-          .map(
-            (g) => GridSection(
-              name: g['name'] as String,
-              own: g['own'] == true,
-              models: [
-                for (final m in parseModels(g['models']))
-                  GridModel(id: m.id, node: m.node, grid: g['name'] as String),
-              ],
-            ),
-          )
-          .toList();
-      return GridModels(
-        gridName: response['gridName'] as String?,
-        models: models,
-        grids: grids,
-        localModelEngines: capable is List
-            ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
-            : null,
-        gridCli: GridCli.parse(response['gridCli']),
+      final response = await _conn(machineId).request(
+        'grid_models_list',
+        payload: payload,
+        timeout: const Duration(seconds: 12),
       );
+      return GridModels.fromReply(response);
     } catch (_) {
       // NOT `gridName: null` with an empty list — that is the shape of "this account has no grid",
       // and a caller cannot tell it from "the machine did not answer". A signed-in user whose daemon
@@ -5089,11 +5165,127 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// A person asked to see what a resting section serves ("Show models"): ask [machineId]'s
+  /// daemon to wake [sectionName], and take its answer as the picture like any read.
+  ///
+  /// This is one of the acts that may wake a grid — nothing automatic ever calls it. The daemon
+  /// answers at once with the section `waking`; the wake itself (one credentialed read, then
+  /// credential-less re-reads for up to 45 s) runs there. Its progress reaches a loopback window by
+  /// `grid_models_changed`, and every other window only by asking again — which [_followWake] does,
+  /// credential-less, for as long as the picture says something is waking.
+  ///
+  /// Not joined with [refreshGridModels]' in-flight read: that ask carries no `wake`, and folding
+  /// this one into it would drop the person's request. An answer that was out when this one landed
+  /// is older, and the picture's epoch keeps it from overwriting this.
+  Future<GridModels> wakeGridModels(
+    String machineId,
+    String sectionName,
+  ) async {
+    final epoch = gridPictures.epochOf(machineId);
+    final answer = await _askGridModels(machineId, {
+      'rowState': true,
+      'wake': [sectionName],
+    });
+    if (_disposed || !answer.reachable) return answer;
+    gridPictures.adopt(machineId, answer, ifEpoch: epoch);
+    _followWake(machineId);
+    return answer;
+  }
+
+  /// How often, and for how long at most, a window re-reads a machine whose picture has a section
+  /// waking. The daemon's own wake gives up at 45 s; the extra is its last re-read landing.
+  static const _wakeFollowEvery = Duration(seconds: 5);
+  static const _wakeFollowFor = Duration(seconds: 60);
+  final Map<String, Timer> _wakeFollowers = {};
+
+  bool _pictureWaking(String machineId) =>
+      gridPictures[machineId]?.sections.any(
+        (s) => s.state == GridSectionState.waking,
+      ) ??
+      false;
+
+  /// Re-read [machineId] until no section in its picture is waking, or [_wakeFollowFor] passes.
+  ///
+  /// Harmless where pushes do arrive (this computer's own daemon): the read is the same
+  /// credential-less one every surface makes, joined with any other in flight, and a push that
+  /// already ended the wake ends this at its next tick. Skipped while the app is in the background,
+  /// like every other refresher.
+  void _followWake(String machineId) {
+    _wakeFollowers.remove(machineId)?.cancel();
+    if (!_pictureWaking(machineId)) return;
+    final deadline = _wakeFollowFor.inMilliseconds;
+    var elapsed = 0;
+    _wakeFollowers[machineId] = Timer.periodic(_wakeFollowEvery, (timer) {
+      elapsed += _wakeFollowEvery.inMilliseconds;
+      if (_disposed || !_pictureWaking(machineId) || elapsed > deadline) {
+        timer.cancel();
+        if (identical(_wakeFollowers[machineId], timer)) {
+          _wakeFollowers.remove(machineId);
+        }
+        return;
+      }
+      if (inForeground) unawaited(refreshGridModels(machineId));
+    });
+  }
+
+  void _stopWakeFollowers() {
+    for (final timer in _wakeFollowers.values) {
+      timer.cancel();
+    }
+    _wakeFollowers.clear();
+  }
+
+  final Map<String, Future<GridModels>> _gridReads = {};
+
+  /// Ask [machineId]'s daemon for the model list and take the answer as its [gridPictures] entry.
+  ///
+  /// One read feeds every surface. Reads for one machine that overlap are one request — the Model
+  /// Manager, the menu and every pane's picker all refresh on the same return to the foreground, and
+  /// that is one question to the daemon, not one per surface. An answer that was already on its way
+  /// when a `grid_models_changed` push landed is returned to its caller but not adopted: the push is
+  /// newer. An answer that is not one — the machine could not be asked — is returned but not adopted
+  /// either: one surface's timed-out read must not blank the list every other surface is showing.
+  Future<GridModels> refreshGridModels(String machineId) {
+    final inFlight = _gridReads[machineId];
+    if (inFlight != null) return inFlight;
+    final epoch = gridPictures.epochOf(machineId);
+    late final Future<GridModels> read;
+    read = gridModels(machineId)
+        .then((answer) {
+          if (!_disposed && answer.reachable) {
+            gridPictures.adopt(machineId, answer, ifEpoch: epoch);
+          }
+          return answer;
+        })
+        .whenComplete(() {
+          if (identical(_gridReads[machineId], read)) {
+            _gridReads.remove(machineId);
+          }
+        });
+    return _gridReads[machineId] = read;
+  }
+
+  /// What a surface shows after a read: the app's picture — newer than the answer when a push landed
+  /// meanwhile, and the last good list when this read could not reach the machine — or the answer
+  /// itself when there has never been a picture.
+  Future<GridModels> readGridPicture(String machineId) async {
+    final answer = await refreshGridModels(machineId);
+    return gridPictures[machineId] ?? answer;
+  }
+
   /// Model Manager keeps the original package ID for installed workspaces.
   static const gridHarness = 'autonomous/autonomous-grid';
   ModelManagerController? _modelManager;
   ModelManagerController get modelManager =>
       _modelManager ??= ModelManagerController(this);
+
+  ModelsMenuController? _modelsMenu;
+
+  /// Subscription readings for the whole window: the Models panel, New Harness and every pane's model
+  /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
+  /// picker said "Not signed in" beside a menu showing the same account with 8% left.
+  ModelsMenuController get modelsMenu =>
+      _modelsMenu ??= ModelsMenuController(remote: readRemoteUsage);
 
   Future<Map<String, dynamic>> localModels(
     String machineId, {
@@ -5877,9 +6069,7 @@ class AppNotifier extends ChangeNotifier {
       if (!tab.nameIsCustom &&
           tab.titleMachineId == machine.machine.machineId &&
           tab.titleAgentId == agent.id) {
-        final title = agent.displayName == kUntitledPane
-            ? Swarm.defaultName
-            : agent.displayName;
+        final title = Swarm.titleFor(agent);
         if (tab.name != title) {
           tab.name = title;
           changed = true;
@@ -5981,10 +6171,22 @@ class AppNotifier extends ChangeNotifier {
       _announceOpenPanesToDial();
     }
     if (agent.launchState == 'failed' && previous?.launchState != 'failed') {
-      _lastError = agent.launchDetail ?? 'Failed to start ${agent.name}';
-      // The launch already ran and failed (e.g. the engine's automatic
-      // install failed) — reloading the machine list will not install it.
-      _lastErrorRetryable = false;
+      // Only where the person would otherwise never see it. A harness with a
+      // pane open says this in the pane, with the button that answers it
+      // (`pane_grid`'s notice) — and this push reaches EVERY client watching
+      // the machine, so the window-wide band told people who had pressed
+      // nothing to go and check a harness they were not looking at.
+      final shown = allPanes.any(
+        (pane) =>
+            pane.machineId == machine.machine.machineId &&
+            pane.agentId == agent.id,
+      );
+      if (!shown) {
+        _lastError = agent.launchDetail ?? 'Failed to start ${agent.name}';
+        // The launch already ran and failed (e.g. the engine's automatic
+        // install failed) — reloading the machine list will not install it.
+        _lastErrorRetryable = false;
+      }
     }
   }
 
@@ -6226,8 +6428,8 @@ class AppNotifier extends ChangeNotifier {
   /// A seam, because reaching it through real panes means `focusPane`, which
   /// announces the focus to the machine, which dials it — and a test with no
   /// live connection hangs rather than fails.
-  late Iterable<({String machineId, String agentId})> Function()
-  watchedAgents = _visibleOnTab;
+  late Iterable<({String machineId, String agentId})> Function() watchedAgents =
+      _visibleOnTab;
 
   /// The real answer, reachable from a test without going through `focusPane`.
   @visibleForTesting
@@ -6256,7 +6458,56 @@ class AppNotifier extends ChangeNotifier {
   /// routes, which are many and would each have to remember.
   void seeWatchedAgents() {
     for (final w in watchedAgents()) {
-      agentUnread.clear(w.machineId, w.agentId);
+      // A QUESTION IS NOT CLEARED BY BEING LOOKED AT. Everything else here is
+      // news — an agent finished, and seeing it is the whole of what was owed.
+      // A blocked agent is a job: it is still waiting on a person however many
+      // times its tab came to the front, and a badge that stopped counting it
+      // would be saying the work was done because somebody glanced at it. It
+      // goes when the question is ANSWERED (`commander_question_close`).
+      if (agentUnread.kindFor(w.machineId, w.agentId) != AlertKind.done) {
+        continue;
+      }
+      _forgetUnread(w.machineId, w.agentId);
+    }
+  }
+
+  /// Drop this harness's mark and tell the daemon, so the dial drops its drawer
+  /// row for it too. Silent when there was no mark.
+  void _forgetUnread(String machineId, String agentId) {
+    if (agentUnread.kindFor(machineId, agentId) == null) return;
+    agentUnread.clear(machineId, agentId);
+    _announceAgentSeen(machineId, agentId);
+  }
+
+  /// Tell the daemon this harness has been looked at, so the dial drops its
+  /// drawer row for it.
+  ///
+  /// The two screens take a notification away on different gestures — a tap on
+  /// the dial, a tab coming to the front here — and each has to reach the other
+  /// or the two numbers part company the first time either is used. The dial's
+  /// half already travels: a tap sends `agent.open`, which brings the harness
+  /// forward here, and the sweep above clears it as anything else would.
+  ///
+  /// Guarded by the caller on "there was a mark", so an ordinary tab switch
+  /// does not put a frame on every socket.
+  void _announceAgentSeen(String machineId, String agentId) {
+    // No transport at all — a window still booting, or a plain `test()` with no
+    // live pool. `_conn` asserts one exists rather than answering null, which
+    // is right for the paths that cannot proceed without it and wrong for a
+    // diagnostic aside like this one.
+    if (_pool == null && connectionForTest == null) return;
+    // Through `_conn`, the resolver everything else on this socket uses — it
+    // refuses a shared harness, which this window has no business reporting on
+    // anyway, by throwing rather than by returning null.
+    try {
+      unawaited(
+        _conn(machineId)
+            .sendTerminalFrame('agent_seen', {'agentId': agentId})
+            .catchError((_) => false),
+      );
+    } on StateError {
+      // A view-only harness. Nothing to tell the dial about something this
+      // window does not drive.
     }
   }
 
@@ -6283,7 +6534,17 @@ class AppNotifier extends ChangeNotifier {
     // Nothing at all for the agent on screen in front of you. A sound, a banner
     // and a count are three ways of saying "look over here", and all three are
     // noise about the pane you are already in.
-    if (_isBeingWatched(machine.machine.machineId, agentId)) return;
+    //
+    // A QUESTION IS THE EXCEPTION, and it is the same exception the sweep makes
+    // (see [seeWatchedAgents]): it is a job rather than news, so it is owed
+    // until it is ANSWERED and being looked at is not an answer. Skipping it
+    // here would also have been self-defeating — a question asks the window to
+    // bring its agent forward, so "already on screen" was true by construction
+    // and the mark was never raised at all (owner, 2026-09-24).
+    if (kind != AlertKind.needsYou &&
+        _isBeingWatched(machine.machine.machineId, agentId)) {
+      return;
+    }
     final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
     // Before the banner and outside its switch: the mark is what the window can
     // still say when somebody has turned the interrupting halves off.
@@ -6330,8 +6591,14 @@ class AppNotifier extends ChangeNotifier {
   /// The person has gone to this agent — by clicking its row, its banner, or
   /// anything else that puts it in front of them. Whatever it was carrying has
   /// been seen.
-  void markAgentSeen(String machineId, String agentId) =>
-      agentUnread.clear(machineId, agentId);
+  /// This harness has been gone to — from a banner, from the dial, from a row.
+  ///
+  /// Same rule as the sweep: arriving at a blocked harness is not answering it,
+  /// so its mark stays. See [seeWatchedAgents].
+  void markAgentSeen(String machineId, String agentId) {
+    if (agentUnread.kindFor(machineId, agentId) != AlertKind.done) return;
+    _forgetUnread(machineId, agentId);
+  }
 
   /// Whatever tile is now in front of the person has been seen.
   ///
@@ -6435,6 +6702,55 @@ class AppNotifier extends ChangeNotifier {
   PendingQuestion? questionFor(String machineId, String agentId) =>
       machineStates[machineId]?.blockedAgents[agentId];
 
+  /// The per-agent events that only a model answering produces — the CLI's live event kinds
+  /// (`SessionEvent` and `LiveEvent` in `cli/src/lib/normalize.ts`) other than the prompt itself
+  /// (`turn_started`, `user_message`), the turn's end (which [_cancelTurnActivity] handles), and a
+  /// compaction (`context_compact`, which is the engine, not the model). A reasoning model's first
+  /// output is its thinking (`thinking_delta`, from the codex, hermes and grok normalizers among
+  /// others), long before any text.
+  static const _modelAnswerEvents = {
+    'thinking_delta',
+    'thinking_title',
+    'text_delta',
+    'tool_start',
+    'tool_end',
+    'subagent_finished',
+    'done',
+  };
+
+  /// Start or end the pane chip from one of an agent's turn events — see [ModelStartWatch].
+  ///
+  /// A message is a `turn_started` that is not a `replay` (a turn picked back up at attach), for
+  /// the agent's own session, while its frame says its model's grid is asleep or waking — the
+  /// daemon's picture, carried on the agent (`grid.state`). Any of [_modelAnswerEvents] is the
+  /// model answering; the turn's end comes through [_cancelTurnActivity]. Terminal bytes are not
+  /// read at all: the first thing a pane prints after Enter is its own echo of the prompt.
+  void _watchModelStart(
+    MachineState machine,
+    String type,
+    Map<String, dynamic> event,
+    Map<String, dynamic> payload,
+  ) {
+    final agentId = _eventAgentId(machine, event, payload);
+    if (agentId == null) return;
+    final machineId = machine.machine.machineId;
+    if (_modelAnswerEvents.contains(type)) {
+      modelStarts.end(machineId, agentId);
+      return;
+    }
+    if (type != 'turn_started' || event['replay'] == true) return;
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null || agent.gridState?.resting != true) return;
+    final sessionId = _eventSessionId(event, payload);
+    // A sub-agent's turn is not a message this pane sent.
+    if (sessionId != null &&
+        agent.sessionId != null &&
+        sessionId != agent.sessionId) {
+      return;
+    }
+    modelStarts.start(machineId, agentId);
+  }
+
   void _cancelTurnActivity(String machineId, String agentId) {
     final key = _turnActivityKey(machineId, agentId);
     _turnActivityWatchdogs.remove(key)?.cancel();
@@ -6443,6 +6759,9 @@ class AppNotifier extends ChangeNotifier {
     // a turn this process never saw start contributes nothing (see
     // `HarnessStats.onTurnEnded`), which is what makes the disconnect sweep safe.
     harnessStats.onTurnEnded(key);
+    // The same ends close the pane's "Starting up…": a turn that ended, however, has nothing
+    // left to start for.
+    modelStarts.end(machineId, agentId);
     final machine = machineStates[machineId];
     machine?.processingAgentIds.remove(agentId);
     // A question cannot outlive its own turn — the daemon's watcher says the
@@ -6466,6 +6785,7 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _turnActivityWatchdogs.clear();
+    modelStarts.clear();
     for (final machine in machineStates.values) {
       machine.processingAgentIds.clear();
       machine.pendingProcessingSessions.clear();
@@ -6761,6 +7081,7 @@ class AppNotifier extends ChangeNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    GridModel? model,
     String? prompt,
     String? name,
     String? agent,
@@ -6783,6 +7104,8 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
+      'gridModel': ?model?.id,
+      'gridName': ?model?.grid,
       // A first message the engine is opened with, and the pane's name before
       // the engine reports a session title. Both absent unless asked for: a
       // daemon that predates them ignores an unknown field, but one that knows
@@ -6963,6 +7286,29 @@ class AppNotifier extends ChangeNotifier {
       return 'Not connected to $machineName yet.';
     }
     final connection = _conn(machineId);
+    if (!creation.awaitingConfirmation && choices['gridModel'] != null) {
+      final models = await refreshGridModels(machineId);
+      if (!models.reachable) {
+        return creation._complete(
+          'Could not verify models on $machineName. Refresh models or use your subscription.',
+        );
+      }
+      if (!models.supportsModelLaunch) {
+        return creation._complete(
+          'Update Harness CLI on $machineName to choose a model before starting.',
+        );
+      }
+      if (!models.canRunLocally(choices['engine'] as String) ||
+          !models.sections.any(
+            (section) =>
+                section.name == choices['gridName'] &&
+                section.models.any((model) => model.id == choices['gridModel']),
+          )) {
+        return creation._complete(
+          'The selected model is unavailable. Refresh models or use your subscription.',
+        );
+      }
+    }
     var launchChoices = choices;
     if (!creation.awaitingConfirmation &&
         choices['projectSource'] != null &&
@@ -7060,7 +7406,7 @@ class AppNotifier extends ChangeNotifier {
             failure.code == 'UNSUPPORTED_ON_REMOTE' ||
             failure.code == 'E2EE_REQUIRED') {
           return '$machineName cannot check this creation. '
-              'Use Open Harness (⌘O) to look for it before starting another.';
+              'Use Open Harness to look for it before starting another.';
         }
         return unconfirmed;
       }
@@ -7074,6 +7420,7 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_CWD',
         'INVALID_ENGINE',
         'INVALID_GRID',
+        'GRID_UNAVAILABLE',
         'INVALID_CODEX_HOME',
         'INVALID_DSH',
         'PROMPT_UNSUPPORTED',
@@ -7115,7 +7462,7 @@ class AppNotifier extends ChangeNotifier {
         // receipt-aware version. Missing is not proof that nothing started.
         // Check status stays read-only, even across upgrades and reconnects.
         return '$machineName has no record of this request. '
-            'Use Open Harness (⌘O) to look for it before starting another.';
+            'Use Open Harness to look for it before starting another.';
       case 'pending':
         return '$machineName is still starting your harness. Check again in a moment.';
       case 'unconfirmed':
@@ -8916,9 +9263,7 @@ class AppNotifier extends ChangeNotifier {
           .firstOrNull;
       target.titleMachineId = machineId;
       target.titleAgentId = agentId;
-      target.name = agent == null || agent.displayName == kUntitledPane
-          ? Swarm.defaultName
-          : agent.displayName;
+      target.name = Swarm.titleFor(agent);
     }
     if (replaced != null && !allPanes.contains(replaced)) {
       // Release just the desktop stream. The CLI agent process keeps running.
@@ -9482,9 +9827,7 @@ class AppNotifier extends ChangeNotifier {
             .firstOrNull;
         target.titleMachineId = pane.machineId;
         target.titleAgentId = pane.agentId;
-        target.name = agent == null || agent.displayName == kUntitledPane
-            ? Swarm.defaultName
-            : agent.displayName;
+        target.name = Swarm.titleFor(agent);
       }
       for (final viewer in viewers) {
         if (target.panes.length >= maxPanes) break;
@@ -10194,7 +10537,9 @@ class AppNotifier extends ChangeNotifier {
         swarm.titleAgentId = raw['titleAgentId'] as String?;
         swarm.nameIsCustom =
             raw['nameIsCustom'] == true ||
-            (swarm.titleAgentId == null && swarm.name != Swarm.defaultName);
+            (swarm.titleAgentId == null &&
+                swarm.name != Swarm.defaultName &&
+                !(swarm.isStore && swarm.name == Swarm.storeName));
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);
           if (entry == null) continue;
@@ -10513,6 +10858,11 @@ class AppNotifier extends ChangeNotifier {
       }
       return;
     }
+    // Before the preview's early returns: several first-output kinds (`thinking_delta`) are not
+    // preview events at all.
+    if (type == 'turn_started' || _modelAnswerEvents.contains(type)) {
+      _watchModelStart(machine, type, event, payload);
+    }
     if (SessionPreviewStore.eventTypes.contains(type)) {
       final agentId = _eventAgentId(machine, event, payload);
       final agent = machine.agents
@@ -10637,6 +10987,12 @@ class AppNotifier extends ChangeNotifier {
             );
           }
         }
+        break;
+      case 'grid_models_changed':
+        // The daemon's picture of the account's grids changed — read without waking any of them,
+        // so this arrives for a grid going to sleep as well as for a model coming up. The payload
+        // is the whole `grid_models_list` document: adopted as it is, with no request.
+        gridPictures.adopt(machineId, GridModels.fromReply(payload));
         break;
       case 'machines_changed':
         // The account's machine list changed somewhere: a machine created,
@@ -10847,13 +11203,46 @@ class AppNotifier extends ChangeNotifier {
         final requestId = payload['requestId'];
         if (agentId != null) {
           final open = machine.blockedAgents[agentId];
-          // Only if it is the one being closed: a stale close must not wipe the
-          // question that replaced it when a dialog advanced to its next page.
-          if (open != null &&
-              (requestId is! String ||
-                  requestId.isEmpty ||
-                  open.requestId == requestId)) {
+          // A stale close must not wipe the question that REPLACED it when a
+          // dialog advanced to its next page. That is the only thing the id
+          // guards, so it is asked as its own question and nothing else hangs
+          // off it.
+          final supersededByANewerQuestion =
+              open != null &&
+              requestId is String &&
+              requestId.isNotEmpty &&
+              open.requestId != requestId;
+          if (!supersededByANewerQuestion) {
             machine.blockedAgents.remove(agentId);
+            // A question stops being unread when it is ANSWERED, wherever that
+            // happened — here, in the pane by hand, on the dial, in another
+            // window. Being looked at is not enough: the badge counts what is
+            // still waiting on a person.
+            //
+            // ⚠️ NOT nested inside "the dialog is still open". It was, and the
+            // mark then outlived its own question: answering makes the turn end
+            // too, `_cancelTurnActivity` clears `blockedAgents` on the way past,
+            // and whichever of the two frames lands first decides whether this
+            // runs at all. The close is the authoritative word that the question
+            // is answered; the dialog bookkeeping is a separate thing that may
+            // already have been tidied.
+            //
+            // WHATEVER THE MARK IS, not only a question's.
+            //
+            // Answering ENDS THE TURN for these engines — measured, one
+            // millisecond apart and the turn first:
+            //
+            //   18:04:58.534 [turn] 395050e8 ended · 65175ms
+            //   18:04:58.535 [question] 395050e8 answered elsewhere · closing
+            //
+            // so the `done` that lands with every answer overwrote the question
+            // mark and the badge never went down. Reading it as news is wrong on
+            // its face: a turn that ended in the same breath as your own answer
+            // is not something that happened while you were away.
+            //
+            // A close means somebody just dealt with this agent. Anything unread
+            // for it at that moment is about the work they were standing over.
+            _forgetUnread(machine.machine.machineId, agentId);
           }
         }
         break;
@@ -10888,7 +11277,14 @@ class AppNotifier extends ChangeNotifier {
       case 'turn_ended':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
-          _raiseAlert(machine, agentId, AlertKind.done);
+          // A SUB-AGENT'S turn end is not news — an Orchestrator specialist, or
+          // its Director while specialists are still out. The dial has always
+          // known (`silent` on its summary card) and this window never did, so a
+          // project of four specialists put one row on the dial and five marks
+          // here. Same predicate now, asked on the daemon: `isSubagentSession`.
+          if (event['subagent'] != true) {
+            _raiseAlert(machine, agentId, AlertKind.done);
+          }
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {
           final sessionId = _eventSessionId(event, payload);
@@ -10954,6 +11350,7 @@ class AppNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _modelManager?.dispose();
+    _modelsMenu?.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }
@@ -10961,6 +11358,10 @@ class AppNotifier extends ChangeNotifier {
     terminalThemeStore.removeListener(_announceTerminalThemeEverywhere);
     _localGitProjects.dispose();
     sessionPreviews.dispose();
+    gridPictures.dispose();
+    _stopWakeFollowers();
+    modelStarts.dispose();
+    foreground.dispose();
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();
     agentUnread.dispose();

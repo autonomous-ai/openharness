@@ -36,7 +36,9 @@ void main() {
         await tester.pump();
         final label = find.descendant(
           of: strip,
-          matching: find.text(app.activeSwarm.name),
+          matching: find.text(
+            '${app.swarms.indexOf(app.activeSwarm) + 1}:${app.activeSwarm.name}',
+          ),
         );
         expect(label, findsOneWidget);
         final viewport = tester.getRect(strip);
@@ -212,7 +214,7 @@ void main() {
     tester.view.physicalSize = const Size(2000, 1200);
     await tester.pump();
     Future<void> command(String query) async {
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> $query',

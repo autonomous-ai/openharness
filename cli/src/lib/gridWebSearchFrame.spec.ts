@@ -17,7 +17,7 @@ import { fakeGridAnswers, installFakeGrid, type FakeGrid, type FakeGridPlan } fr
 import { agentFrame } from './agentFrame.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { clearGridMcpUrlCache } from './gridMcpUrl.js'
-import { resolveGridTarget } from './gridModels.js'
+import { resolveGridTarget } from './gridTarget.js'
 
 const { gridName: GRID, baseUrl: BASE_URL, mcpUrl: MCP_URL, plan } = fakeGridAnswers()
 

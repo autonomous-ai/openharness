@@ -337,6 +337,83 @@ describe('ensureManagedGrid', () => {
   })
 })
 
+describe('startGridPinRecheck', () => {
+  const key = currentPlatformKey()
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'harness-grid-recheck-'))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    for (const dir of [runtimeDir, binDir, cliDir]) mkdirSync(dir, { recursive: true })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    for (const entry of readdirSync(runtimeDir)) {
+      try { chmodSync(join(runtimeDir, entry, 'bin'), 0o755) } catch { /* not a runtime dir */ }
+    }
+    rmSync(root, { recursive: true, force: true })
+    for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
+      delete process.env[key]
+    }
+  })
+
+  /** A snapshot of everything under the runtime dir: names, sizes and times. */
+  const tree = (): string[] => readdirSync(runtimeDir, { recursive: true, withFileTypes: true })
+    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.size}:${st.mtimeMs}` })
+    .sort()
+
+  it('re-reads the pin every ten minutes, writes nothing while it matches, and a moved pin reaches the next grid call', async () => {
+    const installed = installedGrid('0.3.47', key, true)
+    const old = buildArchive('0.3.47', key, 'grid')
+    stubFetch(manifestFor('grid', key, '0.3.47', old.bytes, old.root), old.bytes)
+    const { ensureManagedGrid, startGridPinRecheck, GRID_PIN_RECHECK_MS } = await load()
+    const { gridBinaryPath } = await import('./gridExec.js')
+    let last: Promise<unknown> = Promise.resolve()
+    const ensure = vi.fn(() => (last = ensureManagedGrid()))
+    // The check, and the bookkeeping that frees the next one.
+    const checked = async (): Promise<void> => { await last; await new Promise((resolve) => setImmediate(resolve)) }
+    const stop = startGridPinRecheck({ ensure })
+    const before = tree()
+
+    expect(GRID_PIN_RECHECK_MS).toBe(10 * 60_000)
+    vi.advanceTimersByTime(GRID_PIN_RECHECK_MS - 1)
+    expect(ensure).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    await checked()
+    expect(ensure).toHaveBeenCalledOnce()
+    expect(tree()).toEqual(before)
+    expect(gridBinaryPath({})).toBe(installed)
+
+    const next = buildArchive('0.3.49', key, 'grid')
+    stubFetch(manifestFor('grid', key, '0.3.49', next.bytes, next.root), next.bytes)
+    vi.advanceTimersByTime(GRID_PIN_RECHECK_MS)
+    await checked()
+    expect(gridBinaryPath({})).toBe(join(runtimeDir, `grid-0.3.49-${key}`, 'bin', 'grid'))
+    stop()
+    vi.advanceTimersByTime(GRID_PIN_RECHECK_MS * 3)
+    expect(ensure).toHaveBeenCalledTimes(2)
+  })
+
+  it('runs one check at a time: a slow one is not stacked on', async () => {
+    const { startGridPinRecheck, GRID_PIN_RECHECK_MS } = await load()
+    let release: () => void = () => {}
+    const ensure = vi.fn(() => new Promise<void>((resolve) => { release = resolve }))
+    const stop = startGridPinRecheck({ ensure })
+
+    vi.advanceTimersByTime(GRID_PIN_RECHECK_MS * 3)
+    expect(ensure).toHaveBeenCalledOnce()
+    release()
+    await new Promise((resolve) => setImmediate(resolve))
+    vi.advanceTimersByTime(GRID_PIN_RECHECK_MS)
+    expect(ensure).toHaveBeenCalledTimes(2)
+    stop()
+  })
+})
+
 describe('ensureLauncher', () => {
   const NODE = '/opt/harness/runtime/node-v22/bin/node'
 

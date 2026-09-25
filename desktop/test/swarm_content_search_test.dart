@@ -1,5 +1,5 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/swarm_navigation.dart';
@@ -7,7 +7,6 @@ import 'package:harness/state/swarm_search.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/ws/ws_conn.dart';
 
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_search_preview_test.dart' show seedPreviews;
 import 'swarm_state_test.dart' show createApp;
@@ -72,11 +71,11 @@ void main() {
       expect(search.rows, isEmpty);
       app.sessionPreviews.warm([key]);
       await tester.pump(const Duration(milliseconds: 80));
-      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      // ⌘P's list ends in the row that makes a harness; it is not a match.
       expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       expect(catalog.read(app, []), same(metadata));
       search.setQuery('DESIGN HOVER');
-      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      // ⌘P's list ends in the row that makes a harness; it is not a match.
       expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       search.setQuery('skylark');
       expect(search.rows.map((row) => row.agentId), ['a1', 'a0']);
@@ -96,7 +95,7 @@ void main() {
       expect(resultChanges, 0);
       expect(search.selected?.agentId, 'a0');
       search.setQuery('progress 99');
-      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      // ⌘P's list ends in the row that makes a harness; it is not a match.
       expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       machine.agents = [
         const Agent(
@@ -148,7 +147,7 @@ void main() {
         'content': 'Changed topic',
       });
       await tester.pump(const Duration(milliseconds: 80));
-      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      // ⌘P's list ends in the row that makes a harness; it is not a match.
       expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       search.dispose();
       app.dispose();
@@ -164,7 +163,7 @@ void main() {
       app.adoptSessionForTest(terminal('a69', []));
       app.newSwarm();
       await mount(tester, app);
-      if (!inline) await chord(tester, LogicalKeyboardKey.keyO);
+      if (!inline) await openHarnessPicker(tester);
       final field = find.byKey(
         ValueKey(inline ? 'harness-start-search' : 'swarm-search-input'),
       );
@@ -173,7 +172,7 @@ void main() {
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
           .search;
-      // ⌘O's list ends in the row that makes a harness; it is not a match.
+      // ⌘P's list ends in the row that makes a harness; it is not a match.
       expect(search.rows.where((row) => !row.isCreate).single.agentId, 'a0');
       expect(find.textContaining('Payment retries now reuse'), findsOneWidget);
       expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);

@@ -204,3 +204,45 @@ it if one is dropped.
     follow the text path. Box drawing (U+2500–U+257F) still comes from the
     font. Regression: `test/terminal_block_glyph_test.dart`, which also
     rasterises through the real painter.
+
+12. **Only lines that changed are drawn again** (`lib/src/core/buffer/line.dart`,
+    `lib/src/ui/line_picture_cache.dart`, `lib/src/ui/painter.dart`,
+    `lib/src/ui/render.dart`). Every frame with output — and every cursor blink,
+    twice a second — drew each visible cell again, one paragraph per glyph,
+    though usually one line had changed. `BufferLine.paintVersion` now moves
+    whenever anything a line draws changes (colours too, unlike `textVersion`),
+    but not when a cell is rewritten with the value it already holds, because a
+    TUI redrawing its screen rewrites mostly identical cells. The renderer keeps
+    each visible line's drawing as a `Picture` keyed by the line object and
+    replays it while the version holds; lines keep their identity as they
+    scroll (patch 1), so streaming output records only the newest line. A line
+    is recorded at its sub-device-pixel phase and replayed moved by whole device
+    pixels, so block-glyph snapping (patch 11) lands exactly where a direct
+    paint would put it even at a fractional pixel ratio. The
+    cache holds only what the last frame drew and is cleared with the theme,
+    font, text scale, pixel ratio, and whenever the view stops rendering.
+    Regression: `test/terminal_line_paint_cache_test.dart`, including a
+    pixel-for-pixel comparison of replayed and directly painted lines.
+
+13. **A line's backgrounds are filled a run at a time, before its glyphs**
+    (`lib/src/ui/painter.dart`). Neighbouring cells with the same background
+    colour share one rectangle — the same area, one-pixel overlap included —
+    and a single `Paint` serves them all. Painting every background before any
+    glyph also means a glyph that overhangs its cell (italic, a wide face) now
+    shows over a coloured neighbour just as it always did over the default
+    background, instead of being clipped by that neighbour's fill. Regression:
+    `test/terminal_line_paint_cache_test.dart` (backgrounds identical to the
+    per-cell fill; glyph edges the only difference).
+
+14. **Plain ASCII in one style is drawn as one paragraph**
+    (`lib/src/ui/painter.dart`). Two or more neighbouring printable-ASCII,
+    single-width cells with the same colours and attributes are laid out and
+    drawn together, with ligatures, contextual alternates and kerning disabled
+    so each glyph keeps its cell. A weight/slant is only batched when every
+    printable ASCII character measures exactly one cell wide in it, so a face
+    whose bold or italic runs wider (or a proportional face) stays cell by
+    cell. Wide characters, non-ASCII, block glyphs and the substituted U+23FA
+    still go through `paintCellForeground`. Runs of bare spaces draw nothing,
+    as before; underlined spaces become U+00A0 as in the per-cell path.
+    Regression: `test/terminal_line_paint_cache_test.dart` (where runs are cut,
+    and a rendering within antialiasing of the per-cell one).

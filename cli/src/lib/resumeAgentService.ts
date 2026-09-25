@@ -9,7 +9,7 @@ import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, t
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { enginePathOverride } from './engineBin.js'
 import { engineInstallRecipe } from './engineInstall.js'
-import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported } from './engineLaunch.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
@@ -184,10 +184,21 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         }
         if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY' }
         const { env: launchEnv, extraArgs, clearEnv } = built.overrides
+        // The engine may have been downgraded since this harness was paused. Nobody is waiting on
+        // the mode the way they are waiting on the harness, so the flag goes and the launch stays
+        // (openharness#285). The row keeps its recorded mode; discovery re-derives the live one.
+        const { choice: permission, droppedFlag } = await dropPermissionFlagIfUnsupported(saved.engine, {
+          permissionMode: saved.permissionMode ?? null,
+          bypassPermission: saved.bypassPermission === true,
+        })
+        if (droppedFlag) {
+          console.warn(`[resume] ${sid(saved.agentId)} · ${saved.engine} does not take ${droppedFlag}`
+            + ` · resuming in Ask · update ${saved.engine} to get ${saved.permissionMode ?? 'Auto'} back`)
+        }
         const options = {
           resumeSessionId,
-          bypassPermission: saved.bypassPermission === true,
-          ...(saved.permissionMode ? { permissionMode: saved.permissionMode } : {}),
+          bypassPermission: permission.bypassPermission === true,
+          ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           cwd: saved.cwd,
           ...(extraArgs.length ? { extraArgs } : {}),
           ...(clearEnv.length ? { clearEnv } : {}),

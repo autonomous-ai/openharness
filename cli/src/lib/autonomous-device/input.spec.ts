@@ -79,11 +79,12 @@ describe('in-flight input through the Autonomous Device contract', () => {
     expect(await f.send('B', 'Make the roof red', revision)).toMatchObject({ status: 'duplicate', receipt: { deliveryId: before } })
     expect(f.inject).toHaveBeenCalledTimes(2)
     f.end()
-    expect(f.receipt('A').state).toBe('completed')
+    // A session end without engine result evidence cannot complete a native input.
+    expect(f.receipt('A').state).toBe('unknown')
     expect(f.receipt('B').state).toBe('delivered')
     f.start('Make the roof red')
     f.end()
-    expect(f.receipt('B').state).toBe('completed')
+    expect(f.receipt('B').state).toBe('unknown')
     expect(f.receipt('B').turnId).not.toBe(f.receipt('A').turnId)
     f.controller.forget('agent')
   })
@@ -124,10 +125,10 @@ describe('in-flight input through the Autonomous Device contract', () => {
     expect(f.receipt('B').state).toBe('delivered')
     expect(f.receipt('C').state).toBe('delivered')
     f.start('B'); f.end()
-    expect(f.receipt('B').state).toBe('completed')
+    expect(f.receipt('B').state).toBe('unknown')
     expect(f.receipt('C').state).toBe('delivered')
     f.start('C'); f.end()
-    expect(f.receipt('C').state).toBe('completed')
+    expect(f.receipt('C').state).toBe('unknown')
     f.controller.forget('agent')
   })
 
@@ -138,8 +139,8 @@ describe('in-flight input through the Autonomous Device contract', () => {
     await f.send('B'); await vi.advanceTimersByTimeAsync(0); f.start('B')
     f.end()
     f.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'A answer' } })
-    expect(f.receipt('A')).toMatchObject({ state: 'unknown', error: { code: 'OVERLAPPING_INPUTS' } })
-    expect(f.receipt('B')).toMatchObject({ state: 'unknown', error: { code: 'OVERLAPPING_INPUTS' } })
+    expect(f.receipt('A')).toMatchObject({ state: 'unknown', error: { code: 'RESULT_EVIDENCE_MISSING' } })
+    expect(f.receipt('B')).toMatchObject({ state: 'unknown', error: { code: 'RESULT_EVIDENCE_MISSING' } })
     expect(f.events.findLast(event => event.kind === 'turn.done')).toMatchObject({ payload: {} })
     expect(await f.send('B')).toMatchObject({ status: 'duplicate' })
     expect(f.inject).toHaveBeenCalledTimes(2)
@@ -259,7 +260,8 @@ describe('native input write evidence', () => {
     expect(await f.send('A')).toMatchObject({ status: 'duplicate' })
     expect(f.inject).toHaveBeenCalledTimes(1)
     f.end()
-    expect(f.receipt('A').state).toBe('completed')
+    // A session end without engine result evidence cannot complete a native input.
+    expect(f.receipt('A').state).toBe('unknown')
     f.controller.forget('agent')
   })
 
@@ -270,6 +272,7 @@ describe('native input write evidence', () => {
     f.gone()
     expect(f.receipt('A')).toMatchObject({ state: 'unknown', error: { code: 'AGENT_GONE' } })
     f.end()
+    // A session end without engine result evidence cannot complete a native input.
     expect(f.receipt('A').state).toBe('unknown')
   })
 
@@ -334,8 +337,8 @@ it.each(['codex', 'claude'] as const)('%s Device filter rejects an inferred comp
   expect(inputEvents.map(event => event.type)).toEqual(['turn_ended', 'turn_started'])
   if (engine === 'claude') expect(claude.pendingTools.has('running-tool')).toBe(false) // unchanged shared normalizer
   observe(inputEvents)
-  expect(f.receipt('A').state).toBe('unknown')
-  expect(f.receipt('B').state).toBe('unknown')
+  expect(f.receipt('A').state).toBe('started')
+  expect(f.receipt('B').state).toBe('started')
   const endEvents = engine === 'codex'
     ? codex.ingest(JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }))
     : (() => {

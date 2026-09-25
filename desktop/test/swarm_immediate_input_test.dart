@@ -97,7 +97,7 @@ void main() {
             } else if (nativeEntry) {
               await native(tester, 'keymapCommand', {'command': commandId});
             } else {
-              await command(tester, key, shift: action == 'close pane');
+              await command(tester, key, shift: commandId == 'pane.close');
             }
             // Both events arrive before the canvas updates its widgets.
             await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
