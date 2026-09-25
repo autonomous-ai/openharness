@@ -191,6 +191,7 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
         }
     }
+    app.fleet.save_cache();
     drop(term);
     drop(restore);
     Ok(())
