@@ -1,5 +1,5 @@
 // New Harness, end to end through the real app model: the machine's catalog
-// arrives over `dsh_list`, the harness is picked with keys, ⇧⏎ sends
+// arrives over `dsh_list`, the harness is picked with keys, Enter on New Harness sends
 // `dsh_install`, the machine narrates through `dsh_install_status` pushes,
 // and `agent_create` follows only once the install lands. Only the socket is
 // a fixture; AppNotifier, MachineDsh, the controller and the form are real.
@@ -19,7 +19,7 @@ import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
-import 'support/launch_menu.dart' show focusLaunchRow;
+import 'support/launch_menu.dart' show focusLaunchRow, startHarness;
 
 const _circuit = 'autonomous/autonomous-circuit';
 
@@ -229,7 +229,7 @@ void main() {
     expect(box.harnessId, _circuit);
     expect(pane, findsNothing, reason: 'quiet until start');
 
-    await key(tester, LogicalKeyboardKey.enter, shift: true);
+    await startHarness(tester);
     await settle(tester);
     expect(machine.installs, [_circuit]);
     expect(inPane('Installing Autonomous Circuit on This Mac'), findsOneWidget);
@@ -262,59 +262,64 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a failed install explains itself; ⇧⏎ retries and creates', (
-    tester,
-  ) async {
-    final box = await mount(tester);
-    await pickCircuit(tester);
-    await key(tester, LogicalKeyboardKey.enter, shift: true);
-    await settle(tester);
-    await say({'id': _circuit, 'phase': 'clone'});
-    await say({'id': _circuit, 'phase': 'setup', 'line': 'npm ci'});
-    await say({
-      'id': _circuit,
-      'phase': 'failed',
-      'error': 'DSH_SETUP_FAILED',
-      'detail': 'setup exited 1 · npm ERR! code E401',
-    });
-    machine.reply!.complete({
-      'ok': false,
-      'error': 'DSH_SETUP_FAILED',
-      'detail': 'setup exited 1 · npm ERR! code E401',
-    });
-    await settle(tester);
+  testWidgets(
+    'a failed install explains itself; New Harness retries and creates',
+    (tester) async {
+      final box = await mount(tester);
+      await pickCircuit(tester);
+      await startHarness(tester);
+      await settle(tester);
+      await say({'id': _circuit, 'phase': 'clone'});
+      await say({'id': _circuit, 'phase': 'setup', 'line': 'npm ci'});
+      await say({
+        'id': _circuit,
+        'phase': 'failed',
+        'error': 'DSH_SETUP_FAILED',
+        'detail': 'setup exited 1 · npm ERR! code E401',
+      });
+      machine.reply!.complete({
+        'ok': false,
+        'error': 'DSH_SETUP_FAILED',
+        'detail': 'setup exited 1 · npm ERR! code E401',
+      });
+      await settle(tester);
 
-    expect(machine.creates, isEmpty);
-    expect(
-      inPane('Autonomous Circuit did not install on This Mac'),
-      findsOneWidget,
-    );
-    expect(inPane('✓'), findsOneWidget, reason: 'fetch had finished');
-    expect(inPane('✗'), findsOneWidget, reason: 'set up is what failed');
-    expect(find.textContaining('tries again'), findsOneWidget);
-    expect(box.busy, isFalse);
+      expect(machine.creates, isEmpty);
+      expect(
+        inPane('Autonomous Circuit did not install on This Mac'),
+        findsOneWidget,
+      );
+      expect(inPane('✓'), findsOneWidget, reason: 'fetch had finished');
+      expect(inPane('✗'), findsOneWidget, reason: 'set up is what failed');
+      expect(find.textContaining('tries again'), findsOneWidget);
+      expect(box.busy, isFalse);
 
-    // Opening a list covers the pane while choosing; leaving it brings it back.
-    await focusLaunchRow(tester, 'agent');
-    await key(tester, LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(pane, findsNothing);
-    await key(tester, LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(pane, findsOneWidget);
+      // Opening a list covers the pane while choosing; leaving it brings it back.
+      await key(tester, LogicalKeyboardKey.arrowDown);
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(pane, findsNothing);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(pane, findsOneWidget);
 
-    await key(tester, LogicalKeyboardKey.enter, shift: true);
-    await settle(tester);
-    expect(machine.installs, [_circuit, _circuit]);
-    expect(inPane('✗'), findsNothing, reason: 'a retry is a fresh run');
-    expect(inPane('Installing Autonomous Circuit on This Mac'), findsOneWidget);
-    await say({'id': _circuit, 'phase': 'done'});
-    machine.reply!.complete({'ok': true});
-    await settle(tester);
-    await settle(tester);
-    expect(machine.creates.single['dsh'], _circuit);
-    expect(tester.takeException(), isNull);
-  });
+      await key(tester, LogicalKeyboardKey.arrowUp);
+      await key(tester, LogicalKeyboardKey.enter);
+      await settle(tester);
+      expect(machine.installs, [_circuit, _circuit]);
+      expect(inPane('✗'), findsNothing, reason: 'a retry is a fresh run');
+      expect(
+        inPane('Installing Autonomous Circuit on This Mac'),
+        findsOneWidget,
+      );
+      await say({'id': _circuit, 'phase': 'done'});
+      machine.reply!.complete({'ok': true});
+      await settle(tester);
+      await settle(tester);
+      expect(machine.creates.single['dsh'], _circuit);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('a dropped socket says the install may still be finishing', (
     tester,
@@ -322,7 +327,7 @@ void main() {
     await mount(tester);
     await pickCircuit(tester);
     machine.dropInstall = StateError('socket closed');
-    await key(tester, LogicalKeyboardKey.enter, shift: true);
+    await startHarness(tester);
     await settle(tester);
     expect(machine.creates, isEmpty);
     expect(pane, findsOneWidget);
@@ -353,7 +358,7 @@ void main() {
     ) async {
       await mount(tester, width: width, textScale: scale);
       await pickCircuit(tester);
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await startHarness(tester);
       await settle(tester);
       await say({'id': _circuit, 'phase': 'clone'});
       await say({

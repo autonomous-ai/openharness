@@ -29,6 +29,10 @@ void main() {
   ) async {
     final app = createApp();
     seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     final map = MemoryKeymap();
     addTearDown(app.dispose);
     addTearDown(map.dispose);
@@ -136,7 +140,10 @@ void main() {
         expect(tester.widget<TextField>(input).cursorWidth, 2);
         expect(find.byKey(const ValueKey('swarm-search-prompt')), findsNothing);
         expect(find.text('Harness:'), findsNothing);
-        expect(find.text('[ New Harness ]'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('new-harness-field-start')),
+          findsNothing,
+        );
         expect(find.text('Select Item'), findsNothing);
         expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
         final search = tester

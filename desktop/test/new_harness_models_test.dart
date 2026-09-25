@@ -369,8 +369,10 @@ void main() {
       expect(box.engine, 'terminal');
       expect(box.model, isNull);
       expect(box.draft.model, isNull);
-      await openLaunchRow(tester, 'advanced');
-      expect(find.text('Not used by Terminal'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-model')),
+        findsNothing,
+      );
       await startHarness(tester);
       await tester.pumpAndSettle();
       final payload = connections['m']!.creates.single;
@@ -422,7 +424,7 @@ void main() {
       await load(box);
       box.applyOption(localChoice(box));
       select(box, NewHarnessField.agent, 'cursor');
-      expect(box.subscriptionLabel, 'Cursor default');
+      expect(box.subscriptionLabel, 'Cursor');
       expect(box.modelNotice, contains('own login'));
       expect(await box.create(), NewHarnessOutcome.failed);
       await load(box);
@@ -576,7 +578,8 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        final order = ['agent', 'project', 'advanced'];
+        await openLaunchRow(tester, 'advanced');
+        final order = ['agent', 'project', 'model', 'branch', 'worktree'];
         final positions = [
           for (final name in order)
             tester
@@ -593,7 +596,6 @@ void main() {
         await tester.pumpAndSettle();
         expect(box.modelLabel, 'Qwen-35B · Mac Studio');
         expect(box.machineId, 'm');
-        await openLaunchRow(tester, 'advanced');
         final start = find.byKey(const ValueKey('new-harness-field-start'));
         expect(start.hitTestable(), findsOneWidget);
         final semantics = tester.ensureSemantics();
@@ -605,8 +607,32 @@ void main() {
           findsNothing,
         );
         await openLaunchRow(tester, 'model');
+        await tester.scrollUntilVisible(
+          find.text('Refresh models'),
+          60,
+          scrollable: find.descendant(
+            of: find.byKey(const ValueKey('new-harness-choices')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down,
+            ),
+          ),
+        );
         await tester.tap(find.text('Refresh models'));
         await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(
+          find.text('Manage Models…'),
+          60,
+          scrollable: find.descendant(
+            of: find.byKey(const ValueKey('new-harness-choices')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down,
+            ),
+          ),
+        );
         await tester.tap(find.text('Manage Models…'));
         await tester.pumpAndSettle();
         expect(managed, 1);

@@ -1839,13 +1839,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // row would have started the harness on.
     if (newHarnessOpensInBox) task ??= search?.createTask;
     if (app.activeSwarmId != target) return;
-    // In the box, the new harness starts as another of the one you were in —
-    // its agent, its machine, its project — the way a tmux split inherits its
-    // pane and a new terminal tab opens where the last one was. The form keeps
-    // what it always did: it inherits only for a split.
+    // A fresh launcher uses saved choices on this computer. Only an explicit
+    // split inherits its source pane; changing focus never changes Cmd-N's
+    // defaults.
     final focused =
-        source == _NewHarnessSource.workspace &&
-            (newHarnessOpensInBox || requestedSplit != null)
+        source == _NewHarnessSource.workspace && requestedSplit != null
         ? app.focusedPane ?? _newTabSources[target]
         : null;
     final machine = focused == null ? null : app.stateOf(focused.machineId);
@@ -1860,19 +1858,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
             .firstOrNull
             ?.machine
             .machineId ??
-        app.machineStates.keys.firstOrNull;
+        (newHarnessOpensInBox ? null : app.machineStates.keys.firstOrNull);
     final paneProject =
         projectName != null || agent == null || id != focused?.machineId
         ? null
         : machine?.projectOf(agent);
-    // Another one of these: its agent, machine and folder — not its branch.
-    // New Harness is new work; another agent's branch is one pick away, and
-    // joins its worktree rather than being where Start begins.
-    final initialFolder = folder ?? paneProject?.cwd;
     if (id == null) {
       await _showMachinesControls();
       return;
     }
+    await Future.wait([app.agentPreference.load(), app.projectHistory.load()]);
+    if (!mounted || app.activeSwarmId != target) return;
+    final initialFolder =
+        folder ??
+        paneProject?.cwd ??
+        (newHarnessOpensInBox && source == _NewHarnessSource.workspace
+            ? app.projectHistory.selected(id) ??
+                  app.projectHistory.recent(id).firstOrNull
+            : null);
     if (!newHarnessOpensInBox) {
       await _newAgentForm(
         machineId: id,
@@ -1896,7 +1899,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       autoProject:
           projectName == null &&
           initialFolder == null &&
-          (source == _NewHarnessSource.product || app.panes.isEmpty),
+          source == _NewHarnessSource.product,
       task: task,
       draftContext: (
         source: source,
@@ -2049,7 +2052,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
         draft ??
         (savedDraft != null &&
                 (savedDraft.attempt?.awaitingConfirmation == true ||
-                    (task == null && matchesSelection(savedDraft)))
+                    (origin.source != _NewHarnessSource.workspace &&
+                        task == null &&
+                        matchesSelection(savedDraft)))
             ? savedDraft
             : null);
     if (resumed != null) _newHarnessDrafts.remove(origin);
@@ -2114,8 +2119,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
             listenable: box,
             builder: (context, child) => LayoutBuilder(
               builder: (context, constraints) {
-                final setupScale = terminalTextScaleOf(context)
-                    .clamp(1.0, 1.25);
                 return Stack(
                   children: [
                     Positioned.fill(
@@ -2139,21 +2142,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                     Positioned.fill(
                       top: _native ? 0 : _tabBarHeight,
-                      child: Align(
-                        alignment: const Alignment(0, -0.12),
-                        // Sized for the setup fields rather than the session
-                        // catalog, with some extra room for larger terminal text.
-                        child: SizedBox(
-                          width: math.min(
-                            960 * setupScale,
-                            constraints.maxWidth - 48,
-                          ),
-                          height: math.min(
-                            480 * setupScale,
-                            constraints.maxHeight - 88,
-                          ),
-                          child: content,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: terminalCellSizeOf(context).width * 2,
+                          vertical: terminalCellSizeOf(context).height,
                         ),
+                        child: content,
                       ),
                     ),
                   ],
@@ -2330,7 +2324,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (restoreFocus) {
       // Creation can replace a picker whose editor is now detached. Its node
       // still holds a context, but cannot receive keys after cancellation.
-      if (previous?.context?.mounted == true && previous!.canRequestFocus) {
+      if (previous != null &&
+          previous is! FocusScopeNode &&
+          previous.context?.mounted == true &&
+          previous.canRequestFocus) {
         previous.requestFocus();
       } else if (app.focusedPane?.session?.focusInput() != true) {
         _shellFocus.requestFocus();

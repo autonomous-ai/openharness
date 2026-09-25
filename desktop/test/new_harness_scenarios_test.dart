@@ -185,7 +185,6 @@ Future<_Scenario> _mount(
   );
   await tester.pumpAndSettle();
   if (editProject) {
-    await openLaunchRow(tester, 'advanced');
     await openLaunchRow(tester, 'project');
   }
   return scenario;
@@ -215,7 +214,7 @@ void main() {
   }
 
   testWidgets(
-    'Cmd-N opens with two fields, collapsed Options and explicit launch selected',
+    'Cmd-N opens Agent, Project and Options with Enter ready to launch',
     (tester) async {
       final scenario = await _mount(
         tester,
@@ -228,7 +227,6 @@ void main() {
       expect(_field('advanced'), findsOneWidget);
       for (final name in [
         'machine',
-        'harness',
         'model',
         'branch',
         'worktree',
@@ -242,8 +240,8 @@ void main() {
         isTrue,
       );
       expect(find.byType(TextField), findsNothing);
-      expect(find.byKey(const ValueKey('new-harness-summary')), findsOneWidget);
-      expect(find.text('/work/repo'), findsOneWidget);
+      expect(find.byKey(const ValueKey('new-harness-summary')), findsNothing);
+      expect(find.text('M2:/work/repo'), findsOneWidget);
       expect(scenario.connections.values.expand((c) => c.starts), isEmpty);
       await capture(tester, 'rest');
       await key(tester, LogicalKeyboardKey.enter);
@@ -273,6 +271,8 @@ void main() {
       await openLaunchRow(tester, 'agent');
       expect(scenario.box.options.any((o) => o.title == 'Code'), isFalse);
       await typeHarnessQuery(tester, 'blender');
+      final query = find.byKey(const ValueKey('new-harness-query'));
+      final queryTop = tester.getTopLeft(query).dy;
       await key(tester, LogicalKeyboardKey.enter);
       expect(scenario.box.field, NewHarnessField.agent);
       expect(scenario.box.options.map((o) => o.id).toSet(), {
@@ -280,6 +280,11 @@ void main() {
         'codex',
       });
       expect(scenario.box.selected!.id, 'claude');
+      expect(
+        tester.widget<TextField>(query).decoration!.hintText,
+        'Run Blender with',
+      );
+      expect(tester.getTopLeft(query).dy, queryTop);
       expect(find.text('Run Blender with'), findsOneWidget);
       await capture(tester, 'blender');
       await key(tester, LogicalKeyboardKey.arrowLeft);
@@ -296,6 +301,11 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       expect(scenario.box.launchAgentLabel, 'Blender · Codex');
       expect(harnessChoicesActive(tester), isFalse);
+      for (final label in ['Agent', 'Project', 'Options']) {
+        expect(find.text(label), findsOneWidget);
+      }
+      expect(find.text('Agent default'), findsNothing);
+      await capture(tester, 'blender-form');
       await openLaunchRow(tester, 'agent');
       await typeHarnessQuery(tester, 'Claude Code');
       await key(tester, LogicalKeyboardKey.enter);
@@ -323,7 +333,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       expect(scenario.box.machineId, 'studio');
       expect(scenario.box.project.folder, '/work/repo');
-      expect(scenario.box.launchProjectLabel, 'iMac · Office:repo');
+      expect(scenario.box.launchProjectLabel, 'iMac · Office:/work/repo');
       await openLaunchRow(tester, 'project');
       await typeHarnessQuery(tester, 'build');
       expect(scenario.box.selected!.enabled, isFalse);
@@ -450,6 +460,7 @@ void main() {
     }
 
     expect(scenario.box.worktree, isTrue);
+    await focusLaunchRow(tester, 'worktree');
     activate('worktree');
     await tester.pump();
     expect(scenario.box.worktree, isFalse);
@@ -643,7 +654,7 @@ void main() {
           expect(scenario.box.mode, mode.id);
           expect(scenario.box.engine, engine);
           expect(scenario.creates, 0);
-          await key(tester, LogicalKeyboardKey.enter);
+          await openLaunchRow(tester, 'approvals');
         }
       },
     );
@@ -653,12 +664,14 @@ void main() {
     'clicking approvals uses the chosen agent, not the list preview',
     (tester) async {
       final scenario = await _mount(tester);
+      await focusLaunchRow(tester, 'agent');
       await tester.tap(_field('agent'));
       await tester.pump();
       await tester.tap(_option('claude'));
       await tester.pump();
       expect(scenario.box.engine, 'claude');
       expect(_field('profile'), findsNothing);
+      await openLaunchRow(tester, 'advanced');
       await tester.tap(_field('approvals'));
       await tester.pump();
       expect(scenario.box.options.map((mode) => mode.id), [
@@ -678,6 +691,7 @@ void main() {
       await tester.pump();
       await typeHarnessQuery(tester, 'Codex');
       expect(scenario.box.selected?.id, 'codex');
+      await focusLaunchRow(tester, 'approvals');
       await tester.tap(_field('approvals'));
       await tester.pump();
       expect(scenario.box.options.map((mode) => mode.id), [
@@ -696,7 +710,7 @@ void main() {
   );
 
   testWidgets(
-    'empty results explain Return and Escape clears search before closing',
+    'empty results explain Return and Escape retraces the project steps',
     (tester) async {
       final scenario = await _mount(tester);
       await openLaunchRow(tester, 'machine');
@@ -712,8 +726,6 @@ void main() {
       expect(scenario.box.machineId, 'm');
       await key(tester, LogicalKeyboardKey.escape);
       expect(scenario.box.query, isEmpty);
-      expect(scenario.closes, 0);
-      await key(tester, LogicalKeyboardKey.escape);
       expect(scenario.closes, 0);
       await key(tester, LogicalKeyboardKey.escape);
       expect(scenario.closes, 0);
@@ -734,9 +746,10 @@ void main() {
     );
     await key(tester, LogicalKeyboardKey.tab, shift: true);
     expect(
-      tester.widget<Semantics>(_field('approvals')).properties.selected,
+      tester.widget<Semantics>(_field('advanced')).properties.selected,
       isTrue,
     );
+    await focusLaunchRow(tester, 'approvals');
     final originalMode = scenario.box.mode;
     await key(tester, LogicalKeyboardKey.pageDown);
     expect(scenario.box.mode, isNot(originalMode));
@@ -746,9 +759,9 @@ void main() {
     await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp);
     await tester.pump();
-    // Two steps up from Approvals: Worktree, then Branch.
+    // Two steps up from Approvals: Model, then Options.
     expect(
-      tester.widget<Semantics>(_field('branch')).properties.selected,
+      tester.widget<Semantics>(_field('advanced')).properties.selected,
       isTrue,
     );
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'new-harness-form');
@@ -966,8 +979,6 @@ void main() {
     expect(scenario.box.query, 'repo');
     await key(tester, LogicalKeyboardKey.escape);
     expect(scenario.box.query, isEmpty);
-    expect(harnessChoicesActive(tester), isTrue);
-    await key(tester, LogicalKeyboardKey.escape);
     expect(harnessChoicesActive(tester), isFalse);
     expect(scenario.closes, 0);
   });
@@ -1004,7 +1015,7 @@ void main() {
     (NewHarnessController.repositoryId, 'https://github.com/example/moon.git'),
     (NewHarnessController.existingProjectId, '/work/my project'),
   ]) {
-    testWidgets('$door accepts pasted input and returns focus to fields', (
+    testWidgets('$door accepts pasted input and returns focus to launch', (
       tester,
     ) async {
       final scenario = await _mount(tester);
@@ -1028,7 +1039,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(scenario.box.query, input);
       await key(tester, LogicalKeyboardKey.enter);
-      expect(scenario.box.field, NewHarnessField.projectMenu);
+      expect(scenario.box.field, NewHarnessField.launch);
       expect(harnessChoicesActive(tester), isFalse);
       expect(scenario.box.query, isEmpty);
       switch (door) {
@@ -1217,6 +1228,7 @@ void main() {
     final scenario = await _mount(tester, gitReply: pending.future);
     expect(scenario.box.checkingGit, isTrue);
     expect(find.text('Not a Git repository'), findsNothing);
+    await focusLaunchRow(tester, 'worktree');
     await tester.tap(_field('worktree'));
     await tester.pump();
     pending.complete(_git);
@@ -1231,30 +1243,31 @@ void main() {
     expect(scenario.box.worktree, isTrue);
   });
 
-  testWidgets('narrow layout back actions leave both lists and prompts', (
-    tester,
-  ) async {
-    final scenario = await _mount(tester, size: const Size(520, 520));
-    await focusLaunchRow(tester, 'project');
-    await tester.tap(_field('project'));
-    await tester.pump();
-    expect(harnessChoicesActive(tester), isTrue);
-    await tester.tap(find.text('Project'));
-    await tester.pump();
-    expect(harnessChoicesActive(tester), isFalse);
-    await tester.tap(_field('project'));
-    await tester.pump();
-    await tester.tap(_option(NewHarnessController.existingProjectId));
-    await tester.pump();
-    expect(scenario.box.field, NewHarnessField.machine);
-    await key(tester, LogicalKeyboardKey.enter);
-    expect(scenario.box.field, NewHarnessField.project);
-    await tester.tap(find.text('Project'));
-    await tester.pump();
-    expect(scenario.box.field, NewHarnessField.projectMenu);
-    expect(harnessChoicesActive(tester), isFalse);
-    expect(scenario.creates, 0);
-  });
+  testWidgets(
+    'narrow layout Left leaves lists and prompts without a title row',
+    (tester) async {
+      final scenario = await _mount(tester, size: const Size(520, 520));
+      await focusLaunchRow(tester, 'project');
+      await tester.tap(_field('project'));
+      await tester.pump();
+      expect(harnessChoicesActive(tester), isTrue);
+      expect(find.text('<'), findsNothing);
+      await key(tester, LogicalKeyboardKey.arrowLeft);
+      expect(harnessChoicesActive(tester), isFalse);
+      await tester.tap(_field('project'));
+      await tester.pump();
+      await tester.tap(_option(NewHarnessController.existingProjectId));
+      await tester.pump();
+      expect(scenario.box.field, NewHarnessField.machine);
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(scenario.box.field, NewHarnessField.project);
+      expect(find.text('<'), findsNothing);
+      await key(tester, LogicalKeyboardKey.arrowLeft);
+      expect(scenario.box.field, NewHarnessField.projectMenu);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(scenario.creates, 0);
+    },
+  );
 
   testWidgets(
     'folder completion can switch machines and reverse Tab walks choices',

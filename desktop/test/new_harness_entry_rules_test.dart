@@ -106,15 +106,6 @@ void main() {
 
   setUp(() {
     newHarnessOpensInBox = true;
-    connections = {
-      for (final id in ['m', 'studio', 'build']) id: _Connection(id),
-    };
-    app = createApp(connectionForTest: (id) => connections[id]!);
-    seedMixedAgents(app);
-    for (final machine in app.machineStates.values) {
-      machine.dsh.replace(_products.map((json) => DshEntry.fromJson(json)!));
-    }
-    map = MemoryKeymap();
   });
   tearDown(() {
     map.dispose();
@@ -123,6 +114,19 @@ void main() {
   });
 
   Future<void> mount(WidgetTester tester, {bool store = true}) async {
+    connections = {
+      for (final id in ['m', 'studio', 'build']) id: _Connection(id),
+    };
+    app = createApp(connectionForTest: (id) => connections[id]!);
+    seedMixedAgents(app);
+    app.machineStates['m']!.localOnly = true;
+    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+    for (final machine in app.machineStates.values) {
+      machine.dsh.replace(_products.map((json) => DshEntry.fromJson(json)!));
+    }
+    map = MemoryKeymap();
+    await app.agentPreference.remember('codex');
+    await app.projectHistory.select('m', '/work/openharness');
     app.adoptSessionForTest(terminal('a0', []));
     if (store) app.openStore();
     await configured.mount(tester, app, map);
@@ -198,7 +202,13 @@ void main() {
             findsNothing,
           );
         }
-        expect(find.text('[ New Harness ]'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('new-harness-field-start')),
+            matching: find.text('New Harness'),
+          ),
+          findsOneWidget,
+        );
         expect(connections['m']!.starts, isEmpty);
         await acceptSetupOrSearch(tester);
         expect(connections['m']!.starts, hasLength(1));
@@ -393,6 +403,8 @@ void main() {
     'an in-flight or uncertain Store start cannot be replaced or retried as a new task',
     (tester) async {
       await mount(tester);
+      // This receipt test leaves folder preparation to the fake remote CLI.
+      app.machineStates['m']!.localOnly = false;
       await product(tester, 'autonomous/workshop', task: 'Original task');
       final original = box(tester);
       final starting = original.create();
@@ -506,7 +518,7 @@ void main() {
   });
 
   testWidgets(
-    'Cmd-N keeps drafts separate when the focused source pane changes',
+    'Cmd-N uses local saved defaults regardless of the focused pane',
     (tester) async {
       await mount(tester, store: false);
       final first = app.focusedPane!;
@@ -521,16 +533,18 @@ void main() {
       app.focusPane(other.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
-      expect(box(tester).harnessId, 'autonomous/typst');
-      expect(box(tester).project.folder, '/work/release-notes');
+      expect(box(tester).harnessId, isNull);
+      expect(box(tester).engine, 'codex');
+      expect(box(tester).machineId, 'm');
+      expect(box(tester).project.folder, '/work/openharness');
       expect(box(tester).task, isEmpty);
       await dismiss(tester);
       app.focusPane(first.id);
       await tester.pump();
       await key(tester, shortcut, cmd: true);
       expect(box(tester).engine, 'codex');
-      expect(box(tester).project.name, 'keyboard-review');
-      expect(box(tester).task, 'Review this project');
+      expect(box(tester).project.folder, '/work/openharness');
+      expect(box(tester).task, isEmpty);
       expect(connections.values.expand((c) => c.starts), isEmpty);
       await dismiss(tester);
       await tester.pumpWidget(const SizedBox());
@@ -538,49 +552,50 @@ void main() {
     },
   );
 
-  testWidgets('Cmd-N inherits its source and resumes edits after finding', (
-    tester,
-  ) async {
-    await mount(tester, store: false);
-    final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyN;
-    await key(tester, shortcut, cmd: true);
-    var draft = box(tester);
-    expect(draft.engine, 'codex');
-    expect(draft.machineId, 'm');
-    expect(draft.project.folder, '/work/openharness');
-    expect(app.swarms.first, same(origin));
-    expect(app.swarms.length, 1);
-    draft.task = 'Check keyboard focus';
-    await nameProject(tester, 'keyboard-review');
-    await dismiss(tester);
-    expect(app.swarms, [origin]);
-    expect(app.activeSwarm, same(origin));
-    await openHarnessPicker(tester);
-    await acceptSetupOrSearch(tester);
-    expect(find.byType(NewHarnessForm), findsNothing);
-    expect(connections.values.expand((c) => c.starts), isEmpty);
-    await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-    draft = box(tester);
-    expect(draft.task, 'Check keyboard focus');
-    expect(draft.project.name, 'keyboard-review');
-    expect(draft.placement, HarnessPlacement.currentTab);
-    await acceptSetupOrSearch(tester);
-    final connection = connections['m']!;
-    expect(connection.starts, hasLength(1));
-    expect(connection.starts.single['engine'], 'codex');
-    expect(connection.starts.single['projectName'], 'keyboard-review');
-    expect(connection.starts.single['prompt'], 'Check keyboard focus');
-    expect(connection.starts.single['dsh'], isNull);
-    connection.created();
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byType(NewHarnessForm), findsNothing);
-    expect(app.swarms.length, 1);
-    expect(app.activeSwarm.panes.last.agentId, 'created-1');
-    expect(app.focusedPane?.agentId, 'created-1');
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'fresh Cmd-N keeps successful defaults and discards canceled edits',
+    (tester) async {
+      await mount(tester, store: false);
+      final origin = app.activeSwarm;
+      final shortcut = LogicalKeyboardKey.keyN;
+      await key(tester, shortcut, cmd: true);
+      var draft = box(tester);
+      expect(draft.engine, 'codex');
+      expect(draft.machineId, 'm');
+      expect(draft.project.folder, '/work/openharness');
+      expect(app.swarms.first, same(origin));
+      expect(app.swarms.length, 1);
+      draft.task = 'Check keyboard focus';
+      await nameProject(tester, 'keyboard-review');
+      await dismiss(tester);
+      expect(app.swarms, [origin]);
+      expect(app.activeSwarm, same(origin));
+      await openHarnessPicker(tester);
+      await acceptSetupOrSearch(tester);
+      expect(find.byType(NewHarnessForm), findsNothing);
+      expect(connections.values.expand((c) => c.starts), isEmpty);
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      draft = box(tester);
+      expect(draft.task, isEmpty);
+      expect(draft.project.folder, '/work/openharness');
+      expect(draft.placement, HarnessPlacement.currentTab);
+      await acceptSetupOrSearch(tester);
+      final connection = connections['m']!;
+      expect(connection.starts, hasLength(1));
+      expect(connection.starts.single['engine'], 'codex');
+      expect(connection.starts.single['cwd'], '/work/openharness');
+      expect(connection.starts.single['prompt'], isNull);
+      expect(connection.starts.single['dsh'], isNull);
+      connection.created();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.byType(NewHarnessForm), findsNothing);
+      expect(app.swarms.length, 1);
+      expect(app.activeSwarm.panes.last.agentId, 'created-1');
+      expect(app.focusedPane?.agentId, 'created-1');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'switching the picker keeps its project scope and Escape goes back',

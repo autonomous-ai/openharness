@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show exit, pid;
+import 'dart:io' show Directory, exit, pid;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -7067,6 +7067,9 @@ class AppNotifier extends ChangeNotifier {
     final reader = gitProjectReaderForTest;
     if (reader != null) return reader(machineId, path);
     if (machine.isLocalMachine) {
+      if (!await Directory(path).exists()) {
+        return {'error': 'PROJECT_UNAVAILABLE'};
+      }
       return readLocalGitProject(path, refresh: refresh);
     }
     if (connectionForTest == null &&

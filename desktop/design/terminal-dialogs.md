@@ -71,8 +71,9 @@ when using custom row widgets.
   followed by status and harness type. Omit missing fields and preserve
   important state such as Offline.
 - Boolean controls use `[x]` and `[ ]`; Enter and Space toggle them.
-- Actions use concise text, such as `[ New Harness ]`. Shortcut hints are text
-  beside the action, resolved from the live keymap.
+- Menu actions use concise text, such as `New Harness`, with the same row
+  highlight as other choices and no surrounding brackets. Shortcut hints,
+  when needed, are text beside the action, resolved from the live keymap.
 - Omit redundant heading rows such as “New Tab” or “New Pane.” Add a label or
   explanation only when it helps someone understand a choice or state.
 - Preserve user content, including Unicode. The restriction on decorative
@@ -156,23 +157,46 @@ come from Harness's own Terminal preferences, not Apple Terminal or iTerm.
 
 ## Keep the terminal interaction
 
-Cmd-N opens with **Agent**, **Project**, **Options**, and the selected
-`[ New Harness ]` action. Enter launches with the displayed settings. Options
-starts collapsed on a fresh draft and expands Model, Branch, Worktree,
-Approvals, and Profile in place. Keep Worktree as `[x]` / `[ ]`.
+Cmd-N opens a compact, centered key/value form with Agent, Project, collapsed
+Options, and `New Harness` selected. Enter launches with the displayed
+settings. Options expands Model, Approvals, applicable Profile, Branch, and Worktree
+as consecutive rows without internal blank rows. Machine is selected with Project. Keep a blank row between Agent and Project and before Options.
+Worktree uses `[x]` / `[ ]`. There is no duplicate summary pane.
+Project shows the committed machine and full path, such as
+`M2:~/code/autonomous-harness`. Browsing the chooser never changes this value
+until a choice is accepted.
 
-![Cmd-N with two main fields and a launch summary](images/terminal-new-harness-minimal.png)
+Reserve nine columns for labels and two blank columns before values. The launch
+action follows the last visible field with exactly one blank row; never pin it
+to the bottom with a flexible spacer. The form and chooser use whole character
+columns and rows. The form fits its visible rows, stays centered, and keeps its
+geometry when choices appear. The chooser starts directly with its search line;
+omit a redundant back/title row such as `< Agent`.
 
-The right pane shows the resolved machine, full folder, model, and applicable
-Git and agent settings. Enter or typing on a field replaces that summary with
-its searchable choices; accepting a value restores the summary. Narrow windows
-show the active choices in place of the form. No permanent Machine field or
-additional top-level Harness field.
+Up/Down selects a field and automatically reveals its small chooser to the
+right. Navigation still belongs to the form. Right, typing, or Enter moves
+focus into the chooser; then Up/Down moves its choices. Enter accepts a value,
+closes the chooser, and selects New Harness, ready for the next Enter to launch.
+A held Enter must not accept and launch in one keypress. Escape discards the
+search and returns to the form in one step; Left also returns when the search
+is empty. Nested project and specialized-agent steps retrace their choices.
+On narrow windows, the active chooser replaces the form inside the same frame.
+There is no duplicate summary pane.
+
+Fresh Cmd-N uses the last successfully launched agent, the last used project
+on the local machine, the local machine, branch `main`, and Worktree Yes for a
+Git project. Model shows the selected model name, or OpenAI / Anthropic when
+the subscription agent has not reported a model. Approvals starts at Auto-approve.
+Focused panes and canceled edits do not change these defaults; unresolved
+launch receipts remain recoverable. An explicit split can inherit its source.
+If a required value is unavailable or uncertain, explain it and require a
+choice. Never substitute another branch, project, agent, or profile, or turn
+Worktree off after a worktree creation failure.
 
 Agent offers Codex, Claude Code, Terminal, and specialized harnesses together.
-A direct agent completes the choice. A specialized harness such as Blender
-opens `Run Blender with` in the same pane, offering compatible coding agents
-with its remembered choice selected. The left value then reads
+Keep agent choices to one line. A direct agent completes the choice. A specialized harness such as Blender
+uses `Run Blender with` as the search hint, offering compatible coding agents
+with its remembered choice selected. The Agent value then reads
 `Blender · Codex`.
 
 Project searches existing `machine:project` pairs across the inventory; names,
