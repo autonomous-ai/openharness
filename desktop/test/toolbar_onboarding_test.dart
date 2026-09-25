@@ -116,9 +116,9 @@ void main() {
     app.adoptSessionForTest(terminal('work', []));
   }
 
-  for (var completed = 1; completed <= 3; completed++) {
+  for (var completed = 0; completed <= 3; completed++) {
     testWidgets(
-      'returning welcome restores $completed completed steps with working actions',
+      'welcome has the same working actions with $completed saved steps',
       (tester) async {
         final storage = MemoryStore();
         final previous = WorkspaceOnboarding(storage: storage);
@@ -142,41 +142,23 @@ void main() {
           OnboardingStep.values.where(journey.completed),
           OnboardingStep.values.take(completed),
         );
-        if (completed < 3) {
-          expect(find.text('Harness like a boss.'), findsOneWidget);
-          for (final (index, step) in OnboardingStep.values.indexed) {
-            expect(
-              tester
-                  .widget<Text>(
-                    find.byKey(ValueKey('welcome-progress-${step.name}')),
-                  )
-                  .data,
-              index < completed ? '✓' : '○',
-            );
-          }
-        } else {
-          expect(find.text('Follow your curiosity.'), findsOneWidget);
-          expect(find.text('○'), findsNothing);
-          expect(find.text('✓'), findsNothing);
+        expect(find.text('Follow your curiosity.'), findsOneWidget);
+        expect(find.text('○'), findsNothing);
+        expect(find.text('✓'), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
+        expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
+        for (final hint in ['⌘N', '⌘P', '⌘S']) {
+          expect(find.text(hint), findsOneWidget);
         }
 
-        final destinations = completed < 3
-            ? ['agent.new', 'machines.list', 'models.list']
-            : ['agent.new', 'agent.open', 'app.store'];
+        final destinations = ['agent.new', 'harnesses.list', 'app.store'];
         for (final command in destinations) {
           await tap(tester, find.byKey(ValueKey('welcome-$command')));
           switch (command) {
             case 'agent.new':
               expect(find.byType(NewHarnessForm), findsOneWidget);
-            case 'machines.list':
-              expect(resourceScope('@'), findsOneWidget);
-            case 'models.list':
-              expect(resourceScope(':'), findsOneWidget);
-            case 'agent.open':
-              expect(
-                find.byKey(const ValueKey('swarm-search-input')),
-                findsOneWidget,
-              );
+            case 'harnesses.list':
+              expect(resourceScope(''), findsOneWidget);
             case 'app.store':
               expect(app.activeSwarm.isStore, isTrue);
           }
@@ -189,10 +171,8 @@ void main() {
         }
         for (final shortcut in [
           LogicalKeyboardKey.keyN,
-          if (completed == 3) ...[
-            LogicalKeyboardKey.keyP,
-            LogicalKeyboardKey.keyS,
-          ],
+          LogicalKeyboardKey.keyP,
+          LogicalKeyboardKey.keyS,
           LogicalKeyboardKey.keyM,
           LogicalKeyboardKey.keyI,
         ]) {
@@ -258,11 +238,11 @@ void main() {
           await tester.pumpAndSettle();
         }
 
-        await tap(tester, find.byKey(const ValueKey('welcome-models.list')));
-        expect(models, findsOneWidget);
+        await tap(tester, find.byKey(const ValueKey('welcome-harnesses.list')));
+        expect(resourceScope(''), findsOneWidget);
         await key(tester, LogicalKeyboardKey.keyM, cmd: true);
         await tester.pumpAndSettle();
-        expect(models, findsNothing);
+        expect(resourceScope(''), findsNothing);
         expect(machines, findsOneWidget);
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
         await tester.pumpAndSettle();
@@ -274,9 +254,9 @@ void main() {
         expect(find.byType(NewHarnessForm), findsOneWidget);
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
-        await tap(tester, find.byKey(const ValueKey('welcome-machines.list')));
-        expect(machines, findsOneWidget);
-        await key(tester, LogicalKeyboardKey.escape);
+        await tap(tester, find.byKey(const ValueKey('welcome-app.store')));
+        expect(app.activeSwarm.isStore, isTrue);
+        await key(tester, LogicalKeyboardKey.keyT, cmd: true);
         await tester.pumpAndSettle();
         await tap(tester, find.byKey(const ValueKey('welcome-agent.new')));
         expect(find.byType(NewHarnessForm), findsOneWidget);
@@ -288,9 +268,7 @@ void main() {
     );
   }
 
-  testWidgets('Models shortcut and welcome hint follow a live remap', (
-    tester,
-  ) async {
+  testWidgets('Models shortcut follows a live remap', (tester) async {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
@@ -301,7 +279,6 @@ void main() {
     ]}''');
     await tester.pumpAndSettle();
     expect(find.byTooltip('Models ⌘U'), findsNothing);
-    expect(find.text('⌘U'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.keyI, cmd: true);
     expect(resourceScope(':'), findsNothing);
     await key(tester, LogicalKeyboardKey.keyU, cmd: true);
@@ -324,7 +301,7 @@ void main() {
   });
 
   testWidgets(
-    'completed welcome switches on New Tab and everyday clicks open their destinations',
+    'progress changes keep the same welcome on this and the next tab',
     (tester) async {
       await mount(tester);
       journey.sync(
@@ -334,14 +311,14 @@ void main() {
         modelsAvailable: true,
       );
       await tester.pumpAndSettle();
-      expect(find.text('✓'), findsNWidgets(3));
-      expect(find.text('Harness like a boss.'), findsOneWidget);
+      expect(find.text('✓'), findsNothing);
+      expect(find.text('Follow your curiosity.'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
       await tester.pumpAndSettle();
       expect(find.text('Follow your curiosity.'), findsOneWidget);
       expect(find.text('✓'), findsNothing);
-      await tap(tester, find.byKey(const ValueKey('welcome-agent.open')));
-      expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
+      await tap(tester, find.byKey(const ValueKey('welcome-harnesses.list')));
+      expect(resourceScope(''), findsOneWidget);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       await tap(tester, find.byKey(const ValueKey('welcome-app.store')));

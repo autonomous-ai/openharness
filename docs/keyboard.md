@@ -31,10 +31,9 @@ The defaults, in the workspace:
 | ⇧⌘I | Agents needing input |
 | ⌘, · ⌘/ | Settings · keyboard shortcuts |
 
-New Tab starts with three clickable shortcuts: ⌘N to start your first harness,
-⌘M to manage it from another computer, and ⌘I to power it with a local model.
-Checkmarks record actual use and persist per account on this device. After all
-three are complete, the next New Tab shows the everyday ⌘N, ⌘O, and ⌘S shortcuts.
+First launch and every New Tab show the same “Follow your curiosity.” page with
+three clickable shortcuts: ⌘N to start a new harness, ⌘P to open a harness, and
+⌘S to browse the harness store. The hints follow the current keyboard bindings.
 
 A harness can have views in several tabs, with one view per tab; closing a pane only removes that view.
 

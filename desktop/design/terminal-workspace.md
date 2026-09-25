@@ -58,6 +58,12 @@ actions use `terminalContentStyle()` and follow the terminal font preference.
 
 ## Keep surfaces quiet
 
+First launch uses the same New Tab page as every later visit: “Follow your
+curiosity.” with New Harness, Open Harness, and Harness Store shortcuts. Keep
+this page independent of onboarding progress; no checklist or automatic dialog.
+
+![Shared first-launch and New Tab welcome](images/workspace-welcome.png)
+
 Use terminal foreground, background, muted text, and selection colors. Workspace
 dialogs use the same thin frame as a focused pane. Avoid raised cards, shadows,
 rounded action pills, and redundant headings. Tabs use concise text labels, with

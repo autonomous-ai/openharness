@@ -266,7 +266,6 @@ class _SwarmScreenState extends State<SwarmScreen>
 
   Widget _startGuide() => WorkspaceWelcome(
     key: ValueKey('welcome:${app.activeSwarmId}'),
-    onboarding: _onboarding,
     onCommand: _runShortcut,
   );
 
