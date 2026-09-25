@@ -162,7 +162,7 @@ void main() {
     expect(find.text('Follow your curiosity.'), findsOneWidget);
     expect(find.text('✓'), findsNothing);
     expect(find.text('○'), findsNothing);
-    for (final hint in ['⌘N', '⌘P', '⌘S']) {
+    for (final hint in ['⌘N', '⌘O', '⌘S']) {
       expect(find.text(hint), findsOneWidget);
     }
     commands.clear();

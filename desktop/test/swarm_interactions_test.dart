@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/resource_picker.dart';
 import 'support/agent_picker.dart';
 import 'support/new_agent_project.dart';
@@ -141,7 +142,7 @@ void main() {
           final input = find.byKey(const ValueKey('swarm-search-input'));
           expect(input, findsNothing);
           final created = app.activeSwarmId;
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await openHarnessPicker(tester);
           expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
           await tester.enterText(input, 'Agent 1');
           await tester.pump();
@@ -149,12 +150,12 @@ void main() {
           await tester.pump();
           expect(input, findsNothing);
           expect(app.activeSwarmId, created);
-          await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+          await chord(tester, LogicalKeyboardKey.keyW);
           expect(app.swarms, hasLength(2));
         }
         await newFromChrome();
         await tester.pump();
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await openHarnessPicker(tester);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           'Agent 0',
@@ -181,7 +182,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.pump();
       expect(app.panes, isEmpty);
       await tester.enterText(
@@ -219,11 +220,11 @@ void main() {
       app.newSwarm();
       await app.addAgentToSwarm('m', 'a0');
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyW);
+      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
       expect(app.swarms.length, 2);
       expect(app.panes, isEmpty);
       expect(original.panes.single.session, same(session));
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyW);
       expect(app.swarms.single, same(original));
       expect(app.panes.single.session, same(session));
       await tester.pumpWidget(const SizedBox());
@@ -255,7 +256,7 @@ void main() {
       expect(app.zoomedPaneId, pane.id);
       await chord(tester, LogicalKeyboardKey.enter);
       expect(app.zoomedPaneId, isNull);
-      await chord(tester, LogicalKeyboardKey.keyW);
+      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
       expect(app.panes.single.agentId, 'a1');
       expect(original.panes.single.session, same(session));
       app.selectSwarm(original.id);

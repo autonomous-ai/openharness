@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:harness/widgets/terminal_text_action.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -513,7 +514,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(pane, findsNothing);
-      final button = tester.widget<FilledButton>(
+      final button = tester.widget<TerminalTextAction>(
         find.byKey(const ValueKey('harness-customize-button')),
       );
       expect(button.focusNode!.hasFocus, isTrue);

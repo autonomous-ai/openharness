@@ -47,23 +47,23 @@ Future<void> key(
 }
 
 void main() {
-  test('saved close shortcuts override the new pane and tab defaults', () {
+  test('saved close shortcuts override the pane and tab defaults', () {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     map.apply(
-      '{"bindings":[{"keys":"cmd+w","command":"swarm.close"},{"keys":"cmd+shift+w","command":"pane.close"}]}',
+      '{"bindings":[{"keys":"cmd+w","command":"pane.close"},{"keys":"cmd+shift+w","command":"swarm.close"}]}',
     );
     expect(
       map.current.match(KeymapContext.terminal, [
         KeyStroke.parse('cmd+w'),
       ]).command,
-      'swarm.close',
+      'pane.close',
     );
     expect(
       map.current.match(KeymapContext.terminal, [
         KeyStroke.parse('cmd+shift+w'),
       ]).command,
-      'pane.close',
+      'swarm.close',
     );
   });
   test('the command catalog retains the current direct workspace keys', () {
@@ -78,7 +78,8 @@ void main() {
       ('cmd+9', 'swarm.select_9'),
       ('cmd+t', 'swarm.new'),
       ('cmd+n', 'agent.new'),
-      ('cmd+p', 'agent.open'),
+      ('cmd+o', 'agent.open'),
+      ('cmd+p', 'harnesses.list'),
       ('cmd+r', 'pane.split_right'),
       ('cmd+d', 'pane.split_down'),
       ('cmd+shift+n', 'agent.clone'),
@@ -99,8 +100,8 @@ void main() {
       ('cmd+i', 'models.list'),
       ('cmd+shift+l', 'pane.layout'),
       ('cmd+b', 'task.route'),
-      ('cmd+w', 'pane.close'),
-      ('cmd+shift+w', 'swarm.close'),
+      ('cmd+w', 'swarm.close'),
+      ('cmd+shift+w', 'pane.close'),
       ('ctrl+tab', 'swarm.next'),
     ]) {
       expect(command(keys), expected, reason: keys);

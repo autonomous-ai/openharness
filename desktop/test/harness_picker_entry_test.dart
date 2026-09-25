@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -74,7 +75,7 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 100));
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await openHarnessPicker(tester);
         expect(field, findsOneWidget);
         expect(find.byType(SwarmSearchResults), findsOneWidget);
         expect(

@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -72,7 +73,7 @@ void main() {
         );
         await key(tester, LogicalKeyboardKey.escape);
         expect(field, findsNothing);
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await openHarnessPicker(tester);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
         expect(

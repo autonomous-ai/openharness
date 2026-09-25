@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -197,7 +198,7 @@ void main() {
           expect(app.activeSwarm.isNewTabPage, isTrue);
           final created = app.activeSwarmId;
           expect(_results, findsNothing);
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await openHarnessPicker(tester);
           expect(_results, findsOneWidget);
           expect(_startInput, findsNothing);
           if (dismissal == 'outside') {
@@ -228,7 +229,7 @@ void main() {
     (tester) async {
       final app = createApp();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.enterText(_input, 'Agent 12');
       await tester.pump();
       final text = tester.widget<TextField>(_input).controller!;
@@ -271,7 +272,7 @@ void main() {
     app.newSwarm();
     final destination = app.activeSwarmId;
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     await tester.enterText(_input, 'Agent 0');
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);

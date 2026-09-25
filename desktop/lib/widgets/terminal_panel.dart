@@ -1958,10 +1958,13 @@ class _TerminalHeader extends StatelessWidget {
     ].join('\n');
     // Reserve space for the pane-local model selector.
     // Engines without a picker keep their existing header width.
-    final showModelPicker = modelPickerSupports(session.engineId);
+    final showModelPicker = !compact && modelPickerSupports(session.engineId);
     // The picker: a model id up to 220px and its padding.
     final pickerWidth = showModelPicker ? 250.0 : 0.0;
-    final actionsWidth = pickerWidth;
+    final closeWidth = onClose == null
+        ? 0.0
+        : workspaceBarCellSizeOf(context).width * 3;
+    final actionsWidth = pickerWidth + closeWidth;
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
@@ -2012,7 +2015,7 @@ class _TerminalHeader extends StatelessWidget {
                   );
             // The name/status retain space while model and project text yield.
             final rightWidth = math.min(
-              desiredRightWidth,
+              compact ? closeWidth : desiredRightWidth,
               math.max(0.0, constraints.maxWidth - 99),
             );
             return Row(
@@ -2150,26 +2153,32 @@ class _TerminalHeader extends StatelessWidget {
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: rightWidth),
                   child: PaneHeaderActions(
-                    trailing: showPr
-                        ? ConstrainedBox(
-                            constraints: BoxConstraints(maxWidth: badgeWidth),
-                            child: PullRequestBadge(
-                              compact: narrow,
-                              identity: (
-                                session.machineId,
-                                agent.id,
-                                project?.cwd,
-                                project?.shownBranch,
-                              ),
-                              read: () => notifier.readAgentPullRequest(
-                                session.machineId,
-                                agent.id,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (showPr)
+                          Flexible(
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(maxWidth: badgeWidth),
+                              child: PullRequestBadge(
+                                compact: narrow,
+                                identity: (
+                                  session.machineId,
+                                  agent.id,
+                                  project?.cwd,
+                                  project?.shownBranch,
+                                ),
+                                read: () => notifier.readAgentPullRequest(
+                                  session.machineId,
+                                  agent.id,
+                                ),
                               ),
                             ),
-                          )
-                        : null,
-                    // Keep the current model visible, including while the
-                    // terminal reconnects, without shifting the other controls.
+                          ),
+                        if (onClose != null)
+                          PaneCloseButton(onPressed: onClose!),
+                      ],
+                    ),
                     modelPicker: showModelPicker
                         ? GridModelPicker(
                             key: ValueKey((
@@ -2246,7 +2255,7 @@ class _TerminalHeader extends StatelessWidget {
         ),
       ),
     );
-    final strip = header;
+    final strip = PaneHeaderHoverRegion(child: header);
     final handle = paneDrag;
     if (handle == null) return strip;
 

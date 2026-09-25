@@ -4,6 +4,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/harness_background.dart';
 import 'swarm_wallpaper.dart';
+import 'terminal_text_action.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
@@ -253,23 +254,11 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           Positioned(
             right: 20,
             bottom: 16,
-            child: TextButton.icon(
+            child: TerminalTextAction(
               key: const ValueKey('welcome-customize'),
               onPressed: () => widget.onCommand('app.customize'),
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              label: const Text('Customize Harness'),
-              style: TextButton.styleFrom(
-                foregroundColor: ink,
-                backgroundColor: hasArtwork
-                    ? const Color(0xcc242424)
-                    : grid.AppPalette.swarmTabBar,
-                textStyle: terminalTextStyle(),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                shape: const StadiumBorder(),
-              ),
+              label: 'Customize Harness',
+              overArtwork: hasArtwork,
             ),
           ),
         ],

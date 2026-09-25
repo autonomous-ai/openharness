@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,7 +28,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('swarm-new-pane-button')), findsNothing);
     expect(find.byType(FloatingActionButton), findsNothing);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       'Agent 0',

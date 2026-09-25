@@ -36,6 +36,7 @@ class PromptCustomize extends StatelessWidget {
           project: prefs.project ? 'app' : '',
           branch: prefs.branch ? 'main' : null,
           style: format,
+          separateMachine: true,
         );
         final previewContext = example(prefs.statusStyle);
         final preview = StatusLineParts(prefs.statusStyle, [
@@ -165,7 +166,7 @@ class PromptCustomize extends StatelessWidget {
               ),
               toggle(
                 'color',
-                'Color',
+                'Color (Plain is always monochrome)',
                 prefs.color,
                 (value) => choose(prefs.copyWith(color: value)),
               ),

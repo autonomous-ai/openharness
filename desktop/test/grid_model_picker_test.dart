@@ -14,6 +14,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
+import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/widgets/model_picker_chrome.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -233,8 +234,16 @@ void main() {
       expect(label.style!.fontSize, 13);
       expect(label.style!.fontFamily, workspaceBarTextStyle().fontFamily);
       expect(label.style!.fontWeight, FontWeight.normal);
+      expect(
+        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        'a-very-long-local-model-name',
+      );
       expect(tester.takeException(), isNull);
       await mount(true);
+      expect(
+        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        'a-very-long-local-model-name\nSwitch model · Subscription or local models',
+      );
       await tester.tap(find.byType(GridModelPicker));
       await tester.pumpAndSettle();
       expect(find.byType(ModelPickerSearch), findsOneWidget);
@@ -272,14 +281,30 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.pump(const Duration(milliseconds: 200));
       expect(
-        find.text(
-          'Model: GPT-6 Astra\nSwitch model · Subscription or local models',
-        ),
+        find.text('Switch model · Subscription or local models'),
         findsOneWidget,
       );
-      final ink = tester.widget<InkWell>(find.byType(InkWell));
-      expect(ink.mouseCursor, SystemMouseCursors.click);
-      expect(ink.hoverColor!.a, greaterThan(0));
+      final control = find.byType(WorkspaceBarControl);
+      final focusable = tester.widget<FocusableActionDetector>(
+        find.descendant(
+          of: control,
+          matching: find.byType(FocusableActionDetector),
+        ),
+      );
+      expect(focusable.mouseCursor, SystemMouseCursors.click);
+      final fill = find.descendant(
+        of: control,
+        matching: find.byType(ColoredBox),
+      );
+      expect(fill, findsOneWidget);
+      expect(tester.getSize(fill).height, 28);
+      expect(
+        tester.widget<ColoredBox>(fill).color,
+        tester
+            .widget<WorkspaceBarControl>(control)
+            .selection
+            .withValues(alpha: .5),
+      );
       await hover.moveTo(Offset.zero);
       await tester.pumpAndSettle();
       await mount('GPT-5.6 Sol');
@@ -1144,11 +1169,11 @@ void main() {
     expect(
       // `.last`: the header control names the current model too.
       tester.getSemantics(find.text('Qwen-Test').last),
-      containsSemantics(isSelected: true),
+      isSemantics(isSelected: true),
     );
     expect(
       tester.getSemantics(find.text('DeepSeek-Test')),
-      isNot(containsSemantics(isSelected: true)),
+      isNot(isSemantics(isSelected: true)),
     );
   });
 

@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../logging/debug_surface.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
-/// T opens a tab, P opens the picker, Shift-P opens commands, N creates a harness, S opens the Store,
+/// T opens a tab, O opens projects, P finds harnesses, Shift-P opens commands, N creates a harness, S opens the Store,
 /// Shift-L chooses a layout. H/J/K/L and arrows focus panes; B routes a task.
 /// The same definitions feed live keys, help and search.
 ///
@@ -253,7 +253,11 @@ const List<AppShortcut> kAppShortcuts = [
   ),
   AppShortcut(
     action: ShortcutAction.closePane,
-    activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyW,
+      meta: true,
+      shift: true,
+    ),
     label: 'Close the focused pane',
     group: ShortcutGroup.panes,
   ),
@@ -371,7 +375,7 @@ List<AppShortcut> appShortcuts({bool swarmMode = true}) => [
         AppShortcut(
           action: shortcut.action,
           activator: const SingleActivator(
-            LogicalKeyboardKey.keyP,
+            LogicalKeyboardKey.keyO,
             control: true,
           ),
           label: shortcut.label,
@@ -387,7 +391,7 @@ List<AppShortcut> appShortcuts({bool swarmMode = true}) => [
 const kSwarmShortcuts = [
   AppShortcut(
     action: ShortcutAction.addAgent,
-    activator: SingleActivator(LogicalKeyboardKey.keyP, meta: true),
+    activator: SingleActivator(LogicalKeyboardKey.keyO, meta: true),
     label: 'Open Harness',
     group: ShortcutGroup.actions,
   ),
@@ -442,11 +446,7 @@ const kSwarmShortcuts = [
   ),
   AppShortcut(
     action: ShortcutAction.closeSwarm,
-    activator: SingleActivator(
-      LogicalKeyboardKey.keyW,
-      meta: true,
-      shift: true,
-    ),
+    activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
     label: 'Close Tab',
     group: ShortcutGroup.navigate,
   ),
@@ -508,7 +508,11 @@ const kSwarmShortcuts = [
   ),
   AppShortcut(
     action: ShortcutAction.closePane,
-    activator: SingleActivator(LogicalKeyboardKey.keyW, meta: true),
+    activator: SingleActivator(
+      LogicalKeyboardKey.keyW,
+      meta: true,
+      shift: true,
+    ),
     label: 'Close the focused pane',
     group: ShortcutGroup.panes,
   ),

@@ -36,6 +36,7 @@ Future<T?> showPaneMenu<T>({
   Widget Function(void Function(T?) close)? body,
   void Function(OverlayEntry entry, void Function() close)? onOpen,
   VoidCallback? onClose,
+  bool Function()? shouldRestoreFocus,
   double minWidth = 340,
   double maxWidth = 540,
 }) {
@@ -56,7 +57,10 @@ Future<T?> showPaneMenu<T>({
     closed = true;
     deregister();
     entry.remove();
-    if (previousFocus?.context?.mounted == true) previousFocus!.requestFocus();
+    if (previousFocus?.context?.mounted == true &&
+        (shouldRestoreFocus?.call() ?? true)) {
+      previousFocus!.requestFocus();
+    }
     onClose?.call();
     if (!completer.isCompleted) completer.complete(choice);
   }

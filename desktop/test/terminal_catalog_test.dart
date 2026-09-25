@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +21,7 @@ void main() {
       seedMixedAgents(app);
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(input, 'login');
       await tester.pump();
@@ -97,7 +99,7 @@ void main() {
       }
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       await tester.enterText(input, 'login claude M2');
       await tester.pump();
       await key(tester, LogicalKeyboardKey.enter);
@@ -107,7 +109,7 @@ void main() {
       expect(sharedTab.name, 'openharness');
       expect(sharedTab.panes.single.session, same(claude));
       expect(source.panes, [firstPane, secondPane]);
-      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true);
       expect(app.activeSwarm, same(source));
       expect(secondPane.session, same(claude));
       await command('reopen tab');
@@ -125,7 +127,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter, cmd: true);
       expect(app.zoomedPaneId, isNull);
       await key(tester, LogicalKeyboardKey.keyL, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
       expect(source.panes, [firstPane]);
       expect(
         app.swarms
@@ -160,7 +162,7 @@ void main() {
       seedMixedAgents(app);
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

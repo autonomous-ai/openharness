@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,7 +74,7 @@ void main() {
         ...app.machineStates['m']!.agents.skip(1),
       ];
       await configured.mount(tester, app, map);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       final row = find.byKey(ValueKey(agentDestinationId('m', 'a0')));
       expect(
         find.descendant(of: row, matching: find.byType(EngineMark)),
@@ -126,7 +127,7 @@ void main() {
         tester.view.physicalSize = size;
         await tester.pump();
         final paneBounds = tester.getRect(find.byKey(pane.cellKey));
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await openHarnessPicker(tester);
         final panel = find.byKey(const ValueKey('swarm-search-results'));
         final input = find.byKey(const ValueKey('swarm-search-input'));
         final count = find.byKey(const ValueKey('swarm-search-count'));

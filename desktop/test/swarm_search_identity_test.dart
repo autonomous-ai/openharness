@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,7 +11,6 @@ import 'package:harness/state/swarm_search.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -386,7 +386,7 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(
         tester.widget<TextField>(input).decoration!.hintText,

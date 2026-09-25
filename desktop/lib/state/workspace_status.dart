@@ -129,10 +129,12 @@ class WorkspacePaneContext {
     this.projectName = '',
     this.agent,
     this.branch,
+    this.project,
   });
 
   final TerminalPane pane;
   final Agent? agent;
+  final AgentProject? project;
   final String machineName, provider, location, detail;
   final String projectName;
   final String? branch;
@@ -146,6 +148,7 @@ class WorkspacePaneContext {
     project: prefs.project ? projectName : '',
     branch: prefs.branch ? branch : null,
     style: prefs.statusStyle,
+    separateMachine: true,
   );
 
   static WorkspacePaneContext? focused(AppNotifier app) {
@@ -159,6 +162,7 @@ class WorkspacePaneContext {
     final engine = agent?.engine ?? pane.session?.engineId;
     final provider =
         agent?.gridModel ??
+        agent?.modelName ??
         switch (engine) {
           'codex' => 'OpenAI',
           'claude' => 'Anthropic',
@@ -172,6 +176,7 @@ class WorkspacePaneContext {
     return WorkspacePaneContext(
       pane: pane,
       agent: agent,
+      project: project,
       machineName: machineName,
       provider: provider,
       projectName: projectName,

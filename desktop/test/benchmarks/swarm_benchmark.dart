@@ -1,3 +1,4 @@
+import '../support/open_harness.dart';
 // Run explicitly: flutter test test/benchmarks/swarm_benchmark.dart --reporter expanded
 // These are headless CPU measurements, not network or display latency claims.
 // Optional dock CPU samples: set HARNESS_DOCK_CPU_PROFILE to a temporary file
@@ -119,7 +120,7 @@ void main() {
 
       final reopen = await timed(
         () async {
-          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          await openHarnessPicker(tester);
           await tester.pump();
           expect(field, findsOneWidget);
         },
@@ -147,7 +148,7 @@ void main() {
       final retarget = await timed(() async {
         await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.pump();
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await openHarnessPicker(tester);
         await tester.pump();
       });
       expect(tester.widget<TextField>(field).controller!.text, 'harness');

@@ -7,6 +7,7 @@ import '../shared/theme/harness_background.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import 'box_chrome.dart';
+import 'terminal_text_action.dart';
 import 'harness_customize_pane.dart';
 import 'swarm_search_input.dart';
 import 'swarm_switcher.dart';
@@ -389,33 +390,13 @@ class _HarnessStartPageState extends State<HarnessStartPage> {
                         final onPressed = _customizing
                             ? _closeCustomization
                             : _customize;
-                        if (prefs.background != HarnessBackground.plain) {
-                          return IconButton.filled(
-                            key: const ValueKey('harness-customize-button'),
-                            focusNode: _customizeButtonFocus,
-                            onPressed: onPressed,
-                            tooltip: 'Customize Harness',
-                            icon: const Icon(Icons.edit_outlined, size: 18),
-                            style: IconButton.styleFrom(
-                              backgroundColor: grid.AppPalette.swarmAccent,
-                              foregroundColor: grid.AppPalette.swarmTabBar,
-                              fixedSize: const Size.square(40),
-                              shape: const CircleBorder(),
-                            ),
-                          );
-                        }
-                        return FilledButton.icon(
+                        return TerminalTextAction(
                           key: const ValueKey('harness-customize-button'),
                           focusNode: _customizeButtonFocus,
                           onPressed: onPressed,
-                          icon: const Icon(Icons.edit_outlined, size: 16),
-                          label: const Text('Customize Harness'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: grid.AppPalette.swarmAccent,
-                            foregroundColor: grid.AppPalette.swarmTabBar,
-                            minimumSize: const Size(0, 36),
-                            shape: const StadiumBorder(),
-                          ),
+                          label: 'Customize Harness',
+                          overArtwork:
+                              prefs.background != HarnessBackground.plain,
                         );
                       },
                     ),

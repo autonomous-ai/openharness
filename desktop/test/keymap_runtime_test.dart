@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -358,7 +360,7 @@ void main() {
     expect(app.swarms, hasLength(2));
     expect(app.activeSwarm, isNot(same(original)));
     expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     expect(
       tester
           .widget<TextField>(find.byKey(const ValueKey('swarm-search-input')))
@@ -542,7 +544,7 @@ void main() {
         if (inline) {
           await tester.tap(input);
         } else {
-          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          await openHarnessPicker(tester);
         }
         await tester.enterText(input, 'Agent');
         await tester.pump();
@@ -626,7 +628,7 @@ void main() {
     expect(field, findsOneWidget);
     expect(find.byType(SwarmSearchResults), findsNothing);
     expect(tester.widget<TextField>(field).controller!.text, isEmpty);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     final modal = find.byKey(const ValueKey('swarm-search-input'));
     expect(tester.widget<TextField>(modal).focusNode!.hasFocus, isTrue);
     expect(tester.widget<TextField>(modal).controller!.text, isEmpty);
@@ -833,7 +835,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          await openHarnessPicker(tester);
         }
         await tester.enterText(field, 'Agent');
         await tester.pump();
@@ -960,6 +962,7 @@ void main() {
       await native(tester, 'keymapCommand', {'command': 'agent.open'});
       await tester.pump();
       await tester.tap(field);
+      await key(tester, LogicalKeyboardKey.backspace);
       await tester.enterText(field, 'Agent 0');
       await tester.pump();
       expect(find.byType(SwarmSearchResults), findsOneWidget);

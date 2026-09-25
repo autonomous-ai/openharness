@@ -112,7 +112,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["focusedModel", "focusedContext", "harnessControls", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "store", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -278,7 +278,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // ellipsis (owner, 2026-09-22). The Dart keymap decides every chord below — applyMenuKeys
     // rewrites each equivalent here from it. New Terminal (⇧⌘T) stays in the keymap, off the menu.
     add(file, "New Harness", "n", "newAgent")
-    add(file, "Open Harness", "p", "addAgent")
+    add(file, "Open Harness", "o", "addAgent")
     // ⌘⇧N: another agent like the focused pane's, fresh conversation (Dart: `agent.clone`).
     add(file, "Clone Harness", "n", "cloneAgent", [.command, .shift])
     // ⌘⇧E: the pane's harness starts again where it is (Dart: `agent.restart`).
@@ -287,13 +287,13 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
     add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
-    add(file, "Close Tab", "w", "closeActive", [.command, .shift])
+    add(file, "Close Tab", "w", "closeActive")
     file.addItem(.separator())
     add(file, "Split Right", "r", "splitRight")
     add(file, "Split Down", "d", "splitDown")
     add(file, "Zoom Pane", "", "zoomPane")
     add(file, "Move Pane to Tab", "m", "movePaneToTab", [.command, .shift])
-    add(file, "Close Pane", "w", "closePane")
+    add(file, "Close Pane", "w", "closePane", [.command, .shift])
     install(file, at: 1)
 
     historyMenu.delegate = self
@@ -307,7 +307,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
     if let view = main.item(withTitle: "View")?.submenu {
       view.addItem(.separator())
-      add(view, "Harnesses", "", "sessions")
+      add(view, "Harnesses", "p", "sessions")
       add(view, "Harnesses Needing Input…", "i", "notifications", [.command, .shift])
       add(view, "Machines", "m", "machineList")
       add(view, "Models", "i", "models")
@@ -890,6 +890,16 @@ private class SwarmIconButton: NSButton {
   }
 }
 
+// Match WorkspaceBarControl in Flutter, including the pane model selector.
+private func workspaceBarControlHeight(_ font: NSFont) -> CGFloat {
+  max(28, ceil(font.pointSize * 1.2))
+}
+
+private func drawWorkspaceBarHover(_ rect: NSRect, selection: NSColor) {
+  selection.withAlphaComponent(0.5).setFill()
+  rect.fill()
+}
+
 /// Terminal symbols with a shared text baseline and a visible hover/focus cue.
 private final class SwarmStatusSymbolButton: SwarmIconButton {
   var foreground = NSColor(white: 0.85, alpha: 1) { didSet { needsDisplay = true } }
@@ -897,10 +907,7 @@ private final class SwarmStatusSymbolButton: SwarmIconButton {
 
   override func draw(_ dirtyRect: NSRect) {
     let active = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
-    if active {
-      selection.withAlphaComponent(0.5).setFill()
-      bounds.fill()
-    }
+    defer { if active { drawWorkspaceBarHover(bounds, selection: selection) } }
     let line = NSAttributedString(string: title, attributes: [
       .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
       .foregroundColor: foreground.withAlphaComponent(!isEnabled ? 0.28 : active ? 1 : 0.75),
@@ -943,12 +950,21 @@ private struct SwarmStatusSegment {
 
 /// Dart sends the same resolved segments that Flutter uses for its previews.
 /// Shapes are drawn in cells; no Powerline/Nerd Font installation is needed.
-private final class SwarmContextButton: NSButton {
+private final class SwarmContextButton: SwarmIconButton {
+  var selection = NSColor(white: 0.35, alpha: 1)
+  var onField: ((String, Int) -> Void)?
+  fileprivate private(set) var fieldButtons: [SwarmContextButton] = []
+  private var field: String?
+  private var paneId: Int?
+
   var foreground = NSColor.white
   private var text = ""
+  var textAlignment: NSTextAlignment = .right
+  var contentPadding: CGFloat = 0
+  private var detail: String?
   private var segments: [SwarmStatusSegment] = []
   private var segmented = false
-  var nextBackground: NSColor? { didSet { needsDisplay = true } }
+  var nextBackground: NSColor? { didSet { needsDisplay = true; needsLayout = true } }
   var isSegmented: Bool { segmented && !segments.isEmpty }
   var firstBackground: NSColor? { segments.first?.background }
   var drawsSegments: Bool { isSegmented && bounds.width >= CGFloat(segments.count) * cellWidth * 4 }
@@ -959,7 +975,8 @@ private final class SwarmContextButton: NSButton {
     segments.map { ($0.text as NSString).size(withAttributes: [.font: textFont]).width }
   }
   var preferredWidth: CGFloat {
-    ceil(naturalWidths.reduce(0, +) + (segmented ? CGFloat(segments.count) * cellWidth * 3 : 0))
+    if !fieldButtons.isEmpty { return fieldButtons.reduce(0) { $0 + $1.preferredWidth } }
+    return ceil(naturalWidths.reduce(0, +) + contentPadding * 2 + (segmented ? CGFloat(segments.count) * cellWidth * 3 : 0))
   }
 
   func update(_ context: [String: Any]?, enabled: Bool) {
@@ -971,12 +988,76 @@ private final class SwarmContextButton: NSButton {
         foreground: statusColor(part["foreground"], fallback: foreground),
         background: part["background"] == nil ? nil : statusColor(part["background"], fallback: foreground))
     }
+    let fields = context?["fields"] as? [[String: Any]] ?? []
+    while fieldButtons.count > fields.count { fieldButtons.removeLast().removeFromSuperview() }
+    while fieldButtons.count < fields.count {
+      let button = SwarmContextButton()
+      button.isBordered = false
+      button.target = self
+      button.action = #selector(openField(_:))
+      fieldButtons.append(button)
+      addSubview(button)
+    }
+    for (button, values) in zip(fieldButtons, fields) {
+      button.font = font
+      button.textAlignment = .left
+      button.foreground = foreground
+      button.selection = selection
+      button.update(values, enabled: enabled)
+      button.setAccessibilityLabel(values["detail"] as? String ?? values["text"] as? String)
+    }
+    setAccessibilityChildren(fields.isEmpty ? nil : fieldButtons.filter { $0.field != nil })
+    field = context?["field"] as? String
+    paneId = context?["paneId"] as? Int
     actionURL = context?["url"] as? String
-    toolTip = context?["detail"] as? String
+    detail = context?["detail"] as? String
+    updateTooltip()
     isEnabled = enabled && context?["interactive"] as? Bool == true
     setAccessibilityValue(text)
     setAccessibilityHelp(toolTip)
     needsDisplay = true
+    needsLayout = true
+  }
+
+  private func updateTooltip() {
+    guard fieldButtons.isEmpty else { toolTip = nil; return }
+    let extra = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let hints = [
+      preferredWidth > bounds.width && !text.isEmpty ? text : nil,
+      !extra.isEmpty && extra != text ? extra : nil,
+    ].compactMap { $0 }
+    toolTip = hints.isEmpty ? nil : hints.joined(separator: "\n")
+    setAccessibilityHelp(toolTip)
+  }
+
+  @objc private func openField(_ sender: SwarmContextButton) {
+    guard fieldButtons.contains(where: { $0 === sender }), sender.isEnabled,
+          let field = sender.field, let paneId = sender.paneId else { return }
+    onField?(field, paneId)
+  }
+
+  override func layout() {
+    super.layout()
+    updateTooltip()
+    guard !fieldButtons.isEmpty else { return }
+    let natural = fieldButtons.map { $0.preferredWidth }
+    var widths = natural
+    if natural.reduce(0, +) > bounds.width {
+      var low: CGFloat = 0, high = natural.max() ?? 0
+      for _ in 0..<24 {
+        let cap = (low + high) / 2
+        if natural.reduce(0, { $0 + min($1, cap) }) > bounds.width { high = cap }
+        else { low = cap }
+      }
+      widths = natural.map { min($0, low) }
+    }
+    var x: CGFloat = 0
+    for (index, button) in fieldButtons.enumerated() {
+      button.frame = NSRect(x: x, y: 0, width: widths[index], height: bounds.height)
+      let next = index + 1 < fieldButtons.count ? fieldButtons[index + 1] : nil
+      button.nextBackground = next?.firstBackground ?? (index == fieldButtons.count - 1 ? nextBackground : nil)
+      x += widths[index]
+    }
   }
 
   override var mouseDownCanMoveWindow: Bool { false }
@@ -989,19 +1070,25 @@ private final class SwarmContextButton: NSButton {
     ])
   }
   override func draw(_ dirtyRect: NSRect) {
-    guard bounds.width > 0, !segments.isEmpty else { return }
+    guard fieldButtons.isEmpty, bounds.width > 0, !segments.isEmpty else { return }
     NSGraphicsContext.saveGraphicsState()
-    defer { NSGraphicsContext.restoreGraphicsState() }
+    defer {
+      if isEnabled && (hovered || hasKeyboardFocus || isHighlighted) {
+        drawWorkspaceBarHover(bounds, selection: selection)
+      }
+      NSGraphicsContext.restoreGraphicsState()
+    }
     bounds.clip()
     if !drawsSegments {
       let line = NSMutableAttributedString(string: "")
       if segmented {
-        line.append(attributed(text, foreground, alignment: .right))
+        line.append(attributed(text, foreground, alignment: textAlignment))
       } else {
-        for segment in segments { line.append(attributed(segment.text, segment.foreground, alignment: .right)) }
+        for segment in segments { line.append(attributed(segment.text, segment.foreground, alignment: textAlignment)) }
       }
-      line.draw(in: NSRect(x: 0, y: (bounds.height - line.size().height) / 2,
-        width: bounds.width, height: line.size().height))
+      let inset = min(contentPadding, bounds.width / 2)
+      line.draw(in: NSRect(x: inset, y: (bounds.height - line.size().height) / 2,
+        width: max(0, bounds.width - inset * 2), height: line.size().height))
       return
     }
     let natural = naturalWidths
@@ -1019,6 +1106,14 @@ private final class SwarmContextButton: NSButton {
     let height = ceil(textFont.pointSize * 1.2)
     let bottom = (bounds.height - height) / 2
     var x = max(0, bounds.width - widths.reduce(0, +) - CGFloat(segments.count) * cellWidth * 3)
+    // Separate click targets still form one painted ribbon. Cover fractional
+    // leading/trailing slack too, so cell rounding cannot reveal a dark seam.
+    (segments[0].background ?? foreground).setFill()
+    NSRect(x: 0, y: bottom, width: x + cellWidth, height: height).fill()
+    if let nextBackground {
+      nextBackground.setFill()
+      NSRect(x: x, y: bottom, width: bounds.width - x, height: height).fill()
+    }
     for (index, segment) in segments.enumerated() {
       let inset = cellWidth * (index == 0 ? 1 : 2)
       let width = widths[index] + inset + cellWidth
@@ -1049,8 +1144,10 @@ private final class SwarmTabStrip: NSView {
   var emit: ((String, Any?) -> Void)?
   private let scroll = SwarmStripScrollView()
   private let document = NSView()
-  fileprivate let newButton = SwarmIconButton()
+  fileprivate let newButton = SwarmStatusSymbolButton()
   fileprivate let contextButton = SwarmContextButton()
+  fileprivate let focusedModelButton = SwarmContextButton()
+  private var focusedModelTarget: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
   fileprivate let harnessesButton = SwarmStatusSymbolButton()
   fileprivate let machinesButton = SwarmStatusSymbolButton()
@@ -1099,7 +1196,18 @@ private final class SwarmTabStrip: NSView {
     contextButton.alignment = .right
     contextButton.target = self
     contextButton.setAccessibilityLabel("Focused pane")
+    contextButton.onField = { [weak self] field, paneId in
+      guard let self, self.actionsEnabled else { return }
+      self.emit?("focusedContext", ["field": field, "paneId": paneId])
+    }
     addSubview(contextButton)
+    focusedModelButton.isBordered = false
+    focusedModelButton.textAlignment = .center
+    focusedModelButton.target = self
+    focusedModelButton.action = #selector(openFocusedModel)
+    focusedModelButton.setAccessibilityLabel("Switch focused pane model")
+    focusedModelButton.isHidden = true
+    addSubview(focusedModelButton)
     pullRequestButton.isBordered = false
     pullRequestButton.target = self
     pullRequestButton.action = #selector(openFocusedPullRequest)
@@ -1123,7 +1231,7 @@ private final class SwarmTabStrip: NSView {
       control.isEnabled = false
       addSubview(control)
     }
-    setAccessibilityChildren([scroll, newButton, contextButton, pullRequestButton,
+    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton,
       harnessesButton, machinesButton, modelsButton, storeButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
@@ -1151,19 +1259,26 @@ private final class SwarmTabStrip: NSView {
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
       terminalSelection = statusColor(style["selection"], fallback: terminalSelection)
     }
-    newButton.font = barFont
-    newButton.contentTintColor = terminalForeground
-    for control in [harnessesButton, machinesButton, modelsButton, storeButton] {
+    for control in [newButton, harnessesButton, machinesButton, modelsButton, storeButton] {
       control.font = barFont
       control.foreground = terminalForeground
       control.selection = terminalSelection
       control.isEnabled = actionsEnabled
     }
+    focusedModelButton.font = barFont
+    focusedModelButton.foreground = terminalForeground
+    focusedModelButton.selection = terminalSelection
+    focusedModelButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
+    focusedModelTarget = state["focusedModel"] as? [String: Any]
+    focusedModelButton.update(focusedModelTarget, enabled: actionsEnabled)
+    focusedModelButton.isHidden = focusedModelTarget == nil
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
+    contextButton.selection = terminalSelection
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
     pullRequestButton.font = barFont
     pullRequestButton.foreground = terminalForeground
+    pullRequestButton.selection = terminalSelection
     pullRequestButton.update(state["pullRequest"] as? [String: Any], enabled: actionsEnabled)
     pullRequestButton.isHidden = state["pullRequest"] == nil
     let rows = state["tabs"] as? [[String: Any]] ?? []
@@ -1226,7 +1341,7 @@ private final class SwarmTabStrip: NSView {
     let trailing = cell
     let toolColumns = max(ceil(28 / cell), min(4, floor((bounds.width - cell * 9) / (cell * 4))))
     let toolWidth = cell * toolColumns
-    let toolHeight = max(28, ceil(barFont.pointSize * 1.2))
+    let toolHeight = workspaceBarControlHeight(barFont)
     let toolsX = bounds.width - trailing - toolWidth * 4
     for (index, control) in [harnessesButton, machinesButton, modelsButton, storeButton].enumerated() {
       control.frame = NSRect(x: toolsX + CGFloat(index) * toolWidth,
@@ -1247,17 +1362,22 @@ private final class SwarmTabStrip: NSView {
       tab.contentCenterY = bounds.midY
       x += width
     }
-    newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - 28) / 2,
-      width: cell * 3, height: 28)
+    newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - toolHeight) / 2,
+      width: cell * 3, height: toolHeight)
     let statusWidth = max(0, statusRight - newButton.frame.maxX - cell * 2)
     let prWidth = pullRequestButton.isHidden ? 0 : min(pullRequestButton.preferredWidth, statusWidth * 0.45)
     let joined = contextButton.isSegmented && pullRequestButton.isSegmented && prWidth > 0
     let prGap = prWidth > 0 && !joined ? cell : 0
-    pullRequestButton.frame = NSRect(x: statusRight - prWidth, y: 0,
-      width: prWidth, height: bounds.height)
-    let contextWidth = min(contextButton.preferredWidth, max(0, statusWidth - prWidth - prGap))
-    contextButton.frame = NSRect(x: statusRight - prWidth - prGap - contextWidth, y: 0,
-      width: contextWidth, height: bounds.height)
+    pullRequestButton.frame = NSRect(x: statusRight - prWidth, y: (bounds.height - toolHeight) / 2,
+      width: prWidth, height: toolHeight)
+    let remaining = max(0, statusWidth - prWidth - prGap)
+    let modelWidth = focusedModelButton.isHidden ? 0 : min(focusedModelButton.preferredWidth, remaining * 0.35)
+    let modelGap = modelWidth > 0 ? min(cell, remaining - modelWidth) : 0
+    let contextWidth = min(contextButton.preferredWidth, max(0, remaining - modelWidth - modelGap))
+    contextButton.frame = NSRect(x: statusRight - prWidth - prGap - contextWidth, y: (bounds.height - toolHeight) / 2,
+      width: contextWidth, height: toolHeight)
+    focusedModelButton.frame = NSRect(x: contextButton.frame.minX - modelGap - modelWidth,
+      y: (bounds.height - toolHeight) / 2, width: modelWidth, height: toolHeight)
     contextButton.nextBackground = joined && pullRequestButton.drawsSegments
       ? pullRequestButton.firstBackground : nil
     let geometryChanged = scroll.frame.size != previousScrollSize || document.frame.size != previousDocumentSize
@@ -1293,6 +1413,12 @@ private final class SwarmTabStrip: NSView {
     return event.timestamp - first.time <= NSEvent.doubleClickInterval &&
       hypot(event.locationInWindow.x - first.point.x,
             event.locationInWindow.y - first.point.y) <= 4
+  }
+  @objc private func openFocusedModel() {
+    guard actionsEnabled, focusedModelButton.isEnabled,
+          let paneId = focusedModelTarget?["paneId"] as? Int,
+          let agentId = focusedModelTarget?["agentId"] as? String else { return }
+    emit?("focusedModel", ["paneId": paneId, "agentId": agentId])
   }
   @objc private func openFocusedPullRequest() {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {
@@ -1363,6 +1489,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var actionsEnabled = true {
     didSet {
       selectButton.isEnabled = actionsEnabled
+      needsDisplay = true
     }
   }
   private var downPoint = NSPoint.zero
@@ -1395,7 +1522,13 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   override func layout() {
     super.layout()
     selectButton.frame = bounds
-    toolTip = name
+    let visibleName = displayLabel.replacingOccurrences(of: #"^\d+:"#, with: "", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let fullName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    var hints: [String] = []
+    if label.size().width > max(0, bounds.width - cellWidth * 2) { hints.append(displayLabel) }
+    if !fullName.isEmpty && fullName != visibleName && fullName != displayLabel { hints.append(name) }
+    toolTip = hints.isEmpty ? nil : hints.joined(separator: "\n")
   }
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
@@ -1416,6 +1549,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   private func invalidateLabel() {
     cachedLabel = nil
     needsDisplay = true
+    needsLayout = true
   }
   private var label: NSAttributedString {
     if let cachedLabel { return cachedLabel }
@@ -1433,14 +1567,16 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   override func draw(_ dirtyRect: NSRect) {
     let text = label
-    let height = ceil(labelFont.pointSize * 1.2)
+    let height = workspaceBarControlHeight(labelFont)
     let row = NSRect(x: 0, y: contentCenterY - height / 2, width: bounds.width, height: height)
     if selected {
       selection.setFill()
       row.fill()
-    } else if (hovered || selectButton.hasKeyboardFocus) && actionsEnabled {
-      foreground.withAlphaComponent(0.08).setFill()
-      row.fill()
+    }
+    defer {
+      if !selected && (hovered || selectButton.hasKeyboardFocus || selectButton.isHighlighted) && actionsEnabled {
+        drawWorkspaceBarHover(row, selection: selection)
+      }
     }
     text.draw(in: NSRect(x: cellWidth, y: contentCenterY - text.size().height / 2,
       width: max(0, bounds.width - cellWidth * 2), height: text.size().height))
@@ -1506,6 +1642,10 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
 private class SwarmTabActionButton: SwarmIconButton {
   weak var owner: SwarmTabButton?
   override var showsHoverFill: Bool { false }
+  override func highlight(_ flag: Bool) {
+    super.highlight(flag)
+    owner?.needsDisplay = true
+  }
   override func becomeFirstResponder() -> Bool {
     guard super.becomeFirstResponder() else { return false }
     owner?.needsDisplay = true
@@ -1522,11 +1662,13 @@ private class SwarmTabActionButton: SwarmIconButton {
 private final class SwarmSelectButton: SwarmTabActionButton {
   override func mouseDown(with event: NSEvent) {
     guard isEnabled else { return }
+    highlight(true)
     owner?.mouseDown(with: event)
   }
-  override func mouseUp(with event: NSEvent) {}
+  override func mouseUp(with event: NSEvent) { highlight(false) }
   override func mouseDragged(with event: NSEvent) {
     guard isEnabled else { return }
+    highlight(false)
     owner?.mouseDragged(with: event)
   }
 }

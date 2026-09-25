@@ -29,6 +29,12 @@ void main() {
             style: style,
           );
           final paint = statusLinePaintSegments(parts, theme);
+          if (style == StatusLineStyle.standard) {
+            expect(
+              paint.map((part) => part.foreground),
+              everyElement(theme.foreground),
+            );
+          }
           designs.add(paint.map((p) => p.toJson()).toString());
           expect(paint.any((p) => p.background != null), style.segmented);
           expect(
@@ -46,6 +52,15 @@ void main() {
               style: style,
             );
             expect(pr.text, '#298 $state');
+            if (style == StatusLineStyle.standard) {
+              expect(
+                statusLinePaintSegments(
+                  pr,
+                  theme,
+                ).map((part) => part.foreground),
+                everyElement(theme.foreground),
+              );
+            }
             expect(
               statusLinePaintSegments(
                 pr,
@@ -64,7 +79,7 @@ void main() {
             isEmpty,
           );
         }
-        expect(designs, hasLength(5));
+        expect(designs, hasLength(6));
       }
       expect(StatusLineStyle.fromId('starship'), StatusLineStyle.standard);
       expect(fitStatusLineWidths([10, 80, 40], 90), [

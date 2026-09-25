@@ -118,7 +118,7 @@ void main() {
       await command(tester, 'Keyboard practice');
       expect(filter, findsOneWidget);
       await openLesson(tester, 'New Tab');
-      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true);
       expect(find.textContaining('That is Close Tab'), findsOneWidget);
       expect(app.swarms, [original]);
       expect(original.panes, panes);

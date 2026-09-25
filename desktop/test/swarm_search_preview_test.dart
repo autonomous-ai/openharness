@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -14,7 +16,6 @@ import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' as configured;
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 import 'support/real_fonts.dart';
@@ -203,7 +204,7 @@ void main() {
     await seedPreviews(app);
     app.adoptSessionForTest(terminal('a69', []));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Workspace sync');
     await tester.pump();
@@ -264,7 +265,7 @@ void main() {
       } else {
         await configured.mount(tester, app, map);
       }
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Checkout');
       await tester.pump();
@@ -392,7 +393,7 @@ void main() {
           if (inline) {
             await tester.tap(field);
           } else {
-            await chord(tester, LogicalKeyboardKey.keyP);
+            await openHarnessPicker(tester);
           }
           await tester.enterText(field, 'Checkout retries');
           await tester.pump();
@@ -506,7 +507,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await openHarnessPicker(tester);
         }
         await tester.enterText(field, 'Checkout retries');
         await tester.pump();
@@ -603,7 +604,7 @@ void main() {
       );
       app.adoptSessionForTest(terminal('a69', []));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -642,7 +643,7 @@ void main() {
       await mount(tester, app);
       tester.view.physicalSize = size;
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',

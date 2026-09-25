@@ -192,8 +192,9 @@ from `node_status` pushes — distinct from our own socket status, pending offli
 
 ### Command dock
 
+For workspace presentation, follow the [terminal workspace design system](design/terminal-workspace.md).
 For dialog presentation, follow the [terminal dialog design system](design/terminal-dialogs.md):
-fixed cells, plain text, one-line selection. Cmd-N and Cmd-P are the reference implementations.
+fixed cells, plain text, one-line selection. Cmd-N and Cmd-O are the reference implementations.
 
 `SwarmSearchController` owns search and selection; `SwarmSearchResults` keeps a bounded cache of
 visible/recent row controls. Query-dependent match text listens separately, so typing does not
@@ -201,7 +202,7 @@ rebuild unchanged row controls and arrows rebuild only changed highlights. The c
 invalidates for row metadata, availability, action, geometry, theme, and font changes. Keep focus,
 semantics, and traversal on the row; do not replace them with paint-only search results.
 Creation and draft precedence are documented in `design/new-harness-entry-rules.md` and exercised
-by its listed tests. Cmd-T/Cmd-P retarget the same draft/search; Store requests own their explicit
+by its listed tests. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
 product and machine. `test/benchmarks/swarm_benchmark.dart` measures large synthetic inventories;
 its headless debug timings do not establish native display or network latency.
 

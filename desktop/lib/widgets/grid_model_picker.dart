@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -18,6 +19,7 @@ import '../usage/models_menu_controller.dart';
 import 'engine_identity.dart';
 import 'model_picker_chrome.dart';
 import 'pane_menu.dart';
+import 'workspace_bar_control.dart';
 
 /// The engines whose panes carry a model picker.
 ///
@@ -285,9 +287,11 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// row, and a menu that showed it only on a second click read as the model not being there.
   GridModels? _shown;
   OverlayEntry? _entry;
+  bool _disposing = false;
 
   @override
   void dispose() {
+    _disposing = true;
     widget.notifier.gridPictures.removeListener(_pictureChanged);
     widget.notifier.foreground.removeListener(_foregroundChanged);
     widget.controller?.removeListener(_openFromController);
@@ -457,6 +461,8 @@ class _GridModelPickerState extends State<GridModelPicker> {
     body: body,
     minWidth: kModelPickerWidth,
     maxWidth: kModelPickerWidth,
+    // A new focused pane disposes this picker; do not pull focus back to its owner.
+    shouldRestoreFocus: () => mounted && !_disposing && widget.enabled,
     onOpen: (entry, close) {
       _entry = entry;
       _close = close;
@@ -532,6 +538,50 @@ class _GridModelPickerState extends State<GridModelPicker> {
           _ => 'Model',
         };
     final label = _expecting ? 'Switching…' : current;
+    if (widget.paneHeader) {
+      final theme = terminalThemeFor(
+        grid.AppTheme.palette.value,
+        terminalThemeStore.value,
+      );
+      final cell = workspaceBarCellSizeOf(context);
+      final labelSize = workspaceBarTextSizeOf(context, label);
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final padding = math.min(cell.width, constraints.maxWidth / 2);
+          final textWidth = math.max(
+            0.0,
+            math.min(220.0, constraints.maxWidth - padding * 2),
+          );
+          final clipped = labelSize.width > textWidth;
+          return WorkspaceBarControl(
+            label: 'Model: $current',
+            tooltip: [
+              if (clipped || label != current) current,
+              if (widget.enabled) 'Switch model · Subscription or local models',
+              ?sentence,
+            ].join('\n'),
+            selection: theme.selection,
+            foreground: theme.foreground,
+            onPressed: widget.enabled ? _open : null,
+            child: SizedBox(
+              width: math.min(labelSize.width, textWidth) + padding * 2,
+              height: workspaceBarControlHeight(context),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: padding),
+                child: Center(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: workspaceBarTextStyle(),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
     final foreground = widget.paneHeader
         ? terminalThemeFor(
             grid.AppTheme.palette.value,
