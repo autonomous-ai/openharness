@@ -806,6 +806,7 @@ impl App {
         self.drop_pane(id);
         if let Some((machine, agent)) = agent { self.desk_op(json!({ "op": "pane.remove", "tabId": tab_id, "machineId": machine, "agentId": agent })) }
         if self.tabs[index].root.is_none() && self.tabs.len() > 1 { self.close_tab(index) }
+        else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "home".into() }
         self.fit_panes();
     }
 
