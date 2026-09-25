@@ -67,6 +67,7 @@ harness start -f      # foreground mode for a supervisor; logs to stdout
 harness status     # is it running? shows pid + the chat link
 harness stop       # stop the background adapter
 harness version    # print the installed version
+harness tui        # all of Harness in this terminal — tabs, panes, every machine (see tui/README.md)
 harness logout     # stop the adapter and clear this computer's SSO session
 ```
 
