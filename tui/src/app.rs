@@ -895,6 +895,17 @@ impl App {
         }
     }
 
+    /// Move the active tab one place left (-1) or right (+1), on the desk too.
+    pub fn move_tab(&mut self, by: i32) {
+        let to = self.active as i32 + by;
+        if to < 0 || to as usize >= self.tabs.len() { return }
+        let to = to as usize;
+        self.tabs.swap(self.active, to);
+        self.active = to;
+        let (id, on_desk) = (self.tabs[to].id.clone(), self.tabs[to].on_desk);
+        if on_desk { self.desk_op(json!({ "op": "tab.move", "id": id, "index": to })) }
+    }
+
     pub fn rename_tab(&mut self, name: &str) {
         let tab = self.tab_mut();
         tab.name = name.to_string();
