@@ -388,6 +388,12 @@ fn home(buf: &mut Buffer, app: &App, area: Rect) {
         row_w += piece_w;
     }
     if !row.is_empty() { lines.push(Line::from(row)) }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("⌥ types symbols instead? ", fg(theme::MUTED)),
+        Span::styled("^Space", bold(theme::ACCENT)),
+        Span::styled(" then the key works everywhere — or set Option as Meta (tui/README.md)", fg(theme::MUTED)),
+    ]));
     let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
     for (index, line) in lines.iter().enumerate() {
         let y = top + index as u16;
