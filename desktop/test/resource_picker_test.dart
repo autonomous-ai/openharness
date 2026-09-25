@@ -183,7 +183,7 @@ void main() {
         find.byKey(const ValueKey('swarm-search-result-list')),
       );
       const fullHint =
-          '   harnesses\n@  machines\n#  projects\n:  models\n*  store\n>  commands';
+          '@  machines\n#  projects\n:  models\n*  store\n>  commands';
       expect(tester.widget<Text>(hints).data, fullHint);
       final controller = search(tester);
       expect(controller.selected, isNull);

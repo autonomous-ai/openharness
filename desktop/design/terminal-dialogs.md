@@ -120,7 +120,7 @@ Align its editable text with the result titles. Previews use the same text
 metrics and blank-row spacing; warnings are readable text in semantic colors.
 
 Cmd-P opens with no selected row. The preview area shows the type hints as plain,
-muted text: unprefixed harnesses, `@ machines`, `# projects`, `: models`,
+muted text: `@ machines`, `# projects`, `: models`,
 `* store`, and `> commands`.
 Typing selects the first match and replaces the hints with its preview. Arrows,
 Tab, and pointer movement can also select a row. Clearing the root search returns
