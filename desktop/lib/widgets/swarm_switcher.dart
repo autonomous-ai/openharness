@@ -1368,7 +1368,9 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                         key: ValueKey('model-row-action:${row.id}'),
                         maxLines: 1,
                         style: terminalContentStyle(
-                          color: modelAction == 'Use' ? theme.foreground : muted,
+                          color: modelAction == 'Use'
+                              ? theme.foreground
+                              : muted,
                         ),
                       ),
                     ] else if (widget.unavailableReason case final reason?) ...[

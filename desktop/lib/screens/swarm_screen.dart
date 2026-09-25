@@ -514,7 +514,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final split = _search!.split;
       final placement = _search!.placement;
       final task = _search!.createTask;
-      final machineId = _search!.scopedMachineId;
+      final selected = _search!.selected;
+      final machineId =
+          _search!.scopedMachineId ??
+          (selected?.isMachine == true ? selected!.machineId : null);
       _closeSearch(restoreFocus: false);
       unawaited(
         _newAgent(

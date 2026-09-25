@@ -223,6 +223,26 @@ void main() {
     expect(box.modelLabel, 'OpenAI');
     expect(box.usesProfile, isTrue);
   });
+  test(
+    'model choices explain when their serving machine seems offline',
+    () async {
+      final connection = connections.putIfAbsent('m', _Connection.new);
+      final own = (connection.answer['grids'] as List).first as Map;
+      own['models'] = [
+        <String, dynamic>{
+          'id': 'Qwen-35B',
+          'node': 'Mac Studio',
+          'unavailable': {'reason': 'offline', 'machine': 'Mac Studio'},
+        },
+      ];
+      final box = controller();
+      await load(box);
+      expect(localChoice(box).detail, 'Mac Studio · seems offline');
+      expect(box.model, isNull);
+      expect(connection.creates, isEmpty);
+    },
+  );
+
   test('inline choices reject an agent invalidated by a harness change and a profile from another machine', () async {
     final box = controller();
     await app.probeDsh('m', force: true);

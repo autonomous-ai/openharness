@@ -279,6 +279,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   }
 
   bool _dispatch(String command) {
+    if (widget.search.isCommandMode || widget.search.isHelpMode) {
+      // Command previews are read-only. Keep Tab from stepping results or
+      // focusing resource controls that are not displayed in this scope.
+      return command == 'picker.complete' || command == 'picker.complete_back';
+    }
     if (command == 'picker.complete' || command == 'picker.complete_back') {
       if (row == null || widget.search.showsTypeHints) return false;
       _switchPane();
@@ -1220,6 +1225,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         terminalThemeStore,
       ]),
       builder: (context, _) {
+        if (widget.search.isCommandMode || widget.search.isHelpMode) {
+          return SwarmSearchPreview(
+            key: const ValueKey('swarm-search-preview'),
+            search: widget.search,
+            terminal: true,
+          );
+        }
         final cell = terminalCellSizeOf(context);
         final theme = terminalThemeFor(
           grid.AppTheme.palette.value,

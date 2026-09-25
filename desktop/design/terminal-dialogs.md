@@ -163,8 +163,8 @@ Cmd-N, Cmd-P, and Cmd-I share pane navigation: **Tab/Shift-Tab switch between
 the left and right panes**, without selecting a value or running an action.
 **Up/Down move within the active pane**: fields or choices in Cmd-N, results or
 controls in Cmd-P. **Enter activates the highlighted item**. In Cmd-N, Enter
-on a field opens its choices; Enter on a choice applies it and returns to that
-field. Tab returns without applying a choice. In Cmd-P, Enter on a usable model
+on a field opens its choices; Enter on a choice applies it and selects New
+Harness. Tab returns to the same field without applying a choice. In Cmd-P, Enter on a usable model
 uses it, on a Get row gets it, on a machine enters management, and on a harness
 opens it. Arrow keys walk controls while the right pane owns focus; they must
 not change the resource behind them. Left/Right retain normal cursor movement

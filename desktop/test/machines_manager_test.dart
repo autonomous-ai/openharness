@@ -351,7 +351,7 @@ void main() {
   });
 
   testWidgets(
-    'clicking a linked machine scopes work by ID even when names match',
+    'clicking a linked machine manages its ID even when names match',
     (tester) async {
       final app = createApp();
       app.stateOf('m')!
@@ -377,19 +377,18 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('machine:m')));
       await tester.pumpAndSettle();
-      expect(resourceScope('@'), findsNothing);
+      expect(resourceScope('@'), findsOneWidget);
+      expect(resourceSearch(tester).selected!.machineId, 'm');
+      expect(resourceSearch(tester).managing, isTrue);
       final search = tester.widget<TextField>(
         find.byKey(const ValueKey('swarm-search-input')),
       );
-      expect(search.controller!.text, isEmpty);
-      expect(search.decoration!.hintText, 'Search harnesses in Test host');
+      expect(search.controller!.text, '@');
       expect(find.text('Task from another Test host'), findsNothing);
-      await tester.enterText(
-        find.byKey(const ValueKey('swarm-search-input')),
-        'Task from another',
-      );
+      await key(tester, LogicalKeyboardKey.tab);
       await tester.pumpAndSettle();
-      expect(find.text('Task from another Test host'), findsNothing);
+      expect(resourceSearch(tester).selected!.machineId, 'm');
+      expect(resourceSearch(tester).managing, isFalse);
       expect(search.focusNode!.hasFocus, isTrue);
       await tester.pumpWidget(const SizedBox());
       app.dispose();
@@ -432,7 +431,7 @@ void main() {
     );
   }
 
-  testWidgets('an empty machine session list waits for Cmd-N to create there', (
+  testWidgets('machine management waits for Cmd-N to create on that machine', (
     tester,
   ) async {
     final previous = newHarnessOpensInBox;
@@ -470,7 +469,7 @@ void main() {
 
   for (final fail in [false, true]) {
     testWidgets(
-      'Machines toolbar opens Rename and updates names (failure=$fail)',
+      'Machines picker renames inline and updates names (failure=$fail)',
       (tester) async {
         const channel = MethodChannel('harness/swarm_tabs');
         final updates = <Map>[];
@@ -505,12 +504,12 @@ void main() {
         await tester.pumpAndSettle();
         await runResourceCommand(tester, 'Rename');
         await tester.pumpAndSettle();
-        expect(find.text('Rename Machine'), findsOneWidget);
-        final field = find.byType(TextField).last;
+        expect(find.text('Rename machine'), findsOneWidget);
+        final field = find.byKey(const ValueKey('machine-rename-input'));
         await tester.enterText(field, '   ');
-        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await key(tester, LogicalKeyboardKey.enter);
         await tester.pump();
-        expect(find.text('Name cannot be empty'), findsOneWidget);
+        expect(find.text('Enter a name.'), findsOneWidget);
         expect(api.calls, isEmpty);
         await tester.enterText(field, '  Office Mac  ');
         if (fail) api.error = 'Connection unavailable';
@@ -524,7 +523,7 @@ void main() {
           await key(tester, LogicalKeyboardKey.enter);
           await tester.pumpAndSettle();
         }
-        expect(find.text('Rename Machine'), findsNothing);
+        expect(find.text('Rename machine'), findsNothing);
         expect(
           find.descendant(
             of: find.byKey(const ValueKey('machine:m')),
@@ -534,6 +533,13 @@ void main() {
         );
         expect(app.machines.single.displayName, 'Office Mac');
         expect((updates.last['machines'] as List).single['name'], 'Office Mac');
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(resourceScope('@'), findsOneWidget);
+        expect(
+          tester.widget<TextField>(resourceField).focusNode!.hasFocus,
+          isTrue,
+        );
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(resourceScope('@'), findsNothing);

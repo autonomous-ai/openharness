@@ -747,39 +747,43 @@ void main() {
     },
   );
 
-  testWidgets('reverse navigation, key repeats and Page keys stay within setup', (
-    tester,
-  ) async {
-    final scenario = await _mount(tester, engine: 'claude');
-    await focusLaunchRow(tester, 'harness');
-    await key(tester, LogicalKeyboardKey.arrowUp);
-    expect(
-      tester.widget<Semantics>(_field('start')).properties.selected,
-      isTrue,
-    );
-    await key(tester, LogicalKeyboardKey.arrowUp);
-    expect(
-      tester.widget<Semantics>(_field('advanced')).properties.selected,
-      isTrue,
-    );
-    await focusLaunchRow(tester, 'approvals');
-    final originalMode = scenario.box.mode;
-    await key(tester, LogicalKeyboardKey.pageDown);
-    expect(scenario.box.mode, isNot(originalMode));
-    await key(tester, LogicalKeyboardKey.pageUp);
-    expect(scenario.box.mode, originalMode);
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowUp);
-    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowUp);
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    // Two steps up from Approvals: Model, then Options.
-    expect(
-      tester.widget<Semantics>(_field('advanced')).properties.selected,
-      isTrue,
-    );
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'new-harness-form');
-    expect(scenario.creates, 0);
-  });
+  testWidgets(
+    'reverse navigation, key repeats and Page keys stay within setup',
+    (tester) async {
+      final scenario = await _mount(tester, engine: 'claude');
+      await focusLaunchRow(tester, 'harness');
+      await key(tester, LogicalKeyboardKey.arrowUp);
+      expect(
+        tester.widget<Semantics>(_field('start')).properties.selected,
+        isTrue,
+      );
+      await key(tester, LogicalKeyboardKey.arrowUp);
+      expect(
+        tester.widget<Semantics>(_field('advanced')).properties.selected,
+        isTrue,
+      );
+      await focusLaunchRow(tester, 'approvals');
+      final originalMode = scenario.box.mode;
+      await key(tester, LogicalKeyboardKey.pageDown);
+      expect(scenario.box.mode, isNot(originalMode));
+      await key(tester, LogicalKeyboardKey.pageUp);
+      expect(scenario.box.mode, originalMode);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowUp);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      // Two steps up from Approvals: Model, then Options.
+      expect(
+        tester.widget<Semantics>(_field('advanced')).properties.selected,
+        isTrue,
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'new-harness-form',
+      );
+      expect(scenario.creates, 0);
+    },
+  );
 
   testWidgets(
     'paste fills the active search and backspace removes a whole Unicode character',

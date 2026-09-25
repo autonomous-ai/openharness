@@ -136,7 +136,7 @@ void main() {
     ]) {
       expect(find.byKey(ValueKey('new-harness-field-$field')), findsOneWidget);
     }
-    await press(tester, LogicalKeyboardKey.enter);
+    await press(tester, LogicalKeyboardKey.pageUp);
     expect(find.byKey(const ValueKey('new-harness-field-model')), findsNothing);
   });
 
@@ -449,6 +449,9 @@ void main() {
     await press(tester, LogicalKeyboardKey.enter);
     expect(harnessChoicesActive(tester), isFalse);
     expect(box.engine, selected);
+    expect(box.field, NewHarnessField.launch);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.harness);
     await press(tester, LogicalKeyboardKey.arrowDown);
     expect(box.field, NewHarnessField.projectMenu);
   });

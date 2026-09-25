@@ -1131,7 +1131,13 @@ void main() {
         ),
         findsNothing,
       );
-      expect(find.textContaining('Offline'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Icon && widget.semanticLabel == 'remote-mac: Offline',
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Harness is offline'), findsNothing);
       expect(find.text('harness start'), findsNothing);
       await tester.pumpWidget(const SizedBox());
