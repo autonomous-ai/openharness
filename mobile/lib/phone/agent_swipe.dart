@@ -595,9 +595,14 @@ class _AgentSwipeHostState extends State<AgentSwipeHost> {
     }
   }
 
-  /// How many agents the phone has streams for right now — every pane on the phone is a pager's.
-  int _openPanes() =>
-      widget.notifier.panes.where((pane) => pane.agentId != null).length;
+  /// How many agents the phone has streams for that are staying — every pane on the phone is a
+  /// pager's. Not the ones this pager's pending prune is about to close: see [stayingAgentPanes].
+  int _openPanes() => stayingAgentPanes(
+    widget.notifier.panes,
+    keeping: _keepSet(),
+    attached: _attached,
+    heldElsewhere: _heldByAnotherPager,
+  );
 }
 
 /// Whether a pager currently mounted is holding [agent] open — on screen, a swipe away, or just
