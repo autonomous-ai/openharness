@@ -7,7 +7,7 @@ APIs grouped in one searchable view. The source tabs narrow the list.
 
 Open **Models → APIs**, choose a provider, paste its key, and select **Save**.
 The clipboard icon pastes the key directly; it remains hidden until you reveal it.
-OpenRouter, fal.ai, and Replicate have presets. **Custom API**
+OpenRouter, Requesty, fal.ai, and Replicate have presets. **Custom API**
 accepts a name, base URL, and key; **Advanced** controls the key environment
 variable, authentication header, and optional prefix.
 
@@ -69,6 +69,7 @@ tool receives the selected credential. Connections do not sync between machines.
 
 Preset defaults come from the providers' documentation:
 [OpenRouter](https://openrouter.ai/docs/api/reference/authentication),
+[Requesty](https://docs.requesty.ai/api-reference/introduction),
 [fal.ai](https://fal.ai/models/fal-ai/flux/dev/api), and
 [Replicate](https://replicate.com/docs/reference/http).
 

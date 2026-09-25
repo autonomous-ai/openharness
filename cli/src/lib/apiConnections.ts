@@ -34,6 +34,7 @@ export type ApiPreset = Omit<ApiConnection, 'id'> & { keyUrl: string; docsUrl: s
  * same store and execution path; presets are conveniences, never a provider allowlist. */
 export const API_PRESETS: ApiPreset[] = [
   { provider: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://openrouter.ai/settings/keys', docsUrl: 'https://openrouter.ai/docs/api/reference/authentication' },
+  { provider: 'requesty', name: 'Requesty', baseUrl: 'https://router.requesty.ai/v1', keyEnv: 'REQUESTY_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://app.requesty.ai/api-keys', docsUrl: 'https://docs.requesty.ai/api-reference/introduction' },
   { provider: 'fal', name: 'fal.ai', baseUrl: 'https://queue.fal.run', keyEnv: 'FAL_KEY', authHeader: 'Authorization', authPrefix: 'Key', keyUrl: 'https://fal.ai/dashboard/keys', docsUrl: 'https://fal.ai/docs' },
   { provider: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', keyEnv: 'OPENAI_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://platform.openai.com/api-keys', docsUrl: 'https://developers.openai.com/api/reference/overview' },
   { provider: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', keyEnv: 'ANTHROPIC_API_KEY', authHeader: 'x-api-key', authPrefix: '', keyUrl: 'https://platform.claude.com/settings/keys', docsUrl: 'https://platform.claude.com/docs/en/api/overview' },
