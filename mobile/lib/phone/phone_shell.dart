@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'package:harness_mobile/core/background_hold.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../p2p/phone_terminal_p2p.dart';
@@ -63,8 +62,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _lifecycle =
-        WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     final notices = widget.notifier.agentNotices.system;
     notices.opened.addListener(_openNoticedAgent);
     // Signed in is the first moment a notice could be worth anything, so it is
@@ -75,9 +72,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    widget.notifier.agentNotices.system.opened.removeListener(
-      _openNoticedAgent,
-    );
+    widget.notifier.agentNotices.system.opened.removeListener(_openNoticedAgent);
     _linkedMachineId.dispose();
     _openAgentRequest.dispose();
     for (final controller in _heroControllers.values) {
@@ -169,35 +164,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// start; the WebSocket underneath it was not, so a phone coming back sat through a backoff that
   /// had already climbed to its 30s ceiling — the machine list saying "Connecting…" at somebody
   /// who was looking straight at it, with a network that would have answered at once.
-  /// The lifecycle state as of the last callback, so the step OUT of the
-  /// foreground can be told apart from the one back into it.
-  ///
-  /// ⚠️ **Both directions pass through `inactive`** — resumed → inactive →
-  /// hidden → paused going away, and the same list backwards coming home. The
-  /// hold below is taken on `inactive` because it is the last moment Android
-  /// still allows it; without this guard it would be taken a second time on the
-  /// way in, a few milliseconds before being released, and the notification
-  /// would flash on every return.
-  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final was = _lifecycle;
-    _lifecycle = state;
-    // Leaving the foreground: ask the OS to keep this process running, so the
-    // machine socket is still there on the way back rather than being redialled.
-    // A no-op unless the person turned it on — see [BackgroundHoldStore].
-    if (state != AppLifecycleState.resumed) {
-      if (was == AppLifecycleState.resumed) {
-        unawaited(backgroundHoldStore.hold());
-      }
-    } else {
-      // Back on screen, so the hold has nothing left to protect and its
-      // notification would only be clutter. Released on every resume, not just
-      // the ones that took a hold: the service expires on its own clock, and a
-      // release with nothing to release is a no-op.
-      unawaited(backgroundHoldStore.release());
-    }
     if (state == AppLifecycleState.paused) {
       // The other half of the resume below: work that only makes sense in
       // front of somebody stops here. The sockets are not touched — the OS
