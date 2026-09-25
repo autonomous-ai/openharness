@@ -47,7 +47,7 @@ const double _minRowHeight = 56;
 /// LIGHTER, which is how iOS draws its own sheets.
 Color get sheetFill => AppPalette.cardBg;
 
-/// A group's rows, the search field and the mode chips: the sheet's fill with
+/// A group's rows and the search field: the sheet's fill with
 /// a wash of white over it.
 ///
 /// A wash rather than the palette's next step, because the steps are not
