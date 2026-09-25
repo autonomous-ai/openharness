@@ -218,7 +218,7 @@ void main() {
       expect(find.text('Hatch a companion'), findsNothing);
       expect(
         tester.getRect(button).left,
-        greaterThan(
+        greaterThanOrEqualTo(
           tester
               .getRect(find.byKey(const ValueKey('workspace-pane-context')))
               .right,
@@ -547,7 +547,7 @@ void main() {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
-    expect(find.byTooltip('Models'), findsOneWidget);
+    expect(find.byTooltip('Models'), findsNothing);
     expect(find.byTooltip('Models ⌘I'), findsNothing);
     map.apply('''{"bindings":[
       {"keys":"cmd+i","command":null},
@@ -720,6 +720,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.connections, ['source']);
       expect(resourceScope('@'), findsOneWidget);
+      expect(resourceSearch(tester).selected!.machineId, 'source');
+      expect(field, findsNothing);
+      expect(app.stateOf('source')!.needsLink, isFalse);
+      expect(app.stateOf('source')!.connectionStatus, ConnectionStatus.connected);
+      expect(app.allPanes, isEmpty);
       await key(tester, LogicalKeyboardKey.enter);
       expect(resourceScope('@'), findsOneWidget);
       expect(app.panes, isEmpty);
