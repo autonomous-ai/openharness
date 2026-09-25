@@ -99,7 +99,8 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// Cmd-P starts without a choice; typing or navigating activates a result.
   final bool selectOnEmptyQuery;
-  bool get setupLayout => activityFirst && !isCommandMode && !isHelpMode;
+  // Prefixes change the catalog, never the Cmd-P dialog's layout.
+  bool get setupLayout => activityFirst;
   final bool commandsOnly;
   SessionFilter sessionFilter = SessionFilter.all;
   SessionSort sessionSort = SessionSort.recent;
@@ -281,7 +282,8 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool _previewVisible;
   bool get previewVisible => _previewVisible;
-  bool get supportsPreview => !isCommandMode && !isHelpMode && history == null;
+  bool get supportsPreview =>
+      history == null && (setupLayout || !isCommandMode && !isHelpMode);
   bool get canPreview =>
       supportsPreview &&
       selected != null &&

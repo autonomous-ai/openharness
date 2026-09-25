@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -41,14 +42,14 @@ void main() {
         await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         final controller = tester.widget<TextField>(field).controller!;
         final focus = tester.widget<TextField>(field).focusNode!;
-        final selected = find.byWidgetPredicate(
-          (w) => w is ListTile && w.selected,
-        );
-        final first = tester.widget<ListTile>(selected).key;
+        final search = tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search;
+        final first = search.selected!.id;
         await key(tester, LogicalKeyboardKey.arrowUp);
-        expect(tester.widget<ListTile>(selected).key, isNot(first));
+        expect(search.selected!.id, isNot(first));
         await key(tester, LogicalKeyboardKey.arrowDown);
-        expect(tester.widget<ListTile>(selected).key, first);
+        expect(search.selected!.id, first);
         await tester.enterText(field, '> new');
         await key(tester, LogicalKeyboardKey.keyA, cmd: true);
         expect(controller.selection.textInside(controller.text), '> new');
