@@ -27,6 +27,9 @@ fi
 if [[ "${2:-}" == "--window-zoom" ]]; then
   check_source="$desktop_dir/tool/window_zoom_checks.swift"
 fi
+if [[ "${2:-}" == "--status-preview" ]]; then
+  check_source="$desktop_dir/tool/status_theme_preview.swift"
+fi
 cat "$desktop_dir/macos/Runner/HarnessKeymap.swift" \
   "$desktop_dir/macos/Runner/SwarmTitlebar.swift" \
   "$check_source" > "$check_dir/main.swift"

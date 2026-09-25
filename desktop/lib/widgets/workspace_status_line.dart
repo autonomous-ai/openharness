@@ -38,7 +38,9 @@ class WorkspaceStatusLine extends StatelessWidget {
         component.parts.segments.fold(
               0.0,
               (width, segment) =>
-                  width + workspaceBarTextSizeOf(context, segment.text).width,
+                  width +
+                  workspaceBarTextSizeOf(context, segment.text).width +
+                  (segment.branchSymbol ? cell.width * 2 : 0),
             ) +
             (parts.style.segmented
                 ? component.parts.segments.length * cell.width * 3

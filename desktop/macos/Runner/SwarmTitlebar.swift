@@ -939,6 +939,28 @@ private struct SwarmStatusSegment {
   let text: String
   let foreground: NSColor
   let background: NSColor?
+  let branchSymbol: Bool
+}
+
+/// Same one-cell branch drawing as Flutter; no private-use font glyphs.
+private func drawStatusBranch(in rect: NSRect, color: NSColor) {
+  let left = rect.minX + rect.width * 0.25, right = rect.minX + rect.width * 0.8
+  let top = rect.minY + rect.height * 0.85, bottom = rect.minY + rect.height * 0.15
+  let radius = rect.width * 0.16
+  let path = NSBezierPath()
+  path.lineWidth = rect.width * 0.14
+  path.lineCapStyle = .round
+  path.move(to: NSPoint(x: left, y: top - radius))
+  path.line(to: NSPoint(x: left, y: bottom + radius))
+  path.move(to: NSPoint(x: right, y: top - radius))
+  path.curve(to: NSPoint(x: left, y: bottom + radius),
+    controlPoint1: NSPoint(x: right, y: rect.midY), controlPoint2: NSPoint(x: left, y: rect.midY))
+  for center in [NSPoint(x: left, y: top), NSPoint(x: right, y: top), NSPoint(x: left, y: bottom)] {
+    path.appendOval(in: NSRect(x: center.x - radius, y: center.y - radius,
+      width: radius * 2, height: radius * 2))
+  }
+  color.setStroke()
+  path.stroke()
 }
 
 /// Dart sends the same resolved segments that Flutter uses for its previews.
@@ -956,6 +978,9 @@ private final class SwarmContextButton: SwarmIconButton {
   private var detail: String?
   private var segments: [SwarmStatusSegment] = []
   private var segmented = false
+  private var roundedSeparators = false
+  private var roundedStart = false
+  private var roundedEnd = false
   var nextBackground: NSColor? { didSet { needsDisplay = true; needsLayout = true } }
   var isSegmented: Bool { segmented && !segments.isEmpty }
   var firstBackground: NSColor? { segments.first?.background }
@@ -964,7 +989,7 @@ private final class SwarmContextButton: SwarmIconButton {
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ("m" as NSString).size(withAttributes: [.font: textFont]).width }
   private var naturalWidths: [CGFloat] {
-    segments.map { workspaceBarTextWidth($0.text, font: textFont) }
+    segments.map { workspaceBarTextWidth($0.text, font: textFont) + ($0.branchSymbol ? cellWidth * 2 : 0) }
   }
   var preferredWidth: CGFloat {
     if !fieldButtons.isEmpty { return fieldButtons.reduce(0) { $0 + $1.preferredWidth } }
@@ -974,11 +999,15 @@ private final class SwarmContextButton: SwarmIconButton {
   func update(_ context: [String: Any]?, enabled: Bool) {
     text = context?["text"] as? String ?? ""
     segmented = context?["segmented"] as? Bool == true
+    roundedSeparators = context?["roundedSeparators"] as? Bool == true
+    roundedStart = context?["roundedStart"] as? Bool == true
+    roundedEnd = context?["roundedEnd"] as? Bool == true
     segments = (context?["segments"] as? [[String: Any]] ?? []).compactMap { part in
       guard let text = part["text"] as? String else { return nil }
       return SwarmStatusSegment(text: text,
         foreground: statusColor(part["foreground"], fallback: foreground),
-        background: part["background"] == nil ? nil : statusColor(part["background"], fallback: foreground))
+        background: part["background"] == nil ? nil : statusColor(part["background"], fallback: foreground),
+        branchSymbol: part["branchSymbol"] as? Bool == true)
     }
     let fields = context?["fields"] as? [[String: Any]] ?? []
     while fieldButtons.count > fields.count { fieldButtons.removeLast().removeFromSuperview() }
@@ -1062,6 +1091,17 @@ private final class SwarmContextButton: SwarmIconButton {
       .foregroundColor: color, .paragraphStyle: paragraph,
     ])
   }
+  private func branchAttachment(_ color: NSColor) -> NSAttributedString {
+    let width = cellWidth, height = textFont.pointSize * 0.84
+    let image = NSImage(size: NSSize(width: width * 2, height: height), flipped: false) { _ in
+      drawStatusBranch(in: NSRect(x: 0, y: 0, width: width, height: height), color: color)
+      return true
+    }
+    let attachment = NSTextAttachment()
+    attachment.image = image
+    attachment.bounds = NSRect(x: 0, y: -1, width: width * 2, height: height)
+    return NSAttributedString(attachment: attachment)
+  }
   override func draw(_ dirtyRect: NSRect) {
     guard fieldButtons.isEmpty, bounds.width > 0, !segments.isEmpty else { return }
     NSGraphicsContext.saveGraphicsState()
@@ -1072,7 +1112,10 @@ private final class SwarmContextButton: SwarmIconButton {
       if segmented {
         line.append(attributed(text, foreground, alignment: textAlignment))
       } else {
-        for segment in segments { line.append(attributed(segment.text, segment.foreground, alignment: textAlignment)) }
+        for segment in segments {
+          if segment.branchSymbol { line.append(branchAttachment(segment.foreground)) }
+          line.append(attributed(segment.text, segment.foreground, alignment: textAlignment))
+        }
       }
       let inset = min(contentPadding, bounds.width / 2)
       line.draw(in: NSRect(x: inset, y: (bounds.height - line.size().height) / 2,
@@ -1096,11 +1139,13 @@ private final class SwarmContextButton: SwarmIconButton {
     var x = max(0, bounds.width - widths.reduce(0, +) - CGFloat(segments.count) * cellWidth * 3)
     // Separate click targets still form one painted ribbon. Cover fractional
     // leading/trailing slack too, so cell rounding cannot reveal a dark seam.
-    (segments[0].background ?? foreground).setFill()
-    NSRect(x: 0, y: bottom, width: x + cellWidth, height: height).fill()
+    if !roundedStart {
+      (segments[0].background ?? foreground).setFill()
+      NSRect(x: 0, y: bottom, width: x + cellWidth, height: height).fill()
+    }
     if let nextBackground {
       nextBackground.setFill()
-      NSRect(x: x, y: bottom, width: bounds.width - x, height: height).fill()
+      NSRect(x: bounds.width - cellWidth, y: bottom, width: cellWidth, height: height).fill()
     }
     for (index, segment) in segments.enumerated() {
       let inset = cellWidth * (index == 0 ? 1 : 2)
@@ -1110,18 +1155,51 @@ private final class SwarmContextButton: SwarmIconButton {
         NSRect(x: x + width, y: bottom, width: cellWidth, height: height).fill()
       }
       let shape = NSBezierPath()
-      shape.move(to: NSPoint(x: x, y: bottom))
+      let roundStart = roundedStart && index == 0
+      let roundRight = roundedSeparators || (roundedEnd && index == segments.count - 1 && nextBackground == nil)
+      let end = x + width, top = bottom + height, middle = bottom + height / 2
+      shape.move(to: NSPoint(x: x + (roundStart ? cellWidth : 0), y: bottom))
       shape.line(to: NSPoint(x: x + width, y: bottom))
-      shape.line(to: NSPoint(x: x + width + cellWidth, y: bottom + height / 2))
-      shape.line(to: NSPoint(x: x + width, y: bottom + height))
-      shape.line(to: NSPoint(x: x, y: bottom + height))
-      shape.line(to: NSPoint(x: x + (index == 0 ? 0 : cellWidth), y: bottom + height / 2))
+      if roundRight {
+        shape.curve(to: NSPoint(x: end + cellWidth, y: middle),
+          controlPoint1: NSPoint(x: end + cellWidth * 0.55, y: bottom),
+          controlPoint2: NSPoint(x: end + cellWidth, y: bottom + height * 0.225))
+        shape.curve(to: NSPoint(x: end, y: top),
+          controlPoint1: NSPoint(x: end + cellWidth, y: bottom + height * 0.775),
+          controlPoint2: NSPoint(x: end + cellWidth * 0.55, y: top))
+      } else {
+        shape.line(to: NSPoint(x: end + cellWidth, y: middle))
+        shape.line(to: NSPoint(x: end, y: top))
+      }
+      shape.line(to: NSPoint(x: x + (roundStart ? cellWidth : 0), y: top))
+      if roundStart {
+        shape.curve(to: NSPoint(x: x, y: middle),
+          controlPoint1: NSPoint(x: x + cellWidth * 0.45, y: top),
+          controlPoint2: NSPoint(x: x, y: bottom + height * 0.775))
+        shape.curve(to: NSPoint(x: x + cellWidth, y: bottom),
+          controlPoint1: NSPoint(x: x, y: bottom + height * 0.225),
+          controlPoint2: NSPoint(x: x + cellWidth * 0.45, y: bottom))
+      } else if index > 0 && roundedSeparators {
+        shape.curve(to: NSPoint(x: x + cellWidth, y: middle),
+          controlPoint1: NSPoint(x: x + cellWidth * 0.55, y: top),
+          controlPoint2: NSPoint(x: x + cellWidth, y: bottom + height * 0.775))
+        shape.curve(to: NSPoint(x: x, y: bottom),
+          controlPoint1: NSPoint(x: x + cellWidth, y: bottom + height * 0.225),
+          controlPoint2: NSPoint(x: x + cellWidth * 0.55, y: bottom))
+      } else {
+        shape.line(to: NSPoint(x: x + (index == 0 ? 0 : cellWidth), y: middle))
+      }
       shape.close()
       (segment.background ?? foreground).setFill()
       shape.fill()
+      let symbolWidth = segment.branchSymbol && widths[index] >= cellWidth * 3 ? cellWidth * 2 : 0
+      if symbolWidth > 0 {
+        drawStatusBranch(in: NSRect(x: x + inset, y: bottom + height * 0.15,
+          width: cellWidth, height: height * 0.7), color: segment.foreground)
+      }
       let line = attributed(segment.text, segment.foreground)
-      line.draw(in: NSRect(x: x + inset, y: (bounds.height - line.size().height) / 2,
-        width: widths[index], height: line.size().height))
+      line.draw(in: NSRect(x: x + inset + symbolWidth, y: (bounds.height - line.size().height) / 2,
+        width: max(0, widths[index] - symbolWidth), height: line.size().height))
       x += width
     }
   }
