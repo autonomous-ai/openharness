@@ -106,6 +106,11 @@ Search is one unfilled, borderless text line with a block caret one measured
 cell wide. Its prompt occupies the shared gutter. Previews use the same text
 metrics and blank-row spacing; warnings are readable text in semantic colors.
 
+An empty Cmd-P search uses the blank row below its input for a muted type hint:
+`> harnesses   @ machines   # projects   : models   * store`. Hide it while a
+query or type filter is active, keeping that row's height so results never jump.
+In narrow layouts, show only the symbols and retain the full accessible label.
+
 Open dialogs must follow live terminal font and theme changes while preserving
 the input controller, query, selection, focus, and scroll state. Wire the font,
 palette, and terminal-theme dependencies as the reference dialogs do. Settings
