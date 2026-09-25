@@ -6622,6 +6622,7 @@ function humanizeLinkError(error: string, machine: string, retryAt?: number): st
     NO_REMOTE_PASSWORD: `Machine ${machine} has no remote password set. Ask its operator to run \`harness remote-password set\` there first.`,
     BAD_INTENT: 'The connection request was malformed — this usually means a version mismatch. Update harness on both machines and try again.',
     WRONG_PASSWORD: 'That password is wrong. Check it against the other machine and try again.',
+    BUSY: `Machine ${machine} is already handling another link attempt. Wait a moment and try again.`,
     TIMEOUT: `Machine ${machine} didn't respond in time. Make sure it's running \`harness start\` and reachable, then try again.`,
     SEND_FAILED: 'Could not reach the relay to start linking. Check your network connection and try again.',
     DERIVE_FAILED: 'Could not process the password locally. Try again; if it persists, restart harness and retry.',

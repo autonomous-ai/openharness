@@ -179,6 +179,9 @@ export class E2eeStore {
     const record = this.remotePassword
     if (!record) return { lockedUntil: null }
     const now = Date.now()
+    // The backoff escalates across lockouts only while they keep coming: a quiet day since the last one
+    // ended starts it over, so no one is held at the 24h ceiling for good.
+    if (record.lockedUntil && now - record.lockedUntil > PW_LOCKOUT_MAX_MS) record.lockoutCount = 0
     record.recentFailures = [...record.recentFailures.filter((t) => now - t < PW_FAIL_WINDOW_MS), now]
     if (record.recentFailures.length >= PW_FAIL_THRESHOLD) {
       const count = (record.lockoutCount ?? 0) + 1
@@ -190,11 +193,15 @@ export class E2eeStore {
     return { lockedUntil: record.lockedUntil ?? null }
   }
 
-  /** Successful attempts don't affect the failure count — mirrors manager.ts's `attempts` convention
-   *  for the live pairing code (only failed handshakes count toward its rate limit). Kept as an
-   *  explicit no-op call site (rather than omitted) so the success path in manager.ts reads the same
-   *  shape as the failure path, and so a future policy change has one place to land. */
-  notePwSuccess(): void { /* deliberately no-op — see doc comment */ }
+  /** A successful pairing proves the password is known to its owner's machines: the failures and the
+   *  lockout escalation that came before it no longer describe anyone's guessing, so both start over. */
+  notePwSuccess(): void {
+    const record = this.remotePassword
+    if (!record || (record.recentFailures.length === 0 && !record.lockoutCount)) return
+    record.recentFailures = []
+    record.lockoutCount = 0
+    writeSecure(REMOTE_PASSWORD_FILE, record)
+  }
 
   /** Current lockout, or null if unset/expired. An expired `lockedUntil` is treated as not-locked
    *  without rewriting the file — the next real failure (if any) will naturally recompute it. */
