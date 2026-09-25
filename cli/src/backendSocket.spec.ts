@@ -1,6 +1,6 @@
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
@@ -1213,17 +1213,20 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it.each([
-    { name: 'an empty cwd (the desktop just made it)', contents: [] as string[], trusts: true },
-    { name: 'a cwd that already has something', contents: ['Makefile'], trusts: false },
-  ])('records Claude trust for $name when the daemon sees a plain cwd', async ({ contents, trusts }) => {
-    // A plain cwd on the LOCAL machine is the desktop opening a folder it just made empty; evidence is the
-    // readdir, never the client's word, so a folder with content (a clone, the person's own repo) stays
-    // the engine's question.
-    const dir = mkdtempSync(join(tmpdir(), 'harness-trust-'))
+    { name: 'an empty workspace the app just made', contents: [] as string[], nested: false, trusts: true },
+    { name: 'a workspace that already has something', contents: ['Makefile'], nested: false, trusts: false },
+    { name: 'an empty folder outside the projects root', contents: [] as string[], nested: true, trusts: false },
+  ])('records Claude trust for $name: $trusts', async ({ contents, nested, trusts }) => {
+    // A plain cwd on the LOCAL machine is the desktop handing over a workspace it just made. Trust is
+    // recorded only on evidence (the readdir) and only directly inside the projects root: trust inherits
+    // downward, so an empty folder the person merely browsed to would cover everything cloned under it.
+    const root = mkdtempSync(join(tmpdir(), 'harness-root-'))
+    const dir = nested ? join(root, 'a', 'b') : join(root, 'workspace')
+    mkdirSync(dir, { recursive: true })
     for (const item of contents) writeFileSync(join(dir, item), 'x')
+    vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
     const socket = new BackendSocket('token')
-    const frames: Array<Record<string, unknown>> = []
-    socket.registerLocalClient('local:cwd-trust', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:cwd-trust', { sendFrame: () => true, sendBinary: () => true })
     vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
@@ -1234,16 +1237,23 @@ describe('BackendSocket outbound queue', () => {
     } finally {
       await socket.unregisterLocalClient('local:cwd-trust')
       await socket.stop()
-      rmSync(dir, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
     }
   })
 
-  it('does NOT record Claude trust for an empty cwd from a relayed/E2EE frame', async () => {
+  it('does NOT record Claude trust for an empty workspace named by a relayed frame', async () => {
     // agent_create is not backend-only, so a relay frame is E2EE-unwrapped and reaches the same pre-trust
-    // path. The LOCAL gate is what keeps it from recording trust for an arbitrary empty path on this host.
-    const dir = mkdtempSync(join(tmpdir(), 'harness-trust-'))
+    // path. Everything else about this frame would qualify — the folder is empty AND in the projects root —
+    // so the LOCAL gate is the only thing refusing it.
+    const root = mkdtempSync(join(tmpdir(), 'harness-root-'))
+    const dir = join(root, 'workspace')
+    mkdirSync(dir)
+    vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
     const socket = new BackendSocket('token')
-    const internals = socket as any
+    const internals = socket as unknown as {
+      e2ee: { unwrapDown: (connId: string, frame: unknown) => unknown }
+      dispatchDown: (frame: unknown, connId: string, transport: string) => Promise<void>
+    }
     vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue({
       type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', cwd: dir },
     })
@@ -1251,12 +1261,12 @@ describe('BackendSocket outbound queue', () => {
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       await internals.dispatchDown({ type: 'agent_create', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'web-1', 'relay')
+      // The create ran, so the pre-trust branch was reached and declined — not skipped earlier by the gate.
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      // onCreateAgent ran, so the pre-trust path executed — but a relay frame is not local: no trust recorded.
       expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
     } finally {
       await socket.stop()
-      rmSync(dir, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

@@ -22,7 +22,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 import { WebSocket } from 'ws'
 import { watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
 import { stat, readFile, readdir } from 'fs/promises'
-import { isAbsolute, join } from 'path'
+import { dirname, isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
 import { env } from './config/env.js'
 import { AuthSessionManager, AuthSessionError } from './lib/authSession.js'
@@ -49,7 +49,7 @@ import { probeEngines } from './lib/engineProbe.js'
 import { readMachineResources } from './lib/machineResources.js'
 import { AgentCreationReceipts, AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationStatus } from './lib/agentCreationReceipt.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from './lib/projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from './lib/projectFolder.js'
 import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from './lib/claudeTrust.js'
 import { projectPreview } from './lib/projectPreview.js'
 import { readGitProject } from './lib/gitProject.js'
@@ -2375,20 +2375,26 @@ export class BackendSocket {
                       engineTrust.record(preparedFolder)
                     }
                   } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
-                } else if (!dsh && local) {
-                  // A plain cwd on the LOCAL machine is the desktop opening a NEW folder: the desktop made it
-                  // empty and hands the path over, it has nothing in it to review, so it is trusted the way a
-                  // `new` project is. The LOCAL gate is the boundary — agent_create is not backend-only, so a
-                  // relayed/E2EE frame would otherwise name any empty path on this host and get it trusted.
-                  // A clone / the person's own repo is never empty (lib/claudeTrust.ts), and evidence beats a
-                  // client's word, so this readdir is the gate. DSH trust is decided in cli.ts where the
-                  // template count is known; leave that to it.
+                } else if (!dsh && local && dirname(input.cwd) === projectsRoot()) {
+                  // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
+                  // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
+                  // `new` project is — but only on evidence, and only where those workspaces live:
+                  //
+                  //   · directly inside the projects root, which is the one folder the app and this daemon
+                  //     create workspaces in. Trust INHERITS downward (claudeTrusts), so recording it for a
+                  //     folder the person merely browsed to — an empty `~/code`, or a home with nothing in it —
+                  //     would silently cover every repo cloned under it later: OH-14 again by another door.
+                  //   · empty as read from disk, never on the client's word. A clone, a worktree or the
+                  //     person's own repo has content, so it stays the engine's question (lib/claudeTrust.ts).
+                  //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
+                  //     name an empty path on this host and have it trusted.
+                  //
+                  // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
                   try {
                     const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
                     if (empty) {
-                      const engineTrust = input.engine === 'claude' ? { record: preTrustClaudeProject }
-                        : input.engine === 'codex' ? { record: preTrustCodexProject } : null
-                      if (engineTrust) engineTrust.record(input.cwd)
+                      if (input.engine === 'claude') preTrustClaudeProject(input.cwd)
+                      if (input.engine === 'codex') preTrustCodexProject(input.cwd)
                     }
                   } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
                 }

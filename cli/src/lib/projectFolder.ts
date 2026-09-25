@@ -11,6 +11,12 @@ export type ProjectFolder = { source: 'new'; name?: string } | { source: 'remote
   | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
+/** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
+ *  one of those; anywhere else is a folder the person chose and answers for themselves. */
+export function projectsRoot(home = homedir()): string {
+  return join(home, 'harnesses')
+}
+
 export class ProjectFolderError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
 }
@@ -89,7 +95,7 @@ export async function prepareProjectFolder(
     now?: () => Date
   } = {},
 ): Promise<string> {
-  const root = options.root ?? join(homedir(), 'harnesses')
+  const root = options.root ?? projectsRoot()
   let staging: string | undefined
   try {
     if (project.source === 'worktree' || project.source === 'branch') {
