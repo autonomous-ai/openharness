@@ -396,6 +396,9 @@ const envSchema = z.object({
   ADAPTER_UPDATE_SLOT_SEC: z.string().default('45').transform(Number),
   // Set 'true' to disable self-update entirely.
   ADAPTER_UPDATE_DISABLE: z.string().default('false').transform((v) => v === 'true'),
+  /** How long a daemon whose start-up failed stays up serving nothing but its updater, before it
+   *  gives a clean process a turn. ~15 update slots; `0` keeps it up for ever. */
+  ADAPTER_SAFE_MODE_MS: z.string().default('900000').transform(Number),
   // Install dir holding the packaged cli.js + notify.mjs that the self-updater swaps in place.
   ADAPTER_CLI_DIR: z.string().default(adapterCliDir),
   // Where the managed Node runtime lives. Read (never written) by this process: the hook command

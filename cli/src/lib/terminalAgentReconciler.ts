@@ -114,10 +114,20 @@ export class TerminalAgentReconciler {
 
   constructor(private readonly deps: TerminalAgentReconcilerDeps) {}
 
+  /**
+   * Arm the interval FIRST, then run the opening pass.
+   *
+   * The other way round — await, then schedule — meant a first pass that threw left discovery
+   * unscheduled for the life of the daemon: no new agents, no liveness, `discoveryReady` never true,
+   * and the caller's own start-up rejected on top of it. Neither is worth one bad probe. The opening
+   * pass is reported and dropped; the interval retries it a few seconds later.
+   */
   async start(intervalMs: number): Promise<void> {
-    await this.trigger()
     this.timer = setInterval(() => { void this.trigger() }, intervalMs)
     this.timer.unref?.()
+    await this.trigger().catch((error) => {
+      console.warn(`[discovery] first pass failed, retrying on the interval · ${error instanceof Error ? error.message : error}`)
+    })
   }
 
   stop(): void {
