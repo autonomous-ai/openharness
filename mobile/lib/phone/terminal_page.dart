@@ -43,6 +43,7 @@ import 'terminal_chrome_scroll.dart';
 import 'terminal_header.dart';
 import 'terminal_header_action.dart';
 import 'terminal_input_dock.dart';
+import 'terminal_paste.dart';
 import 'terminal_search.dart';
 import 'voice_input_controller.dart';
 
@@ -1728,6 +1729,7 @@ class _TerminalPageState extends State<TerminalPage>
                                             machine?.machine.displayName ?? '',
                                         agent: agent,
                                         status: headerStatus,
+                                        session: session,
                                       ),
                                     ),
                                 ],
@@ -1837,6 +1839,7 @@ class _TerminalPageState extends State<TerminalPage>
     required String machineName,
     required Agent agent,
     required PhoneSummary status,
+    TerminalSession? session,
   }) {
     // Set here, where no build is running, so the sheet opens on the dot the header shows now
     // rather than on whatever the last frame handed over. See [_actionsStatus].
@@ -1876,7 +1879,16 @@ class _TerminalPageState extends State<TerminalPage>
       // them, where they have room for every row and do not push the rest of this sheet down. The
       // chevron is what tells a door from an action.
       sections: [
-        PhoneSheetSection(actions: _agentActions(agent)),
+        PhoneSheetSection(
+          actions: [
+            // First, because it is the one used mid-conversation: iOS has no paste gesture on a
+            // terminal (long-press is selection there), and the soft keyboard has no paste key.
+            // Hidden rather than dimmed while the stream is read-only: reclaiming is the header's
+            // job, and a paste that silently goes nowhere is worse than no row.
+            if (session != null && session.acceptsInput) _pasteAction(session),
+            ..._agentActions(agent),
+          ],
+        ),
         PhoneSheetSection(
           caption: 'App',
           actions: [
@@ -1918,6 +1930,36 @@ class _TerminalPageState extends State<TerminalPage>
       ],
     );
   }
+
+  /// Paste: the clipboard into [session]. What it reads and sends lives in [pasteClipboard]; the
+  /// page hands it only what the page alone knows, whether this is still the terminal on screen.
+  PhoneSheetAction _pasteAction(TerminalSession session) => PhoneSheetAction(
+    icon: LucideIcons.clipboardPaste300,
+    label: 'Paste',
+    onTap: () {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      unawaited(
+        pasteClipboard(
+          session: session,
+          machine: widget.notifier.stateOf(widget.machineId),
+          stillShowing: () =>
+              mounted &&
+              widget.isActive &&
+              identical(
+                widget.notifier
+                    .paneOfAgent(widget.machineId, widget.agentId)
+                    ?.session,
+                session,
+              ),
+          report: (message) {
+            if (mounted) {
+              messenger?.showSnackBar(SnackBar(content: Text(message)));
+            }
+          },
+        ),
+      );
+    },
+  );
 
   /// What acts on this agent and can be taken back — the first card of its sheet.
   List<PhoneSheetAction> _agentActions(Agent agent) => [
