@@ -177,6 +177,7 @@ import type { CableAgent } from './cable/cableSession.js'
 import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { E2eeStore } from './lib/e2ee/store.js'
+import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import { connectWithPassword } from './lib/e2ee/relayClient.js'
@@ -187,7 +188,7 @@ import {
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
-import { stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
@@ -360,6 +361,10 @@ Machine:
   harness auth status --json   print {loggedIn,...} for this computer's saved session
   harness start                start the adapter using the saved SSO session
   harness start -f             run the adapter in the FOREGROUND (for a supervisor; logs to stdout)
+  harness start --device-dump[=<file>]
+                               record every frame to/from the paired Autonomous device, decrypted, as
+                               JSON lines (default ~/.harness/logs/device-dump-<time>.jsonl). Contains
+                               prompts and answers in the clear — diagnostics only. Stop the daemon first.
   harness start --repair       also re-verify the managed Node runtime and repoint the launcher at it
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
@@ -393,7 +398,6 @@ ${dshUsage()}
 ${apiUsage}
 
 Browser end-to-end encryption:
-  harness browser-link         print a reusable 7-day setup link for browsers
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
   harness pair <code>          pair a BROWSER (code shown on the machine page)
   harness pairings             list paired clients
@@ -521,19 +525,6 @@ function computerId(): string {
 // The REST base for control endpoints, derived from the WS URL (wss→https, ws→http).
 function backendHttpBase(): string {
   return env.BACKEND_WS_URL.replace(/\/$/, '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
-}
-function webBase(): string {
-  return env.WEB_URL.replace(/\/$/, '')
-}
-function createSetupToken(machineId?: string): { token: string; expiresAt: number; fingerprint: string } {
-  const store = new E2eeStore()
-  store.init()
-  return store.createSetupToken(machineId)
-}
-function setupBrowserLink(machineId: string, token: string): string {
-  const u = new URL(`${webBase()}/machine/${machineId}`)
-  u.hash = `setup=browser&t=${encodeURIComponent(token)}`
-  return u.toString()
 }
 
 /** One control-plane call, returning the backend's `data` envelope; throws on a non-2xx / bad body.
@@ -2941,6 +2932,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
     }
     mirror.ingest(events, sessionId)
+    // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
+    if (!opts?.replay) autonomousDeviceService?.stream(agentIdFor(sessionId), events)
   }
   for (const queued of queuedSessionEvents.splice(0)) emitSessionEvents(queued.sessionId, queued.events, queued.opts)
   const cursorSubagents = new CursorSubagentManager(env.CURSOR_HOME, emitSessionEvents)
@@ -3921,10 +3914,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         RATE_LIMITED: 429, BUSY: 409, TIMEOUT: 504,
       }
       return { status: codeMap[r.error] ?? 400, body: { error: r.error } }
-    },
-    onSetupLink: () => {
-      const r = backend.createSetupToken()
-      return { status: 200, body: { url: setupBrowserLink(backend.machineId, r.token), expiresAt: r.expiresAt, fingerprint: r.fingerprint } }
     },
     onListPairs: () => ({ status: 200, body: { pairs: backend.listPairs() } }),
     onRevoke: (id) => {
@@ -4950,11 +4939,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
+        // Asked BEFORE the template goes in: afterwards every folder has content.
+        // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
+        const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
+          (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
         const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
-        // The template just went in: the folder is the harness's, and Claude Code need not ask.
-        if (materialized.created.some((item) => item.startsWith('template'))) {
+        // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
+        // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
+        // it proves nothing about the rest, so trust stays the person's call (lib/claudeTrust.ts).
+        if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
           try {
             if (engine === 'claude') preTrustClaudeProject(cwd)
             if (engine === 'codex') preTrustCodexProject(cwd)
@@ -6000,7 +5995,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     answer: (agentId, requestId, answers) => questions.answer({ agentId, requestId, answers, allowPermissions: false }),
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
     fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
-    emit: frame => backend.emitAutonomousDeviceEvent(frame),
+    emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
   })
   if (appVoiceFocus) autonomousDeviceService.appFocus(appVoiceFocus.machineId, appVoiceFocus.agentId, appVoiceFocus.connId)
   backend.setAutonomousDeviceService(autonomousDeviceService)
@@ -6380,33 +6375,6 @@ async function pairCommand(code: string | undefined): Promise<void> {
   process.exit(1)
 }
 
-/** `harness browser-link` — print a reusable 7-day browser setup link for the current machine. */
-async function browserLinkCommand(): Promise<void> {
-  const session = readAuthSession()
-  if (!session?.machineId) { console.error('\n  ✗ This computer is not signed in. Run: harness login\n'); process.exit(1) }
-  const agentId = session.machineId
-  let url = ''
-  try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/e2ee/setup-link`, {
-      method: 'POST',
-      headers: { 'x-adapter-local': '1' },
-    })
-    if (res.ok) {
-      const body = (await res.json().catch(() => null)) as { url?: unknown; expiresAt?: unknown; fingerprint?: unknown } | null
-      if (typeof body?.url === 'string') url = body.url
-    }
-  } catch { /* fall back to disk-backed token below */ }
-  if (!url) {
-    const setup = createSetupToken(agentId)
-    url = setupBrowserLink(agentId, setup.token)
-  }
-  console.log('\n  Reusable browser setup link (valid for 7 days):\n')
-  console.log(`    ${url}\n`)
-  console.log('  Anyone with this link can pair a browser until it expires. Keep it private.\n')
-  if (!readPid()) console.log('  Start the adapter with `harness start` if the browser cannot connect.\n')
-  process.exit(0)
-}
-
 /** `harness pairings` — list the browsers paired for end-to-end encryption. */
 async function pairingsCommand(): Promise<void> {
   const { res, json } = await daemonCall('GET', '/api/pairs')
@@ -6513,9 +6481,8 @@ function promptPassword(prompt: string): Promise<string> {
  *  shared secret `harness link connect <machineId>` on another machine proves knowledge of, to link
  *  to this one. Not single-use and does not expire — stays valid until explicitly changed/cleared.
  *  Prefers the running daemon (so an in-progress `link connect` from elsewhere sees it immediately);
- *  falls back to writing the disk-backed store directly when no daemon is running, same fallback
- *  shape as `browserLinkCommand`. `--stdin` reads one line with no confirmation (for scripts/GUIs);
- *  interactively it prompts twice (masked) and requires the two to match. */
+ *  falls back to writing the disk-backed store directly when no daemon is running. `--stdin` reads
+ *  one line with no confirmation (for scripts/GUIs); interactively it prompts twice (masked) and requires the two to match. */
 async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<void> {
   const session = readAuthSession()
   if (!session?.machineId) {
@@ -6655,6 +6622,7 @@ function humanizeLinkError(error: string, machine: string, retryAt?: number): st
     NO_REMOTE_PASSWORD: `Machine ${machine} has no remote password set. Ask its operator to run \`harness remote-password set\` there first.`,
     BAD_INTENT: 'The connection request was malformed — this usually means a version mismatch. Update harness on both machines and try again.',
     WRONG_PASSWORD: 'That password is wrong. Check it against the other machine and try again.',
+    BUSY: `Machine ${machine} is already handling another link attempt. Wait a moment and try again.`,
     TIMEOUT: `Machine ${machine} didn't respond in time. Make sure it's running \`harness start\` and reachable, then try again.`,
     SEND_FAILED: 'Could not reach the relay to start linking. Check your network connection and try again.',
     DERIVE_FAILED: 'Could not process the password locally. Try again; if it persists, restart harness and retry.',
@@ -7059,7 +7027,9 @@ const enterSafeMode = (err: unknown): void => {
   // itself was what failed, or we never got that far — take the port for the status alone, so the app
   // still reads not-ready rather than down. A port we cannot take at all leaves only a ticking clock.
   if (!daemonBoot.hookServer) {
+    const hosts = loopbackHosts(env.PORT)
     const status = createServer((req, res) => {
+      if (!isLoopbackRequest(req, hosts)) { res.writeHead(403).end(); return }
       const body = safeModeStatusBody({
         version: VERSION, pid: process.pid, startedAt: Date.now(),
         computerId: computerId(), error: disposition.reason,
@@ -7102,9 +7072,14 @@ switch (cmd) {
   case 'logout':
     logout().catch(onError)
     break
-  case 'start':
+  case 'start': {
+    // `--device-dump[=<file>]`: the daemon (this process with -f, else the detached child, which inherits
+    // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
+    const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
+    if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
     startCommand(foreground, repair).catch(onError)
     break
+  }
   case 'join':
     console.error('`harness join` has been removed. Run `harness login`, then `harness start`.')
     process.exit(1)
@@ -7119,12 +7094,11 @@ switch (cmd) {
     pairCommand(args[0]).catch(onError)
     break
   case 'browser-link':
-    browserLinkCommand().catch(onError)
-    break
   case 'e2ee-link':
-    console.error('(note: "harness e2ee-link" is deprecated — use "harness browser-link")')
-    browserLinkCommand().catch(onError)
-    break
+    // Browser setup links served the retired web client. Said plainly rather than falling to "unknown
+    // command", for anyone following an old doc.
+    console.error(`\n  ✗ harness ${cmd} was removed: the web client is retired. Use the desktop or phone app.\n`)
+    process.exit(1)
   case 'pairings':
     pairingsCommand().catch(onError)
     break

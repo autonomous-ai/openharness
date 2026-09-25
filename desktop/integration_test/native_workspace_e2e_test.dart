@@ -31,7 +31,6 @@ import 'package:harness/usage/ledger/usage_ledger_controller.dart';
 import 'package:harness/usage/ledger/usage_report.dart';
 import 'package:harness/usage/ledger/opencode_ledger_scanner.dart';
 import 'package:harness/screens/swarm_screen.dart';
-import 'package:harness/models/models_panel.dart';
 import 'package:harness/settings/settings_nav.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
@@ -197,6 +196,7 @@ class _FirstCreationApp extends AppNotifier {
       ..localOnly = true
       ..nodeOnline = true
       ..agentLoadStatus = AgentLoadStatus.loaded;
+    gitProjectReaderForTest = (_, _) async => {'isGit': false};
     status = AppStatus.authenticated;
   }
 
@@ -934,6 +934,8 @@ void main() {
     (tester) async {
       final connection = _InstallingConnection();
       final app = _FirstCreationApp(connection);
+      await app.agentPreference.remember('claude');
+      await app.projectHistory.select('m', '/fixture/project');
       addTearDown(app.dispose);
       addTearDown(connection.close);
       await tester.pumpWidget(
@@ -973,7 +975,8 @@ void main() {
           .controller;
       expect(box.harnessId, 'autonomous/circuit');
 
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await key(tester, LogicalKeyboardKey.enter);
+      await startHarness(tester);
       await settle();
       expect(connection.installs, ['autonomous/circuit']);
       expect(
@@ -1003,7 +1006,7 @@ void main() {
       expect(inPane('✗'), findsOneWidget);
       expect(connection.creates, isEmpty);
 
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await key(tester, LogicalKeyboardKey.enter);
       await settle();
       expect(connection.installs, hasLength(2));
       expect(inPane('✗'), findsNothing);
@@ -1024,7 +1027,7 @@ void main() {
     (tester) async {
       final connection = _CreationConnection();
       final app = _FirstCreationApp(connection);
-      await app.agentPreference.select('codex');
+      await app.agentPreference.remember('codex');
       final projects = SwarmProjectStore();
       addTearDown(app.dispose);
       addTearDown(projects.dispose);
@@ -1049,8 +1052,23 @@ void main() {
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
       expect(box.engine, 'codex');
-      expect(box.projectLabel, startsWith('~/harnesses/codex-'));
+      expect(box.needsProject, isTrue);
+      await startHarness(tester);
+      expect(connection.creates, isEmpty);
+      expect(box.requiredChoice?.message, 'Choose a project.');
+      await tester.tap(
+        find.byKey(
+          ValueKey('new-harness-option-${NewHarnessController.newProjectId}'),
+        ),
+      );
+      await tester.pump();
+      expect(box.field, NewHarnessField.machine);
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(box.field, NewHarnessField.projectName);
+      await typeHarnessQuery(tester, 'first-project');
+      await key(tester, LogicalKeyboardKey.enter);
       final proposedFolder = box.projectFolderRequest!.folderName;
+      expect(proposedFolder, 'first-project');
       expect(connection.creates, isEmpty);
       expect(find.byType(WorkspaceWelcome), findsOneWidget);
       await startHarness(tester);
@@ -1446,6 +1464,8 @@ void main() {
       app.machineStates['m']!
         ..localOnly = true
         ..terminalCapabilityAvailable = true;
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       final originalInput = <TerminalBinaryFrame>[];
       app.adoptSessionForTest(terminal('a0', originalInput));
       final source = app.activeSwarm;
@@ -1596,12 +1616,14 @@ void main() {
           await tester.pump(const Duration(milliseconds: 200));
           await reply.future;
           expect(find.byType(NewHarnessForm), findsNothing);
-          expect(find.byType(ModelsPanel), findsOneWidget);
+          final models = find.byKey(const ValueKey('swarm-search-input'));
+          expect(models, findsOneWidget);
+          expect(tester.widget<TextField>(models).controller!.text, ':local');
           expect(connection.creates, isEmpty);
           expect(app.activeSwarm, same(store));
           await key(tester, LogicalKeyboardKey.escape);
           await tester.pump(const Duration(milliseconds: 100));
-          expect(find.byType(ModelsPanel), findsNothing);
+          expect(models, findsNothing);
           expect(connection.creates, isEmpty);
           expect(originalInput, isEmpty);
           await tester.pumpWidget(const SizedBox());
@@ -1611,7 +1633,8 @@ void main() {
         await open('autonomous/blender', task: task);
         const product = 'autonomous/blender';
         const prefix = 'blender';
-        expect(prompt().engine, product);
+        expect(prompt().harnessId, product);
+        expect(prompt().engine, 'claude');
         expect(prompt().projectLabel, startsWith('~/harnesses/$prefix-'));
         expect(prompt().task, task ?? '');
         final folder = prompt().projectFolderRequest!.folderName;
@@ -1649,11 +1672,15 @@ void main() {
   }
 
   testWidgets(
-    'native creation retains edited defaults and uses the chosen destination',
+    'native creation resets canceled edits and launches the reviewed choices',
     (tester) async {
       final connection = _CreationConnection();
       final app = createApp(connectionForTest: (_) => connection);
       seedMixedAgents(app);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       final input = <TerminalBinaryFrame>[];
       final original = app.adoptSessionForTest(terminal('a0', input));
       final source = app.activeSwarm;
@@ -1691,11 +1718,8 @@ void main() {
       expect(prompt().task, task);
       expect(app.swarms, [source]);
       expect(app.activeSwarm, same(source));
-      expect(prompt().field, NewHarnessField.projectMenu);
+      expect(prompt().field, NewHarnessField.launch);
 
-      await openLaunchRow(tester, 'machine');
-      await key(tester, LogicalKeyboardKey.enter);
-      expect(prompt().machineId, 'm');
       await openLaunchRow(tester, 'project');
       await typeHarnessQuery(tester, 'openharness');
       await key(tester, LogicalKeyboardKey.enter);
@@ -1731,8 +1755,17 @@ void main() {
       }
       expect(prompt().selected?.id, NewHarnessController.existingProjectId);
       await key(tester, LogicalKeyboardKey.enter);
+      expect(prompt().field, NewHarnessField.machine);
+      await key(tester, LogicalKeyboardKey.enter);
       expect(prompt().field, NewHarnessField.project);
-      expect(prompt().options.single.id, NewHarnessController.browseId);
+      expect(
+        prompt().options.any(
+          (option) => option.id == NewHarnessController.browseId,
+        ),
+        isTrue,
+      );
+      await key(tester, LogicalKeyboardKey.escape);
+      expect(prompt().field, NewHarnessField.machine);
       await key(tester, LogicalKeyboardKey.escape);
       expect(prompt().field, NewHarnessField.projectMenu);
 
@@ -1752,14 +1785,21 @@ void main() {
       );
       expect(connection.creates, isEmpty);
 
-      // Reopen from the same source. Escape kept the task and edited defaults
-      // without creating a temporary tab.
+      // A canceled draft does not become the next Cmd-N's defaults.
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       await tester.pump(const Duration(milliseconds: 80));
+      expect(prompt().engine, 'codex');
+      expect(prompt().modeLabel, 'Auto-approve');
+      expect(prompt().task, '');
+      expect(prompt().project.folder, '/work/openharness');
+      await openLaunchRow(tester, 'agent');
+      await typeHarnessQuery(tester, 'claude');
+      await key(tester, LogicalKeyboardKey.enter);
+      await openLaunchRow(tester, 'approvals');
+      await typeHarnessQuery(tester, 'Plan first');
+      await key(tester, LogicalKeyboardKey.enter);
       expect(prompt().engine, 'claude');
       expect(prompt().mode, 'plan');
-      expect(prompt().task, task);
-      expect(prompt().project.folder, '/work/openharness');
       await startHarness(tester);
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(NewHarnessForm), findsNothing);
@@ -1767,7 +1807,7 @@ void main() {
       expect(source.panes.length, 2);
       expect(source.panes.first, same(original));
       expect(app.focusedPane!.agentId, 'made');
-      expect(connection.creates.single, containsPair('prompt', task));
+      expect(connection.creates.single['prompt'], isNull);
       expect(connection.creates.single, containsPair('engine', 'claude'));
       expect(connection.creates.single, containsPair('permissionMode', 'plan'));
       expect(

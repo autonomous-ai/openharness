@@ -46,6 +46,10 @@ void main() {
       addTearDown(map.dispose);
       addTearDown(projects.dispose);
       await seedPreviews(app);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
       app.adoptSessionForTest(terminal('a69', []));
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1280, 800);

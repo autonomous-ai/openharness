@@ -57,6 +57,7 @@ class _Connection extends WsConn {
   Map<String, dynamic> answer = catalog();
   Future<Map<String, dynamic>>? waiting;
   bool loseReply = false;
+  int modelReads = 0;
   final creates = <Map<String, dynamic>>[];
   @override
   Future<Map<String, dynamic>> request(
@@ -66,6 +67,7 @@ class _Connection extends WsConn {
   }) async {
     switch (type) {
       case 'grid_models_list':
+        modelReads++;
         return waiting ?? answer;
       case 'git_project_info':
         return {'isGit': false};
@@ -369,8 +371,10 @@ void main() {
       expect(box.engine, 'terminal');
       expect(box.model, isNull);
       expect(box.draft.model, isNull);
-      await openLaunchRow(tester, 'advanced');
-      expect(find.text('Not used by Terminal'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-model')),
+        findsNothing,
+      );
       await startHarness(tester);
       await tester.pumpAndSettle();
       final payload = connections['m']!.creates.single;
@@ -422,7 +426,7 @@ void main() {
       await load(box);
       box.applyOption(localChoice(box));
       select(box, NewHarnessField.agent, 'cursor');
-      expect(box.subscriptionLabel, 'Cursor default');
+      expect(box.subscriptionLabel, 'Cursor');
       expect(box.modelNotice, contains('own login'));
       expect(await box.create(), NewHarnessOutcome.failed);
       await load(box);
@@ -576,7 +580,8 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        final order = ['agent', 'project', 'advanced'];
+        await openLaunchRow(tester, 'advanced');
+        final order = ['agent', 'project', 'model', 'branch', 'worktree'];
         final positions = [
           for (final name in order)
             tester
@@ -593,7 +598,6 @@ void main() {
         await tester.pumpAndSettle();
         expect(box.modelLabel, 'Qwen-35B · Mac Studio');
         expect(box.machineId, 'm');
-        await openLaunchRow(tester, 'advanced');
         final start = find.byKey(const ValueKey('new-harness-field-start'));
         expect(start.hitTestable(), findsOneWidget);
         final semantics = tester.ensureSemantics();
@@ -605,8 +609,36 @@ void main() {
           findsNothing,
         );
         await openLaunchRow(tester, 'model');
+        await tester.scrollUntilVisible(
+          find.text('Refresh models'),
+          60,
+          scrollable: find.descendant(
+            of: find.byKey(const ValueKey('new-harness-choices')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Refresh models').hitTestable(), findsOneWidget);
+        final beforeRefresh = connections['m']!.modelReads;
         await tester.tap(find.text('Refresh models'));
         await tester.pumpAndSettle();
+        expect(connections['m']!.modelReads, greaterThan(beforeRefresh));
+        await tester.scrollUntilVisible(
+          find.text('Manage Models…'),
+          60,
+          scrollable: find.descendant(
+            of: find.byKey(const ValueKey('new-harness-choices')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down,
+            ),
+          ),
+        );
         await tester.tap(find.text('Manage Models…'));
         await tester.pumpAndSettle();
         expect(managed, 1);

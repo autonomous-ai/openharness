@@ -24,6 +24,8 @@ String humanizeLinkError(String code, String machineId, {DateTime? retryAt}) {
           'Update harness on both machines and try again.',
     'WRONG_PASSWORD' =>
       'That password is wrong. Check it against the other machine and try again.',
+    'BUSY' =>
+      'Machine $machineId is already handling another link attempt. Wait a moment and try again.',
     'TIMEOUT' =>
       "Machine $machineId didn't respond in time. Make sure it's running `harness start` "
           'and reachable, then try again.',

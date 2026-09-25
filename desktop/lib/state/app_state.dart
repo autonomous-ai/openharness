@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show exit, pid;
+import 'dart:io' show Directory, exit, pid;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -230,21 +230,19 @@ String? _normalizeComputerId(String? raw) {
 /// Explicit, compile-time guarded fixture used only by `main_local_manual.dart`.
 ///
 /// It lets a normal Flutter window exercise the local Backend -> Harness CLI ->
-/// tmux path without depending on SSO. The API key and setup token are random,
-/// disposable values produced by the local launcher and are never persisted.
+/// tmux path without depending on SSO. The API key is a random, disposable
+/// value produced by the local launcher and is never persisted.
 class LocalManualFixture {
   final String apiBaseUrl;
   final String apiKey;
   final String machineId;
   final String machineName;
-  final String setupToken;
 
   const LocalManualFixture({
     required this.apiBaseUrl,
     required this.apiKey,
     required this.machineId,
     required this.machineName,
-    required this.setupToken,
   });
 }
 
@@ -7069,6 +7067,9 @@ class AppNotifier extends ChangeNotifier {
     final reader = gitProjectReaderForTest;
     if (reader != null) return reader(machineId, path);
     if (machine.isLocalMachine) {
+      if (!await Directory(path).exists()) {
+        return {'error': 'PROJECT_UNAVAILABLE'};
+      }
       return readLocalGitProject(path, refresh: refresh);
     }
     if (connectionForTest == null &&

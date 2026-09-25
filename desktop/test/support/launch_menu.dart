@@ -32,6 +32,8 @@ Future<void> focusLaunchRow(WidgetTester tester, String name) async {
     await tester.pump();
   }
   if (target == 'machine') {
+    // Existing project-flow tests use this to choose the folder's machine.
+    // The direct Machine row is exercised separately in the grid tests.
     await openLaunchRow(tester, 'project');
     await tester.tap(
       find.byKey(const ValueKey('new-harness-option-project:existing')),

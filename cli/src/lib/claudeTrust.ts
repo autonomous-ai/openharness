@@ -1,12 +1,16 @@
 /**
  * Claude Code asks "do you trust this folder?" the first time it opens a project. For a workspace
- * Harness itself just made — a fresh `~/harnesses/codex-2026-09-17-15-26`, or a harness template it laid out —
- * the answer is the one the person already gave by clicking Create, so the daemon records it the
- * way Claude Code does: `projects[<path>].hasTrustDialogAccepted` in `~/.claude.json`.
+ * Harness itself just made EMPTY — a fresh `~/harnesses/codex-2026-09-17-15-26`, or one a harness
+ * template was laid into — there is nothing in it to review, so the daemon records the answer the way
+ * Claude Code does: `projects[<path>].hasTrustDialogAccepted` in `~/.claude.json`.
  *
- * Only ever ADDS trust for a folder the daemon created; never touches a folder the person chose
- * themselves, never removes anything, and does nothing when Claude Code has never run here (no
- * `~/.claude.json`), when the file does not parse, or when the entry already says yes.
+ * ⚠️ Never for a folder with content the person has not been asked about — a clone, their own repo,
+ * a worktree of one: that answer is theirs. The callers decide; see `backendSocket.ts` (project
+ * folders) and `cli.ts` (harness templates). A worktree only inherits the answer its source repo
+ * already has.
+ *
+ * Only ever ADDS trust, never removes anything, and does nothing when Claude Code has never run here
+ * (no `~/.claude.json`), when the file does not parse, or when the entry already says yes.
  */
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -51,6 +55,22 @@ export function preTrustClaudeProject(cwd: string, home = homedir()): 'trusted' 
   return 'trusted'
 }
 
+/** Whether Claude Code already trusts `path`: its own entry, or a folder above it, says yes — the
+ *  same inheritance Claude Code applies. Unreadable or absent config reads as no. */
+export function claudeTrusts(path: string, home = homedir()): boolean {
+  const file = join(home, '.claude.json')
+  if (!existsSync(file)) return false
+  let config: unknown
+  try { config = JSON.parse(readFileSync(file, 'utf8')) } catch { return false }
+  if (!isPlainObject(config) || !isPlainObject(config.projects)) return false
+  for (const [key, entry] of Object.entries(config.projects)) {
+    if (!isPlainObject(entry) || entry.hasTrustDialogAccepted !== true) continue
+    const base = key.replace(/\/+$/, '')
+    if (path === base || path.startsWith(`${base}/`)) return true
+  }
+  return false
+}
+
 /** A `[projects.<key>]` header, however it is spaced or quoted. */
 const CODEX_PROJECT_HEADER_RE = /^[ \t]*\[[ \t]*projects[ \t]*\.[ \t]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*\]/gm
 /** `projects` defined any other way: an inline table, dotted keys, or a bare `[projects]` table. */
@@ -62,10 +82,26 @@ function tomlKey(quoted: string): string | null {
   try { return JSON.parse(quoted) as string } catch { return null }
 }
 
+/** Whether Codex already trusts exactly `path` (a `[projects."<path>"]` table saying `trusted`). */
+export function codexTrusts(path: string, home = homedir()): boolean {
+  const file = join(home, '.codex', 'config.toml')
+  if (!existsSync(file)) return false
+  const text = readFileSync(file, 'utf8')
+  for (const match of text.matchAll(CODEX_PROJECT_HEADER_RE)) {
+    if (tomlKey(match[1]) !== path) continue
+    // The table's body runs to the next header; its trust_level is the answer.
+    const rest = text.slice((match.index ?? 0) + match[0].length)
+    const body = rest.split(/^[ \t]*\[/m)[0]
+    return /^[ \t]*trust_level[ \t]*=[ \t]*["']trusted["']/m.test(body)
+  }
+  return false
+}
+
 /**
  * Codex keeps the same answer in `~/.codex/config.toml` as a `[projects."<path>"]` table with
- * `trust_level = "trusted"`. Same rules: only a folder the daemon made, only when Codex has a
- * config here, never rewriting what is there — the table is appended at the end.
+ * `trust_level = "trusted"`. Same rules: only a folder the daemon made empty (or a worktree of one Codex
+ * already trusts), only when Codex has a config here, never rewriting what is there — the table is
+ * appended at the end.
  *
  * Appending is only safe when nothing else defines that table. The same folder under another quoting,
  * or `projects` written as an inline table or dotted keys, would make the appended table a duplicate

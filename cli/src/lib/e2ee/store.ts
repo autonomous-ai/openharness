@@ -7,14 +7,13 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { env } from '../../config/env.js'
-import { newIdentity, newPairId, b64e, b64d, fingerprint, encodeSetupToken, verifySetupToken, type Identity, type PairRole } from './core.js'
+import { newIdentity, newPairId, b64e, b64d, fingerprint, type Identity, type PairRole } from './core.js'
 import { stretchPassword } from './passwordPake.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const IDENTITY_FILE = join(DIR, 'identity.json')
 const PAIRED_FILE = join(DIR, 'paired.json')
 const REMOTE_PASSWORD_FILE = join(DIR, 'remotePassword.json')
-const SETUP_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 // Remote-password lockout tuning (anti online-guessing for a reusable, human-memorable secret — see
 // notePwFailure()/pwLockedUntil()). Distinct regime from the live pairing code's RATE_MAX=3/5min in
@@ -128,30 +127,10 @@ export class E2eeStore {
     return this.paired.size
   }
 
-  createSetupToken(machineId?: string, ttlMs = SETUP_TTL_MS): { token: string; expiresAt: number; fingerprint: string } {
-    const id = this.getIdentity()
-    const nonce = b64e(newPairId()).replace(/=+$/g, '')
-    const expiresAt = Date.now() + ttlMs
-    const payload = { v: 1 as const, typ: 'adapter-e2ee-setup' as const, pub: b64e(id.pub), nonce, exp: expiresAt, ...(machineId ? { machineId } : {}) }
-    return { token: encodeSetupToken(payload, id.priv), expiresAt, fingerprint: this.fingerprint() }
-  }
-
-  /** Validate a reusable setup link. The signed token is the capability: successful claims never
-   * consume server-side state, so the same unexpired link can pair multiple browser identities —
-   * including a link whose nonce was consumed by an older one-time build before an upgrade. */
-  validateSetupToken(token: string, expectedMachineId?: string): { ok: true; fingerprint: string } | { ok: false; error: 'BAD_TOKEN' | 'WRONG_ADAPTER' } {
-    const id = this.getIdentity()
-    const verified = verifySetupToken(token, Date.now(), expectedMachineId)
-    if (!verified) return { ok: false, error: 'BAD_TOKEN' }
-    if (b64e(id.pub) !== verified.payload.pub) return { ok: false, error: 'WRONG_ADAPTER' }
-    return { ok: true, fingerprint: this.fingerprint() }
-  }
-
   // ── persistent remote password (machine-to-machine `harness link connect`) ───────────────────────
-  // A fourth, separate trust primitive from the three above: not a browser pairing (paired.json), not
-  // a one-time signed token (createSetupToken), and not the live 6-char CPace code — see
-  // passwordPake.ts for why this needs its own domain-separated CPace generator, and manager.ts's
-  // onPwPairIntent/onPwPake for the state machine that consumes remotePasswordVerifier()/
+  // A separate trust primitive from the ones above: not a pairing (paired.json) and not the live 6-char
+  // CPace code — see passwordPake.ts for why this needs its own domain-separated CPace generator, and
+  // manager.ts's onPwPairIntent/onPwPake for the state machine that consumes remotePasswordVerifier()/
   // notePwFailure()/notePwSuccess() below.
 
   /** Stretch + persist a new remote password (0600, same convention as identity.json/paired.json).
@@ -200,6 +179,9 @@ export class E2eeStore {
     const record = this.remotePassword
     if (!record) return { lockedUntil: null }
     const now = Date.now()
+    // The backoff escalates across lockouts only while they keep coming: a quiet day since the last one
+    // ended starts it over, so no one is held at the 24h ceiling for good.
+    if (record.lockedUntil && now - record.lockedUntil > PW_LOCKOUT_MAX_MS) record.lockoutCount = 0
     record.recentFailures = [...record.recentFailures.filter((t) => now - t < PW_FAIL_WINDOW_MS), now]
     if (record.recentFailures.length >= PW_FAIL_THRESHOLD) {
       const count = (record.lockoutCount ?? 0) + 1
@@ -211,11 +193,15 @@ export class E2eeStore {
     return { lockedUntil: record.lockedUntil ?? null }
   }
 
-  /** Successful attempts don't affect the failure count — mirrors manager.ts's `attempts` convention
-   *  for the live pairing code (only failed handshakes count toward its rate limit). Kept as an
-   *  explicit no-op call site (rather than omitted) so the success path in manager.ts reads the same
-   *  shape as the failure path, and so a future policy change has one place to land. */
-  notePwSuccess(): void { /* deliberately no-op — see doc comment */ }
+  /** A successful pairing proves the password is known to its owner's machines: the failures and the
+   *  lockout escalation that came before it no longer describe anyone's guessing, so both start over. */
+  notePwSuccess(): void {
+    const record = this.remotePassword
+    if (!record || (record.recentFailures.length === 0 && !record.lockoutCount)) return
+    record.recentFailures = []
+    record.lockoutCount = 0
+    writeSecure(REMOTE_PASSWORD_FILE, record)
+  }
 
   /** Current lockout, or null if unset/expired. An expired `lockedUntil` is treated as not-locked
    *  without rewriting the file — the next real failure (if any) will naturally recompute it. */

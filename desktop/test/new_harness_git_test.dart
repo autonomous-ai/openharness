@@ -122,9 +122,76 @@ void main() {
 
   Future<void> settle() => Future<void>.delayed(Duration.zero);
 
+  test(
+    'missing main requires choosing a branch without changing Worktree',
+    () async {
+      final connection = _Connection()
+        ..answers['/repo'] = {
+          'isGit': true,
+          'branch': 'master',
+          'defaultRef': 'refs/remotes/origin/master',
+          'branches': [
+            {'ref': 'refs/heads/master', 'name': 'master'},
+            {'ref': 'refs/heads/feature', 'name': 'feature'},
+          ],
+        };
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/repo',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await settle();
+      expect(box.branchRef, isNull);
+      expect(box.worktree, isTrue);
+      expect(box.requiredChoice?.field, NewHarnessField.branch);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, contains('Choose a branch'));
+      expect(connection.starts, isEmpty);
+      expect(box.worktree, isTrue);
+      box.accept(
+        box.options.singleWhere((option) => option.id == 'refs/heads/feature'),
+      );
+      expect(box.branchRef, 'refs/heads/feature');
+      expect(box.requiredChoice, isNull);
+    },
+  );
+
+  test('an unavailable saved folder requires choosing a project', () async {
+    final connection = _Connection()
+      ..answers['/missing'] = {'error': 'PROJECT_UNAVAILABLE'};
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/missing',
+    );
+    addTearDown(app.dispose);
+    addTearDown(box.dispose);
+    await settle();
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.error, contains('Choose a project'));
+    expect(box.project.folder, '/missing');
+    expect(connection.starts, isEmpty);
+  });
+
   test('Branch opens immediately, discovers remote matches, and never queries on typing', () async {
     final connection = _Connection()..refreshing = Completer();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -175,7 +242,10 @@ void main() {
 
   test('failed branch refresh preserves usable choices and manual retry keeps the query', () async {
     final connection = _Connection()..refreshing = Completer();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -217,7 +287,10 @@ void main() {
             },
         ],
       };
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -250,7 +323,10 @@ void main() {
 
   test('a late refresh from another project is discarded', () async {
     final connection = _Connection()..refreshing = Completer();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -274,7 +350,10 @@ void main() {
     'Branch shows refresh progress and manual refresh keeps the typed query',
     (tester) async {
       final connection = _Connection()..refreshing = Completer();
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -341,7 +420,10 @@ void main() {
     'failed Git discovery blocks launch and the next Start retries it',
     () async {
       final connection = _Connection()..gitFailures = 2;
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -366,7 +448,10 @@ void main() {
 
   test('a remote branch cannot launch in the main folder after Worktree is disabled', () async {
     final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -394,7 +479,10 @@ void main() {
   test('closing during Git discovery never sends a late create', () async {
     final connection = _Connection();
     final pending = connection.pending['/repo'] = Completer();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -412,7 +500,10 @@ void main() {
 
   test('Git defaults follow the project, late replies are ignored, and draft choices survive', () async {
     final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -480,7 +571,10 @@ void main() {
 
   test('the form filters a field and takes what it landed on', () async {
     final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -516,7 +610,10 @@ void main() {
   test('one Start waits for Git detection and lost replies reuse the original receipt', () async {
     final connection = _Connection()..loseReply = true;
     final ready = connection.pending['/repo'] = Completer();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -549,7 +646,10 @@ void main() {
         'preparedFolder': '/prepared',
         'failure': {'code': 'TMUX_UNAVAILABLE'},
       };
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -583,7 +683,10 @@ void main() {
       const folder = '/harnesses/worktrees/repo/claude-0922-1136';
       final connection = _Connection()
         ..answers[folder] = linked('harness/claude-0922-1136');
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -628,7 +731,10 @@ void main() {
         'preparedFolder': prepared,
         'failure': {'code': 'TMUX_UNAVAILABLE'},
       };
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -687,7 +793,10 @@ void main() {
 
   test('search finds remote-qualified and older Harness branches', () async {
     final connection = _Connection()..answers['/repo'] = rich;
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -725,7 +834,10 @@ void main() {
           },
         ],
       };
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -743,7 +855,10 @@ void main() {
     'From is where new work starts; Branch is the branch it is on',
     () async {
       final connection = _Connection()..answers['/repo'] = rich;
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -871,7 +986,10 @@ void main() {
     'Worktree off can make a new branch for the folder, from its branch',
     () async {
       final connection = _Connection()..answers['/repo'] = rich;
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -918,7 +1036,10 @@ void main() {
 
   test('Create branch cleans up a typed name', () async {
     final connection = _Connection()..answers['/repo'] = rich;
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -941,7 +1062,10 @@ void main() {
     'Worktree off never switches a folder a harness is working in',
     () async {
       final connection = _Connection()..answers['/repo'] = rich;
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       app.machineStates['m']!.agents = [
         const Agent(
           id: 'busy',
@@ -968,10 +1092,13 @@ void main() {
     },
   );
 
-  test('a repository with no commit starts without a worktree', () async {
+  test('an empty repository keeps Worktree on and requires a choice', () async {
     final connection = _Connection()
       ..answers['/empty'] = {'isGit': true, 'branch': 'main', 'branches': []};
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -982,14 +1109,21 @@ void main() {
     addTearDown(box.dispose);
     await settle();
     expect(box.isGitProject, true);
-    expect(box.worktree, false);
+    expect(box.worktree, true);
+    expect(box.requiredChoice?.message, contains('no commits'));
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.worktree, true);
+    expect(connection.starts, isEmpty);
   });
 
   testWidgets(
     'setup branch and worktree choices are used by the explicit launch action',
     (tester) async {
       final connection = _Connection();
-      final app = createApp(connectionForTest: (_) => connection);
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
       final box = NewHarnessController(
         app,
         machineId: 'm',
@@ -1036,7 +1170,10 @@ void main() {
     final renderDir = Platform.environment['HARNESS_LAUNCH_RENDER_DIR'];
     if (renderDir != null) await tester.runAsync(loadPreviewFonts);
     final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
+    final app = createApp(
+      connectionForTest: (_) => connection,
+      connected: true,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -1076,7 +1213,7 @@ void main() {
       );
       await tester.pump();
       await openLaunchRow(tester, 'start');
-      expect(find.text('[ New Harness ]').hitTestable(), findsOneWidget);
+      expect(find.text('New Harness').hitTestable(), findsOneWidget);
       expect(tester.takeException(), isNull);
       if (renderDir != null) {
         await expectLater(
@@ -1104,7 +1241,7 @@ void main() {
       find.byKey(const ValueKey('new-harness-field-branch')),
       findsOneWidget,
     );
-    // Branch and Worktree remain in the expanded Options group.
+    // Branch and Worktree remain visible in the form.
     expect(
       find.byKey(const ValueKey('new-harness-field-worktree')),
       findsOneWidget,
