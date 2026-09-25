@@ -113,10 +113,7 @@ void main() {
       final session = sessionNamed('Desktop');
       addTearDown(session.dispose);
       await pump(tester, session, width: width, withPr: true);
-      expect(
-        find.text(width < 588 ? '#260 · Draft' : 'PR #260 · Draft'),
-        findsOneWidget,
-      );
+      expect(find.text('#260 Draft'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     });

@@ -112,7 +112,7 @@ void main() {
     ]);
     expect(textsUnder(tester), [
       'Models',
-      'Search models…',
+      'Search models',
       'All 6',
       'Subscriptions 0',
       'Local 5',

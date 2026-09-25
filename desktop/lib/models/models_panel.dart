@@ -188,10 +188,10 @@ class _ModelsPanelState extends State<ModelsPanel> with SectionWakes {
                       style: AppType.monoLabel(),
                       decoration: InputDecoration(
                         hintText: _selectedTab == ModelsTab.subscriptions
-                            ? 'Search subscriptions…'
+                            ? 'Search subscriptions'
                             : _selectedTab == ModelsTab.apis
-                            ? 'Search APIs…'
-                            : 'Search models…',
+                            ? 'Search APIs'
+                            : 'Search models',
                         hintStyle: AppType.monoLabel(
                           color: AppPalette.textFaint,
                         ),

@@ -7,6 +7,12 @@ import '../terminal/terminal_text.dart';
 
 const double kTerminalCornerRadius = 3;
 
+/// One rim for workspace panes and the dialogs that take their keyboard focus.
+BorderSide terminalPaneBorder({bool focused = false}) => BorderSide(
+  color: focused ? grid.AppPalette.accentOnSurface : grid.AppPalette.divider,
+  width: 1,
+);
+
 /// One gutter around the workspace, between panes, and beside command docks.
 const double kWorkspaceInset = 9.5;
 

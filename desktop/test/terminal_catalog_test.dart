@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +21,7 @@ void main() {
       seedMixedAgents(app);
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(input, 'login');
       await tester.pump();
@@ -89,7 +91,7 @@ void main() {
       final input = find.byKey(const ValueKey('swarm-search-input'));
 
       Future<void> command(String query) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(input, '> $query');
         await tester.pump();
         await key(tester, LogicalKeyboardKey.enter);
@@ -97,7 +99,7 @@ void main() {
       }
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       await tester.enterText(input, 'login claude M2');
       await tester.pump();
       await key(tester, LogicalKeyboardKey.enter);
@@ -160,7 +162,7 @@ void main() {
       seedMixedAgents(app);
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

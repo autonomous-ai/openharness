@@ -1,9 +1,11 @@
+import 'support/workspace_tools.dart';
+import 'support/resource_picker.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/models.dart';
-import 'package:harness/models/models_panel.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
@@ -167,12 +169,9 @@ void main() {
             case 'agent.new':
               expect(find.byType(NewHarnessForm), findsOneWidget);
             case 'machines.list':
-              expect(
-                find.byKey(const ValueKey('machines-panel')),
-                findsOneWidget,
-              );
+              expect(resourceScope('@'), findsOneWidget);
             case 'models.list':
-              expect(find.byType(ModelsPanel), findsOneWidget);
+              expect(resourceScope(':'), findsOneWidget);
             case 'agent.open':
               expect(
                 find.byKey(const ValueKey('swarm-search-input')),
@@ -191,7 +190,7 @@ void main() {
         for (final shortcut in [
           LogicalKeyboardKey.keyN,
           if (completed == 3) ...[
-            LogicalKeyboardKey.keyO,
+            LogicalKeyboardKey.keyP,
             LogicalKeyboardKey.keyS,
           ],
           LogicalKeyboardKey.keyM,
@@ -201,7 +200,7 @@ void main() {
           await tester.pumpAndSettle();
           if (shortcut == LogicalKeyboardKey.keyN) {
             expect(find.byType(NewHarnessForm), findsOneWidget);
-          } else if (shortcut == LogicalKeyboardKey.keyO) {
+          } else if (shortcut == LogicalKeyboardKey.keyP) {
             expect(
               find.byKey(const ValueKey('swarm-search-input')),
               findsOneWidget,
@@ -209,12 +208,9 @@ void main() {
           } else if (shortcut == LogicalKeyboardKey.keyS) {
             expect(app.activeSwarm.isStore, isTrue);
           } else if (shortcut == LogicalKeyboardKey.keyM) {
-            expect(
-              find.byKey(const ValueKey('machines-panel')),
-              findsOneWidget,
-            );
+            expect(resourceScope('@'), findsOneWidget);
           } else {
-            expect(find.byType(ModelsPanel), findsOneWidget);
+            expect(resourceScope(':'), findsOneWidget);
           }
           await key(
             tester,
@@ -242,8 +238,8 @@ void main() {
       'welcome clicks and keyboard open real panels (native=$native)',
       (tester) async {
         await mount(tester, native: native);
-        final models = find.byType(ModelsPanel);
-        final machines = find.byKey(const ValueKey('machines-panel'));
+        final models = resourceScope(':');
+        final machines = resourceScope('@');
         await key(tester, LogicalKeyboardKey.keyI, cmd: true);
         await tester.pumpAndSettle();
         expect(models, findsOneWidget);
@@ -252,11 +248,11 @@ void main() {
         expect(models, findsNothing);
 
         if (!native) {
-          await tap(tester, find.byTooltip('Harnesses'));
-          expect(find.byKey(const ValueKey('session-manager')), findsOneWidget);
+          await openWorkspaceTool(tester, 'harnesses');
+          expect(resourceScope(''), findsOneWidget);
           await key(tester, LogicalKeyboardKey.keyI, cmd: true);
           await tester.pumpAndSettle();
-          expect(find.byKey(const ValueKey('session-manager')), findsNothing);
+          expect(resourceScope(''), findsNothing);
           expect(models, findsOneWidget);
           await key(tester, LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
@@ -292,28 +288,28 @@ void main() {
     );
   }
 
-  testWidgets('Models shortcut, welcome hint and toolbar follow a live remap', (
+  testWidgets('Models shortcut and welcome hint follow a live remap', (
     tester,
   ) async {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
-    expect(find.byTooltip('Models ⌘I'), findsOneWidget);
+    expect(find.byTooltip('Models ⌘I'), findsNothing);
     map.apply('''{"bindings":[
       {"keys":"cmd+i","command":null},
       {"keys":"cmd+u","command":"models.list"}
     ]}''');
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Models ⌘U'), findsOneWidget);
+    expect(find.byTooltip('Models ⌘U'), findsNothing);
     expect(find.text('⌘U'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.keyI, cmd: true);
-    expect(find.byType(ModelsPanel), findsNothing);
+    expect(resourceScope(':'), findsNothing);
     await key(tester, LogicalKeyboardKey.keyU, cmd: true);
     await tester.pumpAndSettle();
-    expect(find.byType(ModelsPanel), findsOneWidget);
+    expect(resourceScope(':'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),
       '> Open Models',
@@ -322,7 +318,7 @@ void main() {
     expect(find.text('Open Models'), findsOneWidget);
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(find.byType(ModelsPanel), findsOneWidget);
+    expect(resourceScope(':'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
@@ -357,7 +353,7 @@ void main() {
       expect(app.activeSwarm.isStore, isTrue);
       await key(tester, LogicalKeyboardKey.keyI, cmd: true);
       await tester.pumpAndSettle();
-      expect(find.byType(ModelsPanel), findsOneWidget);
+      expect(resourceScope(':'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -369,10 +365,10 @@ void main() {
       await mount(tester);
       expect(
         find.byKey(const ValueKey('onboarding-harnesses-dot')),
-        findsOneWidget,
+        findsNothing,
       );
-      await tap(tester, find.byTooltip('Harnesses'));
-      expect(find.text('Run your first harness'), findsOneWidget);
+      await openWorkspaceTool(tester, 'harnesses');
+      expect(find.text('New Harness'), findsNothing);
       expect(journey.completed(OnboardingStep.harnesses), isFalse);
       expect(
         find.byKey(const ValueKey('onboarding-harnesses-dot')),
@@ -380,9 +376,9 @@ void main() {
       );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      await tap(tester, find.byTooltip('Harnesses'));
-      await tap(tester, find.text('New harness'));
-      expect(find.byKey(const ValueKey('session-manager')), findsNothing);
+      await openWorkspaceTool(tester, 'harnesses');
+      await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+      expect(resourceScope(''), findsNothing);
       expect(find.byType(NewHarnessForm), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -397,15 +393,19 @@ void main() {
         if (hasPassword) app.password = '123456';
         await mount(tester);
         expect(journey.next, OnboardingStep.machines);
-        await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
-        await tap(tester, find.text('Set up access'));
-        expect(find.text('On your other computer'), findsOneWidget);
-        expect(find.textContaining('Connect to This Mac.'), findsOneWidget);
+        await openWorkspaceTool(tester, 'machines');
+        await selectResource(tester, 'machine:m');
+        await runResourceCommand(tester, 'Password / connection settings');
+        expect(find.text('This computer’s password'), findsOneWidget);
         if (!hasPassword) {
-          final field = find.byType(TextField);
+          final field = find.byKey(const Key('remote-password-field'));
           expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
           await tester.enterText(field, '123456');
-          await tap(tester, find.text('Save'));
+          await tester.enterText(
+            find.byKey(const Key('remote-password-confirm-field')),
+            '123456',
+          );
+          await tap(tester, find.text('Set password'));
         }
         expect(app.password, '123456');
         expect(find.text('Set password'), findsNothing);
@@ -444,20 +444,21 @@ void main() {
     ];
     await mount(tester);
     expect(journey.next, OnboardingStep.machines);
-    await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
-    await tap(tester, find.text('Connect to M2'));
-    final field = find.descendant(
-      of: find.byKey(const ValueKey('machines-panel')),
-      matching: find.byType(TextField),
-    );
+    await openWorkspaceTool(tester, 'machines');
+    await selectResource(tester, 'machine:source');
+    await runResourceCommand(tester, 'Link “M2”');
+    final field = find.byType(TextField);
     await tester.enterText(field, 'wrong');
-    await tap(tester, find.text('Connect'));
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
     expect(find.text('Incorrect password. Try again.'), findsOneWidget);
     await tester.enterText(field, '123456');
-    await tap(tester, find.text('Connect'));
+    await key(tester, LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
     expect(app.connections, ['source']);
-    expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
-    expect(find.text('Harnesses · M2'), findsOneWidget);
+    await key(tester, LogicalKeyboardKey.enter);
+    expect(resourceScope('@'), findsNothing);
+    expect(find.text('Search harnesses in M2'), findsOneWidget);
     expect(find.text('Existing work'), findsWidgets);
     expect(find.text('Work on this computer'), findsNothing);
     expect(journey.completed(OnboardingStep.machines), isFalse);
@@ -479,25 +480,18 @@ void main() {
       app.machines = [...app.machines, source];
       await mount(tester);
       expect(journey.next, OnboardingStep.machines);
-      await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
-      expect(
-        find.text('Open Harness on M2, then check again.'),
-        findsOneWidget,
-      );
-      expect(find.text('Set up access'), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('machines-panel')),
-          matching: find.byType(TextField),
-        ),
-        findsNothing,
-      );
-      await tap(tester, find.text('Check again'));
+      await openWorkspaceTool(tester, 'machines');
+      await selectResource(tester, 'machine:source');
+      expect(find.text('Offline'), findsOneWidget);
+      expect(find.text('Link'), findsNothing);
+      await runResourceCommand(tester, 'Refresh machines');
       expect(app.refreshes, 1);
       app.stateOf('source')!.nodeOnline = true;
       app.notifyListeners();
       await tester.pumpAndSettle();
-      expect(find.text('Connect to M2'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+      expect(find.text('Link “M2”'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -508,18 +502,16 @@ void main() {
       localHarness();
       await app.modelManager.refresh();
       await mount(tester);
-      await tap(tester, find.byKey(const ValueKey('swarm-machines-button')));
-      await tap(tester, find.byTooltip('Dismiss suggestion'));
+      await openWorkspaceTool(tester, 'machines');
+      journey.dismiss(OnboardingStep.machines);
+      await tester.pump();
       expect(journey.next, OnboardingStep.models);
-      expect(
-        find.byKey(const ValueKey('onboarding-models-dot')),
-        findsOneWidget,
-      );
-      await tap(tester, find.byKey(const ValueKey('swarm-models-button')));
-      expect(find.byType(ModelsPanel), findsOneWidget);
-      expect(find.byType(OnboardingCard), findsOneWidget);
-      expect(find.text('Power a harness with local AI'), findsOneWidget);
-      await tap(tester, find.text('Explore local models'));
+      expect(find.byKey(const ValueKey('onboarding-models-dot')), findsNothing);
+      await openWorkspaceTool(tester, 'models');
+      expect(resourceScope(':'), findsOneWidget);
+      expect(find.byType(OnboardingCard), findsNothing);
+      await tester.enterText(resourceField, ':local');
+      await tester.pump();
       expect(find.text('Qwen3.8-27B'), findsOneWidget);
       expect(app.actions, isEmpty);
       expect(journey.completed(OnboardingStep.models), isFalse);

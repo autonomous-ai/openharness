@@ -1,8 +1,12 @@
+import 'dart:async';
+
 // The pane header's model picker: two sections, the way back always offered, and a marked row that
 // says where the agent actually is.
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/widgets/box_chrome.dart';
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -10,6 +14,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
+import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/widgets/model_picker_chrome.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -72,6 +77,21 @@ class _Conn extends WsConn {
   }
 }
 
+class _DelayedConn extends _Conn {
+  _DelayedConn() : super([]);
+  final reply = Completer<Map<String, dynamic>>();
+  int reads = 0;
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    reads++;
+    return reply.future;
+  }
+}
+
 void main() {
   late AppNotifier notifier;
 
@@ -100,6 +120,51 @@ void main() {
 
   setUp(() => build());
   tearDown(() => notifier.dispose());
+
+  testWidgets(
+    'offline selectors do not read models and late reads cannot open a disabled picker',
+    (tester) async {
+      notifier.dispose();
+      final connection = _DelayedConn();
+      notifier = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        connectionForTest: (_) => connection,
+      );
+      Future<void> mount(bool enabled) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              paneHeader: true,
+              enabled: enabled,
+            ),
+          ),
+        ),
+      );
+      await mount(false);
+      await tester.pump();
+      expect(connection.reads, 0);
+      await mount(true);
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pump();
+      expect(connection.reads, 1);
+      await mount(false);
+      connection.reply.complete({'models': [], 'gridName': null});
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+      await mount(true);
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsOneWidget);
+      await mount(false);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   Future<void> open(
     WidgetTester tester, {
@@ -136,6 +201,131 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets(
+    'pane model label stays compact and disabled selectors cannot open',
+    (tester) async {
+      final controller = GridModelPickerController();
+      addTearDown(controller.dispose);
+      Future<void> mount(bool enabled) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 180,
+              child: GridModelPicker(
+                notifier: notifier,
+                machineId: 'local',
+                currentModel: 'a-very-long-local-model-name',
+                controller: controller,
+                paneHeader: true,
+                enabled: enabled,
+              ),
+            ),
+          ),
+        ),
+      );
+      await mount(false);
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+      expect(find.byType(Icon), findsNothing);
+      final label = tester.widget<Text>(
+        find.text('a-very-long-local-model-name'),
+      );
+      expect(label.style!.fontSize, 13);
+      expect(label.style!.fontFamily, workspaceBarTextStyle().fontFamily);
+      expect(label.style!.fontWeight, FontWeight.normal);
+      expect(
+        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        'a-very-long-local-model-name',
+      );
+      expect(tester.takeException(), isNull);
+      await mount(true);
+      expect(
+        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        'a-very-long-local-model-name\nSwitch model · Subscription or local models',
+      );
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'observed subscription model updates live and advertises local switching on hover',
+    (tester) async {
+      Future<void> mount(String? model, {String? local}) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: GridModelPicker(
+                notifier: notifier,
+                machineId: 'local',
+                engineLabel: 'codex',
+                subscriptionModel: model,
+                currentModel: local,
+                paneHeader: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await mount('GPT-6 Astra');
+      expect(find.text('GPT-6 Astra'), findsOneWidget);
+      final hover = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await hover.addPointer(location: Offset.zero);
+      addTearDown(hover.removePointer);
+      await hover.moveTo(tester.getCenter(find.text('GPT-6 Astra')));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.text('Switch model · Subscription or local models'),
+        findsOneWidget,
+      );
+      final control = find.byType(WorkspaceBarControl);
+      final focusable = tester.widget<FocusableActionDetector>(
+        find.descendant(
+          of: control,
+          matching: find.byType(FocusableActionDetector),
+        ),
+      );
+      expect(focusable.mouseCursor, SystemMouseCursors.click);
+      final fill = find.descendant(
+        of: control,
+        matching: find.byType(ColoredBox),
+      );
+      expect(fill, findsOneWidget);
+      expect(tester.getSize(fill).height, 28);
+      expect(
+        tester.widget<ColoredBox>(fill).color,
+        tester
+            .widget<WorkspaceBarControl>(control)
+            .selection
+            .withValues(alpha: .5),
+      );
+      await hover.moveTo(Offset.zero);
+      await tester.pumpAndSettle();
+      await mount('GPT-5.6 Sol');
+      expect(find.text('GPT-5.6 Sol'), findsOneWidget);
+      expect(find.text('GPT-6 Astra'), findsNothing);
+      await tester.tap(find.text('GPT-5.6 Sol'));
+      await tester.pumpAndSettle();
+      final subscription = tester
+          .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
+          .singleWhere((row) => row.title == 'OpenAI');
+      expect(subscription.selected, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await mount('GPT-5.6 Sol', local: 'Local-Exact-Name');
+      expect(find.text('Local-Exact-Name'), findsOneWidget);
+      expect(find.text('GPT-5.6 Sol'), findsNothing);
+      await mount(null);
+      expect(find.text('OpenAI'), findsOneWidget);
+    },
+  );
+
   testWidgets('shows both sections, and the way back is in the first one', (
     tester,
   ) async {
@@ -155,6 +345,45 @@ void main() {
     expect(find.text('Anthropic').last, findsOneWidget);
     expect(find.textContaining('usage'), findsOneWidget);
   });
+
+  testWidgets(
+    'workspace context opens the shared picker without a pane label',
+    (tester) async {
+      build(
+        models: [
+          {'id': 'local-model', 'node': 'M2'},
+        ],
+      );
+      final controller = GridModelPickerController();
+      addTearDown(controller.dispose);
+      String? selected;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              engineLabel: 'codex',
+              controller: controller,
+              menuOnly: true,
+              onSelected: (model) => selected = model.id,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('OpenAI'), findsNothing);
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.text('local-model'), findsOneWidget);
+      await tester.tap(find.text('local-model'));
+      await tester.pumpAndSettle();
+      expect(selected, 'local-model');
+      await tester.pumpWidget(const SizedBox());
+      controller.open();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('compact model menu stays on screen, and Escape closes it', (
     tester,
@@ -779,7 +1008,7 @@ void main() {
                   .first,
             )
             .message,
-        'Model: Qwen-Test · Click to switch',
+        'Model: Qwen-Test\nSwitch model · Subscription or local models',
       );
     });
 
@@ -817,7 +1046,7 @@ void main() {
                     .first,
               )
               .message,
-          'Model: Qwen-Test · Click to switch\nWeb search unavailable',
+          'Model: Qwen-Test\nSwitch model · Subscription or local models\nWeb search unavailable',
         );
       },
     );
@@ -846,7 +1075,7 @@ void main() {
                   .first,
             )
             .message,
-        'Model: Qwen-Test · Click to switch\nWeb search not supported by this engine',
+        'Model: Qwen-Test\nSwitch model · Subscription or local models\nWeb search not supported by this engine',
       );
     });
 
@@ -940,11 +1169,11 @@ void main() {
     expect(
       // `.last`: the header control names the current model too.
       tester.getSemantics(find.text('Qwen-Test').last),
-      containsSemantics(isSelected: true),
+      isSemantics(isSelected: true),
     );
     expect(
       tester.getSemantics(find.text('DeepSeek-Test')),
-      isNot(containsSemantics(isSelected: true)),
+      isNot(isSemantics(isSelected: true)),
     );
   });
 

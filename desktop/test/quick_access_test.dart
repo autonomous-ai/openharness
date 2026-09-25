@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,6 +16,55 @@ import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 
 void main() {
+  test('Cmd-P never creates harnesses in root or scoped session lists', () {
+    final app = createApp();
+    seedMixedAgents(app);
+    addTearDown(app.dispose);
+    final search = SwarmSearchController(
+      app,
+      const [],
+      adding: true,
+      activityFirst: true,
+      offersCreate: true,
+      offersHarnessCreate: false,
+      selectOnEmptyQuery: false,
+      placement: HarnessPlacement.currentTab,
+    );
+    addTearDown(search.dispose);
+    expect(search.rows, isNotEmpty);
+    expect(search.rows.any((row) => row.isCreate), isFalse);
+    expect(search.selected, isNull);
+    expect(search.submit(), isNull);
+    for (final query in ['@ Office', '# openharness']) {
+      search.setQuery(query);
+      expect(search.rows.any((row) => row.isCreate), query.startsWith('@'));
+      expect(search.selected!.isCreate, isFalse);
+      expect(search.submit(), isNull);
+      expect(search.canGoBack, isTrue);
+      expect(search.rows, isNotEmpty);
+      expect(search.rows.any((row) => row.isCreate), isFalse);
+      search.setQuery('a harness that does not exist');
+      expect(search.rows, isEmpty);
+      expect(search.selected, isNull);
+      expect(search.submit(), isNull);
+      expect(search.back(), isTrue);
+    }
+    search.setQuery('a harness that does not exist');
+    expect(search.rows, isEmpty);
+    expect(search.submit(), isNull);
+    search.setQuery('');
+    for (final machine in app.machineStates.values) {
+      machine.agents = [];
+    }
+    app.notifyListeners();
+    expect(search.rows, isEmpty);
+    expect(search.showsTypeHints, isTrue);
+    search.move(1);
+    search.move(-1);
+    expect(search.selected, isNull);
+    expect(search.submit(), isNull);
+  });
+
   for (final placement in HarnessPlacement.values) {
     test('prefixes switch lists and retain $placement', () {
       final app = createApp();
@@ -47,10 +98,18 @@ void main() {
       expect(search.rows.single.commandId, 'app.store');
       expect(search.createTask, isNull);
       search.setQuery('@ Office');
-      expect(search.rows.single.isMachine, isTrue);
-      expect(search.rows.single.machineId, 'studio');
+      expect(search.rows.first.title, 'New Machine');
+      expect(
+        search.rows.where((row) => !row.isCreate).single.isMachine,
+        isTrue,
+      );
+      expect(search.selected!.machineId, 'studio');
       search.setQuery('# openharness');
-      expect(search.rows.single.isProject, isTrue);
+      expect(search.rows.any((row) => row.isCreate), isFalse);
+      expect(
+        search.rows.where((row) => !row.isCreate).single.isProject,
+        isTrue,
+      );
       search.setQuery('');
       expect(search.rows.any((row) => row.isCreate), isTrue);
       expect(
@@ -93,14 +152,21 @@ void main() {
     final stale = search.selected!;
     expect(search.submit(), isNull);
     expect(
-      search.rows.map((row) => row.agentId),
+      search.rows.where((row) => !row.isCreate).map((row) => row.agentId),
       unorderedEquals(['focus', 'helmet']),
     );
-    expect(search.rows.every((row) => row.machineId == 'studio'), isTrue);
+    expect(search.rows.first.title, 'New Harness');
+    expect(search.scopedMachineId, 'studio');
+    expect(
+      search.rows
+          .where((row) => !row.isCreate)
+          .every((row) => row.machineId == 'studio'),
+      isTrue,
+    );
     app.machineStates['studio']!.agents = [];
     app.notifyListeners();
     expect(
-      search.rows,
+      search.rows.where((row) => !row.isCreate),
       isEmpty,
       reason: 'A missing group must never fall back to all agents',
     );
@@ -127,7 +193,7 @@ void main() {
         await configured.mount(tester, app, map);
         await key(tester, entry, cmd: true);
         if (entry == LogicalKeyboardKey.keyT) {
-          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+          await openHarnessPicker(tester);
         }
         final tabs = app.swarms.length;
         final input = find.byKey(const ValueKey('swarm-search-input'));
@@ -160,17 +226,34 @@ void main() {
         expect(search.rows.every((row) => row.agentId != null), isTrue);
         expect(app.swarms, hasLength(tabs));
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field.controller!.text, '# openharness');
+        expect(field.controller!.text, 'openharness');
+        expect(search.isProjectMode, isTrue);
         await type('? @');
         await key(tester, LogicalKeyboardKey.enter);
-        expect(field.controller!.text, '@ ');
+        expect(field.controller!.text, isEmpty);
+        expect(search.isMachineMode, isTrue);
         await type('@ Office');
         await key(tester, LogicalKeyboardKey.enter);
-        expect(search.rows.every((row) => row.machineId == 'studio'), isTrue);
+        expect(
+          search.rows
+              .where((row) => !row.isCreate)
+              .every((row) => row.machineId == 'studio'),
+          isTrue,
+        );
         expect(field.focusNode!.hasFocus, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field.controller!.text, '@ Office');
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        expect(field.controller!.text, 'Office');
+        expect(search.isMachineMode, isTrue);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+        expect(
+          find.byKey(const ValueKey('resource-command-input')),
+          findsOneWidget,
+        );
+        expect(field.controller!.text, 'Office');
+        await key(tester, LogicalKeyboardKey.escape);
+        expect(field.focusNode!.hasFocus, isTrue);
+        await type('? >');
+        await key(tester, LogicalKeyboardKey.enter);
         expect(field.controller!.text, '>');
         expect(search.isCommandMode, isTrue);
         expect(search.canGoBack, isFalse);

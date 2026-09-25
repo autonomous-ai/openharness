@@ -472,6 +472,8 @@ class _AgentPickerState extends State<AgentPicker> {
           'picker.cancel': () => run(_close),
           if (widget.terminalStyle)
             'picker.toggle_preview': () => run(_togglePreview),
+          'picker.page_down': () => run(() => _page(1)),
+          'picker.page_up': () => run(() => _page(-1)),
           'picker.preview_page_down': () => run(() => _page(1)),
           'picker.preview_page_up': () => run(() => _page(-1)),
           // Tab is a picker command now (the box completes paths with it); a

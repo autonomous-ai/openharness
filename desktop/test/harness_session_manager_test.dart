@@ -69,7 +69,7 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await tester.tap(find.byTooltip('Harnesses'));
+    await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
     await tester.pumpAndSettle();
   }
 
@@ -230,18 +230,11 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await tester.tap(find.byTooltip('Harnesses'));
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
         findsNothing,
-      );
-      final managerIcon = tester.getRect(find.byTooltip('Harnesses'));
-      expect(
-        managerIcon.right,
-        lessThan(
-          tester.getRect(find.byKey(const ValueKey('swarm-store-button'))).left,
-        ),
       );
       await tester.tap(find.byKey(const ValueKey('session-filter:needsInput')));
       await tester.pump(const Duration(milliseconds: 300));
@@ -384,7 +377,7 @@ void main() {
             .widget<TextField>(find.byKey(const ValueKey('session-search')))
             .decoration
             ?.hintText,
-        'Search harnesses, machines, projects, branches…',
+        'Search harnesses, machines, projects, branches',
       );
       await tester.enterText(
         find.byKey(const ValueKey('session-search')),
@@ -513,7 +506,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await tester.tap(find.byTooltip('Harnesses'));
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -904,7 +897,7 @@ void main() {
       expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await tester.tap(find.byTooltip('Harnesses'));
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },
@@ -932,7 +925,7 @@ void main() {
         tester.binding.defaultBinaryMessenger.handlePlatformMessage(
           channel.name,
           const StandardMethodCodec().encodeMethodCall(
-            const MethodCall('sessions'),
+            const MethodCall('harnessControls'),
           ),
           (_) {},
         );

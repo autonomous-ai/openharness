@@ -1,5 +1,8 @@
 # New Harness entry rules
 
+Presentation follows the [terminal dialog design system](terminal-dialogs.md).
+Use that guide for current visuals; this document owns entry and launch behavior.
+
 Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
 Escape leaves that tab open. The command dock opens only after an explicit
 Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
@@ -33,7 +36,7 @@ Narrow windows show the active list full-width with a back action.
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
 | Cmd-T, then Cmd-N | Previous pane's agent, machine, and project | The blank tab opened by Cmd-T |
-| Cmd-O or Cmd-P → New Harness | Focused pane's agent, machine, and project | Current tab |
+| Cmd-Shift-P → New Harness | Focused pane's agent, machine, and project | Current tab |
 | Cmd-N or the New Harness command | Focused pane's defaults; retain a task and destination already chosen in search | Current tab unless its source requests a new tab |
 | Explicit pane split | Focused pane's defaults | Requested split in that tab |
 | Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
@@ -45,10 +48,18 @@ The Store and orchestration tabs cannot host a terminal pane. Generic creation
 from either uses a new tab. Command-bar requests keep the workspace context and
 apply any agent or machine explicitly named by the request.
 
-Cmd-O and Cmd-P open the same picker. Repeating either shortcut preserves the
-query, selection, highlighted result, and filters, then refocuses the input.
-Cmd-T closes the dock and opens a quiet blank tab. Creation remains blocked
-while a pending start needs confirmation.
+The unified picker has search and results on the left, with a read-only preview
+on the right. It has no action strip or keyboard footer. Enter opens a result;
+machines and projects drill into their session lists. Cmd-P never offers New
+Harness, including when no sessions match or a scoped list is empty. Cmd-N opens
+creation explicitly. Cmd-Shift-P searches named
+commands for the selected resource and returns to the same search after an action
+or cancellation. Each item action names its target, which is revalidated before
+execution. Filters and sorting are explicit commands, with no More menu.
+
+Workspace panes remain terminals, with viewers as the only exception. Do not add
+model or API details tabs: status stays in the picker preview, Model Manager opens
+as a terminal session, and API configuration uses the existing edit dialog.
 
 ## Harness and agent choices
 
@@ -183,7 +194,7 @@ worktree: the retry selects that worktree's branch with Worktree off.
 
 - Workspace drafts belong to their original machine, focused source harness,
   and project context. A different focused harness does not inherit their edits.
-- Cmd-O and Cmd-P can resume the same workspace draft. The current tab controls
+- Cmd-N and Cmd-Shift-P can resume the same workspace draft. The current tab controls
   placement; a saved draft cannot redirect it to an old destination.
 - Store drafts belong to the explicitly requested product and machine. Opening
   Blender cannot restore Workshop's agent, task, or generated project name.
@@ -222,7 +233,7 @@ never silently renamed, and existing files are never overwritten.
 - `test/new_harness_entry_rules_test.dart`: product changes with an open or
   dismissed dock, Open/Try, edited names, machine changes, explicit agent
   precedence, search isolation, exact launch payloads, pending receipts, source
-  pane changes, and Cmd-O/Cmd-P draft recovery and placement. Repeated/switched
+  pane changes, and Cmd-N/Cmd-Shift-P draft recovery and placement. Repeated/switched
   shortcuts retain typed tasks, text selection, existing results, and project
   scope; starting then uses the displayed destination.
 - `test/harness_placement_test.dart`, `test/box_flows_test.dart`,
@@ -240,7 +251,7 @@ never silently renamed, and existing files are never overwritten.
   `test/new_harness_project_context_test.dart`: generated versus edited names,
   collisions, delayed replies, and machine-specific project choices.
 - `integration_test/native_workspace_e2e_test.dart`: native onboarding,
-  Cmd-T/Cmd-P creation, edited defaults, Store product switching for Open/Try,
+  Cmd-T/Cmd-Shift-P creation, edited defaults, Store product switching for Open/Try,
   the Models menu, and terminal input immediately after starting without a
   mouse click. Creation journeys also switch and repeat shortcuts while a task
   is already typed into the picker.

@@ -254,6 +254,8 @@ class SwarmDestination {
     this.machineId,
     this.machineLabel = '',
     this.agentId,
+    this.modelId,
+    this.storeId,
     this.engine,
     this.closedId,
     this.commandId,
@@ -291,6 +293,10 @@ class SwarmDestination {
   final PromptContext? promptContext;
   final DateTime? lastActivityAt;
   final String? swarmId, machineId, agentId, engine;
+  final String? modelId;
+  bool get isModel => modelId != null;
+  final String? storeId;
+  bool get isStoreEntry => storeId != null;
   final String? closedId;
   final String? commandId, shortcut;
 
@@ -319,13 +325,16 @@ class SwarmDestination {
   final bool current;
   final List<String> fields;
   bool get isProject => projectId != null;
-  bool get isMachine => agentId == null && machineId != null && !isProject;
+  bool get isMachine =>
+      agentId == null && machineId != null && !isProject && !isModel;
   bool get isGroup => isProject || isMachine;
   bool get isSwarm =>
       agentId == null &&
       !isGroup &&
       !isCommand &&
       !isCreate &&
+      !isModel &&
+      !isStoreEntry &&
       pickerQuery == null;
   bool get hasView => swarmId != null;
 }
@@ -558,7 +567,7 @@ class SwarmSearchCatalog {
           id: 'project:${group.id}',
           projectId: group.id,
           title: group.name,
-          detail: 'Project · ${_countLabel(members.length, 'harness')}',
+          detail: _countLabel(members.length, 'harness'),
           swarmId: null,
           current: false,
           members: Set.unmodifiable(members),

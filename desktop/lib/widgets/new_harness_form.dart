@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
@@ -14,7 +15,7 @@ import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
-import 'box_chrome.dart';
+import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 
 /// Every answer a new harness needs, on one screen, changed where it stands.
@@ -678,21 +679,20 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     return KeyEventResult.handled;
   }
 
-  Color get _rule => Colors.white.withValues(alpha: .16);
+  TerminalTheme get _theme =>
+      terminalThemeFor(grid.AppTheme.palette.value, terminalThemeStore.value);
 
-  Color get _popupFill => terminalThemeFor(
-    grid.AppTheme.palette.value,
-    terminalThemeStore.value,
-  ).background;
+  Color get _rule => _theme.foreground.withValues(alpha: .16);
+  Color get _faint => _theme.foreground.withValues(alpha: .54);
 
   // Only the column that owns the keys carries Open Harness's full highlight.
-  Color get _activeFill => Colors.white.withValues(alpha: .12);
+  Color get _activeFill => _theme.selection;
 
   /// A machine that cannot be picked — unlinked or offline — in dark grey,
   /// darker than the faint of an idle list, so it recedes rather than warns.
-  Color get _unavailableInk => Colors.white.withValues(alpha: .28);
+  Color get _unavailableInk => _theme.foreground.withValues(alpha: .28);
 
-  Color get _idleFill => Colors.white.withValues(alpha: .04);
+  Color get _idleFill => _theme.foreground.withValues(alpha: .04);
 
   /// One face, one size, everywhere on this screen — and it is the
   /// TERMINAL's size, the one ⌘+ and ⌘− set, not the UI's fixed 13pt. A box
@@ -702,10 +702,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// wrapped ones included — lands on the grid by itself. A two-line notice
   /// is exactly two rows; nothing needs a box around it to stay in step.
   TextStyle _ink([Color? color]) =>
-      terminalContentStyle(color: color ?? Colors.white).copyWith(
-        height: _rowHeight / _font,
-        leadingDistribution: TextLeadingDistribution.even,
-      );
+      terminalContentStyle(color: color ?? _theme.foreground);
 
   /// THE GRID. A terminal has two units and positions nothing in pixels:
   ///
@@ -724,16 +721,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   double _rowHeight = 20;
 
   void _measureGrid(BuildContext context) {
-    final scaler = MediaQuery.textScalerOf(context);
-    _font = scaler.scale(terminalFontStore.size);
-    _rowHeight = (_font * 1.6).roundToDouble();
-    final painter = TextPainter(
-      text: TextSpan(text: '0000000000', style: terminalContentStyle()),
-      textDirection: TextDirection.ltr,
-      textScaler: scaler,
-    )..layout();
-    _cell = painter.width / 10;
-    painter.dispose();
+    _font = MediaQuery.textScalerOf(context).scale(terminalFontStore.size);
+    final cell = terminalCellSizeOf(context);
+    _cell = cell.width;
+    _rowHeight = cell.height;
   }
 
   /// Where each pane's rows sit: one cell in from the pane's edge, so the
@@ -767,7 +758,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _revealRow();
     }
     _measureGrid(context);
-    return KeymapRegion(
+    final form = KeymapRegion(
       contextKind: KeymapContext.picker,
       composing: _isComposing,
       actions: {
@@ -791,9 +782,15 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         focusNode: _focus,
         onKeyEvent: _onKey,
         child: Material(
+          key: const ValueKey('new-harness-surface'),
           elevation: 0,
-          color: _popupFill,
+          color: _theme.background,
           surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(kTerminalCornerRadius),
+            side: terminalPaneBorder(focused: true),
+          ),
+          clipBehavior: Clip.antiAlias,
           child: DefaultTextStyle.merge(
             style: _ink(),
             child: LayoutBuilder(
@@ -843,6 +840,14 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
           ),
         ),
       ),
+    );
+    return TextSelectionTheme(
+      data: TextSelectionThemeData(
+        cursorColor: _theme.cursor,
+        selectionColor: _theme.selection,
+        selectionHandleColor: _theme.cursor,
+      ),
+      child: form,
     );
   }
 
@@ -922,7 +927,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     maxLines: 1,
                     softWrap: false,
                     overflow: TextOverflow.clip,
-                    style: _ink(grid.AppPalette.swarmAccent),
+                    style: _ink(_theme.cursor),
                   ),
                 ),
                 SizedBox(width: _cell * 2),
@@ -932,7 +937,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     maxLines: 1,
                     softWrap: false,
                     overflow: TextOverflow.clip,
-                    style: _ink(kBoxFaint),
+                    style: _ink(_faint),
                   ),
                 ),
               ],
@@ -984,10 +989,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                         Icon(
                           LucideIcons.chevronLeft300,
                           size: _font,
-                          color: kBoxFaint,
+                          color: _faint,
                         ),
                       ),
-                      Text(_label(_row), style: _ink(kBoxFaint)),
+                      Text(_label(_row), style: _ink(_faint)),
                     ],
                   ),
                 ),
@@ -999,7 +1004,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               _atTextColumn(
                 Semantics(
                   liveRegion: true,
-                  child: Text(status, style: _ink(kBoxFaint)),
+                  child: Text(status, style: _ink(_faint)),
                 ),
               ),
             SizedBox(height: _rowHeight),
@@ -1076,39 +1081,39 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     : run.failed
                     ? '$name did not install on ${box.machineLabel}'
                     : 'Installing $name on ${box.machineLabel}',
-                end: _Elapsed(run: run, style: _ink(kBoxFaint)),
+                end: _Elapsed(run: run, style: _ink(_faint)),
               ),
               SizedBox(height: _rowHeight),
               for (final (phase, label) in steps) ...[
                 if (failedPhase == phase)
-                  line('✗', label, color: Colors.orangeAccent)
+                  line('✗', label, color: _theme.red)
                 else if (run.done || (run.reached(phase) && run.phase != phase))
                   line(
                     '✓',
                     label,
                     end: run.took(phase) == null
                         ? null
-                        : Text(_took(run.took(phase)!), style: _ink(kBoxFaint)),
+                        : Text(_took(run.took(phase)!), style: _ink(_faint)),
                   )
                 else if (run.phase == phase && run.inProgress) ...[
                   line('>', label),
                   if (run.line ?? run.detail case final now?)
-                    line(null, now, color: kBoxFaint),
+                    line(null, now, color: _faint),
                 ] else
-                  line(' ', label, color: kBoxFaint),
+                  line(' ', label, color: _faint),
               ],
               if (tail.isNotEmpty && !run.done && failure == null) ...[
                 SizedBox(height: _rowHeight),
-                for (final entry in tail) line(null, entry, color: kBoxFaint),
+                for (final entry in tail) line(null, entry, color: _faint),
               ],
               if (failure != null) ...[
                 SizedBox(height: _rowHeight),
-                line(null, failure.title, color: Colors.orangeAccent),
+                line(null, failure.title, color: _theme.red),
                 if (failure.body case final body?)
-                  line(null, body, color: kBoxFaint),
+                  line(null, body, color: _faint),
                 if (failure.command case final command?) line(null, command),
                 if (failure.hint case final hint?)
-                  line(null, hint, color: kBoxFaint),
+                  line(null, hint, color: _faint),
               ],
               SizedBox(height: _rowHeight),
               line(
@@ -1118,7 +1123,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     : run.done
                     ? 'Starting the harness…'
                     : 'The first install takes a few minutes.',
-                color: kBoxFaint,
+                color: _faint,
               ),
             ],
           ),
@@ -1136,7 +1141,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     child: Text(
       box.error ?? box.status!,
       key: const ValueKey('new-harness-status'),
-      style: _ink(box.error != null ? Colors.orangeAccent : kBoxFaint),
+      style: _ink(box.error != null ? _theme.red : _faint),
     ),
   );
 
@@ -1168,18 +1173,18 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (_row == _Row.model && box.modelNotice != null) ...[
-          _atTextColumn(Text(box.modelNotice!, style: _ink(kBoxFaint))),
+          _atTextColumn(Text(box.modelNotice!, style: _ink(_faint))),
           SizedBox(height: _rowHeight),
         ],
         if (shown.isEmpty &&
             !_prompts.contains(box.field) &&
             !box.refreshingChoices)
-          _atTextColumn(Text('No matches', style: _ink(kBoxFaint))),
+          _atTextColumn(Text('No matches', style: _ink(_faint))),
         for (var i = 0; i < shown.length; i++) ...[
           if (blankBefore(i)) SizedBox(height: _rowHeight),
           if (shown[i].group != null &&
               (i == 0 || shown[i].group != shown[i - 1].group))
-            _atTextColumn(Text(shown[i].group!, style: _ink(kBoxFaint))),
+            _atTextColumn(Text(shown[i].group!, style: _ink(_faint))),
           _matchRow(shown[i]),
         ],
       ],
@@ -1223,7 +1228,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
               '>',
               key: const ValueKey('new-harness-prompt'),
               textAlign: TextAlign.center,
-              style: _ink(_picking ? Colors.white : kBoxFaint),
+              style: _ink(_picking ? _theme.foreground : _faint),
             ),
           ),
           Expanded(
@@ -1242,8 +1247,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 focusNode: _inputFocus,
                 readOnly: box.locked,
                 showCursor: _picking,
-                style: _ink(Colors.white),
-                cursorColor: Colors.white70,
+                style: _ink(_theme.foreground),
+                cursorColor: _theme.cursor,
                 // A block caret, one cell wide, as a terminal draws it.
                 cursorWidth: _cell,
                 cursorRadius: Radius.zero,
@@ -1258,7 +1263,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 onTapOutside: (_) {},
                 decoration: InputDecoration(
                   hintText: _promptHint,
-                  hintStyle: _ink(kBoxFaint),
+                  hintStyle: _ink(_faint),
                   hintMaxLines: 1,
                   isDense: true,
                   isCollapsed: true,
@@ -1285,7 +1290,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                 height: _rowHeight,
               ),
               iconSize: _font,
-              icon: Icon(LucideIcons.refreshCw300, color: kBoxFaint),
+              icon: Icon(LucideIcons.refreshCw300, color: _faint),
             ),
         ],
       ),
@@ -1341,12 +1346,10 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         unavailable
             ? _unavailableInk
             : !_picking || !option.enabled
-            ? kBoxFaint
+            ? _faint
             : option.synthetic
-            ? grid.AppPalette.swarmAccent
-            : on
-            ? Colors.white
-            : Colors.white70,
+            ? _theme.cursor
+            : _theme.foreground,
       ),
     );
     return Semantics(
@@ -1383,7 +1386,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                   // or never linked — which a dimmed row alone cannot.
                   if (note != null) ...[
                     SizedBox(width: _cell * 2),
-                    Text(note, style: _ink(kBoxFaint)),
+                    Text(note, style: _ink(_faint)),
                   ],
                 ],
               ),
@@ -1398,7 +1401,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                       child: _oneRow(
                         Text(
                           option.detail,
-                          style: _ink(kBoxFaint),
+                          style: _ink(_faint),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -1454,11 +1457,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     final highlighted = row == _row;
     final blocked = _blocked(row);
     final value = blocked ?? _value(row);
-    final ink = blocked != null || _picking
-        ? kBoxFaint
-        : highlighted
-        ? Colors.white
-        : Colors.white70;
+    final ink = blocked != null || _picking ? _faint : _theme.foreground;
     return Semantics(
       key: ValueKey('new-harness-field-${row.name}'),
       label: '${_label(row)}, $value',
@@ -1477,7 +1476,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final stacked = constraints.maxWidth < 360 * _scale;
-            final label = Text(_label(row), style: _ink(kBoxFaint));
+            final label = Text(_label(row), style: _ink(_faint));
             final content = Text(
               value,
               style: _ink(ink),

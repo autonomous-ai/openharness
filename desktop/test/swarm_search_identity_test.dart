@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,8 +9,8 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -385,7 +386,7 @@ void main() {
       app.newSwarm();
       final target = app.activeSwarm;
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       expect(
         tester.widget<TextField>(input).decoration!.hintText,
@@ -393,9 +394,15 @@ void main() {
       );
       await tester.enterText(input, 'extensibility');
       await tester.pump();
-      // One harness, then the row that makes what was typed instead.
-      expect(find.byType(ListTile), findsNWidgets(2));
-      expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsOneWidget);
+      // Only the matching harness; creation belongs to Cmd-N.
+      expect(
+        tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .rows,
+        hasLength(1),
+      );
+      expect(find.byKey(const ValueKey(kSwarmCreateRowId)), findsNothing);
       // Minimal rows keep the full metadata accessible and searchable.
       for (final value in [
         'Claude',
@@ -415,7 +422,13 @@ void main() {
       expect(find.byKey(const ValueKey('swarm-search-hints')), findsNothing);
       await tester.enterText(input, 'Architecture review');
       await tester.pump();
-      expect(find.byType(ListTile), findsNWidgets(2));
+      expect(
+        tester
+            .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+            .search
+            .rows,
+        hasLength(1),
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(app.activeSwarm, same(target));

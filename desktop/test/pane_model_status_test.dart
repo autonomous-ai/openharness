@@ -102,10 +102,11 @@ void main() {
     tester,
   ) async {
     await pane(tester, {'model': 'Qwen3.5-4B', 'webSearch': 'on'});
-    // What the build before this one drew for this very frame, captured from it.
-    expect(textsUnder(tester), ['Desktop', 'Qwen3.5-4B', 'Test host']);
+    // The header as it was drawn before this ticket, nothing added — its order is main's since
+    // #329, which put the model after the machine.
+    expect(textsUnder(tester), ['Desktop', 'Test host', 'Qwen3.5-4B']);
     await event(tester, 'turn_started', payload: {'userMessage': 'hi'});
-    expect(textsUnder(tester), ['Desktop', 'Qwen3.5-4B', 'Test host']);
+    expect(textsUnder(tester), ['Desktop', 'Test host', 'Qwen3.5-4B']);
     await settle(tester);
   });
 

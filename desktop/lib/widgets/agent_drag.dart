@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../theme/app_theme.dart';
+import '../shortcuts/app_keymap.dart';
+import '../shared/theme/workspace_bar_style.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
+import 'workspace_bar_control.dart';
 
 /// An agent in flight between the rail and the grid.
 class AgentDragRef {
@@ -71,6 +75,33 @@ final agentDrag = ValueNotifier<AgentDragRef?>(null);
 /// a pane drag offers the other tiles to trade places with.
 final paneDragging = ValueNotifier<PaneDragRef?>(null);
 
+/// Hover the whole header to reveal its close action without moving its title.
+class PaneHeaderHoverRegion extends StatefulWidget {
+  const PaneHeaderHoverRegion({super.key, required this.child});
+  final Widget child;
+
+  @override
+  State<PaneHeaderHoverRegion> createState() => _PaneHeaderHoverRegionState();
+}
+
+class _PaneHeaderHoverRegionState extends State<PaneHeaderHoverRegion> {
+  bool _hovered = false;
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: _PaneHeaderHover(hovered: _hovered, child: widget.child),
+  );
+}
+
+class _PaneHeaderHover extends InheritedWidget {
+  const _PaneHeaderHover({required this.hovered, required super.child});
+  final bool hovered;
+  @override
+  bool updateShouldNotify(_PaneHeaderHover oldWidget) =>
+      hovered != oldWidget.hovered;
+}
+
 class PaneCloseButton extends StatelessWidget {
   const PaneCloseButton({super.key, required this.onPressed});
 
@@ -79,15 +110,34 @@ class PaneCloseButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return Tooltip(
-      message: 'Close Pane',
-      child: IconButton(
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
+    final hint = KeymapTheme.of(context)?.hint('pane.close');
+    return Visibility(
+      visible:
+          context
+              .dependOnInheritedWidgetOfExactType<_PaneHeaderHover>()
+              ?.hovered ??
+          true,
+      maintainState: true,
+      maintainAnimation: true,
+      maintainSize: true,
+      child: WorkspaceBarControl(
+        label: 'Close Pane',
+        tooltip: [
+          'Close Pane',
+          if (hint != null && hint.isNotEmpty) hint,
+        ].join(' · '),
+        selection: theme.selection,
+        foreground: theme.foreground,
         onPressed: onPressed,
-        icon: Icon(Icons.close, size: 15, color: AppColors.muted),
-        splashRadius: 13,
-        constraints: const BoxConstraints.tightFor(width: 26, height: 26),
-        padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
+        child: SizedBox(
+          width: workspaceBarCellSizeOf(context).width * 3,
+          height: workspaceBarControlHeight(context),
+          child: Center(child: Text('x', style: workspaceBarTextStyle())),
+        ),
       ),
     );
   }

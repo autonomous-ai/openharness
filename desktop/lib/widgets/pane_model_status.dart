@@ -24,11 +24,6 @@ const EdgeInsets _kChipPadding = EdgeInsets.symmetric(horizontal: 6, vertical: 4
 /// or without one, so a note that loses its action does not resize the terminal again.
 const double _kNoteHeight = 30;
 
-/// Opens a pane's model picker from somewhere other than its control — the model note's
-/// "Pick another". Owned by the pane; handed to the picker as its `openRequests`.
-class ModelPickerOpener extends ChangeNotifier {
-  void open() => notifyListeners();
-}
 
 /// The chip's words for [phase].
 String startingChipLabel(ModelStartPhase phase) => switch (phase) {

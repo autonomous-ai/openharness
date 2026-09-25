@@ -4559,6 +4559,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
+          prev.modelName != agent.modelName ||
           prev.parentAgentId != agent.parentAgentId ||
           prev.project != agent.project ||
           prev.lastActivityAt != agent.lastActivityAt ||
@@ -7405,7 +7406,7 @@ class AppNotifier extends ChangeNotifier {
             failure.code == 'UNSUPPORTED_ON_REMOTE' ||
             failure.code == 'E2EE_REQUIRED') {
           return '$machineName cannot check this creation. '
-              'Use Open Harness (⌘O) to look for it before starting another.';
+              'Use Open Harness to look for it before starting another.';
         }
         return unconfirmed;
       }
@@ -7461,7 +7462,7 @@ class AppNotifier extends ChangeNotifier {
         // receipt-aware version. Missing is not proof that nothing started.
         // Check status stays read-only, even across upgrades and reconnects.
         return '$machineName has no record of this request. '
-            'Use Open Harness (⌘O) to look for it before starting another.';
+            'Use Open Harness to look for it before starting another.';
       case 'pending':
         return '$machineName is still starting your harness. Check again in a moment.';
       case 'unconfirmed':
@@ -10536,7 +10537,9 @@ class AppNotifier extends ChangeNotifier {
         swarm.titleAgentId = raw['titleAgentId'] as String?;
         swarm.nameIsCustom =
             raw['nameIsCustom'] == true ||
-            (swarm.titleAgentId == null && swarm.name != Swarm.defaultName);
+            (swarm.titleAgentId == null &&
+                swarm.name != Swarm.defaultName &&
+                !(swarm.isStore && swarm.name == Swarm.storeName));
         for (final item in (raw['panes'] as List).take(maxPanes)) {
           final entry = PaneLayoutEntry.fromJson(item);
           if (entry == null) continue;

@@ -199,6 +199,8 @@ class TerminalPromptKeys extends StatelessWidget {
             FocusManager.instance.primaryFocus?.nextFocus(),
         'picker.complete_back': () =>
             FocusManager.instance.primaryFocus?.previousFocus(),
+        'picker.page_down': ?pageDown,
+        'picker.page_up': ?pageUp,
         'picker.preview_page_down': ?pageDown,
         'picker.preview_page_up': ?pageUp,
         'picker.refresh': ?refresh,

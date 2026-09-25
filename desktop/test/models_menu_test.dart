@@ -1,3 +1,5 @@
+import 'support/resource_picker.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -23,8 +25,6 @@ import 'package:harness/widgets/new_harness_form.dart';
 import 'swarm_screen_test.dart' show terminal;
 import 'swarm_state_test.dart' show createApp;
 import 'support/model_manager.dart';
-
-import 'package:harness/models/models_panel.dart';
 
 import 'keymap_host_test.dart' show key;
 
@@ -385,13 +385,13 @@ void main() {
       expect(reply.isCompleted, isTrue);
       expect(source.calls, 1);
       expect(app.activeSwarmId, original);
-      expect(find.byType(ModelsPanel), findsOneWidget);
-      expect(find.text('OpenAI'), findsOneWidget);
-      expect(find.text('Not signed in'), findsOneWidget);
+      expect(resourceScope(':'), findsOneWidget);
+      expect(find.text('OpenAI'), findsWidgets);
+      expect(find.textContaining('Not signed in'), findsWidgets);
       expect(messages.where((c) => c.method == 'modelsState'), isEmpty);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byType(ModelsPanel), findsNothing);
+      expect(resourceScope(':'), findsNothing);
       expect(app.activeSwarmId, original);
       await tester.pumpWidget(const SizedBox());
       expect(source.calls, 1);
@@ -481,7 +481,7 @@ void main() {
       expect(find.byType(NewHarnessForm), findsNothing);
       expect(app.swarms, [source]);
       if (command == 'manageMachines') {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(
           find.byKey(const ValueKey('swarm-search-input')),
           '> machine monitor',
@@ -514,8 +514,11 @@ void main() {
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(app.activeSwarm.isStore, isFalse);
         expect(app.allPanes, isEmpty);
-        expect(find.byType(ModelsPanel), findsOneWidget);
-        expect(find.text('Search models…'), findsOneWidget);
+        expect(resourceScope(':'), findsOneWidget);
+        expect(
+          tester.widget<TextField>(resourceField).decoration!.hintText,
+          'Search models',
+        );
         expect(app.sent, isEmpty);
         await tester.pumpWidget(const SizedBox());
         app.dispose();
@@ -529,13 +532,16 @@ void main() {
     final connection = ModelManagerConnection();
     final app = ModelManagerTestApp(connection);
     await openGridDoor(tester, app, command: 'models');
-    expect(find.byType(ModelsPanel), findsOneWidget);
-    expect(find.text('Search models…'), findsOneWidget);
-    expect(find.byKey(const ValueKey('models-tab-all')), findsOneWidget);
+    expect(resourceScope(':'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(resourceField).decoration!.hintText,
+      'Search models',
+    );
+    expect(resourceField, findsOneWidget);
     expect(connection.creations, isEmpty);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(find.byType(ModelsPanel), findsNothing);
+    expect(resourceScope(':'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });

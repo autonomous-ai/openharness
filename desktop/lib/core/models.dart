@@ -3,6 +3,8 @@ library;
 
 import 'package:flutter/foundation.dart' show immutable;
 
+import 'runtime_model_name.dart';
+
 enum MachineAuthMode { managed, remote, self, provider }
 
 enum ConnectionStatus { disconnected, connecting, connected, reconnecting }
@@ -285,6 +287,10 @@ class Agent {
   final String? engineIconHint;
   final String? codexHome;
 
+  /// Model observed in this session by the daemon, when available. Independent
+  /// of [gridModel], which determines subscription versus local-model routing.
+  final String? modelName;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -387,6 +393,7 @@ class Agent {
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.modelName,
     this.gridModel,
     this.gridWebSearch,
     this.gridState,
@@ -513,6 +520,11 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      modelName: runtimeModelName(
+        j['selectedModel'],
+        agentId: j['id'] as String,
+        engine: _safeEngine(j['engine']),
+      ),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridState: GridSectionState.parse(grid?['state']),
@@ -566,6 +578,7 @@ class Agent {
         engineDisplayName: engineDisplayName,
         engineIconHint: engineIconHint,
         codexHome: codexHome,
+        modelName: modelName,
         gridModel: gridModel,
         gridWebSearch: gridWebSearch,
         gridState: gridState,
@@ -954,14 +967,23 @@ class AgentProject {
   final bool branchPending;
 
   /// The folder as the person chose it: inside a Git checkout, a subfolder
-  /// shows as itself and the checkout's root as its repository ([name]), even
+  /// shows as itself and the checkout's root as its remote repository name
+  /// (falling back to [name]), even
   /// when the checkout is a temporary worktree. Outside Git it is [name], the
   /// folder itself. The branch beside it is the repository's.
   String get label {
     final checkout = root;
     if (checkout == null) return name;
     String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
-    if (trimmed(checkout) == trimmed(cwd)) return name;
+    if (trimmed(checkout) == trimmed(cwd)) {
+      final repository = remote == null
+          ? ''
+          : trimmed(remote!)
+                .split('/')
+                .last
+                .replaceFirst(RegExp(r'\.git$', caseSensitive: false), '');
+      return repository.isEmpty ? name : repository;
+    }
     return cwd
             .split(RegExp(r'[/\\]'))
             .where((part) => part.isNotEmpty)

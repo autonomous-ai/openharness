@@ -1,5 +1,9 @@
 # New Harness setup and minimal Open Harness picker — handoff
 
+For current dialog presentation, follow the
+[terminal dialog design system](terminal-dialogs.md). The 2026-09-24 review
+supersedes this handoff's older logo, selection, spacing, and color directions.
+
 Branch: `feat/centered-new-harness-palette`. Updated 2026-09-23.
 
 ## Latest review direction

@@ -40,9 +40,7 @@ void main() {
           if (native) {
             await configured.native(tester, 'store');
           } else {
-            final button = find.byKey(const ValueKey('swarm-store-button'));
-            expect(tester.getRect(button).bottom, lessThanOrEqualTo(40));
-            await tester.tap(button);
+            await key(tester, LogicalKeyboardKey.keyS, cmd: true);
           }
           await tester.pump();
         }
@@ -57,7 +55,7 @@ void main() {
         await openStore();
         expect(app.activeSwarm, same(store));
         expect(app.swarms, hasLength(2));
-        await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
         expect(app.activeSwarm, same(work));
         expect(tester.state(view), same(terminalState));
         await key(tester, LogicalKeyboardKey.arrowLeft);
@@ -84,7 +82,7 @@ void main() {
       'browse harnesses',
       'extensions',
     ]) {
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         '> $query',

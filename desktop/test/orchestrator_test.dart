@@ -123,7 +123,7 @@ void main() {
     final shortcut = appShortcuts()
         .singleWhere((s) => s.action == ShortcutAction.addAgent)
         .activator;
-    expect(shortcut.trigger, LogicalKeyboardKey.keyO);
+    expect(shortcut.trigger, LogicalKeyboardKey.keyP);
     expect(shortcut.meta, isTrue);
     expect(shortcut.shift, isFalse);
     expect(

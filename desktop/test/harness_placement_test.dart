@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
 import 'dart:async';
@@ -366,8 +367,7 @@ void main() {
         final original = app.activeSwarm;
         await mount(tester, app);
         await chord(tester, LogicalKeyboardKey.keyT);
-        await chord(tester, LogicalKeyboardKey.keyO);
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await chord(tester, LogicalKeyboardKey.keyN);
         await tester.pump();
         final input = find.byKey(const ValueKey('new-harness-query'));
         tester
@@ -474,7 +474,10 @@ void main() {
       expect(search.isCommandMode, query.startsWith('>'));
       expect(search.isHelpMode, isFalse);
       expect(search.createTask, isNull);
-      expect(search.rows.any((row) => row.isCreate), isFalse);
+      expect(search.rows.any((row) => row.isCreate), query.startsWith('@'));
+      if (query.startsWith('@')) {
+        expect(search.rows.first.title, 'New Machine');
+      }
     }
     search.setQuery('');
     expect(search.selected!.isCreate, isTrue);
@@ -710,12 +713,15 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, 'fix the login regression');
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
+      expect(find.byType(NewHarnessForm), findsNothing);
+      expect(connection.requests, isEmpty);
+      await chord(tester, LogicalKeyboardKey.keyN);
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
           .controller;
@@ -742,7 +748,7 @@ void main() {
         await tester.pump();
         expect(box.task, task);
         for (final key in [
-          LogicalKeyboardKey.keyO,
+          LogicalKeyboardKey.keyP,
           LogicalKeyboardKey.keyT,
           LogicalKeyboardKey.period,
         ]) {
@@ -807,8 +813,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyO);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
@@ -827,8 +832,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessForm), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       final box = tester
           .widget<NewHarnessForm>(find.byType(NewHarnessForm))
@@ -845,8 +849,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(NewHarnessForm), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyO);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
@@ -886,13 +889,10 @@ void main() {
         await app.addAgentToSwarm('m', 'a0');
         final original = app.activeSwarm;
         await mount(tester, app);
-        final key = placement == HarnessPlacement.newTab
-            ? LogicalKeyboardKey.keyT
-            : LogicalKeyboardKey.keyO;
-        await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyT);
         }
+        await openHarnessPicker(tester);
         await tester.pump();
         expect(app.swarms, contains(original));
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
@@ -902,7 +902,8 @@ void main() {
           var inside = false;
           element.visitAncestorElements((ancestor) {
             final key = ancestor.widget.key;
-            inside = key is ValueKey<String> &&
+            inside =
+                key is ValueKey<String> &&
                 app.swarms.any((swarm) => swarm.id == key.value);
             return !inside;
           });
@@ -920,13 +921,15 @@ void main() {
           await chord(tester, LogicalKeyboardKey.keyW);
         }
         expect(app.swarms, [original]);
-        await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await chord(tester, LogicalKeyboardKey.keyT);
         }
+        await openHarnessPicker(tester);
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
+        expect(find.byType(NewHarnessForm), findsNothing);
+        await chord(tester, LogicalKeyboardKey.keyN);
         final box = tester
             .widget<NewHarnessForm>(find.byType(NewHarnessForm))
             .controller;
@@ -942,7 +945,7 @@ void main() {
         expect(app.swarms, contains(original));
         // The creation box was opened from a search editor that is now gone.
         // Returning focus to that detached editor would disable shortcuts.
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await chord(tester, LogicalKeyboardKey.keyP, shift: true);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,

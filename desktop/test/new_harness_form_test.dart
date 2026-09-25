@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/box_chrome.dart';
+import 'package:harness/terminal/terminal_theme.dart';
+import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -535,7 +537,10 @@ void main() {
   testWidgets('the selection bar marks which column has the keys', (
     tester,
   ) async {
-    final bright = Colors.white.withValues(alpha: .12);
+    final bright = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).selection;
     int barsOn() => tester
         .widgetList<Container>(find.byType(Container))
         .where((box) => box.color == bright)
@@ -570,7 +575,12 @@ void main() {
 
   testWidgets('the list dims while the items hold the keys', (tester) async {
     final box = await mount(tester);
-    // An unselected option stays quieter than the active choice.
+    final foreground = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).foreground;
+    final faint = foreground.withValues(alpha: .54);
+    // The inactive column stays quieter than the one receiving input.
     final other = box.options
         .firstWhere((row) => !row.synthetic && !identical(row, box.selected))
         .title;
@@ -579,17 +589,17 @@ void main() {
 
     expect(
       inkOf(other),
-      kBoxFaint,
+      faint,
       reason: 'The column the arrows are not in is grey.',
     );
     await press(tester, LogicalKeyboardKey.enter);
     expect(
       inkOf(other),
-      Colors.white70,
+      foreground,
       reason: 'Handing the arrows over brings the column up.',
     );
     await press(tester, LogicalKeyboardKey.escape);
-    expect(inkOf(other), kBoxFaint);
+    expect(inkOf(other), faint);
   });
 
   testWidgets('the right column follows the focused row', (tester) async {

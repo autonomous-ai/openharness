@@ -1,5 +1,3 @@
-import 'dart:ui' show PointerDeviceKind;
-
 import 'package:harness/widgets/pane_header_actions.dart';
 
 import 'dart:async';
@@ -18,7 +16,7 @@ void main() {
       body: PullRequestBadge(identity: id, read: read, open: open),
     ),
   );
-  testWidgets('PR and branch hide together while hovering reveals controls', (
+  testWidgets('standalone PR and branch remain beside the model selector', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -26,50 +24,31 @@ void main() {
         home: Scaffold(
           body: SizedBox(
             width: 500,
-            child: PaneHeaderHover(
-              child: PaneHeaderActions(
-                zoomed: false,
-                onZoom: () {},
-                details: const Text('branch-name'),
-                trailing: PullRequestBadge(
-                  identity: 'branch',
-                  read: () async => {
-                    'status': 'found',
-                    'number': 12,
-                    'state': 'Open',
-                    'url': 'https://github.com/acme/repo/pull/12',
-                  },
-                ),
+            height: 46,
+            child: PaneHeaderActions(
+              details: const Text('branch-name'),
+              modelPicker: const Text('OpenAI'),
+              trailing: PullRequestBadge(
+                identity: 'branch',
+                read: () async => {
+                  'status': 'found',
+                  'number': 12,
+                  'state': 'Open',
+                  'url': 'https://github.com/acme/repo/pull/12',
+                },
               ),
             ),
           ),
         ),
       ),
     );
-    await tester.pump();
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await mouse.addPointer(location: Offset.zero);
-    await mouse.moveTo(tester.getCenter(find.text('PR #12 · Open')));
     await tester.pumpAndSettle();
-    final details = find.byKey(const ValueKey('pane-header-details'));
-    expect(tester.widget<AnimatedOpacity>(details).opacity, 0);
-    expect(
-      find.descendant(of: details, matching: find.text('branch-name')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: details, matching: find.text('PR #12 · Open')),
-      findsOneWidget,
-    );
-    expect(find.text('PR #12 · Open').hitTestable(), findsNothing);
-    expect(find.byTooltip('Zoom Pane').hitTestable(), findsOneWidget);
-    await mouse.moveTo(const Offset(700, 500));
-    await tester.pumpAndSettle();
-    expect(tester.widget<AnimatedOpacity>(details).opacity, 1);
-    expect(find.text('PR #12 · Open').hitTestable(), findsOneWidget);
-    await mouse.removePointer();
-    await tester.pumpWidget(const SizedBox());
+    expect(find.text('branch-name').hitTestable(), findsOneWidget);
+    expect(find.text('#12 Open').hitTestable(), findsOneWidget);
+    expect(find.text('OpenAI').hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Zoom Pane'), findsNothing);
   });
+
   for (final state in ['Draft', 'Open', 'Merged', 'Closed']) {
     testWidgets('labels $state and opens the PR URL', (tester) async {
       Uri? opened;
@@ -89,7 +68,7 @@ void main() {
         ),
       );
       await tester.pump();
-      await tester.tap(find.text('PR #12 · $state'));
+      await tester.tap(find.text('#12 $state'));
       expect(opened.toString(), 'https://github.com/acme/repo/pull/12');
       await tester.pumpWidget(const SizedBox());
     });
@@ -125,7 +104,7 @@ void main() {
     expect(find.byType(TextButton), findsNothing);
     await tester.pump(const Duration(seconds: 60));
     await tester.pump();
-    expect(find.text('PR #12 · Open'), findsOneWidget);
+    expect(find.text('#12 Open'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets(

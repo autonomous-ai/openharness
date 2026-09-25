@@ -11,7 +11,7 @@ class SwarmSearchField extends StatefulWidget {
     this.onSubmitted,
     this.onMove,
     this.autofocus = false,
-    this.hintText = 'Find a harness',
+    this.hintText = 'Search harnesses',
     this.controller,
     this.focusNode,
   });

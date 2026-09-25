@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../core/pull_request_status.dart';
 
 /// A separate PR label: branch colour does not encode review state.
 class PullRequestBadge extends StatefulWidget {
@@ -67,44 +68,28 @@ class _PullRequestBadgeState extends State<PullRequestBadge> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final result = _result;
-    if (result?['status'] == 'none') return const SizedBox.shrink();
-    final number = result?['number'];
-    final state = result?['state'];
-    final uri = Uri.tryParse(
-      result?['url'] is String ? result!['url'] as String : '',
-    );
-    final found =
-        result?['status'] == 'found' &&
-        number is int &&
-        number > 0 &&
-        const ['Draft', 'Open', 'Merged', 'Closed'].contains(state) &&
-        uri?.scheme == 'https' &&
-        uri?.host == 'github.com' &&
-        uri!.userInfo.isEmpty &&
-        uri.path.endsWith('/pull/$number');
-    if (!found) return const SizedBox.shrink();
-    final label = '${widget.compact ? '' : 'PR '}#$number · $state';
+    final pr = PullRequestStatus.fromResult(_result);
+    if (pr == null) return const SizedBox.shrink();
+    final number = pr.number, state = pr.state, uri = pr.url;
+    final label = pr.label;
     return Tooltip(
-      message: 'PR #$number · $state — Open on GitHub',
+      message: '#$number $state — Open on GitHub',
       child: TextButton(
         style: TextButton.styleFrom(
           minimumSize: const Size(0, 28),
           padding: const EdgeInsets.symmetric(horizontal: 6),
           textStyle: grid.AppType.monoLabel(),
         ),
-        onPressed: found
-            ? () async {
-                final opened =
-                    await (widget.open?.call(uri) ??
-                        launchUrl(uri, mode: LaunchMode.externalApplication));
-                if (!opened && context.mounted) {
-                  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                    const SnackBar(content: Text('Could not open GitHub.')),
-                  );
-                }
-              }
-            : null,
+        onPressed: () async {
+          final opened =
+              await (widget.open?.call(uri) ??
+                  launchUrl(uri, mode: LaunchMode.externalApplication));
+          if (!opened && context.mounted) {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(content: Text('Could not open GitHub.')),
+            );
+          }
+        },
         child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
     );

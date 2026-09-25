@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -295,7 +296,7 @@ void main() {
     expect(find.byType(WorkspaceWelcome), findsOneWidget);
     expect(find.text('Harness like a boss.'), findsOneWidget);
     expect(search, findsNothing);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     await tester.pump();
     expect(search, findsOneWidget);
     await key(tester, LogicalKeyboardKey.escape);
@@ -311,7 +312,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('Command-O opens harnesses and Command-P opens commands', (
+  testWidgets('Command-O opens harnesses and Command-O opens commands', (
     tester,
   ) async {
     final app = _FirstApp();
@@ -326,7 +327,7 @@ void main() {
     ];
     await _mount(tester, app);
     expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
     expect(find.text('Existing work'), findsOneWidget);
@@ -335,7 +336,7 @@ void main() {
     app.notifyListeners();
     await tester.pump();
     expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
     final input = tester.widget<TextField>(
       find.byKey(const ValueKey('swarm-search-input')),
     );
@@ -432,7 +433,7 @@ void main() {
         expect(find.byType(WorkspaceWelcome).hitTestable(), findsOneWidget);
         expect(find.byType(NewHarnessForm), findsNothing);
         expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        await openHarnessPicker(tester);
         expect(
           find.byKey(const ValueKey('swarm-search-input')),
           findsOneWidget,
@@ -599,7 +600,7 @@ void main() {
 
     final search = find.byKey(const ValueKey('swarm-search-input'));
     expect(search, findsNothing);
-    await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+    await openHarnessPicker(tester);
     await tester.enterText(search, 'nothing matches');
     await tester.pumpAndSettle();
     expectCentered();

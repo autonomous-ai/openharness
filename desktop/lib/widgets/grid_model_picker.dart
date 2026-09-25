@@ -1,6 +1,13 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import '../shared/theme/workspace_bar_style.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
+
 import 'package:harness/terminal/terminal_text.dart';
 
 import '../core/models.dart';
@@ -15,6 +22,7 @@ import 'model_picker_chrome.dart';
 import 'pane_menu.dart';
 import 'resting_model_words.dart';
 import 'resting_section.dart';
+import 'workspace_bar_control.dart';
 
 /// The engines whose panes carry a model picker.
 ///
@@ -48,6 +56,10 @@ bool modelPickerSupports(String? engine) =>
 /// The list is fetched when the menu opens rather than held in state, because it is live: an engine
 /// can join or leave a grid between two openings, and an offer nobody is serving any more is worse
 /// than a moment's spinner.
+class GridModelPickerController extends ChangeNotifier {
+  void open() => notifyListeners();
+}
+
 class GridModelPicker extends StatefulWidget {
   final AppNotifier notifier;
   final String machineId;
@@ -67,6 +79,9 @@ class GridModelPicker extends StatefulWidget {
   /// filled row, so the menu answers "where am I" as well as "where could I go".
   final String? currentModel;
 
+  /// Observed subscription model for the label. Does not select a Local row.
+  final String? subscriptionModel;
+
   /// Whether the agent can search the web on [currentModel], as the daemon decided when it built
   /// the launch. Shown as a subtitle under the current Local row and in the control's tooltip —
   /// only for the two degraded values; `on` and null (nothing said) show nothing. Read only when
@@ -77,9 +92,13 @@ class GridModelPicker extends StatefulWidget {
   /// The agent's engine, for the subscription row's icon and label.
   final String? engineLabel;
   final bool compact;
+  final bool paneHeader;
+  final bool enabled;
 
-  /// Opens the menu whenever it fires, as a click does — the pane note's "Pick another".
-  final Listenable? openRequests;
+  /// An optional programmatic trigger without a visible label. The menu anchors
+  /// to the top of the Flutter surface; pane headers use the normal trigger.
+  final bool menuOnly;
+  final GridModelPickerController? controller;
 
   const GridModelPicker({
     super.key,
@@ -89,10 +108,14 @@ class GridModelPicker extends StatefulWidget {
     this.onUseOwnLogin,
     this.onRunLocalModel,
     this.currentModel,
+    this.subscriptionModel,
     this.webSearch,
     this.engineLabel,
     this.compact = false,
-    this.openRequests,
+    this.paneHeader = false,
+    this.enabled = true,
+    this.menuOnly = false,
+    this.controller,
   });
 
   @override
@@ -119,7 +142,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
     _last = widget.notifier.gridPictures[widget.machineId];
     widget.notifier.gridPictures.addListener(_pictureChanged);
     widget.notifier.foreground.addListener(_foregroundChanged);
-    widget.openRequests?.addListener(_openRequested);
+    widget.controller?.addListener(_openFromController);
     // A reading that lands while the menu is open redraws its Subscription row, rather than
     // leaving "Checking usage…" there until the next open.
     _usage.addListener(_redrawOpenMenu);
@@ -128,21 +151,17 @@ class _GridModelPickerState extends State<GridModelPicker> {
     // a header do nothing. Fire-and-forget: nothing here waits on it, and a failure just means the
     // first open pays what it used to. Not while the app is in the background: a pane restored
     // behind a minimised window asks nothing until somebody can see it.
-    if (widget.notifier.inForeground) {
-      unawaited(_prefetch());
-    } else {
-      _prefetchOwed = true;
-    }
-  }
-
-  /// [GridModelPicker.openRequests] fired. One menu at a time.
-  void _openRequested() {
-    if (!mounted || _entry != null) return;
-    unawaited(_open());
+    _prefetchOwed = true;
+    _foregroundChanged();
   }
 
   void _foregroundChanged() {
-    if (!mounted || !_prefetchOwed || !widget.notifier.inForeground) return;
+    if (!mounted ||
+        !widget.enabled ||
+        !_prefetchOwed ||
+        !widget.notifier.inForeground) {
+      return;
+    }
     _prefetchOwed = false;
     unawaited(_prefetch().then((_) => _refreshOpenMenu()));
   }
@@ -210,9 +229,17 @@ class _GridModelPickerState extends State<GridModelPicker> {
   @override
   void didUpdateWidget(GridModelPicker oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(widget.openRequests, oldWidget.openRequests)) {
-      oldWidget.openRequests?.removeListener(_openRequested);
-      widget.openRequests?.addListener(_openRequested);
+    if (widget.enabled != oldWidget.enabled) {
+      _foregroundChanged();
+      if (!widget.enabled) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !widget.enabled) _close?.call();
+        });
+      }
+    }
+    if (widget.controller != oldWidget.controller) {
+      oldWidget.controller?.removeListener(_openFromController);
+      widget.controller?.addListener(_openFromController);
     }
     if (widget.currentModel == oldWidget.currentModel) return;
     if (_expecting && _settles(widget.currentModel)) {
@@ -263,12 +290,14 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// row, and a menu that showed it only on a second click read as the model not being there.
   GridModels? _shown;
   OverlayEntry? _entry;
+  bool _disposing = false;
 
   @override
   void dispose() {
+    _disposing = true;
     widget.notifier.gridPictures.removeListener(_pictureChanged);
     widget.notifier.foreground.removeListener(_foregroundChanged);
-    widget.openRequests?.removeListener(_openRequested);
+    widget.controller?.removeListener(_openFromController);
     _expiry?.cancel();
     // A pane can go away under an open menu — closed, moved, or its swarm switched — and an overlay
     // entry outlives the State that inserted it.
@@ -296,8 +325,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
   Map<String, Object?>? _subscriptionRow() =>
       subscriptionRowFor(widget.engineLabel, _usage.rows);
 
+  void _openFromController() => unawaited(_open());
+
   Future<void> _open() async {
-    if (_loading) return;
+    if (_loading || !widget.enabled) return;
     // A warm answer opens the menu with no wait at all. It is at most seconds old — the daemon's own
     // memo is what bounds that — and the refresh below lands in time for the next open.
     final GridModels answer;
@@ -328,7 +359,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// Draw the menu for an answer already in hand. Split from [_open] so a warm open shares exactly
   /// the same menu as a cold one rather than a second copy of it.
   Future<void> _show(GridModels answer) async {
-    if (!mounted) return;
+    if (!mounted || !widget.enabled) return;
     _shown = answer;
 
     final box = context.findRenderObject() as RenderBox?;
@@ -336,12 +367,14 @@ class _GridModelPickerState extends State<GridModelPicker> {
         Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (box == null || overlay == null) return;
     final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
-    final position = RelativeRect.fromLTRB(
-      origin.dx,
-      origin.dy + box.size.height + 6,
-      overlay.size.width - origin.dx - box.size.width,
-      0,
-    );
+    final position = widget.menuOnly
+        ? RelativeRect.fromLTRB(overlay.size.width - 12, 0, 12, 0)
+        : RelativeRect.fromLTRB(
+            origin.dx,
+            origin.dy + box.size.height + 6,
+            overlay.size.width - origin.dx - box.size.width,
+            0,
+          );
 
     final chosen = await _showMenu(
       position: position,
@@ -359,7 +392,7 @@ class _GridModelPickerState extends State<GridModelPicker> {
         close: close,
       ),
     );
-    if (chosen == null) return;
+    if (chosen == null || !mounted || !widget.enabled) return;
     if (chosen.runLocalModel) {
       widget.onRunLocalModel?.call();
       return;
@@ -444,6 +477,8 @@ class _GridModelPickerState extends State<GridModelPicker> {
     body: body,
     minWidth: kModelPickerWidth,
     maxWidth: kModelPickerWidth,
+    // A new focused pane disposes this picker; do not pull focus back to its owner.
+    shouldRestoreFocus: () => mounted && !_disposing && widget.enabled,
     onOpen: (entry, close) {
       _entry = entry;
       _close = close;
@@ -473,9 +508,11 @@ class _GridModelPickerState extends State<GridModelPicker> {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
+    if (widget.menuOnly) return const SizedBox.shrink();
     final sentence = _webSearchSentence;
     final current =
         widget.currentModel ??
+        widget.subscriptionModel ??
         switch (widget.engineLabel?.toLowerCase()) {
           'codex' => 'OpenAI',
           'claude' => 'Anthropic',
@@ -483,29 +520,87 @@ class _GridModelPickerState extends State<GridModelPicker> {
           _ => 'Model',
         };
     final label = _expecting ? 'Switching…' : current;
+    if (widget.paneHeader) {
+      final theme = terminalThemeFor(
+        grid.AppTheme.palette.value,
+        terminalThemeStore.value,
+      );
+      final cell = workspaceBarCellSizeOf(context);
+      final labelSize = workspaceBarTextSizeOf(context, label);
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final padding = math.min(cell.width, constraints.maxWidth / 2);
+          final textWidth = math.max(
+            0.0,
+            math.min(220.0, constraints.maxWidth - padding * 2),
+          );
+          final clipped = labelSize.width > textWidth;
+          return WorkspaceBarControl(
+            label: 'Model: $current',
+            tooltip: [
+              if (clipped || label != current) current,
+              if (widget.enabled) 'Switch model · Subscription or local models',
+              ?sentence,
+            ].join('\n'),
+            selection: theme.selection,
+            foreground: theme.foreground,
+            onPressed: widget.enabled ? _open : null,
+            child: SizedBox(
+              width: math.min(labelSize.width, textWidth) + padding * 2,
+              height: workspaceBarControlHeight(context),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: padding),
+                child: Center(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: workspaceBarTextStyle(),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+    final foreground = widget.paneHeader
+        ? terminalThemeFor(
+            grid.AppTheme.palette.value,
+            terminalThemeStore.value,
+          ).foreground.withValues(alpha: .65)
+        : AppColors.textSoft;
     return Tooltip(
       // The same sentence the menu shows, one line under the control's own — so a person can learn
       // the agent has no web search without opening the menu at all.
-      message: sentence == null
-          ? 'Model: $current · Click to switch'
-          : 'Model: $current · Click to switch\n$sentence',
+      message: [
+        'Model: $current',
+        if (widget.enabled) 'Switch model · Subscription or local models',
+        ?sentence,
+      ].join('\n'),
       waitDuration: const Duration(milliseconds: 700),
       child: MouseRegion(
         // Stated rather than inherited. The pane header sits over a terminal, and the cursor a
         // person sees while hovering this was whatever the surface underneath asked for — so a
         // control that opens a menu did not look like one until you clicked it.
-        cursor: SystemMouseCursors.click,
+        cursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         // Its own ink surface: an InkWell needs a Material above it, and a pane header is not
         // always inside one — every test that drew a header threw "No Material widget found".
         child: Material(
           type: MaterialType.transparency,
           child: InkWell(
-            onTap: _open,
+            onTap: widget.enabled ? _open : null,
             // Stated on the InkWell as well as on the MouseRegion above it. The cursor a person sees is
             // the INNERMOST annotation under the pointer, and InkWell installs one of its own — so an
             // ancestor asking for a hand is not, by itself, the thing that decides.
-            mouseCursor: SystemMouseCursors.click,
+            mouseCursor: widget.enabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
             borderRadius: BorderRadius.circular(4),
+            hoverColor: foreground.withValues(alpha: 0.10),
+            focusColor: foreground.withValues(alpha: 0.10),
             child: Padding(
               padding: EdgeInsets.symmetric(
                 horizontal: widget.compact ? 3 : 6,
@@ -520,28 +615,32 @@ class _GridModelPickerState extends State<GridModelPicker> {
                   Flexible(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxWidth: widget.compact ? 44 : 220,
+                        maxWidth: widget.compact && !widget.paneHeader
+                            ? 44
+                            : 220,
                       ),
                       child: Text(
                         label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: AppType.monoLabel(
-                          fontWeight: FontWeight.w400,
-                          color: AppColors.textSoft,
-                        ),
+                        style: widget.paneHeader
+                            ? workspaceBarTextStyle(color: foreground)
+                            : AppType.monoLabel(
+                                fontWeight: FontWeight.w400,
+                                color: AppColors.textSoft,
+                              ),
                       ),
                     ),
                   ),
                   // Replace the arrow while loading so a read cannot squeeze
                   // the session name or move the pane's other controls.
-                  if (_loading)
+                  if (_loading && !widget.paneHeader)
                     const SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 1.5),
                     )
-                  else
+                  else if (!widget.paneHeader)
                     Icon(
                       Icons.arrow_drop_down,
                       size: 14,

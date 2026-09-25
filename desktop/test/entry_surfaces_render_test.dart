@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -197,7 +198,7 @@ void main() {
           }
         }
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await chord(tester, LogicalKeyboardKey.keyO);
+        await openHarnessPicker(tester);
         await tester.pumpAndSettle();
         await capture('open');
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);

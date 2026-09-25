@@ -908,6 +908,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('harness-start-new-pane')));
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await chord(tester, LogicalKeyboardKey.keyN);
       await tester.pumpAndSettle();
       // With no machine to open an agent on, the start page's New goes to
       // the Machines panel, with desktop and server instructions one click away.
@@ -1179,10 +1180,12 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyM);
+    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
-    await tester.tap(find.text('link-mac'));
+    await tester.tap(
+      find.byKey(const ValueKey('connect-machine-link-machine')),
+    );
     // Same popup-transition reasoning as above.
     await tester.pumpAndSettle();
 
@@ -1261,10 +1264,12 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await chord(tester, LogicalKeyboardKey.keyM);
+    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
-    await tester.tap(find.text('link-mac'));
+    await tester.tap(
+      find.byKey(const ValueKey('connect-machine-link-machine')),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('machines-panel')), findsOneWidget);

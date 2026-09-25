@@ -159,7 +159,7 @@ Future<void> runCoreBenchmark(
       for (final operation in [
         'typing_echo',
         'cmd_n',
-        'cmd_o',
+        'cmd_p',
         'picker_query',
         'picker_accept_input',
         'cmd_t',
@@ -174,7 +174,7 @@ Future<void> runCoreBenchmark(
           SwarmSearchInput? picker;
           if (operation == 'picker_query' ||
               operation == 'picker_accept_input') {
-            benchmarkKey((LogicalKeyboardKey.keyO, PhysicalKeyboardKey.keyO));
+            benchmarkKey((LogicalKeyboardKey.keyP, PhysicalKeyboardKey.keyP));
             await benchmarkFrame();
             picker =
                 benchmarkFind((w) => w is SwarmSearchInput && w.search != null)
@@ -230,10 +230,10 @@ Future<void> runCoreBenchmark(
                       'new-harness-form',
                   'Cmd+N did not take keyboard focus',
                 );
-              case 'cmd_o':
+              case 'cmd_p':
                 benchmarkKey((
-                  LogicalKeyboardKey.keyO,
-                  PhysicalKeyboardKey.keyO,
+                  LogicalKeyboardKey.keyP,
+                  PhysicalKeyboardKey.keyP,
                 ));
                 await benchmarkFrame();
                 final input =
@@ -346,7 +346,7 @@ Future<void> runCoreBenchmark(
           if (operation == 'cmd_n') {
             await dismissNew();
           } else if ([
-            'cmd_o',
+            'cmd_p',
             'picker_query',
             'find_query',
           ].contains(operation)) {
