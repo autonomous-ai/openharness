@@ -26,12 +26,13 @@ works in every terminal, including ones where `⌥` types accented letters.
 | `⌥P` | the launcher: every harness on every machine |
 | `⌥⇧P` / `>` | commands |
 | `⌥O` / `#` | projects, then one of their harnesses |
-| `⌥I` / `:` | models — switch the focused harness's model and effort |
-| `⌥M` / `@` | machines, then one of their harnesses (`^L` links one) |
+| `⌥I` / `:` | models — switch the focused harness's model and effort; start, stop or get local models |
+| `⌥M` / `@` | machines (with each one's round trip), then one of their harnesses (`^L` links one) |
 | `⌥S` / `*` | the Harness Store |
 | `?` | what the launcher can do |
 | `⌥⇧I` | agents needing input — `⌥1…9` answers without opening the pane |
 | `⌥A` | jump to the next harness waiting on you (oldest question first) |
+| `` ⌥` `` | back to the tab you were on |
 | `⌥N` / `⌥⇧T` | new harness / new terminal |
 | `⌥T` `⌥1…9` `⌥{` `⌥}` `⌥⇧R` `⌥⇧W` | new, go to, previous/next, rename, close tab |
 | `⌥\` `⌥-` `⌥h/j/k/l` `⌥H/J/K/L` `⌥Z` `⌥W` `⌥L` `⌥=` | split right/down, focus, grow, zoom, close, layout, equalize |
@@ -43,6 +44,11 @@ works in every terminal, including ones where `⌥` types accented letters.
 Inside the launcher: type to filter (fzf matching), `↑/↓` or `^P/^N`, `enter` open, `^T` new tab,
 `^V`/`^S` split right/down, `^R` replace this pane, `tab` cycle all / needs input / running /
 paused, `^X` pause or resume, `esc` back out of a machine or project, then close.
+
+**macOS terminals send ⌥ as a symbol by default** (⌥P types π). Either press `^Space` then the
+key, or make ⌥ a Meta key once: iTerm2 → Profiles → Keys → Left Option key: *Esc+*; Terminal.app →
+Settings → Profiles → Keyboard → *Use Option as Meta key*; Ghostty → `macos-option-as-alt = true`;
+kitty → `macos_option_as_alt yes`; WezTerm → `send_composed_key_when_left_alt_is_pressed = false`.
 
 `⌥⏎`, `⌥←/→`, `⌥B`, `⌥F`, `⌥D` and the other chords a shell's line editor relies on are left to
 the pane. `⇧⏎` reaches the pane as a newline, the way the desktop sends it.
