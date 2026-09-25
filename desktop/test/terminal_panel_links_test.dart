@@ -182,29 +182,9 @@ void main() {
     );
   }
   testOnPlatform(
-    'a plain click on a link opens it without terminal mouse input',
+    'ordinary click still sends terminal mouse reports and never opens a file',
     (tester) async {
       await mount(tester);
-      await click(tester);
-      expect(launched.single.toFilePath(), '/tmp/preview.png');
-      expect(outbound, isEmpty);
-    },
-  );
-  testOnPlatform(
-    'shift-click on a link still belongs to the terminal',
-    (tester) async {
-      await mount(tester);
-      await click(tester, modifier: LogicalKeyboardKey.shiftLeft);
-      expect(launched, isEmpty);
-      expect(outbound, hasLength(2));
-    },
-  );
-  testOnPlatform(
-    'a plain click on ordinary text still sends terminal mouse reports',
-    (tester) async {
-      await mount(tester);
-      session.terminal.write('\r\x1b[2Kordinary text');
-      await tester.pump();
       await click(tester);
       expect(launched, isEmpty);
       expect(outbound, hasLength(2));
@@ -375,12 +355,16 @@ void main() {
     expect(view.controller!.selection, isNotNull);
   });
   testOnPlatform(
-    'a stationary link pointer follows session replacement and a shift press',
+    'a stationary link pointer follows session replacement and modifier release',
     (tester) async {
       await mount(tester);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(point(tester));
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
+      );
       await tester.pump();
       final previous = tester.widget<TerminalPanel>(find.byType(TerminalPanel));
       final replacement =
@@ -413,18 +397,14 @@ void main() {
         tester.widget<TerminalView>(find.byType(TerminalView)).mouseCursor,
         SystemMouseCursors.click,
       );
-      await tester.sendKeyDownEvent(
-        LogicalKeyboardKey.shiftLeft,
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.metaLeft,
         platform: 'macos',
       );
       await tester.pump();
       expect(
         tester.widget<TerminalView>(find.byType(TerminalView)).mouseCursor,
         SystemMouseCursors.text,
-      );
-      await tester.sendKeyUpEvent(
-        LogicalKeyboardKey.shiftLeft,
-        platform: 'macos',
       );
       await mouse.removePointer();
       await tester.pump(const Duration(milliseconds: 350));
@@ -445,9 +425,9 @@ void main() {
     final linkBottom = render
         .localToGlobal(render.getOffset(const CellOffset(0, 1)))
         .dy;
-    final tip = tester.getRect(find.text('/tmp/preview.png').last);
+    final tip = tester.getRect(find.textContaining('-click to open'));
     expect(tip.top, greaterThanOrEqualTo(linkBottom));
-    expect(tip.top, lessThan(linkBottom + render.cellSize.height * 2));
+    expect(tip.top, lessThan(linkBottom + render.cellSize.height * 3));
     await mouse.removePointer();
     await tester.pump(const Duration(milliseconds: 350));
   });
@@ -508,9 +488,17 @@ void main() {
               ),
             )
             .message,
-        url,
+        '⌘-click to open\n$url',
+      );
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
       );
       await tester.tapAt(point(tester, 10, 1), kind: PointerDeviceKind.mouse);
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
+      );
       await tester.pump(const Duration(milliseconds: 350));
       expect(launched.single.toString(), url);
       expect(outbound, isEmpty);

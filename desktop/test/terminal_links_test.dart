@@ -165,6 +165,15 @@ void main() {
       ]);
     });
 
+    test('a link never closed ends at a full reset', () {
+      const url = 'https://example.com/leak';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x1b\\cut off');
+      terminal.write('\x1bc\r\nprompt');
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(1, 1)), isNull);
+    });
+
     test('ignores non-web schemes', () {
       final terminal = Terminal()..resize(40, 4);
       terminal.write('\x1b]8;;javascript:alert(1)\x1b\\x\x1b]8;;\x1b\\');

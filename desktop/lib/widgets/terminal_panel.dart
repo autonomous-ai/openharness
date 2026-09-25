@@ -1367,11 +1367,12 @@ class _TerminalPanelState extends State<TerminalPanel>
     LogicalKeyboardKey.arrowRight,
   };
 
-  /// A click on a link opens it, bare or with ⌘/Ctrl; Shift and Alt are
-  /// left to the terminal for extending and block-selecting text.
-  bool get _linkClickAllowed {
+  bool get _linkModifierPressed {
     final keyboard = HardwareKeyboard.instance;
-    return !keyboard.isAltPressed && !keyboard.isShiftPressed;
+    if (keyboard.isAltPressed || keyboard.isShiftPressed) return false;
+    return defaultTargetPlatform == TargetPlatform.macOS
+        ? keyboard.isMetaPressed && !keyboard.isControlPressed
+        : keyboard.isControlPressed && !keyboard.isMetaPressed;
   }
 
   bool _onLinkModifierChanged(KeyEvent event) {
@@ -1501,7 +1502,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   bool _onLinkTapDown(TapDownDetails details, CellOffset cell) {
-    _pressedLink = _linkClickAllowed
+    _pressedLink = _linkModifierPressed
         ? _linkAtPointer(details.globalPosition)
         : null;
     return _pressedLink != null;
@@ -1513,7 +1514,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     // Read the current buffer again: streamed output may have replaced the
     // text between press and release, or this pane may now show another agent.
     if (target == null ||
-        !_linkClickAllowed ||
+        !_linkModifierPressed ||
         target != _linkAtPointer(details.globalPosition)) {
       return;
     }
@@ -1682,9 +1683,11 @@ class _TerminalPanelState extends State<TerminalPanel>
                         onHover: (event) => _hoverLink(event.position),
                         onExit: (_) => _hoverLink(null),
                         child: Tooltip(
-                          // The address alone: an OSC 8 label such as `!125`
+                          // With the address: an OSC 8 label such as `!125`
                           // does not say where it leads.
-                          message: _hoveredLink ?? '',
+                          message: _hoveredLink == null
+                              ? ''
+                              : '${defaultTargetPlatform == TargetPlatform.macOS ? '⌘' : 'Ctrl'}-click to open\n$_hoveredLink',
                           positionDelegate: _linkTooltipPosition,
                           child: CustomPaint(
                             key: _linkUnderlineKey,
@@ -1726,7 +1729,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                               onTapDown: _onLinkTapDown,
                               onTapUp: _onLinkTapUp,
                               mouseCursor:
-                                  _hoveredLink != null && _linkClickAllowed
+                                  _hoveredLink != null && _linkModifierPressed
                                   ? SystemMouseCursors.click
                                   // An I-beam invites typing; a blocked pane does not.
                                   : _inputBlocked
