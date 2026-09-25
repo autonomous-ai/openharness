@@ -121,7 +121,7 @@ async fn main() -> io::Result<()> {
             _ = tokio::time::sleep(wait) => None,
         };
         let mut refill = false;
-        let mut apply = |app: &mut app::App, event: Event, refill: &mut bool| {
+        let apply = |app: &mut app::App, event: Event, refill: &mut bool| {
             match event {
                 Event::Input(input) => { input::handle(app, input); *refill = true }
                 Event::Machine { machine_id, generation, event } => {

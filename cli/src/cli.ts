@@ -7161,7 +7161,7 @@ switch (cmd) {
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'tui':
-    tuiCommand(rest, { port: daemonPort() }).then((code) => { process.exitCode = code }).catch(onError)
+    tuiCommand(rest, { port: daemonPort(), signedIn: () => readAuthSession() !== null }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({

@@ -64,7 +64,6 @@ pub struct Prompt {
     pub hint: String,
     pub value: String,
     pub secret: bool,
-    pub busy: Option<String>,
 }
 
 pub enum Modal {

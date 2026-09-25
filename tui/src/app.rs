@@ -75,7 +75,6 @@ pub struct App {
     pub desk_revision: i64,
     desk_loaded: bool,
     pub started: Instant,
-    pub status_line: String,
     pub daemon_down: bool,
     pub dsh: HashMap<String, Vec<Value>>,
     pub homes: HashMap<String, String>,
@@ -116,7 +115,6 @@ impl App {
             desk_revision: -1,
             desk_loaded: false,
             started: Instant::now(),
-            status_line: String::new(),
             daemon_down: false,
             dsh: HashMap::new(),
             homes: HashMap::new(),
@@ -947,7 +945,6 @@ impl App {
         }
     }
 
-    pub fn new_pane_id_for_test(&mut self, machine_id: &str, agent_id: &str) -> u64 { self.new_pane(machine_id, agent_id) }
 }
 
 /// The desktop's preset ids (desktop/lib/state/pane_preset.dart, enum names) → our shapes.
