@@ -1062,7 +1062,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// text at all, so a naive body finds `null` and returns, silently: the single
   /// most common thing anyone pastes into a coding agent did nothing, with no
   /// error and nothing in a log. [NativeClipboard] closes that gap with a native
-  /// platform-channel read for an actual image (macOS/Linux only; see its doc).
+  /// platform-channel read for an actual image (macOS, Linux, iOS; see its doc).
   ///
   /// The engines running in these panes read the system clipboard THEMSELVES —
   /// Claude Code attaches an image on Ctrl+V — so on a LOCAL pane that is already
@@ -1074,10 +1074,10 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// clipboard than this one — see `MachineState.isLocalMachine`.
   /// An image handed over by the software keyboard's own clipboard.
   ///
-  /// This is the phone's ONLY way to get an image into a pane: Flutter's
-  /// [Clipboard] reads `text/plain` and nothing else, and the native reader
-  /// [_paste] falls back on is macOS/Linux. Gboard hands the bytes over directly,
-  /// so there is no clipboard to read at all.
+  /// Flutter's [Clipboard] reads `text/plain` and nothing else, and Gboard hands
+  /// the bytes over directly, so there is no clipboard to read at all. (The
+  /// actions sheet's Paste reads the system clipboard's image instead, through
+  /// [NativeClipboard]: see `phone/terminal_paste.dart`.)
   ///
   /// ⚠️ A pane on a phone is ALWAYS remote — the agent runs on another machine,
   /// whose engine reads a different OS clipboard — so unlike the desktop there is
