@@ -74,6 +74,8 @@ pub enum Modal {
     Prompt(Prompt),
     /// ⌥F: find in the focused pane's history. `found` is None before the first search.
     Find { pane: u64, query: String, found: Option<bool> },
+    /// ⌥[: move a cursor over the pane's text and copy from it, vi-style.
+    Copy { pane: u64 },
 }
 
 pub const ENGINES: [&str; 14] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "terminal"];
@@ -107,6 +109,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("equalize", "Equalize Panes", "⌥=", "", "Panes"),
     ("pane-tab", "Move Pane to New Tab", "", "", "Panes"),
     ("find", "Find in Pane…", "⌥⇧F", "search this pane's history", "Panes"),
+    ("copy-mode", "Copy Mode", "⌥V", "select and copy with the keyboard", "Panes"),
     ("machines", "Machines", "⌥M", "", "Machines"),
     ("store", "Harness Store", "⌥S", "", "Machines"),
     ("help", "Keyboard Shortcuts", "⌥/", "", "Session"),
@@ -139,6 +142,7 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Panes", "⌥=", "Equalize panes"),
     ("Panes", "wheel  ⇧PgUp", "Scroll the pane's history"),
     ("Panes", "⌥⇧F", "Find in the pane's history (↑ older, ↓ newer)"),
+    ("Panes", "⌥V  ^␣ [", "Copy mode — hjkl w b 0 $ g G, v / V select, y copy, / find, q leave"),
     ("Session", "^␣", "Prefix — then any key above without ⌥ (^␣ o, ^␣ n, …)"),
     ("Session", "⌘", "In kitty / Ghostty / WezTerm, ⌘ works where ⌥ is shown"),
     ("Session", "⌥Q", "Quit — everything keeps running; your tabs come back"),
