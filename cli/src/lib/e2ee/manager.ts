@@ -135,9 +135,6 @@ export class E2eeManager {
   }
 
   fingerprint(): string { return this.store.fingerprint() }
-  createSetupToken(machineId = this.deps.machineId): { token: string; expiresAt: number; fingerprint: string } {
-    return this.store.createSetupToken(machineId)
-  }
 
   // ── persistent remote password (`harness remote-password set|clear|status`) ──────────────────────
   setRemotePassword(password: string): Promise<{ fingerprint: string }> {
@@ -376,7 +373,6 @@ export class E2eeManager {
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     switch (type) {
       case 'e2e_status': return this.onStatus(connId, payload)
-      case 'e2e_setup_claim': return this.onSetupClaim(connId, payload)
       case 'e2e_pair_intent': return this.onPairIntent(connId, payload)
       case 'e2e_pair_cancel': return this.onPairCancel(connId, payload)
       case 'e2e_pake': return this.onPake(connId, payload)
@@ -494,25 +490,6 @@ export class E2eeManager {
       : { error: result.error }
     const reply = this.wrapRpcReply(connId, 'device_e2ee_pair_result', requestId, payload)
     if (reply) this.deps.sendTo(connId, reply)
-  }
-
-  private onSetupClaim(connId: string, p: Record<string, unknown>): boolean {
-    const requestId = p.requestId
-    const token = typeof p.token === 'string' ? p.token : ''
-    const identityPub = typeof p.identityPub === 'string' ? p.identityPub : ''
-    const sig = typeof p.sig === 'string' ? p.sig : ''
-    const label = typeof p.label === 'string' ? p.label.slice(0, 60) : 'browser'
-    const fail = (error: string): void => {
-      this.deps.sendTo(connId, { type: 'e2e_setup_claim_result', payload: { requestId, error } })
-    }
-    if (!token || !identityPub || !sig) { fail('BAD_CLAIM'); return true }
-    const validated = this.store.validateSetupToken(token, this.deps.machineId)
-    if (!validated.ok) { fail(validated.error); return true }
-    const pub = C.b64d(identityPub)
-    if (!C.setupClaimVerify(pub, this.deps.machineId, token, C.b64d(sig))) { fail('BAD_SIG'); return true }
-    this.store.addPaired(identityPub, label, this.now(), 'web')
-    this.deps.sendTo(connId, { type: 'e2e_setup_claim_result', payload: { requestId, ok: true, fingerprint: validated.fingerprint } })
-    return true
   }
 
   /** Called by the hook server when the user runs `harness pair <code>`. Resolves when done/failed. */

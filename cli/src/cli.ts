@@ -397,7 +397,6 @@ ${dshUsage()}
 ${apiUsage}
 
 Browser end-to-end encryption:
-  harness browser-link         print a reusable 7-day setup link for browsers
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
   harness pair <code>          pair a BROWSER (code shown on the machine page)
   harness pairings             list paired clients
@@ -525,19 +524,6 @@ function computerId(): string {
 // The REST base for control endpoints, derived from the WS URL (wss→https, ws→http).
 function backendHttpBase(): string {
   return env.BACKEND_WS_URL.replace(/\/$/, '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')
-}
-function webBase(): string {
-  return env.WEB_URL.replace(/\/$/, '')
-}
-function createSetupToken(machineId?: string): { token: string; expiresAt: number; fingerprint: string } {
-  const store = new E2eeStore()
-  store.init()
-  return store.createSetupToken(machineId)
-}
-function setupBrowserLink(machineId: string, token: string): string {
-  const u = new URL(`${webBase()}/machine/${machineId}`)
-  u.hash = `setup=browser&t=${encodeURIComponent(token)}`
-  return u.toString()
 }
 
 /** One control-plane call, returning the backend's `data` envelope; throws on a non-2xx / bad body.
@@ -3928,10 +3914,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       return { status: codeMap[r.error] ?? 400, body: { error: r.error } }
     },
-    onSetupLink: () => {
-      const r = backend.createSetupToken()
-      return { status: 200, body: { url: setupBrowserLink(backend.machineId, r.token), expiresAt: r.expiresAt, fingerprint: r.fingerprint } }
-    },
     onListPairs: () => ({ status: 200, body: { pairs: backend.listPairs() } }),
     onRevoke: (id) => {
       const r = backend.revoke(id)
@@ -6386,33 +6368,6 @@ async function pairCommand(code: string | undefined): Promise<void> {
   process.exit(1)
 }
 
-/** `harness browser-link` — print a reusable 7-day browser setup link for the current machine. */
-async function browserLinkCommand(): Promise<void> {
-  const session = readAuthSession()
-  if (!session?.machineId) { console.error('\n  ✗ This computer is not signed in. Run: harness login\n'); process.exit(1) }
-  const agentId = session.machineId
-  let url = ''
-  try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/e2ee/setup-link`, {
-      method: 'POST',
-      headers: { 'x-adapter-local': '1' },
-    })
-    if (res.ok) {
-      const body = (await res.json().catch(() => null)) as { url?: unknown; expiresAt?: unknown; fingerprint?: unknown } | null
-      if (typeof body?.url === 'string') url = body.url
-    }
-  } catch { /* fall back to disk-backed token below */ }
-  if (!url) {
-    const setup = createSetupToken(agentId)
-    url = setupBrowserLink(agentId, setup.token)
-  }
-  console.log('\n  Reusable browser setup link (valid for 7 days):\n')
-  console.log(`    ${url}\n`)
-  console.log('  Anyone with this link can pair a browser until it expires. Keep it private.\n')
-  if (!readPid()) console.log('  Start the adapter with `harness start` if the browser cannot connect.\n')
-  process.exit(0)
-}
-
 /** `harness pairings` — list the browsers paired for end-to-end encryption. */
 async function pairingsCommand(): Promise<void> {
   const { res, json } = await daemonCall('GET', '/api/pairs')
@@ -6519,9 +6474,8 @@ function promptPassword(prompt: string): Promise<string> {
  *  shared secret `harness link connect <machineId>` on another machine proves knowledge of, to link
  *  to this one. Not single-use and does not expire — stays valid until explicitly changed/cleared.
  *  Prefers the running daemon (so an in-progress `link connect` from elsewhere sees it immediately);
- *  falls back to writing the disk-backed store directly when no daemon is running, same fallback
- *  shape as `browserLinkCommand`. `--stdin` reads one line with no confirmation (for scripts/GUIs);
- *  interactively it prompts twice (masked) and requires the two to match. */
+ *  falls back to writing the disk-backed store directly when no daemon is running. `--stdin` reads
+ *  one line with no confirmation (for scripts/GUIs); interactively it prompts twice (masked) and requires the two to match. */
 async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<void> {
   const session = readAuthSession()
   if (!session?.machineId) {
@@ -7130,12 +7084,11 @@ switch (cmd) {
     pairCommand(args[0]).catch(onError)
     break
   case 'browser-link':
-    browserLinkCommand().catch(onError)
-    break
   case 'e2ee-link':
-    console.error('(note: "harness e2ee-link" is deprecated — use "harness browser-link")')
-    browserLinkCommand().catch(onError)
-    break
+    // Browser setup links served the retired web client. Said plainly rather than falling to "unknown
+    // command", for anyone following an old doc.
+    console.error(`\n  ✗ harness ${cmd} was removed: the web client is retired. Use the desktop or phone app.\n`)
+    process.exit(1)
   case 'pairings':
     pairingsCommand().catch(onError)
     break

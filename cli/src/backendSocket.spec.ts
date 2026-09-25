@@ -435,14 +435,14 @@ describe('BackendSocket outbound queue', () => {
     ws.open()
 
     const frame = {
-      type: 'e2e_setup_claim',
-      payload: { requestId: 'setup-1', token: 'signed-setup-token' },
+      type: 'e2e_status',
+      payload: { requestId: 'status-1' },
     }
     ws.message({ t: 'down', connId: 'web-1', frame })
 
     await vi.waitFor(() => expect(handle).toHaveBeenCalledWith('web-1', frame))
     expect(parseSent(ws).some((item) =>
-      (item.frame as { type?: string } | undefined)?.type === 'e2e_setup_claim_result',
+      (item.frame as { type?: string } | undefined)?.type === 'e2e_status_result',
     )).toBe(false)
     await socket.stop()
   })
@@ -2569,6 +2569,12 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await dispatch({ type: 'x\n2026-09-25 [backend] forged', payload: {} }, 'web-1')
     expect(warn.mock.calls.flat().join(' ')).not.toContain('\n2026')
+  })
+
+  it('answers a sealed e2ee_browser_link_create UNSUPPORTED — setup links are gone', async () => {
+    const { socket, replies, dispatch } = harness()
+    await dispatch(sealedDown(socket, 'web-1', 'e2ee_browser_link_create', { requestId: 'r' }).frame, 'web-1')
+    expect(replies).toEqual([{ connId: 'web-1', type: 'e2ee_browser_link_create', payload: { error: 'UNSUPPORTED' } }])
   })
 
   it('leaves trusted local clients in cleartext', async () => {

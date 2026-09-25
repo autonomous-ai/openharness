@@ -95,8 +95,6 @@ export interface HookServerHandlers {
   }) => void
   /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
   onPair?: (code: string) => Promise<PairOutcome>
-  /** `adapter browser-link` — mint a setup-link token from the running daemon. */
-  onSetupLink?: () => PairOutcome
   /** `harness pairings` — list E2EE-paired browsers. */
   onListPairs?: () => PairOutcome
   /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
@@ -604,14 +602,6 @@ export function startHookServer(
         try { const out = await handlers.onPair(body.code); json(out.status, out.body) }
         catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
         return
-      }
-
-      // `harness browser-link` → mint a reusable 7-day setup token using the running daemon's E2EE
-      // identity. The signed token is self-contained, so it remains valid across daemon restarts.
-      if (req.method === 'POST' && url === '/api/e2ee/setup-link') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSetupLink) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onSetupLink(); json(out.status, out.body); return
       }
 
       // `harness remote-password set` → stretch + persist a new persistent remote password on the

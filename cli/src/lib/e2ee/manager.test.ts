@@ -182,69 +182,12 @@ async function fullPair(h: ReturnType<typeof machine>, conn: string): Promise<We
 }
 
 describe('E2eeManager pairing', () => {
-  it('setup-link claim auto-pairs the browser, then hello establishes a session', () => {
-    const h = machine()
+  it('pairs nobody from an e2e_setup_claim — browser setup links were removed with the web client', () => {
+    const { mgr, sent } = machine()
     const web = new WebPeer()
-    const conn = 'setup1'
-    const setup = h.mgr.createSetupToken()
-    const claim = {
-      type: 'e2e_setup_claim',
-      payload: {
-        requestId: 'setup-r1',
-        token: setup.token,
-        identityPub: C.b64e(web.identity.pub),
-        label: 'Chrome · macOS',
-        sig: C.b64e(C.setupClaimSig(web.identity.priv, AGENT, setup.token, web.identity.pub)),
-      },
-    }
-
-    h.mgr.handleFrame(conn, claim)
-    const result = h.lastFor(conn, 'e2e_setup_claim_result')!.payload as Record<string, unknown>
-    expect(result).toMatchObject({ ok: true, requestId: 'setup-r1', fingerprint: h.mgr.fingerprint() })
-    expect(h.mgr.listPaired()[0].fingerprint).toBe(C.fingerprint(web.identity.pub))
-
-    h.mgr.handleFrame(conn, web.hello())
-    web.adapterPub = C.b64d(C.verifySetupToken(setup.token)!.payload.pub)
-    web.onWelcome(h.lastFor(conn, 'e2e_welcome')!, web.adapterPub)
-    expect(h.mgr.hasSession(conn)).toBe(true)
-  })
-
-  it('one setup link pairs multiple browsers and establishes an E2EE session for each', () => {
-    const h = machine()
-    const web1 = new WebPeer()
-    const web2 = new WebPeer()
-    const setup = h.mgr.createSetupToken()
-    h.mgr.handleFrame('setup-a', {
-      type: 'e2e_setup_claim',
-      payload: {
-        requestId: 'a',
-        token: setup.token,
-        identityPub: C.b64e(web1.identity.pub),
-        label: 'Chrome',
-        sig: C.b64e(C.setupClaimSig(web1.identity.priv, AGENT, setup.token, web1.identity.pub)),
-      },
-    })
-    h.mgr.handleFrame('setup-b', {
-      type: 'e2e_setup_claim',
-      payload: {
-        requestId: 'b',
-        token: setup.token,
-        identityPub: C.b64e(web2.identity.pub),
-        label: 'Firefox',
-        sig: C.b64e(C.setupClaimSig(web2.identity.priv, AGENT, setup.token, web2.identity.pub)),
-      },
-    })
-    expect(h.lastFor('setup-a', 'e2e_setup_claim_result')!.payload).toMatchObject({ ok: true })
-    expect(h.lastFor('setup-b', 'e2e_setup_claim_result')!.payload).toMatchObject({ ok: true })
-    expect(h.mgr.listPaired().length).toBe(2)
-
-    const adapterPub = C.b64d(C.verifySetupToken(setup.token)!.payload.pub)
-    h.mgr.handleFrame('setup-a', web1.hello())
-    web1.onWelcome(h.lastFor('setup-a', 'e2e_welcome')!, adapterPub)
-    h.mgr.handleFrame('setup-b', web2.hello())
-    web2.onWelcome(h.lastFor('setup-b', 'e2e_welcome')!, adapterPub)
-    expect(h.mgr.hasSession('setup-a')).toBe(true)
-    expect(h.mgr.hasSession('setup-b')).toBe(true)
+    mgr.handleFrame('claim-1', { type: 'e2e_setup_claim', payload: { requestId: 'r', token: 'x', identityPub: C.b64e(web.identity.pub), sig: 'x' } })
+    expect(mgr.listPaired()).toEqual([])
+    expect(sent.some((s) => s.frame.type === 'e2e_setup_claim_result')).toBe(false)
   })
 
   it('completes a full pairing, pins the browser, and establishes a session + group key', async () => {

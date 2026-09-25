@@ -776,9 +776,6 @@ export class BackendSocket {
   e2eeFingerprint(): string {
     return this.e2ee.fingerprint()
   }
-  createSetupToken(): ReturnType<E2eeManager['createSetupToken']> {
-    return this.e2ee.createSetupToken()
-  }
   /** `harness pairings` — list paired clients. */
   listPairs(): ReturnType<E2eeManager['listPaired']> {
     return this.e2ee.listPaired()
@@ -1700,12 +1697,6 @@ export class BackendSocket {
         case 'e2ee_pairings_unpair_all':
           this.e2ee.revokeAllFromTrustedWeb(connId, requestId)
           return
-
-        case 'e2ee_browser_link_create': {
-          const setup = this.e2ee.createSetupToken()
-          reply(type, requestId, setup)
-          return
-        }
 
         case 'agents_list': {
           const projects = await Promise.all(registry.advertised().map((s) => this.toProject(s)))

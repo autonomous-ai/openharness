@@ -318,3 +318,13 @@ describe('/api/status', () => {
     expect(await response.json()).toEqual({ pid: process.pid, connected: false, restarting: false, discoveryReady: true })
   })
 })
+
+describe('browser setup links are gone', () => {
+  // They served the retired web client; the route that minted them must not come back.
+  it('mints nothing at the old /api/e2ee/setup-link route', async () => {
+    const { base } = await start()
+    const response = await fetch(`${base}/api/e2ee/setup-link`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
+    expect(response.status).not.toBe(200)
+    expect(await response.text()).not.toContain('setup=browser')
+  })
+})

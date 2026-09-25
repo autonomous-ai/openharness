@@ -197,21 +197,6 @@ done
 AGENT_SUMMARY="$(curl --silent --fail -H 'x-adapter-local: 1' "http://127.0.0.1:${CLI_PORT}/api/status" \
   | jq -r '.sessions | map(.engine + ":" + .name) | join(", ")')"
 
-browser_link_output="$(
-  cd "$HARNESS_ROOT/cli"
-  env \
-    BACKEND_WS_URL="$WS_BASE_URL" \
-    WEB_URL="$API_BASE_URL" \
-    ADAPTER_DATA_DIR="$RUN_ROOT/adapter-data" \
-    PORT="$CLI_PORT" \
-    ANALYTICS_ENABLED=false \
-    ADAPTER_UPDATE_DISABLE=true \
-    ./node_modules/.bin/tsx src/cli.ts browser-link
-)"
-setup_url="$(printf '%s\n' "$browser_link_output" | sed -nE 's/^[[:space:]]*(http[^[:space:]]+)[[:space:]]*$/\1/p' | head -1)"
-[[ -n "$setup_url" ]] || { echo "Harness did not return a setup link" >&2; exit 75; }
-SETUP_TOKEN="$(node -e 'const u=new URL(process.argv[1]); const t=new URLSearchParams(u.hash.slice(1)).get("t"); if (!t) process.exit(1); process.stdout.write(t)' "$setup_url")"
-
 echo
 echo "LOCAL TERMINAL MANUAL STACK READY"
 echo "  Backend  $API_BASE_URL"
@@ -233,5 +218,4 @@ flutter run -d macos -t lib/main_local_manual.dart \
   --dart-define=LOCAL_MANUAL_API_BASE_URL="$API_BASE_URL" \
   --dart-define=LOCAL_MANUAL_API_KEY="$API_KEY" \
   --dart-define=LOCAL_MANUAL_MACHINE_ID="$MACHINE_ID" \
-  --dart-define=LOCAL_MANUAL_MACHINE_NAME=local-terminal-e2e \
-  --dart-define=LOCAL_MANUAL_SETUP_TOKEN="$SETUP_TOKEN"
+  --dart-define=LOCAL_MANUAL_MACHINE_NAME=local-terminal-e2e
