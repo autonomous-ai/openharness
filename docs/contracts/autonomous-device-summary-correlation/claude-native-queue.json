@@ -1,0 +1,346 @@
+{
+  "description": "Redacted structural capture of Claude Code 2.1.263 Lamp failure, 2026-09-25. No new engine task. Node IDs, content and tool payloads anonymized; parent chain and record kinds preserved.",
+  "inputs": [
+    "Paint four planes red.",
+    "Correction: only paint two planes red."
+  ],
+  "records": [
+    {
+      "type": "user",
+      "timestamp": "2026-09-25T02:22:08.844Z",
+      "isSidechain": false,
+      "uuid": "node-0",
+      "parentUuid": "previous-turn",
+      "message": {
+        "role": "user",
+        "content": "Paint four planes red."
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:22:08.844Z",
+      "isSidechain": false,
+      "uuid": "node-1",
+      "parentUuid": "node-0",
+      "attachment": {
+        "type": "total_tokens_reminder"
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-25T02:22:13.997Z",
+      "isSidechain": false,
+      "uuid": "node-2",
+      "parentUuid": "node-1",
+      "message": {
+        "id": "msg_011CfPMsRDDeQeLM3HWEK6nX",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool-redacted",
+            "name": "Bash",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-09-25T02:22:26.743Z",
+      "operation": "enqueue",
+      "content": "Correction: only paint two planes red."
+    },
+    {
+      "type": "queue-operation",
+      "timestamp": "2026-09-25T02:22:42.479Z",
+      "operation": "remove",
+      "content": "Correction: only paint two planes red.",
+      "reason": "absorbed_mid_turn"
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:22:14.034Z",
+      "isSidechain": false,
+      "uuid": "node-5",
+      "parentUuid": "node-2",
+      "attachment": {
+        "type": "hook_success"
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-09-25T02:22:42.473Z",
+      "isSidechain": false,
+      "uuid": "node-6",
+      "parentUuid": "node-2",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "tool-redacted",
+            "content": "Tool completed."
+          }
+        ]
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:22:42.466Z",
+      "isSidechain": false,
+      "uuid": "node-7",
+      "parentUuid": "node-6",
+      "attachment": {
+        "type": "hook_success"
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:22:26.743Z",
+      "isSidechain": false,
+      "uuid": "node-8",
+      "parentUuid": "node-7",
+      "attachment": {
+        "type": "queued_command",
+        "prompt": "Correction: only paint two planes red.",
+        "commandMode": "prompt",
+        "origin": {
+          "kind": "human"
+        },
+        "source_uuid": "queued-source-B"
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:22:42.479Z",
+      "isSidechain": false,
+      "uuid": "node-9",
+      "parentUuid": "node-8",
+      "attachment": {
+        "type": "total_tokens_reminder"
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-25T02:22:45.427Z",
+      "isSidechain": false,
+      "uuid": "node-10",
+      "parentUuid": "node-9",
+      "message": {
+        "id": "msg_011CfPMusfEtFVd5aR9gbJ51",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "text",
+            "text": "Applying correction."
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-25T02:22:50.170Z",
+      "isSidechain": false,
+      "uuid": "node-11",
+      "parentUuid": "node-10",
+      "message": {
+        "id": "msg_011CfPMusfEtFVd5aR9gbJ51",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool-redacted",
+            "name": "Bash",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:22:50.228Z",
+      "isSidechain": false,
+      "uuid": "node-12",
+      "parentUuid": "node-11",
+      "attachment": {
+        "type": "hook_success"
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-09-25T02:23:18.525Z",
+      "isSidechain": false,
+      "uuid": "node-13",
+      "parentUuid": "node-11",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "tool-redacted",
+            "content": "Tool completed."
+          }
+        ]
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:18.517Z",
+      "isSidechain": false,
+      "uuid": "node-14",
+      "parentUuid": "node-13",
+      "attachment": {
+        "type": "hook_success"
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:18.530Z",
+      "isSidechain": false,
+      "uuid": "node-15",
+      "parentUuid": "node-14",
+      "attachment": {
+        "type": "total_tokens_reminder"
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:18.531Z",
+      "isSidechain": false,
+      "uuid": "node-16",
+      "parentUuid": "node-15",
+      "attachment": {
+        "type": "batching_reminder_sent"
+      }
+    },
+    {
+      "type": "last-prompt"
+    },
+    {
+      "type": "ai-title"
+    },
+    {
+      "type": "mode"
+    },
+    {
+      "type": "permission-mode"
+    },
+    {
+      "type": "atis-latch"
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-25T02:23:21.461Z",
+      "isSidechain": false,
+      "uuid": "node-22",
+      "parentUuid": "node-16",
+      "message": {
+        "id": "msg_011CfPMxZskCY97NtvfmVPc2",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool-redacted",
+            "name": "Bash",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:21.506Z",
+      "isSidechain": false,
+      "uuid": "node-23",
+      "parentUuid": "node-22",
+      "attachment": {
+        "type": "hook_success"
+      }
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-09-25T02:23:21.583Z",
+      "isSidechain": false,
+      "uuid": "node-24",
+      "parentUuid": "node-22",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "tool-redacted",
+            "content": "Tool completed."
+          }
+        ]
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:21.582Z",
+      "isSidechain": false,
+      "uuid": "node-25",
+      "parentUuid": "node-24",
+      "attachment": {
+        "type": "hook_success"
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:21.594Z",
+      "isSidechain": false,
+      "uuid": "node-26",
+      "parentUuid": "node-25",
+      "attachment": {
+        "type": "total_tokens_reminder"
+      }
+    },
+    {
+      "type": "attachment",
+      "timestamp": "2026-09-25T02:23:21.597Z",
+      "isSidechain": false,
+      "uuid": "node-27",
+      "parentUuid": "node-26",
+      "attachment": {
+        "type": "batching_reminder_sent"
+      }
+    },
+    {
+      "type": "last-prompt"
+    },
+    {
+      "type": "ai-title"
+    },
+    {
+      "type": "mode"
+    },
+    {
+      "type": "permission-mode"
+    },
+    {
+      "type": "atis-latch"
+    },
+    {
+      "type": "assistant",
+      "timestamp": "2026-09-25T02:23:26.780Z",
+      "isSidechain": false,
+      "uuid": "node-33",
+      "parentUuid": "node-27",
+      "message": {
+        "id": "msg_011CfPMxmyWjnS5SWf5KYDht",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [
+          {
+            "type": "text",
+            "text": "Finished: two red planes and two blue planes."
+          }
+        ]
+      }
+    }
+  ]
+}

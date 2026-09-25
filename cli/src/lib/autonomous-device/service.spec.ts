@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { AUTONOMOUS_DEVICE_CAPABILITIES, AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
 
+// Legacy-engine fixture retains the original lifecycle contract; native evidence has its own results suite.
 function fixture(now?: () => number, fullAnswer?: string) {
   const submit = vi.fn(), stop = vi.fn(async () => true), answer = vi.fn(async () => true)
   const events: AutonomousDeviceFrame[] = []
-  const service = new AutonomousDeviceService({ now, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Project', engine: 'claude', state: 'idle' }],
+  const service = new AutonomousDeviceService({ now, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Project', engine: 'commandcode', state: 'idle' }],
     submit, stop, answer, cancelDelivery: vi.fn(() => true), recent: () => [], fullText: () => fullAnswer, emit: f => events.push(f) })
   const send = (fields: Record<string, unknown> = {}) => ({ type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', text: 'hello', idempotencyKey: 'intent1', ...fields })
   return { service, submit, stop, answer, events, send }
