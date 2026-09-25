@@ -23,6 +23,13 @@
          microphone is the only permission it needs. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Holding the machine socket open while the app is in another app's shadow: without a
+         foreground service Android freezes the process (~30s on a Pixel 8 Pro), the backend's
+         liveness ping goes unanswered, and coming back costs a full redial. `dataSync` is the
+         type that fits — and the one Android 14 caps at six hours a day, which is why the hold
+         expires on its own. See AwakeService.kt. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <application
         android:label="Harness"
         android:name="${applicationName}"
@@ -49,6 +56,11 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Not exported: nothing outside the app has any business holding this. -->
+        <service
+            android:name=".AwakeService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
