@@ -14,8 +14,8 @@ async function git(cwd: string, args: string[]): Promise<string> {
 
 /**
  * Names a worktree's branch after its session, once: `brave-otter`, made up at Start, becomes
- * `worktree-and-branches-organization` when the session first has a name. A name a local or remote
- * branch already has gets `-2`. Only a branch Harness
+ * `worktree-branches` (two words of `Worktree and branches organization`) when the session first has
+ * a name. A name a local or remote branch already has gets `-2`, so it stays two words. Only a branch Harness
  * marked as a placeholder, with no upstream, is renamed; the mark goes with it, so a later session name,
  * a push, or a rename by the person or the agent is never overridden. Returns the new name, if any.
  */

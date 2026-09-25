@@ -98,11 +98,34 @@ export function worktreeFolderName(branch: string): string {
   return name ? name.slice(0, 64) : 'worktree'
 }
 
-/** A session's name as a branch's last part: `Worktree and branches organization` →
- *  `worktree-and-branches-organization`, cut at a word to 48 characters. Null when nothing is left. */
+/** Words a branch name can do without: they join a title's words, they do not tell branches apart. */
+const BRANCH_FILLER = new Set([
+  'a', 'an', 'the', 'and', 'or', 'of', 'to', 'for', 'in', 'on', 'at', 'by', 'with', 'from', 'into', 'as', 'is',
+])
+
+/** What a title's first word usually is, and what every branch would otherwise start with. The PR title
+ *  keeps the verb; the branch keeps what it is about. */
+const BRANCH_VERBS = new Set([
+  'fix', 'add', 'update', 'make', 'improve', 'refine', 'build', 'implement', 'support', 'handle', 'remove',
+  'change', 'move', 'allow', 'create', 'use', 'show', 'let', 'set', 'get', 'enable', 'disable', 'rename',
+  'refactor', 'clean', 'debug', 'investigate', 'review', 'help', 'write', 'test', 'discuss', 'explore',
+  'plan', 'research', 'try', 'check',
+])
+
+/** A session's name as a branch's last part, in two words: `Worktree and branches organization` →
+ *  `worktree-branches`, `Fix the harness list order` → `harness-list`. Filler words and a leading
+ *  verb go first (a title that is only a verb keeps it). One word is capped at 24 characters. Null
+ *  when nothing meaningful is left, and the placeholder branch stays. */
 export function sessionBranchSlug(title: string | null | undefined): string | null {
-  let slug = (title ?? '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-  if (slug.length > 48) slug = slug.slice(0, 48).replace(/-[^-]*$/, '') || slug.slice(0, 48)
+  // NFKD splits `é` into `e` and its accent; the accent goes, or it would split the word in two.
+  const words = (title ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    .split(/[^a-z0-9]+/).filter(Boolean)
+  const meaningful = words.filter(word => !BRANCH_FILLER.has(word))
+  while (meaningful.length > 1 && BRANCH_VERBS.has(meaningful[0]!)) meaningful.shift()
+  // A lone number (`0` of 0.3.1, `2` of "Part 2") says nothing beside a word that does.
+  const worded = meaningful.filter(word => !/^\d+$/.test(word))
+  const picked = (worded.length ? worded : meaningful).slice(0, 2)
+  const slug = picked.map(word => word.slice(0, 24)).join('-')
   return slug || null
 }
 
