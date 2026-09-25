@@ -88,6 +88,8 @@ pub struct App {
     pub last_click: Option<(u64, u16, u16, Instant, u8)>,
     /// What the outer terminal's title was last set to.
     pub title: String,
+    pub first_frame: bool,
+    pub fleet_marked: bool,
 }
 
 impl App {
@@ -128,6 +130,8 @@ impl App {
             selecting: None,
             last_click: None,
             title: String::new(),
+            first_frame: false,
+            fleet_marked: false,
         }
     }
 
@@ -285,6 +289,17 @@ impl App {
     pub fn relist(&mut self, machine_id: &str) {
         let Some(link) = self.link(machine_id) else { return };
         let id = machine_id.to_string();
+        // Live harnesses first: the daemon answers those in milliseconds, while the list with every
+        // paused one costs it most of a second. Paint what is running, then fold the rest in.
+        let fast = link.clone();
+        let fast_id = id.clone();
+        self.spawn(async move { fast.rpc("agents_list", json!({}), Duration::from_secs(20)).await }, move |app, reply| {
+            if let Ok(reply) = reply {
+                let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
+                app.fleet.merge_roster(&fast_id, &rows);
+                app.sync_titles();
+            }
+        });
         self.spawn(async move { link.rpc("agents_list", json!({ "includeStopped": true }), Duration::from_secs(20)).await }, move |app, reply| {
             if let Ok(reply) = reply {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
