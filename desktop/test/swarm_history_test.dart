@@ -163,6 +163,7 @@ void main() {
           terminalAvailable: true,
         ),
       ];
+      final kept = app.adoptSessionForTest(terminal('a1', []));
       final pane = app.adoptSessionForTest(terminal('a0', []));
       final origin = app.activeSwarm;
       final projects = SwarmProjectStore();
@@ -202,7 +203,7 @@ void main() {
       await reply.future;
       await tester.pump();
       expect(app.activeSwarm, same(origin));
-      expect(app.panes.single.agentId, 'a0');
+      expect(app.panes.map((pane) => pane.agentId), [kept.agentId, 'a0']);
       expect(app.closedHistory, isEmpty);
       await app.closeSwarm(origin.id);
       await tester.pump();

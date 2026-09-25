@@ -533,6 +533,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.scheduleFrame();
   }
 
+  bool _checkingLaunch = false;
+
   Future<void> _start() async {
     if (box.busy) return;
     if (box.requiredChoice case final choice?) {
@@ -543,6 +545,7 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
       _revealRow();
       return;
     }
+    _checkingLaunch = box.checking;
     final outcome = await box.create();
     if (!mounted) return;
     switch (outcome) {
@@ -1057,13 +1060,16 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
   /// The launch action uses plain text on the label column and the same
   /// single-row highlight as the fields. It is selected when the form opens.
   Widget _buildButton() {
-    final on = _row == _Row.start && !_picking;
-    final label = _value(_Row.start);
+    final on = box.busy || (_row == _Row.start && !_picking);
+    final label = box.busy
+        ? (_checkingLaunch ? 'Checking...' : 'Starting...')
+        : _value(_Row.start);
     return Semantics(
       key: const ValueKey('new-harness-field-start'),
       container: true,
       button: true,
       label: label,
+      liveRegion: box.busy,
       excludeSemantics: true,
       selected: on,
       enabled: !box.busy && !box.linkingProfile && box.requiredChoice == null,
@@ -1085,17 +1091,19 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             padding: EdgeInsets.symmetric(horizontal: _margin),
             height: _rowHeight,
             alignment: Alignment.centerLeft,
-            child: Text(
-              label,
-              maxLines: 1,
-              softWrap: false,
-              overflow: TextOverflow.clip,
-              style: _ink(
-                box.requiredChoice != null || _picking
-                    ? _faint
-                    : _theme.foreground,
-              ),
-            ),
+            child: box.busy
+                ? _LaunchProgress(label: label, style: _ink(_theme.foreground))
+                : Text(
+                    label,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.clip,
+                    style: _ink(
+                      box.requiredChoice != null || _picking
+                          ? _faint
+                          : _theme.foreground,
+                    ),
+                  ),
           ),
         ),
       ),
@@ -1257,6 +1265,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
                     : 'The first install takes a few minutes.',
                 color: _faint,
               ),
+              SizedBox(height: _rowHeight),
+              _buildButton(),
             ],
           ),
         ),
@@ -1697,4 +1707,51 @@ class _ElapsedState extends State<_Elapsed> {
       style: widget.style,
     );
   }
+}
+
+/// Animate only the busy action, at terminal speed, without rebuilding the form.
+class _LaunchProgress extends StatefulWidget {
+  const _LaunchProgress({required this.label, required this.style});
+
+  final String label;
+  final TextStyle style;
+
+  @override
+  State<_LaunchProgress> createState() => _LaunchProgressState();
+}
+
+class _LaunchProgressState extends State<_LaunchProgress> {
+  static const _frames = ['|', '/', '-', '\\'];
+  Timer? _timer;
+  int _frame = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context) ||
+        !TickerMode.valuesOf(context).enabled) {
+      _timer?.cancel();
+      _timer = null;
+    } else {
+      _timer ??= Timer.periodic(const Duration(milliseconds: 160), (_) {
+        setState(() => _frame = (_frame + 1) % _frames.length);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Text(
+    '${_frames[_frame]} ${widget.label}',
+    key: const ValueKey('new-harness-progress'),
+    maxLines: 1,
+    softWrap: false,
+    overflow: TextOverflow.clip,
+    style: widget.style,
+  );
 }

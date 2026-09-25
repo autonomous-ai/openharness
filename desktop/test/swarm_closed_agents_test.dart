@@ -30,6 +30,7 @@ void main() {
         ),
       ];
       app.renameSwarm(app.activeSwarmId, 'Work');
+      app.adoptSessionForTest(terminal('a1', []));
       await app.addAgentToSwarm('m', 'a0');
       await app.closePane(app.focusedPaneId!);
       final agentId = app.closedHistory.single.historyId;
@@ -252,6 +253,7 @@ void main() {
   test('with many tabs open, agent and tab recovery both still fit', () async {
     final app = createApp();
     addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a1');
     await app.addAgentToSwarm('m', 'a0');
     final origin = app.activeSwarmId;
     await app.closePane(app.focusedPaneId!);
@@ -265,7 +267,7 @@ void main() {
     expect(app.canReopenClosed(agentId), isTrue);
     expect(app.reopenClosed(historyId: agentId), isTrue);
     expect(app.activeSwarmId, origin);
-    expect(app.panes.single.agentId, 'a0');
+    expect(app.panes.map((pane) => pane.agentId), ['a1', 'a0']);
     expect(app.swarms, hasLength(30));
   });
 
@@ -274,6 +276,7 @@ void main() {
     () async {
       final app = createApp();
       addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a1');
       await app.addAgentToSwarm('m', 'a0');
       await app.closePane(app.focusedPaneId!);
       final id = app.closedHistory.single.historyId;
@@ -344,6 +347,7 @@ void main() {
       final app = createApp();
       addTearDown(app.dispose);
       for (var i = 0; i < 30; i++) {
+        await app.addAgentToSwarm('m', 'a1');
         await app.addAgentToSwarm('m', 'a0');
         await app.closePane(app.focusedPaneId!);
         app.renameSwarm(app.activeSwarmId, 'Work $i');
@@ -371,7 +375,7 @@ void main() {
     expect(app.closedHistory, hasLength(1));
     expect(app.reopenClosed(), isTrue);
     await tester.pump();
-    expect(app.activeSwarm, same(origin));
+    expect(app.activeSwarmId, origin.id);
     expect(app.panes.single.agentId, 'a0');
     expect(app.closedHistory, isEmpty);
     await tester.pumpWidget(const SizedBox());
