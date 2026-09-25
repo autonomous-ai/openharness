@@ -341,7 +341,8 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
             _ if m.online() => ("○", theme::SOFT, "online".into()),
             _ => ("○", theme::MUTED, "offline".into()),
         };
-        let counts = if waiting > 0 { format!("{running} running · {waiting} waiting") } else { format!("{running} running") };
+        let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
+        let counts = if waiting > 0 { format!("{rtt}{running} running · {waiting} waiting") } else { format!("{rtt}{running} running") };
         Row::new(m.id.clone(), m.name.clone()).extra(m.status.clone())
             .lead(vec![span(dot, fg(color)), span(" ", Style::default())])
             .detail(vec![span(word, fg(color))])
