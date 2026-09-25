@@ -169,6 +169,7 @@ impl App {
     // ── start: this machine, the account's machines, the desk ─────────────────
 
     pub fn boot(&mut self) {
+        if self.fleet.agents.is_empty() && self.fleet.machines.is_empty() { self.fleet.load_cache() }
         let port = self.port;
         self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, |app, status| match status {
             Ok(status) => {
@@ -998,6 +999,7 @@ impl App {
             if id == self.fleet.local_id || self.fleet.machine(&id).map(Machine::online).unwrap_or(false) { self.connect(&id) }
         }
         if self.tick % 120 == 0 { self.refresh_machines() }
+        if self.tick % 80 == 40 { self.fleet.save_cache() }
         if self.tick % 240 == 0 { let ids: Vec<String> = self.links.keys().cloned().collect(); for id in ids { self.relist(&id) } }
         if self.toast.as_ref().map(|t| now.duration_since(t.2) > Duration::from_secs(4)).unwrap_or(false) { self.toast = None }
         if let Some(Modal::Picker { picker, .. }) = &mut self.modal {

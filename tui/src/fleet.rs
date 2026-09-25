@@ -82,7 +82,10 @@ impl Agent {
     pub fn key(&self) -> (String, String) { (self.machine_id.clone(), self.id.clone()) }
 
     pub fn state(&self, machine: Option<&Machine>) -> State {
-        if machine.map(|m| !m.usable()).unwrap_or(false) || self.status == "offline" { return State::Offline }
+        // Offline only when the machine is known to be unreachable — not while it is still being
+        // dialled (a cached roster at startup), which lasts a second and is not news.
+        let down = machine.map(|m| matches!(m.reach, Reach::Offline | Reach::NeedsLink | Reach::Error(_)) || (!m.online() && !m.local)).unwrap_or(false);
+        if down || self.status == "offline" { return State::Offline }
         if self.status == "stopped" { return State::Paused }
         if self.launch == "starting" { return State::Starting }
         if self.launch == "failed" { return State::Failed }
@@ -239,6 +242,50 @@ impl Fleet {
     pub fn waiting(&self) -> usize { self.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").count() }
     pub fn working(&self) -> usize { self.agents.values().filter(|a| a.working && a.status != "stopped").count() }
     pub fn running(&self) -> usize { self.agents.values().filter(|a| a.status == "active").count() }
+}
+
+// ── the roster between runs ────────────────────────────────────────────────────
+
+fn cache_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui").join("fleet.json")
+}
+
+impl Fleet {
+    /// Last run's machines and harnesses — searchable the instant the TUI opens, replaced by the
+    /// live rosters as each machine answers.
+    pub fn load_cache(&mut self) {
+        let Ok(text) = std::fs::read_to_string(cache_path()) else { return };
+        let Ok(value) = serde_json::from_str::<Value>(&text) else { return };
+        for m in value.get("machines").and_then(Value::as_array).into_iter().flatten() {
+            let id = s(m, "id");
+            if id.is_empty() || self.machine(&id).is_some() { continue }
+            self.machines.push(Machine { name: s(m, "name"), local: m.get("local").and_then(Value::as_bool).unwrap_or(false), status: s(m, "status"), reach: Reach::Unknown, id });
+        }
+        for a in value.get("agents").and_then(Value::as_array).into_iter().flatten() {
+            let machine = s(a, "machine");
+            let row = a.get("row").cloned().unwrap_or(Value::Null);
+            let id = s(&row, "id");
+            if machine.is_empty() || id.is_empty() { continue }
+            let mut agent = agent_from(&machine, &row, None);
+            agent.active_at = a.get("activeAt").and_then(Value::as_u64).unwrap_or(0);
+            self.agents.entry((machine, id)).or_insert(agent);
+        }
+    }
+
+    pub fn save_cache(&self) {
+        if self.agents.is_empty() { return }
+        let machines: Vec<Value> = self.machines.iter().map(|m| serde_json::json!({ "id": m.id, "name": m.name, "local": m.local, "status": m.status })).collect();
+        let agents: Vec<Value> = self.agents.values().map(|a| serde_json::json!({
+            "machine": a.machine_id, "activeAt": a.active_at,
+            "row": { "id": a.id, "sessionId": a.session_id, "name": a.name, "engine": a.engine, "status": a.status,
+                     "launch": { "state": a.launch }, "selectedModel": a.model, "dshName": a.dsh,
+                     "project": { "cwd": a.cwd, "name": a.project, "branch": a.branch, "root": a.project_root } },
+        })).collect();
+        let path = cache_path();
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        let temp = path.with_extension("json.tmp");
+        if std::fs::write(&temp, serde_json::json!({ "machines": machines, "agents": agents }).to_string()).is_ok() { let _ = std::fs::rename(temp, path); }
+    }
 }
 
 /// "3m", "2h", "4d".
