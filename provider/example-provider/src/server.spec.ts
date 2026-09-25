@@ -449,3 +449,30 @@ describe('the method surface', () => {
     })
   })
 })
+
+describe('only servers are clients', () => {
+  it('refuses a request a browser made, whatever its credential', async () => {
+    await withServer('/bin/false', async (port) => {
+      for (const headers of [{ origin: 'http://rebind.example' }, { 'sec-fetch-site': 'same-origin' }] as Record<string, string>[]) {
+        const res = await fetch(`http://127.0.0.1:${port}/`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: 'Bearer test-key', ...headers },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent.list', params: {} }),
+        })
+        expect(res.status, JSON.stringify(headers)).toBe(403)
+      }
+      expect(await rpc(port, 'agent.list', {})).toHaveProperty('agents')
+    })
+  })
+
+  it('refuses a body past the request size limit instead of buffering it', async () => {
+    await withServer('/bin/false', async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer test-key' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent.list', params: { pad: 'x'.repeat(2 * 1024 * 1024) } }),
+      }).catch(() => null)
+      expect(res?.status).toBe(413)
+    })
+  })
+})
