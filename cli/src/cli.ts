@@ -4334,6 +4334,39 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (overrides.gridLaunchRecord) registry.setGridLaunch(agentId, overrides.gridLaunchRecord)
   }
 
+  /**
+   * The permission this relaunch can actually ask for. Nobody is waiting on a restart, a retarget, a
+   * restore or a resume, so an engine that no longer takes the row's flag costs it the mode, not the
+   * harness — the alternative is a pane of help text, or no pane at all (openharness#285).
+   *
+   * The row is NOT rewritten. `permissionMode` is the person's recorded choice and `setPermissionMode`
+   * is fill-only for that reason; an engine put back the way it was gets Auto again on the next
+   * relaunch, with nobody having to ask for it twice. The row stops CLAIMING the mode on its own:
+   * discovery re-derives `bypassPermission` from the live argv on every pass (`setBypassPermission`
+   * above), so a launch without the flag reads as one within a reconcile.
+   *
+   * ⚠️ DECLARED BEFORE THE RESTORE PASS, and it has to stay there. `restoreAgents` runs during
+   * start-up and calls `buildLaunch` for every pane it rebuilds, which asks this — and a `const`
+   * declared further down the function is still in its dead zone then, so the daemon died on boot
+   * with `Cannot access 'downgradedPermission' before initialization` on any machine that had a
+   * pane to restore. Everything it needs is imported; it closes over nothing local.
+   */
+  const downgradedPermission = async (
+    session: RegisteredSession,
+    bypassPermission: boolean,
+    what: string,
+  ): Promise<{ permissionMode?: string | null; bypassPermission?: boolean }> => {
+    const { choice, droppedFlag } = await dropPermissionFlagIfUnsupported(session.engine, {
+      permissionMode: session.permissionMode ?? null,
+      bypassPermission,
+    })
+    if (droppedFlag) {
+      console.warn(`[agent] ${what} ${sid(session.agentId)} · ${session.engine} does not take ${droppedFlag}`
+        + ` · starting in Ask · update ${session.engine} to get ${session.permissionMode ?? 'Auto'} back`)
+    }
+    return choice
+  }
+
   const prepareSessionResume = (session: RegisteredSession): void => {
     const repair = prepareCodexResume(session)
     if (repair.repairedItems) {
@@ -4992,33 +5025,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const current = registry.byAgent(session.agentId)
     return !!current && current.registeredAt === session.registeredAt
       && current.tmuxPane === session.tmuxPane && current.engine === session.engine
-  }
-
-  /**
-   * The permission this relaunch can actually ask for. Nobody is waiting on a restart, a retarget, a
-   * restore or a resume, so an engine that no longer takes the row's flag costs it the mode, not the
-   * harness — the alternative is a pane of help text, or no pane at all (openharness#285).
-   *
-   * The row is NOT rewritten. `permissionMode` is the person's recorded choice and `setPermissionMode`
-   * is fill-only for that reason; an engine put back the way it was gets Auto again on the next
-   * relaunch, with nobody having to ask for it twice. The row stops CLAIMING the mode on its own:
-   * discovery re-derives `bypassPermission` from the live argv on every pass (`setBypassPermission`
-   * above), so a launch without the flag reads as one within a reconcile.
-   */
-  const downgradedPermission = async (
-    session: RegisteredSession,
-    bypassPermission: boolean,
-    what: string,
-  ): Promise<{ permissionMode?: string | null; bypassPermission?: boolean }> => {
-    const { choice, droppedFlag } = await dropPermissionFlagIfUnsupported(session.engine, {
-      permissionMode: session.permissionMode ?? null,
-      bypassPermission,
-    })
-    if (droppedFlag) {
-      console.warn(`[agent] ${what} ${sid(session.agentId)} · ${session.engine} does not take ${droppedFlag}`
-        + ` · starting in Ask · update ${session.engine} to get ${session.permissionMode ?? 'Auto'} back`)
-    }
-    return choice
   }
 
   const paneSwapDeps = (
