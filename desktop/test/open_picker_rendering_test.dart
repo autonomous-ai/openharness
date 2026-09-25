@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -101,7 +102,7 @@ void main() {
           tester.getSize(find.byKey(ValueKey(search.selected!.id))).height,
           closeTo(cell.height, .01),
         );
-        expect(field.cursorWidth, closeTo(cell.width, .01));
+        expect(field.cursorWidth, 2);
         final rowTitles = tester.widgetList<SearchResultText>(
           find.byWidgetPredicate(
             (widget) =>

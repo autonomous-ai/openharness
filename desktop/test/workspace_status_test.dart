@@ -267,7 +267,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await captureControls(tester, 'pane-hover-close');
     await tester.tap(close.hitTestable());
-    await tester.pumpAndSettle();
+    await tester.pump();
+    expect(find.byKey(first.cellKey), findsNothing);
     expect(app.panes, [second]);
     expect(app.allPanes, isNot(contains(first)));
     expect(second.session!.agentId, 'a1');

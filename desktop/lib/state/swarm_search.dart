@@ -211,24 +211,6 @@ class SwarmSearchController extends ChangeNotifier {
       : isHelpMode
       ? '?'
       : '';
-  String get prompt => scopePrefix.isEmpty ? '>' : scopePrefix;
-  String get inputQuery =>
-      isGroupMode || isModelMode || isStoreMode ? matchQuery : query;
-
-  /// Prefix keystrokes change the prompt. The editable field holds only the
-  /// search text, so clearing it does not silently change the selected type.
-  void editQuery(String value) {
-    if (RegExp(r'^[@#:*?]').hasMatch(value)) {
-      setQuery(value);
-    } else if (isCommandMode || isHelpMode) {
-      setQuery(value);
-    } else if (value.startsWith('>') && !isCommandMode) {
-      setQuery(value.substring(1).trimLeft());
-    } else {
-      setQuery(scopePrefix.isEmpty ? value : '$scopePrefix$value');
-    }
-  }
-
   String get createLabel => isMachineMode
       ? 'New Machine'
       : isModelMode

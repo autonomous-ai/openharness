@@ -77,7 +77,6 @@ import '../widgets/box_chrome.dart';
 import '../widgets/new_harness_form.dart';
 import '../widgets/open_harness_intent.dart';
 import '../widgets/pane_grid.dart';
-import '../widgets/pane_minimize.dart';
 import '../widgets/remote_folder_picker.dart';
 import '../widgets/shortcuts_sheet.dart';
 import '../widgets/harness_customize_pane.dart';
@@ -148,8 +147,7 @@ typedef _NewHarnessContext = ({
 TextStyle get _boxCaption =>
     grid.AppType.monoLabel(color: kBoxFaint, fontWeight: FontWeight.w400);
 
-class _SwarmScreenState extends State<SwarmScreen>
-    with SingleTickerProviderStateMixin {
+class _SwarmScreenState extends State<SwarmScreen> {
   static const _channel = MethodChannel('harness/swarm_tabs');
 
   /// The tab the middle button went down on, so an up that slid onto another
@@ -163,7 +161,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
-  final _paneContextAnchor = GlobalKey();
   final _focusedModelController = GridModelPickerController();
   MachinesPanelHandle? _machinesPanel;
   OverlayEntry? _modelsOverlay;
@@ -175,9 +172,6 @@ class _SwarmScreenState extends State<SwarmScreen>
   late final _onboarding =
       widget.onboarding ??
       WorkspaceOnboarding(storage: kUnderTest ? null : HarnessFileStore.shared);
-  late final _minimize = PaneMinimizeController(vsync: this);
-  bool _closingPane = false;
-  OverlayEntry? _minimizeOverlay;
   final _startSearchFocus = FocusNode(debugLabel: 'Start page search');
   final _commandFocus = FocusNode(debugLabel: 'Ask Harness');
   bool _commandBarOpen = false;
@@ -209,6 +203,9 @@ class _SwarmScreenState extends State<SwarmScreen>
   final _searchCatalog = SwarmSearchCatalog();
   final _searchText = TextEditingController();
   final _searchFocus = FocusNode(debugLabel: 'Search harnesses');
+  // Prefix edits switch between command and resource layouts. Keep the same
+  // editor mounted so its text-input connection and composition survive.
+  late GlobalKey _searchInputKey;
   final _tabScroll = ScrollController();
   ({String activeId, List<String> order, double viewport, List<double> widths})?
   _tabGeometry;
@@ -396,10 +393,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     app.modelManager.removeListener(_modelManagerChanged);
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
-    _minimizeOverlay?.remove();
-    _minimizeOverlay?.dispose();
-    _minimizeOverlay = null;
-    _minimize.dispose();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -1490,7 +1483,7 @@ class _SwarmScreenState extends State<SwarmScreen>
           }
         }
       case 'closePane':
-        if (app.focusedPane case final pane?) unawaited(_closePane(pane));
+        if (app.focusedPane case final pane?) unawaited(app.closePane(pane.id));
       case 'findTerminal':
         app.focusedPane?.session?.find(TerminalFindAction.open);
       case 'findNext':
@@ -2795,68 +2788,6 @@ class _SwarmScreenState extends State<SwarmScreen>
     if (_search != null && filter != null) _search!.setSessionFilter(filter);
   }
 
-  Future<void> _closePane(TerminalPane pane) async {
-    if (_closingPane ||
-        pane.isWeb ||
-        pane.agentId == null ||
-        MediaQuery.disableAnimationsOf(context) ||
-        !_minimize.capture(pane)) {
-      await app.closePane(pane.id);
-      return;
-    }
-    _closingPane = true;
-    final tab = app.activeSwarmId;
-    final overlay = Overlay.of(context);
-    final box = overlay.context.findRenderObject() as RenderBox;
-    final origin = box.localToGlobal(Offset.zero);
-    _minimizeOverlay = OverlayEntry(
-      builder: (_) => Positioned.fromRect(
-        rect: _minimize.source.shift(-origin),
-        child: PaneMinimizeSnapshot(controller: _minimize),
-      ),
-    );
-    overlay.insert(_minimizeOverlay!);
-    // Close logically before the first await: the next keystroke belongs to
-    // the remaining pane, even while the captured pixels are still moving.
-    final closed = app.closePane(pane.id);
-    try {
-      Offset? target;
-      if (_native) {
-        final anchor = await _channel.invokeMapMethod<String, dynamic>(
-          'sessionsAnchor',
-        );
-        if (anchor?['reduceMotion'] == true) return;
-        if (anchor?['x'] is num && anchor?['y'] is num) {
-          target = Offset(
-            (anchor!['x'] as num).toDouble(),
-            (anchor['y'] as num).toDouble(),
-          );
-        }
-      } else {
-        final button = _paneContextAnchor.currentContext?.findRenderObject();
-        if (button is RenderBox && button.hasSize) {
-          target = button.localToGlobal(button.size.center(Offset.zero));
-        }
-      }
-      if (!mounted || app.activeSwarmId != tab) return;
-      if (target != null) await _minimize.animate(target);
-      if (_native && mounted && app.activeSwarmId == tab) {
-        unawaited(_channel.invokeMethod<void>('sessionMinimized'));
-      }
-    } on TickerCanceled {
-      // Disposing the window cancels motion, never the agent process.
-    } on MissingPluginException {
-      // The pane is already closed; only the optional animation is skipped.
-    } finally {
-      _closingPane = false;
-      _minimizeOverlay?.remove();
-      _minimizeOverlay?.dispose();
-      _minimizeOverlay = null;
-      if (mounted) _minimize.reset();
-      await closed;
-    }
-  }
-
   void _openSearch({
     bool adding = false,
     PaneSplitRequest? split,
@@ -2887,6 +2818,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     // Search is an overlay, so late pane attachment needs an explicit focus
     // boundary to keep its programmatic focus request out of the picker.
     _canvasFocus.descendantsAreFocusable = false;
+    _searchInputKey = GlobalKey();
     _search = SwarmSearchController(
       app,
       _navigation.recent,
@@ -3028,10 +2960,10 @@ class _SwarmScreenState extends State<SwarmScreen>
         unawaited(_modelsMenu!.refresh());
       }
     }
-    if (_searchText.text != search.inputQuery) {
+    if (_searchText.text != search.query) {
       _searchText.value = TextEditingValue(
-        text: search.inputQuery,
-        selection: TextSelection.collapsed(offset: search.inputQuery.length),
+        text: search.query,
+        selection: TextSelection.collapsed(offset: search.query.length),
       );
     }
     // Results listen to their controller directly. Rebuilding the entire
@@ -3243,21 +3175,19 @@ class _SwarmScreenState extends State<SwarmScreen>
                     label: search.hint,
                     child: ReadlineKeys(
                       controller: _searchText,
-                      onChanged: search.editQuery,
+                      onChanged: search.setQuery,
                       child: SwarmSearchInput(
+                        key: _searchInputKey,
                         inputKey: const ValueKey('swarm-search-input'),
                         controller: _searchText,
                         focusNode: _searchFocus,
                         search: search,
                         onClose: _dismissSearch,
-                        onChanged: search.editQuery,
+                        onChanged: search.setQuery,
                         onOpen: _focusSearch,
                         terminal: true,
                         bios: true,
-                        prompt: search.prompt,
-                        onEmptyBackspace: search.scopePrefix.isEmpty
-                            ? null
-                            : () => search.setQuery(''),
+                        cursorWidth: 2,
                         hintText: search.hint,
                       ),
                     ),
@@ -3300,14 +3230,15 @@ class _SwarmScreenState extends State<SwarmScreen>
                         label: search.hint,
                         child: ReadlineKeys(
                           controller: _searchText,
-                          onChanged: search.editQuery,
+                          onChanged: search.setQuery,
                           child: SwarmSearchInput(
+                            key: _searchInputKey,
                             inputKey: const ValueKey('swarm-search-input'),
                             controller: _searchText,
                             focusNode: _searchFocus,
                             search: search,
                             onClose: _dismissSearch,
-                            onChanged: search.editQuery,
+                            onChanged: search.setQuery,
                             onOpen: _focusSearch,
                             height: 38,
 
@@ -3591,7 +3522,7 @@ class _SwarmScreenState extends State<SwarmScreen>
     ShortcutAction.addAgent: _addAgent,
     ShortcutAction.closePane: () {
       if (app.focusedPane case final pane?) {
-        unawaited(_closePane(pane));
+        unawaited(app.closePane(pane.id));
       }
     },
     ShortcutAction.newAgent: _newAgent,
@@ -3996,13 +3927,7 @@ class _SwarmScreenState extends State<SwarmScreen>
   );
 
   @override
-  Widget build(BuildContext context) => PaneMinimizeScope(
-    controller: _minimize,
-    close: _closePane,
-    child: _buildWorkspace(context),
-  );
-
-  Widget _buildWorkspace(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([app, _projects, _learning]),
     builder: (context, _) {
       grid.AppTheme.watch(context);
@@ -4594,7 +4519,6 @@ class _SwarmScreenState extends State<SwarmScreen>
                 child: Align(
                   alignment: Alignment.centerRight,
                   child: SizedBox(
-                    key: _paneContextAnchor,
                     child: SizedBox(
                       key: const ValueKey('workspace-pane-context'),
                       child: focused == null

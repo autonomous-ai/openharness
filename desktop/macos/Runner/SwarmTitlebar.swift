@@ -61,16 +61,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         let state = call.arguments as? [String: Any] ?? [:]
         self.updateMachines(state["machines"] as? [[String: Any]] ?? [])
         result(nil)
-      case "sessionsAnchor":
-        guard let content = self.window?.contentViewController?.view else { result(nil); return }
-        let rect = self.strip.contextButton.convert(self.strip.contextButton.bounds, to: content)
-        result([
-          "x": rect.midX,
-          "y": content.isFlipped ? rect.midY : content.bounds.height - rect.midY,
-          "reduceMotion": NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-        ])
-      case "sessionMinimized":
-        result(nil)
       case "playAlert":
         // A named macOS system sound. Every Mac has these, so no audio asset ships with the app,
         // nothing has to be decoded, and the alert plays at whatever volume the person has set for

@@ -36,6 +36,11 @@ three clickable shortcuts: ⌘N to start a new harness, ⌘P to open a harness, 
 ⌘S to browse the harness store. The hints follow the current keyboard bindings.
 
 A harness can have views in several tabs, with one view per tab; closing a pane only removes that view.
+The view closes immediately, without a minimize animation.
+
+Cmd-P opens an empty search field. Cmd-O inserts an editable `#` for projects.
+Delete the prefix to return to harness search. These fields use a thin caret and
+no separate prompt character.
 
 Use **⌘R / ⌘D** or **File → Split Right / Split Down** to open the pane picker. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged. A pane header reveals its `x` close action on hover; **⇧⌘W** closes the focused pane and **⌘W** closes the tab.
 

@@ -744,7 +744,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       ),
       children: [
         Text(
-          '>  harnesses\n@  machines\n#  projects\n:  models\n*  store',
+          '   harnesses\n@  machines\n#  projects\n:  models\n*  store\n>  commands',
           key: const ValueKey('swarm-search-type-hints'),
           style: terminalContentStyle(
             color: theme.foreground.withValues(alpha: .54),
