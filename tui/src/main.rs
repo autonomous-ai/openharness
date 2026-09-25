@@ -145,6 +145,11 @@ async fn main() -> io::Result<()> {
             execute!(term.backend_mut(), EndSynchronizedUpdate)?;
             last_draw = Instant::now();
             need_draw = false;
+            let title = app.window_title();
+            if title != app.title {
+                execute!(term.backend_mut(), terminal::SetTitle(&title))?;
+                app.title = title;
+            }
         }
     }
     drop(term);

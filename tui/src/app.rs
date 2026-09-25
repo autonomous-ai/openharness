@@ -84,6 +84,8 @@ pub struct App {
     pub selecting: Option<u64>,
     /// The last click (pane, col, row, when, count) — for double and triple clicks.
     pub last_click: Option<(u64, u16, u16, Instant, u8)>,
+    /// What the outer terminal's title was last set to.
+    pub title: String,
 }
 
 impl App {
@@ -122,6 +124,7 @@ impl App {
             mouse_drag: None,
             selecting: None,
             last_click: None,
+            title: String::new(),
         }
     }
 
@@ -234,6 +237,7 @@ impl App {
             MachineEvent::Connected => {
                 if let Some(state) = self.links.get_mut(&machine_id) { state.attempts = 0 }
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
+                if machine_id == self.fleet.local_id { self.daemon_down = false }
                 self.relist(&machine_id);
                 if machine_id == self.fleet.local_id && !self.desk_loaded { self.load_desk() }
                 // Every pane of this machine that lost its stream gets it back.
@@ -389,6 +393,7 @@ impl App {
         } else {
             pane.note_echo();
             pane.feed(&bytes);
+            pane.settle_predictions();
         }
     }
 
@@ -690,8 +695,10 @@ impl App {
         }
         self.tab_mut().zoomed = false;
         self.name_tab_after_first();
-        self.fit_panes();
+        // The person asked for THIS harness: open it as the controller before the layout pass,
+        // which would otherwise open it as a mere watcher of whoever has it elsewhere.
         self.open_stream(id, true);
+        self.fit_panes();
         self.seen(id);
         let tab_id = self.tab().id.clone();
         self.desk_pane_added(&tab_id, machine_id, agent_id);
@@ -924,10 +931,22 @@ impl App {
         });
     }
 
+    /// The outer terminal's title: the harness in front of you, so a terminal tab says what is in it.
+    pub fn window_title(&self) -> String {
+        let focused = self.focused().and_then(|id| self.panes.get(&id)).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id));
+        let waiting = self.fleet.waiting();
+        let lead = if waiting > 0 { format!("◆{waiting} ") } else { String::new() };
+        match focused {
+            Some(agent) => format!("{lead}{} — Harness", agent.name),
+            None => format!("{lead}Harness"),
+        }
+    }
+
     // ── the loop's slow tick ─────────────────────────────────────────────────
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        for pane in self.panes.values_mut() { pane.settle_predictions() }
         let now = Instant::now();
         for agent in self.fleet.agents.values_mut() {
             if agent.working && agent.last_beat.map(|t| now.duration_since(t) > Duration::from_secs(90)).unwrap_or(true) { agent.working = false }

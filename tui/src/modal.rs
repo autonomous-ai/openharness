@@ -69,6 +69,8 @@ pub struct Prompt {
 pub enum Modal {
     Picker { kind: PickerKind, picker: Picker },
     Prompt(Prompt),
+    /// ⌥F: find in the focused pane's history. `found` is None before the first search.
+    Find { pane: u64, query: String, found: Option<bool> },
 }
 
 pub const ENGINES: [&str; 14] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "terminal"];
@@ -98,6 +100,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("layout", "Layout…", "⌥L", "grid, columns, main + stack…", "Panes"),
     ("equalize", "Equalize Panes", "⌥=", "", "Panes"),
     ("pane-tab", "Move Pane to New Tab", "", "", "Panes"),
+    ("find", "Find in Pane…", "⌥F", "search this pane's history", "Panes"),
     ("machines", "Machines", "⌥M", "", "Machines"),
     ("store", "Harness Store", "⌥S", "", "Machines"),
     ("help", "Keyboard Shortcuts", "⌥/", "", "Session"),
@@ -125,6 +128,7 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Panes", "⌥W", "Close pane"),
     ("Panes", "⌥=", "Equalize panes"),
     ("Panes", "wheel  ⇧PgUp", "Scroll the pane's history"),
+    ("Panes", "⌥F", "Find in the pane's history (↑ older, ↓ newer)"),
     ("Session", "^␣", "Prefix — then any key above without ⌥ (^␣ o, ^␣ n, …)"),
     ("Session", "⌘", "In kitty / Ghostty / WezTerm, ⌘ works where ⌥ is shown"),
     ("Session", "⌥Q", "Quit — everything keeps running; your tabs come back"),

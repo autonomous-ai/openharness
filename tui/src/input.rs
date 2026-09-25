@@ -60,6 +60,7 @@ fn chord(key: &KeyEvent) -> Option<&'static str> {
             '}' => "next-tab",
             '=' => "equalize",
             'g' | 'G' => "send",
+            'f' | 'F' => "find",
             'q' | 'Q' => "quit",
             '1' => "tab-1", '2' => "tab-2", '3' => "tab-3", '4' => "tab-4", '5' => "tab-5",
             '6' => "tab-6", '7' => "tab-7", '8' => "tab-8", '9' => "tab-9",
@@ -138,10 +139,26 @@ fn on_key(app: &mut App, key: KeyEvent) {
                 if title == "Paused" || title == "Could not resume" { app.resume(focus) } else { app.open_stream(focus, true) }
             }
         }
-        Phase::Connecting(_) => {}
+        // Mid-takeover (or still opening): keep what is typed and deliver it once the stream is ours.
+        Phase::Connecting(_) => {
+            if let Some(bytes) = encode_key(&key, pane.mode()) {
+                if let Some(p) = app.panes.get_mut(&focus) { if p.opening { p.queued.push(bytes) } }
+            }
+        }
         Phase::Live | Phase::Watching(_) => {
             if let Some(bytes) = encode_key(&key, pane.mode()) {
-                if let Some(p) = app.panes.get_mut(&focus) { p.clear_selection() }
+                if let Some(p) = app.panes.get_mut(&focus) {
+                    p.clear_selection();
+                    // Local echo on a slow link: plain characters appear now, confirmed when the echo lands.
+                    let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+                    if p.should_predict() && plain && matches!(p.phase, Phase::Live) {
+                        match key.code {
+                            KeyCode::Char(c) => p.predict_char(c),
+                            KeyCode::Backspace => p.predict_backspace(),
+                            _ => p.clear_predictions(),
+                        }
+                    } else { p.clear_predictions() }
+                }
                 send_to_focused(app, bytes)
             }
         }
@@ -457,6 +474,10 @@ pub fn run(app: &mut App, command: &str) {
             if let Some(root) = app.tab_mut().root.as_mut() { root.resize(focus, dir, delta); }
             app.fit_panes();
         }
+        "find" => {
+            let Some(pane) = app.focused() else { return };
+            app.modal = Some(Modal::Find { pane, query: String::new(), found: None });
+        }
         "quit" => app.quit = true,
         c if c.starts_with("tab-") => { let n: usize = c[4..].parse().unwrap_or(1); app.select_tab(n - 1) }
         _ => {}
@@ -532,6 +553,23 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 fn modal_key(app: &mut App, key: KeyEvent) {
     let Some(modal) = app.modal.take() else { return };
     match modal {
+        Modal::Find { pane, mut query, mut found } => {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let Some(p) = app.panes.get_mut(&pane) else { return };
+            match key.code {
+                KeyCode::Esc => { p.end_find(); return }
+                KeyCode::Char('c' | 'g') if ctrl => { p.end_find(); return }
+                KeyCode::Enter | KeyCode::Up => { if !p.find(&query, true, false) { found = Some(false) } else { found = Some(true) } }
+                KeyCode::Char('p' | 'k') if ctrl => { found = Some(p.find(&query, true, false)) }
+                KeyCode::Down => { found = Some(p.find(&query, false, false)) }
+                KeyCode::Char('n' | 'j') if ctrl => { found = Some(p.find(&query, false, false)) }
+                KeyCode::Backspace => { query.pop(); found = Some(p.find(&query, true, true)) }
+                KeyCode::Char('u') if ctrl => { query.clear(); p.end_find() }
+                KeyCode::Char(c) if !ctrl => { query.push(c); found = Some(p.find(&query, true, true)) }
+                _ => {}
+            }
+            app.modal = Some(Modal::Find { pane, query, found });
+        }
         Modal::Prompt(mut p) => {
             match key.code {
                 KeyCode::Esc => return,

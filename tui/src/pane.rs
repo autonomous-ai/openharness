@@ -85,6 +85,11 @@ pub struct Pane {
     pub input_at: Option<Instant>,
     /// Keystroke → first output back, in microseconds (the last 256).
     pub echo_us: Vec<u32>,
+    /// Characters typed but not yet echoed, drawn where they will land — the local echo that makes a
+    /// far machine feel near. (col, row, char, when).
+    pub predictions: Vec<(u16, u16, char, Instant)>,
+    /// The match ⌥F is on.
+    pub find_at: Option<alacritty_terminal::term::search::Match>,
     /// Inside screen's `ESC k … ESC \` title (split across chunks).
     in_screen_title: bool,
     /// An ESC ended the last chunk; the next byte decides what it was.
@@ -124,6 +129,8 @@ impl Pane {
             pending_esc: false,
             input_at: None,
             echo_us: Vec::new(),
+            predictions: Vec::new(),
+            find_at: None,
         }
     }
 
@@ -215,6 +222,57 @@ impl Pane {
 
     pub fn mode(&self) -> TermMode { *self.term.mode() }
 
+    /// Whether typing here should be echoed locally: a slow link (measured), a visible cursor on the
+    /// main screen, the view at the bottom. Full-screen programs redraw on their own terms and are
+    /// left alone, as mosh leaves them. `HARNESS_TUI_PREDICT=off` turns it off, `=always` forces it.
+    pub fn should_predict(&self) -> bool {
+        let setting = std::env::var("HARNESS_TUI_PREDICT").unwrap_or_default();
+        if setting == "off" { return false }
+        let slow = setting == "always" || self.echo_ms().map(|(p50, _)| p50 >= 20.0).unwrap_or(false);
+        let mode = self.mode();
+        slow && mode.contains(TermMode::SHOW_CURSOR) && !mode.contains(TermMode::ALT_SCREEN) && self.scrolled() == 0
+    }
+
+    pub fn predict_char(&mut self, c: char) {
+        if c.is_control() || unicode_width::UnicodeWidthChar::width(c) != Some(1) { self.predictions.clear(); return }
+        let (col, row) = match self.predictions.last() {
+            Some((col, row, _, _)) => (col + 1, *row),
+            None => {
+                let cursor = self.term.grid().cursor.point;
+                (cursor.column.0 as u16, cursor.line.0.max(0) as u16)
+            }
+        };
+        if col >= self.cols { return }
+        self.predictions.push((col, row, c, Instant::now()));
+        self.dirty = true;
+    }
+
+    pub fn predict_backspace(&mut self) {
+        if self.predictions.pop().is_some() { self.dirty = true }
+    }
+
+    pub fn clear_predictions(&mut self) {
+        if !self.predictions.is_empty() { self.predictions.clear(); self.dirty = true }
+    }
+
+    /// Drop what the far side has now confirmed (the grid shows that character there), and give up
+    /// on anything it has not echoed well past a round trip — a password prompt, say.
+    pub fn settle_predictions(&mut self) {
+        if self.predictions.is_empty() { return }
+        use alacritty_terminal::index::{Column, Line};
+        let patience = std::time::Duration::from_millis(self.echo_ms().map(|(_, p95)| (p95 * 3.0) as u64).unwrap_or(600).clamp(400, 2_000));
+        let grid = self.term.grid();
+        let rows = grid.screen_lines() as u16;
+        let before = self.predictions.len();
+        self.predictions.retain(|(col, row, c, at)| {
+            if *row >= rows { return false }
+            let cell = &grid[Line(*row as i32)][Column(*col as usize)];
+            cell.c != *c && at.elapsed() < patience
+        });
+        // A confirmed character with an unconfirmed one BEFORE it means the line went elsewhere.
+        if self.predictions.len() != before { self.dirty = true }
+    }
+
     pub fn scroll(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
         self.dirty = true;
@@ -257,6 +315,49 @@ impl Pane {
 
     pub fn selection_text(&self) -> Option<String> {
         self.term.selection_to_string().filter(|text| !text.is_empty())
+    }
+
+    /// Find [query] (literal, case-insensitive unless it has capitals) from the current match —
+    /// or from the bottom — toward older lines ([older]) or newer ones. Highlights it as the
+    /// selection and scrolls it into view. False when there is nothing (more) to find.
+    pub fn find(&mut self, query: &str, older: bool, fresh: bool) -> bool {
+        use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        use alacritty_terminal::term::search::RegexSearch;
+        if query.is_empty() { self.clear_selection(); return false }
+        let escaped: String = query.chars().map(|c| if "\\.+*?()|[]{}^$#&-~".contains(c) { format!("\\{c}") } else { c.to_string() }).collect();
+        let Ok(mut regex) = RegexSearch::new(&escaped) else { return false };
+        let grid = self.term.grid();
+        let bottom = Point::new(Line(grid.screen_lines() as i32 - 1), Column(grid.columns().saturating_sub(1)));
+        let current = if fresh { None } else { self.find_at.clone() };
+        let origin = match (&current, older) {
+            (Some(m), true) => m.start().sub(&self.term, Boundary::None, 1),
+            (Some(m), false) => m.end().add(&self.term, Boundary::None, 1),
+            (None, _) => bottom,
+        };
+        if let Ok(path) = std::env::var("HARNESS_TUI_DEBUG") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "find {query:?} esc={escaped:?} origin={origin:?} history={} lines={} cols={}", grid.history_size(), grid.screen_lines(), grid.columns());
+            }
+        }
+        let found = self.term.search_next(&mut regex, origin, if older { Direction::Left } else { Direction::Right }, if older { Side::Right } else { Side::Left }, None);
+        let Some(found) = found else { return false };
+        // A search that wrapped around past where it started is not "more".
+        if let Some(m) = &current { if (older && found.start() >= m.start()) || (!older && found.start() <= m.start()) { return false } }
+        self.term.scroll_to_point(*found.start());
+        let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+        selection.update(*found.end(), Side::Right);
+        self.term.selection = Some(selection);
+        self.find_at = Some(found);
+        self.dirty = true;
+        true
+    }
+
+    pub fn end_find(&mut self) {
+        self.find_at = None;
+        self.clear_selection();
+        self.scroll_bottom();
     }
 
     pub fn clear_selection(&mut self) {
@@ -423,6 +524,20 @@ mod tests {
         assert_eq!(pane.strip_screen_titles(b"tle\x1b"), b"");
         assert_eq!(pane.strip_screen_titles(b"\\y\x1b"), b"y");
         assert_eq!(pane.strip_screen_titles(b"[0m"), b"\x1b[0m");
+    }
+
+    #[test]
+    fn finds_in_history() {
+        let mut pane = Pane::new(1, "m", "a", 40, 12);
+        let mut text = String::new();
+        for i in 0..100 { text.push_str(&format!("line-{i}\r\n")); }
+        text.push_str("needle-here\r\n");
+        for i in 0..30 { text.push_str(&format!("after-{i}\r\n")); }
+        pane.feed(text.as_bytes());
+        assert!(pane.find("needle", true, true));
+        assert!(pane.scrolled() > 0);
+        assert!(!pane.find("needle", true, false));
+        assert!(pane.find("line-5", true, true));
     }
 
     #[test]
