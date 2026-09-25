@@ -188,7 +188,7 @@ import {
 } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
-import { stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
 import { CursorNormalizer, lastCursorTurnText } from './engines/cursor/normalizer.js'
@@ -4939,11 +4939,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       try {
         dshAccount = { privateGrid: await backend.privateGridName().catch(() => null) }
+        // Asked BEFORE the template goes in: afterwards every folder has content.
+        // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
+        const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
+          (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
         const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
-        // The template just went in: the folder is the harness's, and Claude Code need not ask.
-        if (materialized.created.some((item) => item.startsWith('template'))) {
+        // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
+        // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
+        // it proves nothing about the rest, so trust stays the person's call (lib/claudeTrust.ts).
+        if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
           try {
             if (engine === 'claude') preTrustClaudeProject(cwd)
             if (engine === 'codex') preTrustCodexProject(cwd)

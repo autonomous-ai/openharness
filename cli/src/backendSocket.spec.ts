@@ -15,6 +15,7 @@ import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
+import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as storeCatalog from './dsh/catalog.js'
 import { randomUUID } from 'node:crypto'
@@ -212,6 +213,12 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
+// and an unmocked run of these specs used to write test paths into the developer's own config.
+vi.mock('./lib/claudeTrust.js', () => ({
+  claudeTrusts: vi.fn(() => false), codexTrusts: vi.fn(() => false),
+  preTrustClaudeProject: vi.fn(() => 'trusted'), preTrustCodexProject: vi.fn(() => 'trusted'),
+}))
 
 function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<string, unknown>> {
   return ws.sent.map((s) => JSON.parse(s) as Record<string, unknown>)
@@ -1173,6 +1180,33 @@ describe('BackendSocket outbound queue', () => {
     } finally {
       finish?.('/remote/Harness Projects/repo')
       await socket.unregisterLocalClient('local:project')
+      await socket.stop()
+    }
+  })
+
+  it.each([
+    { name: 'a new empty folder', project: { projectSource: 'new' }, sourceTrusted: false, trusts: true },
+    { name: 'a clone', project: { projectSource: 'remote', repositoryUrl: 'owner/repo' }, sourceTrusted: false, trusts: false },
+    { name: 'the person\'s own repo (branch)', project: { projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature' }, sourceTrusted: true, trusts: false },
+    { name: 'a worktree of an untrusted repo', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: false, trusts: false },
+    { name: 'a worktree of a repo Claude already trusts', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: true, trusts: true },
+  ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
+    // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    vi.spyOn(projectFolder, 'prepareProjectFolder').mockResolvedValue('/work/prepared')
+    vi.mocked(claudeTrust.claudeTrusts).mockReturnValue(sourceTrusted)
+    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
+    socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
+    try {
+      socket.handleLocalFrame('local:trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', ...project } })
+      await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
+      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith('/work/prepared')
+      else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
+      if (project.projectSource === 'worktree') expect(claudeTrust.claudeTrusts).toHaveBeenCalledWith('/work/repo')
+    } finally {
+      await socket.unregisterLocalClient('local:trust')
       await socket.stop()
     }
   })
