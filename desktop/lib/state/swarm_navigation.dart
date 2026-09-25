@@ -491,6 +491,8 @@ List<Object?> _catalogPresentation(
       machine.machine,
       machine.nodeOnline,
       machine.needsLink,
+      machine.connectionStatus,
+      machine.isLocalMachine,
       machine.agents,
       machine.agents.length,
       machine.localEndpoint?.agentProjects,

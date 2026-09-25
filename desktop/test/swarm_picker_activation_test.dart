@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,7 +53,7 @@ void main() {
     testWidgets('$activate opens one existing agent immediately in this tab', (
       tester,
     ) async {
-      final app = createApp();
+      final app = createApp(connected: true);
       final input = <TerminalBinaryFrame>[];
       final existing = terminal('a0', input);
       app.adoptSessionForTest(existing);

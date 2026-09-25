@@ -131,7 +131,7 @@ void main() {
             null,
           ),
         );
-        final app = createApp();
+        final app = createApp(connected: true);
         for (var i = 1; i < 30; i++) {
           app.newSwarm(name: 'Project $i');
         }
@@ -462,7 +462,7 @@ void main() {
   testWidgets(
     'an older daemon working folder is searchable and seeds its real agents',
     (tester) async {
-      final app = createApp();
+      final app = createApp(connected: true);
       app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
         computerId: 'local-computer',
         wsUri: Uri.parse('ws://fixture.invalid'),
@@ -510,7 +510,7 @@ void main() {
   testWidgets(
     'welcome, search and picker cancellation leave layout and zoom intact',
     (tester) async {
-      final app = createApp();
+      final app = createApp(connected: true);
       await mount(tester, app);
       expect(
         find.byKey(const ValueKey('harness-start-search')),

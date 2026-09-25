@@ -531,8 +531,7 @@ void main() {
         {"keys":"enter","command":null,"when":"picker"},
         {"keys":"alt+enter","command":"picker.accept","when":"picker"}
       ]}''');
-        final app = createApp();
-        app.machineStates['m']!.nodeOnline = true;
+        final app = createApp(connected: true);
         final frames = <TerminalBinaryFrame>[];
         final pane = app.adoptSessionForTest(terminal('a0', frames));
         app.newSwarm();
@@ -813,8 +812,7 @@ void main() {
     testWidgets(
       'focused results share picker selection and configured keys (inline=$inline)',
       (tester) async {
-        final app = createApp();
-        app.machineStates['m']!.nodeOnline = true;
+        final app = createApp(connected: true);
         final firstInput = <TerminalBinaryFrame>[];
         final secondInput = <TerminalBinaryFrame>[];
         app.adoptSessionForTest(terminal('a0', firstInput));
@@ -932,7 +930,7 @@ void main() {
         ),
       );
       final map = MemoryKeymap();
-      final app = createApp();
+      final app = createApp(connected: true);
       final pane = app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app, map, native: true);
       expect(calls.where((c) => c.method == 'keymapState'), hasLength(1));

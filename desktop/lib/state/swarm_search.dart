@@ -1035,9 +1035,20 @@ class SwarmSearchController extends ChangeNotifier {
     );
   }
 
+  /// Read live state at activation too: a rendered row can outlive a disconnect.
+  String? sessionUnavailable(SwarmDestination? row) {
+    if (!setupLayout || row?.agentId == null) return null;
+    final machine = app.stateOf(row!.machineId!);
+    final agent = machine?.agents
+        .where((agent) => agent.id == row.agentId)
+        .firstOrNull;
+    return harnessSessionUnavailable(machine, agent);
+  }
+
   bool canSubmit(SwarmDestination? row) =>
-      sessionFilter == SessionFilter.needsInput &&
-          _unavailableAttentionIds.contains(row?.id)
+      sessionUnavailable(row) != null ||
+          sessionFilter == SessionFilter.needsInput &&
+              _unavailableAttentionIds.contains(row?.id)
       ? false
       : row?.pickerQuery != null
       ? isHelpMode && _commandIds.contains(row!.id)
@@ -1074,6 +1085,7 @@ class SwarmSearchController extends ChangeNotifier {
       !navigating &&
       history == null &&
       row != null &&
+      sessionUnavailable(row) == null &&
       !row.isCommand &&
       !row.isModel &&
       !row.isStoreEntry &&
