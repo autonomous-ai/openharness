@@ -49,11 +49,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
     if let Some((text, color, _)) = &app.toast { toast(buf, area, text, *color) }
+    let body = app.body();
+    let rects = app.rects.clone();
     if let Some(modal) = &mut app.modal {
         cursor = None;
         match modal {
             Modal::Picker { picker, .. } => picker_box(buf, area, picker),
             Modal::Prompt(prompt) => cursor = Some(prompt_box(buf, area, prompt)),
+            Modal::Find { pane, query, found } => {
+                let rect = rects.iter().find(|(id, _)| id == pane).map(|(_, r)| *r).unwrap_or(body);
+                cursor = Some(find_bar(buf, rect, query, *found));
+            }
         }
     }
     if app.prefix {
@@ -264,7 +270,16 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool) -> Opt
             _ => { target.set_char(cell.c).set_style(style); }
         }
     }
+    // Local echo, drawn over the grid: underlined until the far side confirms it.
+    for (col, row, c, _) in &pane.predictions {
+        if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
+            if *col < area.width && *row < area.height { cell.set_char(*c).set_style(Style::default().add_modifier(Modifier::UNDERLINED)); }
+        }
+    }
     if pane.scrolled() > 0 || !active { return None }
+    if let Some((col, row, _, _)) = pane.predictions.last() {
+        if col + 1 < area.width && *row < area.height { return Some(Position::new(area.x + col + 1, area.y + row)) }
+    }
     if !mode.contains(TermMode::SHOW_CURSOR) || matches!(pane.phase, Phase::Watching(_)) { return None }
     let row = cursor_point.line.0 + offset;
     let col = cursor_point.column.0 as u16;
@@ -464,6 +479,21 @@ fn prompt_box(buf: &mut Buffer, area: Rect, prompt: &crate::modal::Prompt) -> Po
     let keys = Line::from(vec![Span::styled(" enter", bold(theme::ACCENT)), Span::styled(" ok   ", fg(theme::SOFT)), Span::styled("esc", bold(theme::ACCENT)), Span::styled(" cancel", fg(theme::SOFT))]);
     buf.set_line(inner.x, inner.y + inner.height.saturating_sub(1), &keys, inner.width);
     Position::new(inner.x + 3 + visible.width() as u16, inner.y + 2)
+}
+
+/// ⌥F's bar, in the pane's header line: what is being looked for and whether it is there.
+fn find_bar(buf: &mut Buffer, pane: Rect, query: &str, found: Option<bool>) -> Position {
+    let status = match found { Some(false) if !query.is_empty() => "  no more", _ => "" };
+    let text = format!(" find: {query}");
+    let hint = "  ↑ older  ↓ newer  esc done ";
+    let w = (text.width() + status.width() + hint.width()) as u16;
+    let x = pane.x + pane.width.saturating_sub(w + 1);
+    let style = Style::default().bg(theme::SELECT).fg(theme::TEXT);
+    buf.set_string(x, pane.y, &text, style.add_modifier(Modifier::BOLD));
+    let after = x + text.width() as u16;
+    buf.set_string(after, pane.y, status, style.fg(theme::ATTENTION));
+    buf.set_string(after + status.width() as u16, pane.y, hint, style.fg(theme::SOFT));
+    Position::new(after, pane.y)
 }
 
 fn toast(buf: &mut Buffer, area: Rect, text: &str, color: Color) {
