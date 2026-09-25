@@ -26,26 +26,21 @@ enum AlertKind {
   final String sound;
 }
 
-/// Whether this computer plays a sound when an agent finishes or gets stuck.
+/// An on/off preference kept in the app's own store.
 ///
-/// OFF by default. An app that makes a noise nobody asked for is a bad guest,
-/// and a swarm is many agents: the first thing a new user would hear is a
-/// sound they did not choose, from a window they may not be looking at. It is
-/// one switch away in Settings ▸ Notifications for anybody who wants it.
-class AlertSoundStore extends ValueNotifier<bool> {
-  AlertSoundStore({LocalKeyValueStore? storage})
+/// OFF by default, and only the exact string `on` switches it on — a truncated
+/// or hand-edited file lands on the default, so a damaged store cannot start
+/// interrupting somebody who never asked. Every alert switch follows that rule,
+/// so it is written once.
+abstract class OnOffPreference extends ValueNotifier<bool> {
+  OnOffPreference(this._key, {LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared,
       super(false);
 
-  static const _key = 'app_alert_sounds';
-
+  final String _key;
   final LocalKeyValueStore _storage;
   Future<void>? _save;
 
-  /// Read the saved choice. Tolerant: a missing or hand-edited value lands on
-  /// the default rather than throwing, the same rule the appearance store
-  /// follows. Only the exact string `on` switches it on, so a truncated file
-  /// cannot start making noises nobody asked for.
   Future<void> load() async {
     try {
       value = (await _storage.read(_key)) == 'on';
@@ -67,41 +62,23 @@ class AlertSoundStore extends ValueNotifier<bool> {
   }
 }
 
+/// Whether this computer plays a sound when an agent finishes or gets stuck.
+///
+/// OFF by default. An app that makes a noise nobody asked for is a bad guest,
+/// and a swarm is many agents: the first thing a new user would hear is a
+/// sound they did not choose, from a window they may not be looking at. It is
+/// one switch away in Settings ▸ Notifications for anybody who wants it.
+class AlertSoundStore extends OnOffPreference {
+  AlertSoundStore({super.storage}) : super('app_alert_sounds');
+}
+
 /// Whether a banner appears in the window when an agent finishes or gets stuck.
 ///
 /// OFF by default, like the sound. Both are interruptions, and an app that
 /// interrupts without being asked is a bad guest whichever sense it reaches
 /// for. One switch each in Settings ▸ Notifications.
-class ScreenAlertStore extends ValueNotifier<bool> {
-  ScreenAlertStore({LocalKeyValueStore? storage})
-    : _storage = storage ?? HarnessFileStore.shared,
-      super(false);
-
-  static const _key = 'app_screen_alerts';
-
-  final LocalKeyValueStore _storage;
-  Future<void>? _save;
-
-  /// Only the exact string `on` switches it on — a truncated or hand-edited
-  /// file lands on the default, so a damaged store cannot start interrupting
-  /// somebody who never asked. The same rule [AlertSoundStore] follows.
-  Future<void> load() async {
-    try {
-      value = (await _storage.read(_key)) == 'on';
-    } catch (_) {
-      value = false;
-    }
-  }
-
-  Future<void> set(bool on) {
-    if (value == on) return _save ?? Future.value();
-    value = on;
-    final pending = (_save ?? Future.value()).then(
-      (_) => _storage.write(_key, on ? 'on' : 'off'),
-    );
-    _save = pending;
-    return pending;
-  }
+class ScreenAlertStore extends OnOffPreference {
+  ScreenAlertStore({super.storage}) : super('app_screen_alerts');
 }
 
 /// The stores the app reads, loaded at start-up beside the other preferences.

@@ -75,6 +75,8 @@ import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
 import '../notify/agent_alerts.dart';
 import '../notify/alert_sounds.dart';
+import '../notify/system_notifications.dart';
+import '../notify/system_notifications.dart' as notify_system;
 
 enum AppStatus {
   bootstrapping,
@@ -484,6 +486,10 @@ class AppNotifier extends ChangeNotifier {
   /// And what it puts on screen for the same two moments. Its own notifier, so
   /// a banner appearing does not rebuild the workspace.
   final AgentAlerts agentAlerts;
+
+  /// And what it hands the operating system, for when the window is not in
+  /// front and neither the banner nor the badge can be seen.
+  final SystemNotifications systemNotifications;
 
   /// Which agents have news nobody has looked at. Marked on the same two
   /// moments and NOT behind the banner or sound switches — see [AgentUnread].
@@ -1692,8 +1698,11 @@ class AppNotifier extends ChangeNotifier {
     AlertSounds? alerts,
     AgentAlerts? agentAlerts,
     AgentUnread? agentUnread,
+    SystemNotifications? systemNotifications,
   }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
+       systemNotifications =
+           systemNotifications ?? notify_system.systemNotifications,
        agentUnread = agentUnread ?? AgentUnread(),
        _paneLayout = paneLayoutStore,
        // Remembers "a dial has been seen here" on the same terms the pane
@@ -6569,6 +6578,9 @@ class AppNotifier extends ChangeNotifier {
   void _forgetUnread(String machineId, String agentId) {
     if (agentUnread.kindFor(machineId, agentId) == null) return;
     agentUnread.clear(machineId, agentId);
+    // Notification Center would otherwise keep saying "Finished" about an agent
+    // the person has already gone and looked at.
+    systemNotifications.withdraw(machineId, agentId);
     _announceAgentSeen(machineId, agentId);
   }
 
@@ -6643,19 +6655,25 @@ class AppNotifier extends ChangeNotifier {
     // still say when somebody has turned the interrupting halves off.
     agentUnread.mark(machine.machine.machineId, agentId, kind);
     alerts.play(kind);
-    agentAlerts.post(
-      AgentAlert(
-        machineId: machine.machine.machineId,
-        agentId: agentId,
-        // The agent's own name, and its id only when it has none — a banner
-        // naming a uuid tells nobody which pane to look at.
-        title: (agent?.name.trim().isNotEmpty ?? false)
-            ? agent!.name.trim()
-            : agentId,
-        kind: kind,
-        at: DateTime.now(),
-      ),
+    final alert = AgentAlert(
+      machineId: machine.machine.machineId,
+      agentId: agentId,
+      // The agent's own name, and its id only when it has none — a banner
+      // naming a uuid tells nobody which pane to look at.
+      title: (agent?.name.trim().isNotEmpty ?? false)
+          ? agent!.name.trim()
+          : agentId,
+      kind: kind,
+      at: DateTime.now(),
     );
+    agentAlerts.post(alert);
+    // The operating system only while the window is NOT in front. In front of
+    // it the banner already says this, and a second notice in the corner of the
+    // screen for the window you are looking at is the same news twice. Unknown
+    // counts as not in front, for the reason [lifecycle] gives.
+    if (lifecycle() != AppLifecycleState.resumed) {
+      systemNotifications.post(alert);
+    }
   }
 
   /// What clicking a banner does: show that agent, wherever it is.
@@ -6666,6 +6684,7 @@ class AppNotifier extends ChangeNotifier {
   /// same order [placeFork] uses for the same reason.
   Future<void> revealAgentFromAlert(String machineId, String agentId) async {
     markAgentSeen(machineId, agentId);
+    systemNotifications.withdraw(machineId, agentId);
     agentAlerts.dismiss(
       AgentAlert(
         machineId: machineId,

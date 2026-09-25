@@ -305,6 +305,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
       onStateChange: app.appLifecycleChanged,
     );
     app.appLifecycleChanged(WidgetsBinding.instance.lifecycleState);
+    // A click on a system notification does what a click on its banner does,
+    // from wherever the window was: bring it forward, then open that agent.
+    app.systemNotifications.onTap = (machineId, agentId) async {
+      await revealWindow();
+      if (!mounted) return;
+      try {
+        await app.revealAgentFromAlert(machineId, agentId);
+      } catch (_) {
+        // An agent deleted since, or a machine this window no longer reaches.
+        // The window came forward, which is most of what a click asked for.
+      }
+    };
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);
@@ -427,6 +439,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
+    app.systemNotifications.onTap = null;
     if (_native) {
       unawaited(_channel.invokeMethod<void>('machinesState', {'machines': []}));
       app.removeListener(_syncNative);

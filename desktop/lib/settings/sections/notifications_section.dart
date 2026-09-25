@@ -13,9 +13,10 @@ import 'alerts_card.dart';
 /// is not a look — somebody who wants to silence one does not go looking under
 /// Appearance for it, which is exactly how it went the first time.
 ///
-/// One switch today. The row exists because this is where the next ones belong
-/// — a desktop notification, a single agent muted, a choice of sound — and each
-/// of those would otherwise find the same wrong home for the same reason.
+/// A switch per channel — banner, sound, and the system's own notifications.
+/// The next ones belong here too — a single agent muted, a choice of sound —
+/// and each of those would otherwise find the same wrong home for the same
+/// reason.
 class NotificationsSection extends StatelessWidget {
   const NotificationsSection({super.key});
 
