@@ -120,7 +120,7 @@ export async function tuiCommand(argv: string[], opts: { port: number; signedIn?
   const result = spawnSync(binary, argv, {
     stdio: 'inherit',
     // How the TUI runs this CLI back (`harness link connect` for a machine it has to link).
-    env: { ...process.env, PORT: String(opts.port), HARNESS_CLI: process.execPath, HARNESS_CLI_SCRIPT: process.argv[1] ?? '' },
+    env: { ...process.env, PORT: String(opts.port), HARNESS_CLI: process.execPath, HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
   })
   if (result.error) { console.error(`  ✗ Could not start ${binary}: ${result.error.message}`); return 1 }
   return result.status ?? 0

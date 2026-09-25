@@ -1080,7 +1080,8 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             if value.is_empty() { return }
             // The CLI that started us (node + its script), else `harness` on PATH.
             let exe = std::env::var("HARNESS_CLI").unwrap_or_else(|_| "harness".into());
-            let script = std::env::var("HARNESS_CLI_SCRIPT").ok().filter(|s| !s.is_empty());
+            // Its loader flags and script (tsx in a dev checkout), as the launcher passed them.
+            let script: Vec<String> = std::env::var("HARNESS_CLI_ARGS").ok().and_then(|a| serde_json::from_str(&a).ok()).unwrap_or_default();
             let id = machine.clone();
             app.say("Linking…", theme::SOFT);
             app.spawn(async move {
@@ -1095,7 +1096,13 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                 }
             }, move |app, (ok, out)| {
                 if ok { app.say("Linked", theme::ONLINE); if let Some(m) = app.fleet.machine_mut(&machine) { m.reach = crate::fleet::Reach::Unknown } app.connect(&machine) }
-                else { app.say(format!("Could not link: {}", out.lines().last().unwrap_or("")), theme::DANGER) }
+                else {
+                    // `--json` answers with {ok, message}; anything else, its first error-looking line.
+                    let said = out.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).find_map(|v| v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str()).map(str::to_string))
+                        .or_else(|| out.lines().map(str::trim).find(|l| l.contains('✗') || l.to_lowercase().contains("error")).map(str::to_string))
+                        .unwrap_or_else(|| "the link was refused".into());
+                    app.say(format!("Could not link: {said}"), theme::DANGER)
+                }
             });
         }
     }
