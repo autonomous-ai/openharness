@@ -459,6 +459,8 @@ fn focused_agent(app: &App) -> Option<(String, String)> {
 /// The one box: open it in the mode [prefix] names (`""` harnesses, `>` `@` `#` `:` `*` `?`). The
 /// same key again, while it is already in that mode, closes it.
 pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
+    // A split waits for the NEXT pick only if it asked for this box; any other opening forgets it.
+    SPLIT.with(|s| s.set(None));
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
         let same_mode = modal::is_launcher(kind) && picker.query.trim().chars().next().map(|c| c.to_string()).unwrap_or_default() == prefix
             && !matches!(kind, PickerKind::Open { filter: f, .. } if *f != filter);
