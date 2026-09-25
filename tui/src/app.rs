@@ -81,6 +81,8 @@ pub struct App {
     pub models: HashMap<(String, String), Vec<Value>>,
     /// Each machine's local models (the grid): downloaded, running, available.
     pub local_models: HashMap<String, Vec<Value>>,
+    /// Each machine's last measured round trip (the live roster request), for `@`.
+    pub rtt: HashMap<String, Duration>,
     pub homes: HashMap<String, String>,
     last_focus_sent: Option<(String, String)>,
     pub mouse_drag: Option<(u64, u16, u16)>,
@@ -142,6 +144,7 @@ impl App {
             dsh: HashMap::new(),
             models: HashMap::new(),
             local_models: HashMap::new(),
+            rtt: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
             mouse_drag: None,
@@ -321,7 +324,8 @@ impl App {
         // paused one costs it most of a second. Paint what is running, then fold the rest in.
         let fast = link.clone();
         let fast_id = id.clone();
-        self.spawn(async move { fast.rpc("agents_list", json!({}), Duration::from_secs(20)).await }, move |app, reply| {
+        self.spawn(async move { let t = Instant::now(); (fast.rpc("agents_list", json!({}), Duration::from_secs(20)).await, t.elapsed()) }, move |app, (reply, took)| {
+            if reply.is_ok() { app.rtt.insert(fast_id.clone(), took); }
             if let Ok(reply) = reply {
                 let rows = reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
                 app.fleet.merge_roster(&fast_id, &rows);
