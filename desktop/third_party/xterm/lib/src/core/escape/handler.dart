@@ -211,5 +211,8 @@ abstract class EscapeHandler {
 
   void setIconName(String name);
 
+  /// OSC 8: cells printed from now on link to [uri]; null ends the link.
+  void setHyperlink(String? uri);
+
   void unknownOSC(String code, List<String> args);
 }

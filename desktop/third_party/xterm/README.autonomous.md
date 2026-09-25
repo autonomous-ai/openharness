@@ -13,6 +13,15 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 
 ## Local patches
 
+- **OSC 8 hyperlinks are kept per cell** (`lib/src/core/escape/parser.dart`,
+  `lib/src/core/cursor.dart`, `lib/src/core/buffer/line.dart`,
+  `lib/src/core/buffer/buffer.dart`, `lib/src/terminal.dart`). Upstream drops
+  OSC 8, so a Claude Code markdown link printed as just its label (`!125`)
+  had no address to open. The target rides on `CursorStyle.hyperlink`, which
+  SGR resets leave alone, and `BufferLine.getHyperlink` reads it back; the
+  per-line array is allocated only once a linked cell is written. Regressions:
+  the `OSC 8 hyperlinks` group in `test/terminal_links_test.dart`.
+
 - **Linux clipboard and Meta keys leave shell editing intact**
   (`lib/src/ui/shortcut/shortcuts.dart`, `lib/src/terminal_view.dart`,
   `lib/src/core/input/handler.dart`). Linux uses Ctrl-Shift-C/V/A for clipboard

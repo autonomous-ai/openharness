@@ -544,6 +544,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return _painter.cellSize;
   }
 
+  /// The colour a cell's foreground word paints in under the current theme.
+  Color resolveForegroundColor(int cellColor) {
+    return _painter.resolveForegroundColor(cellColor);
+  }
+
   @override
   void paint(PaintingContext context, Offset offset) {
     _paint(context, offset);

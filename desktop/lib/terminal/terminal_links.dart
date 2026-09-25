@@ -336,6 +336,18 @@ String? terminalLinkAt(Terminal terminal, CellOffset cell) {
       cell.x >= lines[cell.y].length) {
     return null;
   }
+  // An OSC 8 hyperlink names its target outright — Claude Code prints a
+  // markdown link `[!125](https://…)` as just `!125` and hides the address
+  // there — so it wins over anything read off the visible text.
+  final hyperlink = lines[cell.y].getHyperlink(cell.x);
+  if (hyperlink != null) {
+    final uri = Uri.tryParse(hyperlink);
+    if (uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty) {
+      return hyperlink;
+    }
+  }
   final own = _logicalLine(terminal, cell.y, cell);
   if (own == null || own.offset == null) return null;
   final single = terminalLinkInText(own.text, own.offset!);
@@ -391,4 +403,71 @@ String? terminalLinkAt(Terminal terminal, CellOffset cell) {
   if (target == null) return single;
   final scheme = Uri.tryParse(target)?.scheme;
   return scheme == 'http' || scheme == 'https' ? target : single;
+}
+
+/// One row's run of cells, [start] to [end] inclusive, that opens a link.
+typedef TerminalLinkSpan = ({int row, int start, int end});
+
+/// The cells that open [target], walked out from [cell] — what a hover
+/// underlines. An OSC 8 link is exactly the cells that carry it; a link read
+/// off the text is the run of cells [terminalLinkAt] resolves to [target],
+/// followed onto the rows above and below when it reaches their edge (a
+/// wrapped address continues at the next row's indent).
+List<TerminalLinkSpan> terminalLinkSpans(
+  Terminal terminal,
+  CellOffset cell,
+  String target,
+) {
+  final lines = terminal.buffer.lines;
+  if (cell.y < 0 || cell.y >= lines.length) return const [];
+  final osc8 = lines[cell.y].getHyperlink(cell.x) == target;
+  bool hit(int x, int y) => osc8
+      ? lines[y].getHyperlink(x) == target
+      : terminalLinkAt(terminal, CellOffset(x, y)) == target;
+  TerminalLinkSpan? walk(int y, int x) {
+    if (y < 0 || y >= lines.length || x < 0 || !hit(x, y)) return null;
+    final width = lines[y].length;
+    var start = x;
+    var end = x;
+    while (start > 0 && hit(start - 1, y)) {
+      start--;
+    }
+    while (end + 1 < width && hit(end + 1, y)) {
+      end++;
+    }
+    return (row: y, start: start, end: end);
+  }
+
+  int firstVisible(BufferLine line) {
+    for (var x = 0; x < line.length; x++) {
+      final codePoint = line.getCodePoint(x);
+      if (codePoint != 0 && codePoint != 0x20) return x;
+    }
+    return line.length;
+  }
+
+  final own = walk(cell.y, cell.x);
+  if (own == null) return const [];
+  final spans = [own];
+  var head = own;
+  while (spans.length < _hardWrapRows &&
+      head.start <= firstVisible(lines[head.row])) {
+    final above = head.row - 1;
+    if (above < 0) break;
+    final span = walk(above, _visibleWidth(lines[above]) - 1);
+    if (span == null) break;
+    spans.insert(0, span);
+    head = span;
+  }
+  var tail = own;
+  while (spans.length < _hardWrapRows * 2 &&
+      tail.end >= _visibleWidth(lines[tail.row]) - 1) {
+    final below = tail.row + 1;
+    if (below >= lines.length) break;
+    final span = walk(below, firstVisible(lines[below]));
+    if (span == null) break;
+    spans.add(span);
+    tail = span;
+  }
+  return spans;
 }

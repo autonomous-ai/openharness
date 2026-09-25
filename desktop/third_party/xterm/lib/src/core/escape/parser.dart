@@ -100,7 +100,8 @@ class EscapeParser {
     'E'.charCode: _escHandleNextLine,
     'H'.charCode: _escHandleTabSet,
     'M'.charCode: _escHandleReverseIndex,
-    'P'.charCode: _escHandleStringSequence, // DCS (incl. Sixel, tmux passthrough)
+    'P'.charCode:
+        _escHandleStringSequence, // DCS (incl. Sixel, tmux passthrough)
     '_'.charCode: _escHandleStringSequence, // APC
     '^'.charCode: _escHandleStringSequence, // PM
     'X'.charCode: _escHandleStringSequence, // SOS
@@ -1116,6 +1117,11 @@ class EscapeParser {
           return true;
         case '2':
           handler.setTitle(pt);
+          return true;
+        case '8':
+          // OSC 8 ; params ; URI — the URI is the rest, semicolons included.
+          final uri = _osc.length > 2 ? _osc.sublist(2).join(';') : '';
+          handler.setHyperlink(uri.isEmpty ? null : uri);
           return true;
       }
     }

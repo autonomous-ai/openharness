@@ -182,9 +182,29 @@ void main() {
     );
   }
   testOnPlatform(
-    'ordinary click still sends terminal mouse reports and never opens a file',
+    'a plain click on a link opens it without terminal mouse input',
     (tester) async {
       await mount(tester);
+      await click(tester);
+      expect(launched.single.toFilePath(), '/tmp/preview.png');
+      expect(outbound, isEmpty);
+    },
+  );
+  testOnPlatform(
+    'shift-click on a link still belongs to the terminal',
+    (tester) async {
+      await mount(tester);
+      await click(tester, modifier: LogicalKeyboardKey.shiftLeft);
+      expect(launched, isEmpty);
+      expect(outbound, hasLength(2));
+    },
+  );
+  testOnPlatform(
+    'a plain click on ordinary text still sends terminal mouse reports',
+    (tester) async {
+      await mount(tester);
+      session.terminal.write('\r\x1b[2Kordinary text');
+      await tester.pump();
       await click(tester);
       expect(launched, isEmpty);
       expect(outbound, hasLength(2));
@@ -355,16 +375,12 @@ void main() {
     expect(view.controller!.selection, isNotNull);
   });
   testOnPlatform(
-    'a stationary link pointer follows session replacement and modifier release',
+    'a stationary link pointer follows session replacement and a shift press',
     (tester) async {
       await mount(tester);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(point(tester));
-      await tester.sendKeyDownEvent(
-        LogicalKeyboardKey.metaLeft,
-        platform: 'macos',
-      );
       await tester.pump();
       final previous = tester.widget<TerminalPanel>(find.byType(TerminalPanel));
       final replacement =
@@ -397,8 +413,8 @@ void main() {
         tester.widget<TerminalView>(find.byType(TerminalView)).mouseCursor,
         SystemMouseCursors.click,
       );
-      await tester.sendKeyUpEvent(
-        LogicalKeyboardKey.metaLeft,
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.shiftLeft,
         platform: 'macos',
       );
       await tester.pump();
@@ -406,10 +422,35 @@ void main() {
         tester.widget<TerminalView>(find.byType(TerminalView)).mouseCursor,
         SystemMouseCursors.text,
       );
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: 'macos',
+      );
       await mouse.removePointer();
       await tester.pump(const Duration(milliseconds: 350));
     },
   );
+  testOnPlatform('the link tooltip sits under the link, not mid-pane', (
+    tester,
+  ) async {
+    await mount(tester);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(point(tester));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    final render = tester
+        .state<TerminalViewState>(find.byType(TerminalView))
+        .renderTerminal;
+    final linkBottom = render
+        .localToGlobal(render.getOffset(const CellOffset(0, 1)))
+        .dy;
+    final tip = tester.getRect(find.text('/tmp/preview.png').last);
+    expect(tip.top, greaterThanOrEqualTo(linkBottom));
+    expect(tip.top, lessThan(linkBottom + render.cellSize.height * 2));
+    await mouse.removePointer();
+    await tester.pump(const Duration(milliseconds: 350));
+  });
   testOnPlatform(
     'hover shows the shortcut and refreshes after streamed output changes',
     (tester) async {
@@ -467,17 +508,9 @@ void main() {
               ),
             )
             .message,
-        '⌘-click to open\n$url',
-      );
-      await tester.sendKeyDownEvent(
-        LogicalKeyboardKey.metaLeft,
-        platform: 'macos',
+        url,
       );
       await tester.tapAt(point(tester, 10, 1), kind: PointerDeviceKind.mouse);
-      await tester.sendKeyUpEvent(
-        LogicalKeyboardKey.metaLeft,
-        platform: 'macos',
-      );
       await tester.pump(const Duration(milliseconds: 350));
       expect(launched.single.toString(), url);
       expect(outbound, isEmpty);
