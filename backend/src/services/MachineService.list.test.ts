@@ -16,6 +16,7 @@ const groupBy = vi.hoisted(() => vi.fn())
 const planFindMany = vi.hoisted(() => vi.fn())
 const runCommandRaw = vi.hoisted(() => vi.fn())
 const getAgentPresence = vi.hoisted(() => vi.fn())
+const readAgentPresence = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   // The REAL helper — the thing under test is whether listForUser applies it, so stubbing it would
@@ -30,6 +31,7 @@ vi.mock('../lib/prisma.js', () => ({
 }))
 vi.mock('../lib/bus.js', () => ({
   getAgentPresence,
+  readAgentPresence,
   clearAgentPresence: vi.fn(),
   publishDown: vi.fn(),
   publishDeviceMachineListChanged: vi.fn(),
@@ -83,6 +85,7 @@ beforeEach(() => {
   planFindMany.mockResolvedValue([])
   runCommandRaw.mockResolvedValue({ cursor: { firstBatch: [] } })
   getAgentPresence.mockResolvedValue(null)
+  readAgentPresence.mockResolvedValue(false)
 })
 
 const listedIds = async (env?: 'prod' | 'stag') =>
@@ -114,5 +117,23 @@ describe('listForUser — what the mobile app is allowed to see', () => {
     const where = findMany.mock.calls[0]![0].where as Where
     expect(where.autonomousEnv).toBe('prod')
     expect(where.OR).toEqual([{ deletedAt: null }, { deletedAt: { isSet: false } }])
+  })
+})
+
+describe('listForUser — a remote machine\'s presence', () => {
+  const remote = (machineId: string): Row => ({ ...base, machineId, userId: 'u1', authMode: 'remote' })
+  const statusOf = async (): Promise<Record<string, unknown>> =>
+    Object.fromEntries((await machineService.listForUser('u1')).map((m) => [m.machineId, m.status]))
+
+  beforeEach(() => {
+    findMany.mockImplementation(async ({ where }: { where: Where }) =>
+      [remote('up'), remote('down'), remote('unreadable')].filter((r) => matches(r, where)))
+    readAgentPresence.mockImplementation(async (id: string) => id === 'up' ? true : id === 'down' ? false : null)
+  })
+
+  it('reads running when present, offline when absent, and unknown — never offline — when the read failed', async () => {
+    // A daemon labels a model "seems offline" only on `offline` (grid-reads-without-waking issue 03), so a
+    // presence store that could not be read must not say a machine is gone.
+    expect(await statusOf()).toEqual({ up: 'running', down: 'offline', unreadable: 'unknown' })
   })
 })

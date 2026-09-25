@@ -22,6 +22,7 @@ import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
 import '../core/test_run.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/resting_model_words.dart';
 import 'app_state.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
@@ -996,7 +997,12 @@ class NewHarnessController extends ChangeNotifier {
                   GridModel(id: model.id, node: model.node, grid: section.name),
                 ),
                 title: model.id,
-                detail: model.node,
+                // Every read now asks for row state, so the daemon no longer folds "seems
+                // offline" into the node — this row puts back what an older build showed.
+                detail: switch (model.unavailable) {
+                  final offline? => offlineNodeLabel(offline.machine),
+                  null => model.node,
+                },
                 group: section.own
                     ? 'On your machines'
                     : 'Shared · ${section.name}',

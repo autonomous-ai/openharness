@@ -134,6 +134,34 @@ describe('local model discovery and lifecycle', () => {
     expect(await readFile(join(stateDir, (await readdir(stateDir))[0]), 'utf8')).not.toContain('token')
   })
 
+  // grid-reads-without-waking issue 03: the reply test is an inference THROUGH the grid, so on a sleeping
+  // grid it starts it — and the platform then keeps it up for hours. A stray Start on a model that is
+  // already serving has nothing to check.
+  it('Start on a model already serving at the last read skips the reply test', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models[0].state).toBe('running')
+    request.mockClear(); calls.length = 0
+
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+
+    // Nothing that reads through the grid with its credential: no reply test, no `info --env` for its
+    // key, no signed-in `engines` for the served window — and nothing started.
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(false)
+    expect(calls.filter(args => args.includes('--env') || args.includes('engines') || args.includes('join'))).toEqual([])
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'running', operation: { phase: 'done' } })
+  })
+
+  it('Start on a model this computer holds but that was not serving at the last read runs the reply test, as before', async () => {
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ endpoint_url: null, models: ['Small-Q4.gguf'] }], advertise_as: [] }))
+    expect((await service.list('home', true)).models[0].state).not.toBe('running')
+
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
+    expect(calls.some(args => args.includes('join'))).toBe(false)
+  })
+
   it('uses an already downloaded complete file, and Stop retains it', async () => {
     await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
     expect((await service.list('home')).models[0].state).toBe('downloaded')

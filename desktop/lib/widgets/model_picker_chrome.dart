@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import '../models/model_mark.dart';
 import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
+import 'resting_section.dart' show kUnavailableOpacity;
 
 /// The panel's own width. Narrower than a row list, because every row here is two lines and the
 /// eye reads a column better than a stripe.
@@ -205,6 +206,7 @@ class ModelPickerRow extends StatelessWidget {
     this.meter,
     this.note,
     this.hint,
+    this.dimmed = false,
   });
 
   final String title;
@@ -212,6 +214,10 @@ class ModelPickerRow extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final Widget? avatar;
+
+  /// Greyed: a row the picker still offers but that will not answer right now — every computer
+  /// serving it seems offline. Still a choice; what picking it does is the picker's to decide.
+  final bool dimmed;
 
   /// The right-hand column — a quota, a state, whatever the row is worth saying.
   final Widget? trailing;
@@ -233,7 +239,12 @@ class ModelPickerRow extends StatelessWidget {
     final row = Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        if (avatar != null) ...[avatar!, const SizedBox(width: 11)],
+        if (avatar != null) ...[
+          dimmed
+              ? Opacity(opacity: kUnavailableOpacity, child: avatar)
+              : avatar!,
+          const SizedBox(width: 11),
+        ],
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -243,8 +254,9 @@ class ModelPickerRow extends StatelessWidget {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppType.body(color: AppColors.text)
-                    .copyWith(fontWeight: FontWeight.w600, fontSize: 13.5),
+                style: AppType.body(
+                  color: dimmed ? AppColors.muted : AppColors.text,
+                ).copyWith(fontWeight: FontWeight.w600, fontSize: 13.5),
               ),
               if (subtitle.isNotEmpty) ...[
                 const SizedBox(height: 2),
@@ -252,14 +264,18 @@ class ModelPickerRow extends StatelessWidget {
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: AppType.mono(color: AppColors.mutedStrong),
+                  style: AppType.mono(
+                    color: dimmed ? AppColors.muted : AppColors.mutedStrong,
+                  ),
                 ),
               ],
               if (hint != null) ...[
                 const SizedBox(height: 2),
+                // Two lines: "<computer> seems offline — its models come back when it does" is
+                // longer than a row is wide, and cut short it no longer says when.
                 Text(
                   hint!,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: AppType.body(color: AppColors.muted)
                       .copyWith(fontSize: 11.5),

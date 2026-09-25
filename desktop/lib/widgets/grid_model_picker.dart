@@ -17,8 +17,11 @@ import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart';
 import '../usage/models_menu_controller.dart';
 import 'engine_identity.dart';
+import 'model_picker_answer.dart';
 import 'model_picker_chrome.dart';
 import 'pane_menu.dart';
+import 'resting_model_words.dart';
+import 'resting_section.dart';
 import 'workspace_bar_control.dart';
 
 /// The engines whose panes carry a model picker.
@@ -384,6 +387,8 @@ class _GridModelPickerState extends State<GridModelPicker> {
         sections: _sectionsToDraw(_shown!),
         subtitleFor: _subtitleFor,
         emptySentence: (section) => _emptySentence(_shown!, section),
+        onWake: (section) =>
+            widget.notifier.wakeGridModels(widget.machineId, section.name),
         close: close,
       ),
     );
@@ -400,10 +405,20 @@ class _GridModelPickerState extends State<GridModelPicker> {
       }
       return;
     }
-    if (chosen.model!.id != _effectiveModel) {
-      _expect(chosen.model!.id);
-      widget.onSelected?.call(chosen.model!);
+    final model = chosen.model!;
+    if (model.id == _effectiveModel) return;
+    // A row whose every computer seems offline is asked about first; the move is never refused.
+    if (model.unavailable case final offline?) {
+      if (!mounted) return;
+      final go = await confirmSwitchAnyway(
+        context,
+        model: model.id,
+        offline: offline,
+      );
+      if (!go || !mounted) return;
     }
+    _expect(model.id);
+    widget.onSelected?.call(model);
   }
 
   /// What the Local section says when it lists nothing.
@@ -434,9 +449,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
   /// and a shared grid only while it serves something. A team grid with nothing running is not
   /// a choice this menu can offer, and a heading over "nothing here" was a line to read for no
   /// gain — the menu is for picking a model, not for surveying grids.
+  /// Unless it has something to SAY ([SectionWords.speaks] — only ever from a newer daemon).
   List<GridSection> _sectionsToDraw(GridModels answer) {
     final sections = answer.sections
-        .where((s) => s.own || s.models.isNotEmpty)
+        .where((s) => s.own || s.models.isNotEmpty || sectionWords(s).speaks)
         .toList();
     if (sections.any((s) => s.own)) return sections;
     return [
@@ -482,45 +498,11 @@ class _GridModelPickerState extends State<GridModelPicker> {
     final fresh = _last;
     final shown = _shown;
     if (!mounted || entry == null || fresh == null || shown == null) return;
-    if (_sameAnswer(fresh, shown)) return;
+    if (drawsSameMenu(fresh, shown)) return;
     _shown = fresh;
     // One safe path for every redraw — see [_redrawOpenMenu]. This one arrives off an async read
     // and so is usually clear of the build phase, but "usually" is what the crash was.
     _redrawOpenMenu();
-  }
-
-  static bool _sameAnswer(GridModels a, GridModels b) {
-    if (a.reachable != b.reachable ||
-        a.gridName != b.gridName ||
-        a.gridCli != b.gridCli) {
-      return false;
-    }
-    if (a.models.length != b.models.length) return false;
-    for (var i = 0; i < a.models.length; i += 1) {
-      if (a.models[i].id != b.models[i].id ||
-          a.models[i].node != b.models[i].node) {
-        return false;
-      }
-    }
-    if (a.grids.length != b.grids.length) return false;
-    for (var i = 0; i < a.grids.length; i += 1) {
-      final left = a.grids[i];
-      final right = b.grids[i];
-      if (left.name != right.name ||
-          left.own != right.own ||
-          left.state != right.state ||
-          left.models.length != right.models.length) {
-        return false;
-      }
-      for (var j = 0; j < left.models.length; j += 1) {
-        if (left.models[j].id != right.models[j].id ||
-            left.models[j].node != right.models[j].node ||
-            left.models[j].grid != right.models[j].grid) {
-          return false;
-        }
-      }
-    }
-    return true;
   }
 
   @override
@@ -688,6 +670,7 @@ class _ModelPickerPanel extends StatefulWidget {
     required this.sections,
     required this.subtitleFor,
     required this.emptySentence,
+    required this.onWake,
     required this.close,
   });
 
@@ -698,13 +681,17 @@ class _ModelPickerPanel extends StatefulWidget {
   final List<GridSection> sections;
   final String? Function(GridModel) subtitleFor;
   final String? Function(GridSection) emptySentence;
+
+  /// "Show models": wake that section. The menu stays open; the answer lands in it.
+  final Future<void> Function(GridSection) onWake;
   final void Function(_Choice?) close;
 
   @override
   State<_ModelPickerPanel> createState() => _ModelPickerPanelState();
 }
 
-class _ModelPickerPanelState extends State<_ModelPickerPanel> {
+class _ModelPickerPanelState extends State<_ModelPickerPanel>
+    with SectionWakes {
   final _query = TextEditingController();
   String _needle = '';
 
@@ -760,6 +747,8 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
       // A section a search has emptied says nothing: the query is the reason, and repeating
       // "nothing here" under every heading turns one empty result into a wall of them.
       if (_needle.isNotEmpty && models.isEmpty) continue;
+      // Resting, starting, not answering — nothing for an engine that cannot use it at all.
+      final words = canRunLocally ? wordsFor(section) : SectionWords.none;
       rows.add(
         ModelPickerSectionHeader(
           label: section.own ? 'On your machines' : 'Shared · ${section.name}',
@@ -774,18 +763,30 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
         );
         continue;
       }
+      if (words.speaks) {
+        rows.add(
+          RestingSectionNotes(
+            words: words,
+            inset: kModelPickerInset,
+            onWake: () => unawaited(wakeSection(section, widget.onWake)),
+          ),
+        );
+      }
       if (models.isEmpty) {
-        final sentence = widget.emptySentence(section);
+        // Resting or starting is not empty: "set up your first model" would be wrong about it.
+        final sentence = words.speaks ? null : widget.emptySentence(section);
         if (sentence != null) rows.add(_panelSentence(sentence));
         continue;
       }
       for (final model in models) {
+        final offlineSentence = offlineRowNote(model);
         rows.add(
           Padding(
             padding: const EdgeInsets.only(bottom: 2),
             child: Tooltip(
               message: [
                 'Where this agent runs',
+                ?offlineSentence,
                 ?widget.subtitleFor(model),
               ].join('\n'),
               child: ModelPickerRow(
@@ -794,8 +795,10 @@ class _ModelPickerPanelState extends State<_ModelPickerPanel> {
                 // The web-search sentence for the CURRENT model only — a fact
                 // about this agent's launch, not about the model. Dropped when
                 // the panel replaced the old row list, which lost it silently;
-                // the tests that caught it are the reason it is back.
-                hint: widget.subtitleFor(model),
+                // the tests that caught it are the reason it is back. A row
+                // that will not answer at all says that instead.
+                hint: offlineSentence ?? widget.subtitleFor(model),
+                dimmed: offlineSentence != null,
                 selected: widget.currentModel == model.id,
                 avatar: ModelAvatar(label: model.id),
                 note: null,

@@ -1,6 +1,7 @@
 import type { AgentEngine } from '../engines/types.js'
 import { gridCapableEngines, type GridLaunchOverride } from './gridLaunch.js'
-import { forgetGridModels, listGridModels, resolveGridTarget } from './gridModels.js'
+import { forgetGridModels, listGridModels } from './gridModels.js'
+import { resolveGridTarget } from './gridTarget.js'
 
 export interface NewAgentModel { model: string; grid: string }
 

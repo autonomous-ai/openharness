@@ -7,6 +7,7 @@
   <title>Model Manager</title>
   <link rel="stylesheet" href="app.css">
   <script src="stream.js" defer></script>
+  <script src="wake.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -17,6 +18,7 @@
           <div class="segmented" aria-label="Fleet view"><button id="topology-button" type="button" aria-pressed="true">Topology</button><button id="rack-button" type="button" aria-pressed="false">Rack</button></div>
           <div class="toolbar-selects"><div class="menu"><button type="button" class="menu-button" id="grid-select" aria-haspopup="listbox" aria-expanded="false"><span class="menu-kicker">Grid</span><span class="menu-value" id="grid-value">Choose your grid</span><span class="menu-chevron" aria-hidden="true">▾</span></button><div class="menu-list" id="grid-list" role="listbox" aria-label="Grid" hidden></div></div><div class="menu"><button type="button" class="menu-button" id="metric" aria-haspopup="listbox" aria-expanded="false"><span class="menu-kicker">Show</span><span class="menu-value" id="metric-value">Decode speed</span><span class="menu-chevron" aria-hidden="true">▾</span></button><div class="menu-list" id="metric-list" role="listbox" aria-label="Show" hidden></div></div></div>
         </div>
+        <div class="wake-bar" id="wake-bar" role="status" hidden><p id="wake-message"></p><button type="button" id="wake-now">Wake now</button></div>
         <div class="topology" id="topology">
           <canvas id="connections" aria-hidden="true"></canvas>
           <div class="map-heading"><span class="eyebrow">YOUR COMPUTE, CONNECTED</span><span class="map-subtitle" id="map-subtitle">Every machine has a place.</span></div>

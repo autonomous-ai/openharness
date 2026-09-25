@@ -52,6 +52,7 @@ import '../widgets/engine_identity.dart'
 import '../store/store_screen.dart' show openStoreAgent;
 import 'dial_status.dart';
 import 'grid_pictures.dart';
+import 'model_start_watch.dart';
 import 'harness_placement.dart';
 import 'desk_sync.dart';
 import 'pane_layout_store.dart';
@@ -564,6 +565,11 @@ class AppNotifier extends ChangeNotifier {
   /// What each machine's daemon last said the account's grids serve — the one list the pane
   /// picker, the macOS Models menu and the Model Manager all read. See [GridPictures].
   final GridPictures gridPictures = GridPictures();
+
+  /// Which agents were sent a message while their model's computer was resting and have not
+  /// answered yet — the pane chip's "Starting up…". Fed by [_watchModelStart] and ended with every
+  /// turn ([_cancelTurnActivity]). See [ModelStartWatch] for why these signals and not others.
+  final ModelStartWatch modelStarts = ModelStartWatch();
 
   /// Whether the app is in front of the person (`AppLifecycleState.resumed`). The three surfaces
   /// that refresh [gridPictures] on their own — the Model Manager's timer, the macOS menu's refresh
@@ -3048,6 +3054,7 @@ class AppNotifier extends ChangeNotifier {
     machineStates.clear();
     sessionPreviews.clear();
     gridPictures.clear();
+    _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;
     _ensurePool();
@@ -3388,6 +3395,7 @@ class AppNotifier extends ChangeNotifier {
     machineStates.clear();
     sessionPreviews.clear();
     gridPictures.clear();
+    _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;
     _closedHistory.clear();
@@ -5129,10 +5137,25 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Never throws — a machine whose daemon is too old to know the RPC, one with no grid, and one
   /// that timed out are all "nothing to offer", which is what the picker shows.
-  Future<GridModels> gridModels(String machineId) async {
+  Future<GridModels> gridModels(String machineId) =>
+      _askGridModels(machineId, const {'rowState': true});
+
+  /// One `grid_models_list` ask with [payload].
+  ///
+  /// `rowState: true` on every ask this app makes: every surface here draws row state, so rows
+  /// come back with `unavailable` beside a plain `node` rather than the old build's
+  /// `<computer> · seems offline` folded into it — and a loopback window that asked this way gets
+  /// its `grid_models_changed` pushes in the same form. An older daemon ignores the field.
+  Future<GridModels> _askGridModels(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
     try {
-      final response = await _conn(machineId)
-          .request('grid_models_list', timeout: const Duration(seconds: 12));
+      final response = await _conn(machineId).request(
+        'grid_models_list',
+        payload: payload,
+        timeout: const Duration(seconds: 12),
+      );
       return GridModels.fromReply(response);
     } catch (_) {
       // NOT `gridName: null` with an empty list — that is the shape of "this account has no grid",
@@ -5140,6 +5163,76 @@ class AppNotifier extends ChangeNotifier {
       // was offline was told to sign in again, which was both wrong and unactionable.
       return const GridModels.unreachable();
     }
+  }
+
+  /// A person asked to see what a resting section serves ("Show models"): ask [machineId]'s
+  /// daemon to wake [sectionName], and take its answer as the picture like any read.
+  ///
+  /// This is one of the acts that may wake a grid — nothing automatic ever calls it. The daemon
+  /// answers at once with the section `waking`; the wake itself (one credentialed read, then
+  /// credential-less re-reads for up to 45 s) runs there. Its progress reaches a loopback window by
+  /// `grid_models_changed`, and every other window only by asking again — which [_followWake] does,
+  /// credential-less, for as long as the picture says something is waking.
+  ///
+  /// Not joined with [refreshGridModels]' in-flight read: that ask carries no `wake`, and folding
+  /// this one into it would drop the person's request. An answer that was out when this one landed
+  /// is older, and the picture's epoch keeps it from overwriting this.
+  Future<GridModels> wakeGridModels(
+    String machineId,
+    String sectionName,
+  ) async {
+    final epoch = gridPictures.epochOf(machineId);
+    final answer = await _askGridModels(machineId, {
+      'rowState': true,
+      'wake': [sectionName],
+    });
+    if (_disposed || !answer.reachable) return answer;
+    gridPictures.adopt(machineId, answer, ifEpoch: epoch);
+    _followWake(machineId);
+    return answer;
+  }
+
+  /// How often, and for how long at most, a window re-reads a machine whose picture has a section
+  /// waking. The daemon's own wake gives up at 45 s; the extra is its last re-read landing.
+  static const _wakeFollowEvery = Duration(seconds: 5);
+  static const _wakeFollowFor = Duration(seconds: 60);
+  final Map<String, Timer> _wakeFollowers = {};
+
+  bool _pictureWaking(String machineId) =>
+      gridPictures[machineId]?.sections.any(
+        (s) => s.state == GridSectionState.waking,
+      ) ??
+      false;
+
+  /// Re-read [machineId] until no section in its picture is waking, or [_wakeFollowFor] passes.
+  ///
+  /// Harmless where pushes do arrive (this computer's own daemon): the read is the same
+  /// credential-less one every surface makes, joined with any other in flight, and a push that
+  /// already ended the wake ends this at its next tick. Skipped while the app is in the background,
+  /// like every other refresher.
+  void _followWake(String machineId) {
+    _wakeFollowers.remove(machineId)?.cancel();
+    if (!_pictureWaking(machineId)) return;
+    final deadline = _wakeFollowFor.inMilliseconds;
+    var elapsed = 0;
+    _wakeFollowers[machineId] = Timer.periodic(_wakeFollowEvery, (timer) {
+      elapsed += _wakeFollowEvery.inMilliseconds;
+      if (_disposed || !_pictureWaking(machineId) || elapsed > deadline) {
+        timer.cancel();
+        if (identical(_wakeFollowers[machineId], timer)) {
+          _wakeFollowers.remove(machineId);
+        }
+        return;
+      }
+      if (inForeground) unawaited(refreshGridModels(machineId));
+    });
+  }
+
+  void _stopWakeFollowers() {
+    for (final timer in _wakeFollowers.values) {
+      timer.cancel();
+    }
+    _wakeFollowers.clear();
   }
 
   final Map<String, Future<GridModels>> _gridReads = {};
@@ -6609,6 +6702,55 @@ class AppNotifier extends ChangeNotifier {
   PendingQuestion? questionFor(String machineId, String agentId) =>
       machineStates[machineId]?.blockedAgents[agentId];
 
+  /// The per-agent events that only a model answering produces — the CLI's live event kinds
+  /// (`SessionEvent` and `LiveEvent` in `cli/src/lib/normalize.ts`) other than the prompt itself
+  /// (`turn_started`, `user_message`), the turn's end (which [_cancelTurnActivity] handles), and a
+  /// compaction (`context_compact`, which is the engine, not the model). A reasoning model's first
+  /// output is its thinking (`thinking_delta`, from the codex, hermes and grok normalizers among
+  /// others), long before any text.
+  static const _modelAnswerEvents = {
+    'thinking_delta',
+    'thinking_title',
+    'text_delta',
+    'tool_start',
+    'tool_end',
+    'subagent_finished',
+    'done',
+  };
+
+  /// Start or end the pane chip from one of an agent's turn events — see [ModelStartWatch].
+  ///
+  /// A message is a `turn_started` that is not a `replay` (a turn picked back up at attach), for
+  /// the agent's own session, while its frame says its model's grid is asleep or waking — the
+  /// daemon's picture, carried on the agent (`grid.state`). Any of [_modelAnswerEvents] is the
+  /// model answering; the turn's end comes through [_cancelTurnActivity]. Terminal bytes are not
+  /// read at all: the first thing a pane prints after Enter is its own echo of the prompt.
+  void _watchModelStart(
+    MachineState machine,
+    String type,
+    Map<String, dynamic> event,
+    Map<String, dynamic> payload,
+  ) {
+    final agentId = _eventAgentId(machine, event, payload);
+    if (agentId == null) return;
+    final machineId = machine.machine.machineId;
+    if (_modelAnswerEvents.contains(type)) {
+      modelStarts.end(machineId, agentId);
+      return;
+    }
+    if (type != 'turn_started' || event['replay'] == true) return;
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null || agent.gridState?.resting != true) return;
+    final sessionId = _eventSessionId(event, payload);
+    // A sub-agent's turn is not a message this pane sent.
+    if (sessionId != null &&
+        agent.sessionId != null &&
+        sessionId != agent.sessionId) {
+      return;
+    }
+    modelStarts.start(machineId, agentId);
+  }
+
   void _cancelTurnActivity(String machineId, String agentId) {
     final key = _turnActivityKey(machineId, agentId);
     _turnActivityWatchdogs.remove(key)?.cancel();
@@ -6617,6 +6759,9 @@ class AppNotifier extends ChangeNotifier {
     // a turn this process never saw start contributes nothing (see
     // `HarnessStats.onTurnEnded`), which is what makes the disconnect sweep safe.
     harnessStats.onTurnEnded(key);
+    // The same ends close the pane's "Starting up…": a turn that ended, however, has nothing
+    // left to start for.
+    modelStarts.end(machineId, agentId);
     final machine = machineStates[machineId];
     machine?.processingAgentIds.remove(agentId);
     // A question cannot outlive its own turn — the daemon's watcher says the
@@ -6640,6 +6785,7 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _turnActivityWatchdogs.clear();
+    modelStarts.clear();
     for (final machine in machineStates.values) {
       machine.processingAgentIds.clear();
       machine.pendingProcessingSessions.clear();
@@ -10712,6 +10858,11 @@ class AppNotifier extends ChangeNotifier {
       }
       return;
     }
+    // Before the preview's early returns: several first-output kinds (`thinking_delta`) are not
+    // preview events at all.
+    if (type == 'turn_started' || _modelAnswerEvents.contains(type)) {
+      _watchModelStart(machine, type, event, payload);
+    }
     if (SessionPreviewStore.eventTypes.contains(type)) {
       final agentId = _eventAgentId(machine, event, payload);
       final agent = machine.agents
@@ -11208,6 +11359,8 @@ class AppNotifier extends ChangeNotifier {
     _localGitProjects.dispose();
     sessionPreviews.dispose();
     gridPictures.dispose();
+    _stopWakeFollowers();
+    modelStarts.dispose();
     foreground.dispose();
     // Its sweep timer would otherwise outlive the window it was drawing into.
     agentAlerts.dispose();

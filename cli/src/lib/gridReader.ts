@@ -15,13 +15,15 @@
  * ⚠️ **Never add a credential to anything in this file.** Not an Authorization header, not x-api-key,
  * not a token in the query. The whole resource saving rests on it, and its failure is SILENT: every list
  * still looks perfect while every open harness keeps every grid awake again. A person's act that SHOULD
- * wake a grid (a message, Start, an explicit wake) goes out another way, on purpose.
+ * wake a grid (a message, Start, an explicit wake, a prewarm) goes out another way — `gridWake.ts` — on
+ * purpose.
  *
  * The values below are cross-repo (the lockstep register; `tests/test_grid_reads_lockstep.py` in the
  * public `grid` repository finds the two literals by these exact quoted spellings).
  */
 import { VERSION } from '../version.js'
 import { gridExec, gridJson } from './gridExec.js'
+import { idKey } from './gridPicture.js'
 
 /** The master's two public reads, under a grid's address. ⚠️ Cross-repo literals (grid-src's routes,
  *  grid-apis' route rules and sleep record, the public CLI's `remote_overview`). */
@@ -82,8 +84,9 @@ export interface LastKnown {
 
 export type GridRead =
   /** It answered: these are the live nodes. `rawNodes` is the overview's own node objects, for the Model
-   *  Manager, which reads telemetry off them; through the CLI fallback, the little `grid models` says. */
-  | { kind: 'awake'; nodes: ReadNode[]; curatedIds: string[]; rawNodes: Array<Record<string, unknown>> }
+   *  Manager, which reads telemetry off them; through the CLI fallback, the little `grid models` says.
+   *  `windows` is each model's context window, keyed without case (empty through the fallback). */
+  | { kind: 'awake'; nodes: ReadNode[]; curatedIds: string[]; rawNodes: Array<Record<string, unknown>>; windows: Record<string, number> }
   /** The platform says it is resting. `lastKnown` is its record, when it has a valid one. */
   | { kind: 'asleep'; lastKnown: LastKnown | null }
   /** Anything else: stopped by its owner, master down, deleted, a codeless 503, garbage, a timeout. */
@@ -200,7 +203,34 @@ export async function readOverview(base: string): Promise<GridRead> {
     ? body.models.filter(isObject).map((entry) => text(entry.id)).filter(Boolean).slice(0, MAX_IDS)
     : []
   const rawNodes = body.nodes.filter(isObject).slice(0, MAX_NODES)
-  return { kind: 'awake', nodes: readNodes(rawNodes), curatedIds, rawNodes }
+  return { kind: 'awake', nodes: readNodes(rawNodes), curatedIds, rawNodes, windows: readWindows(body.models, rawNodes) }
+}
+
+/** No model's window is this large; a number past it is not one. */
+const MAX_WINDOW = 100_000_000
+
+/**
+ * Each model's context window as the overview reports it — the largest of its curated entry's
+ * `context_length` and every node's `model_capabilities[id].context_length`. The same figure the relay's
+ * signed-in `/models` gives as `context_window` (grid-src `advertised_context_window`, MAX across the
+ * engines serving it), read here without a credential. Keyed without case.
+ */
+function readWindows(curated: unknown, nodes: Array<Record<string, unknown>>): Record<string, number> {
+  const windows: Record<string, number> = {}
+  const take = (id: unknown, value: unknown): void => {
+    const key = idKey(text(id))
+    if (!key || typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > MAX_WINDOW) return
+    if (Object.keys(windows).length >= MAX_IDS && !(key in windows)) return
+    windows[key] = Math.max(windows[key] ?? 0, value)
+  }
+  if (Array.isArray(curated)) for (const entry of curated.filter(isObject)) take(entry.id, entry.context_length)
+  for (const node of nodes) {
+    const capabilities = isObject(node.model_capabilities) ? node.model_capabilities : {}
+    for (const [id, cell] of Object.entries(capabilities).slice(0, MAX_MODELS_PER_NODE)) {
+      if (isObject(cell)) take(id, cell.context_length)
+    }
+  }
+  return windows
 }
 
 /** The master's display rule (grid-src `model_ids.display_model_name`): a trailing `.gguf` removed,
@@ -299,5 +329,5 @@ export async function readViaCli(gridName: string): Promise<GridRead> {
   // The Model Manager reads node objects; these carry what `grid models` knows, and a node it lists is
   // one the grid is routing to right now.
   const rawNodes = nodes.map((node) => ({ name: node.name, engine: node.engine, models: node.models, online: true }))
-  return { kind: 'awake', nodes, curatedIds: exact.slice(0, MAX_IDS), rawNodes }
+  return { kind: 'awake', nodes, curatedIds: exact.slice(0, MAX_IDS), rawNodes, windows: {} }
 }

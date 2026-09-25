@@ -10,6 +10,7 @@ import { binaryOnPath } from './binaryOnPath.js'
 import { processExists } from './processLiveness.js'
 import type { LocalRecord, PictureState } from './gridPicture.js'
 import { displayModelName } from './gridReader.js'
+import { readEnvExports } from './gridWake.js'
 
 const GiB = 1024 ** 3
 const obj = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v : {}
@@ -153,6 +154,8 @@ export class LocalModels {
   private listPending?: Promise<LocalModelsSnapshot>
   private listGrid?: string
   private cached?: { at: number; grid: string; value: LocalModelsSnapshot }
+  /** The models the last read of each grid found running — kept past `cached`, which any save clears. */
+  private readonly runningAtLastRead = new Map<string, Set<string>>()
   private active?: { grid: string; operation: ModelOperation; done: Promise<void> }
   private receipt?: Receipt
   private receiptScope?: string
@@ -483,6 +486,7 @@ export class LocalModels {
       hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), notice: inventoryError || this.catalogError,
       observedAt: new Date().toISOString(), busy: !!this.active }
     this.cached = { grid, at: Date.now(), value }
+    this.runningAtLastRead.set(grid, new Set(models.filter(model => model.state === 'running').map(model => model.id)))
     return value
   }
 
@@ -614,6 +618,13 @@ export class LocalModels {
             ? `This computer does not have the memory to run ${candidate.name} with a 64K context. Close some apps, or choose a smaller model.`
             : 'The model could not start. Try again.')
         }
+      } else if (this.runningAtLastRead.get(grid)?.has(operation.modelId)) {
+        // Already serving when last read, and nothing was started: nothing to check. The reply test is an
+        // inference THROUGH the grid (so is the served-window read) — on a sleeping grid it would start it,
+        // and the platform then holds it up for hours, for a stray click (grid-reads-without-waking 03).
+        operation.phase = 'done'
+        await this.save(grid, operation)
+        return
       }
       await change('verifying')
       const model = instance?.aliases[0] || candidate.aliases?.[0] || candidate.file
@@ -634,14 +645,13 @@ export class LocalModels {
 
   private async verify(grid: string, model: string): Promise<void> {
     const info = await this.run(['--remote', 'info', grid, '--env'])
-    const exports: Record<string, string> = {}
-    for (const match of info.stdout.matchAll(/^export\s+(OPENAI_BASE_URL|OPENAI_API_KEY)=(.*)$/gm)) exports[match[1]] = match[2].trim().replace(/^["']|["']$/g, '')
-    if (!info.ok || !exports.OPENAI_BASE_URL || !exports.OPENAI_API_KEY) throw new ModelError('The model is starting, but could not be checked. Try again shortly.')
+    const { baseUrl, apiKey } = readEnvExports(info.stdout)
+    if (!info.ok || !baseUrl || !apiKey) throw new ModelError('The model is starting, but could not be checked. Try again shortly.')
     const deadline = Date.now() + 180_000
     do {
       try {
-        const response = await this.request(`${exports.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`, {
-          method: 'POST', headers: { authorization: `Bearer ${exports.OPENAI_API_KEY}`, 'content-type': 'application/json' },
+        const response = await this.request(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
           body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with the single word: ok' }], max_tokens: 8 }),
           signal: AbortSignal.timeout(30_000), redirect: 'error',
         })

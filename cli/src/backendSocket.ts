@@ -36,7 +36,10 @@ import { GridFleetRpc, GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS, parseGrid
 import { LocalModels } from './lib/localModels.js'
 import { ApiConnections, apiConnectionsRequest } from './lib/apiConnections.js'
 import { gridCapableEngines, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
-import { forgetGridModels, gridInventory, listAllGridModels, onGridModelsChanged, resolveGridTarget, type GridSection } from './lib/gridModels.js'
+import {
+  forgetGridModels, gridInventory, listAllGridModels, onGridModelsChanged, presentGridSections, retargetPrewarm, type GridSection,
+} from './lib/gridModels.js'
+import { resolveGridTarget } from './lib/gridTarget.js'
 import { parseNewAgentModel, resolveNewAgentModel } from './lib/newAgentModel.js'
 import { deriveHarnessGridName } from './lib/gridDerive.js'
 import { AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from './lib/engineLaunch.js'
@@ -365,10 +368,16 @@ async function enrichSubagentStats(events: SessionEvent[], transcriptPath: strin
   }
 }
 
+/** Sections one `grid_models_list` may ask to wake — a person presses one "Show models" at a time. */
+const MAX_WAKES_PER_ASK = 8
+
 /** What `grid_models_list` answers and `grid_models_changed` pushes — one shape, so a window parses both
  *  with one reader. `gridName` and `models` keep naming the own grid alone, for an app that predates
- *  `grids`; each section's `state`, `seenAt` and `lastKnownAge` are additive. */
-function gridModelsPayload(gridName: string | null, grids: GridSection[]): Record<string, unknown> {
+ *  `grids`; each section's `state`, `seenAt`, `lastKnownAge` and `wakeOutcome` are additive, and a row's
+ *  offline label is `unavailable` for a window that asked for row state, its node text for one that did
+ *  not (`presentGridSections`). */
+function gridModelsPayload(gridName: string | null, sections: GridSection[], rowState: boolean): Record<string, unknown> {
+  const grids = presentGridSections(sections, { rowState })
   return {
     gridName,
     models: grids.find((g) => g.own)?.models ?? [],
@@ -610,6 +619,9 @@ export class BackendSocket {
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid
    *  that lands meanwhile. */
   private gridModelsInFlight: { gridName: string | null; grids: ReturnType<typeof listAllGridModels> } | null = null
+  /** The windows on this computer that draw row state (`grid_models_list` with `rowState: true`) and so
+   *  are pushed labels as `unavailable` rather than in the node text. */
+  private readonly rowStateWindows = new Set<string>()
   /** Receives `theme_set` — the desktop's pane colours, to become this machine's tmux
    *  `window-style` (lib/hostTheme.ts). Wired by cli.ts; null answers with UNSUPPORTED. */
   hostThemeSink: ((theme: HostTheme) => void) | null = null
@@ -810,7 +822,10 @@ export class BackendSocket {
     try {
       const gridName = await this.resolveGridName()
       const grids = await listAllGridModels(gridName, { refresh: false })
-      this.sendLocal({ type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids) })
+      // Each window in the form it asked for — see `gridModelsPayload`.
+      const plain: Frame = { type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids, false) }
+      const withRowState: Frame = { type: 'grid_models_changed', payload: gridModelsPayload(gridName, grids, true) }
+      this.sendLocal((connId) => this.rowStateWindows.has(connId) ? withRowState : plain)
     } catch { /* the next ask answers the same thing */ }
   }
 
@@ -1012,10 +1027,12 @@ export class BackendSocket {
    *  dial is a physical object on one table, and a finger moving on its glass is meaningful to the window
    *  in front of it and to nothing else. `send()` fans out to the web audience as well, which would scroll
    *  a window on a computer the user is not sitting at. */
-  sendLocal(frame: Frame): void {
-    if (env.LOG_FRAMES) logFrame('→', 'local', frame)
+  /** One frame to every window on this computer — or, given a function, each window its own. */
+  sendLocal(frame: Frame | ((connId: string) => Frame)): void {
     for (const [connId, sink] of this.localClients) {
-      if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
+      const sent = typeof frame === 'function' ? frame(connId) : frame
+      if (env.LOG_FRAMES) logFrame('→', 'local', sent)
+      if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
     }
   }
 
@@ -1142,6 +1159,7 @@ export class BackendSocket {
   /** Release all connection-scoped state when the loopback WebSocket closes. */
   async unregisterLocalClient(connId: string): Promise<void> {
     if (!this.localClients.delete(connId)) return
+    this.rowStateWindows.delete(connId)
     this.viewerForwarder.closeConnection(connId)
     // The window left before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and a later link must not be told otherwise.
@@ -1935,18 +1953,31 @@ export class BackendSocket {
           // One computation at a time: detached, a second ask that lands while the first is still
           // out (the app re-asks on every connect) would spawn another `grid ls` for the same answer.
           // Later askers share the one in flight; each grid's reads are single-flight in the service.
+          //
+          // `rowState: true` — a window that draws row state gets offline labels as `unavailable` (and
+          // its pushes in that form); `wake: [name]` — a person pressed "Show models" / "Wake now", and
+          // the answer (with those sections "waking") comes back at once while the wake runs behind it
+          // (grid-reads-without-waking issue 03). A wake never joins a listing already out: that one
+          // was built before the wake began, and would not say "waking".
+          const rowState = payload.rowState === true
+          if (rowState && this.localClients.has(connId)) this.rowStateWindows.add(connId)
+          const wake = Array.isArray(payload.wake)
+            ? payload.wake.filter((name): name is string => typeof name === 'string' && !!name.trim()).map((name) => name.trim()).slice(0, MAX_WAKES_PER_ASK)
+            : []
           void (async () => {
             const gridName = await this.resolveGridName()
             const inFlight = this.gridModelsInFlight
-            const listing = inFlight && inFlight.gridName === gridName
-              ? inFlight.grids
-              : (this.gridModelsInFlight = {
-                  gridName,
-                  grids: listAllGridModels(gridName).finally(() => {
-                    if (this.gridModelsInFlight?.gridName === gridName) this.gridModelsInFlight = null
-                  }),
-                }).grids
-            reply(type, requestId, gridModelsPayload(gridName, await listing))
+            const listing = wake.length
+              ? listAllGridModels(gridName, { wake })
+              : inFlight && inFlight.gridName === gridName
+                ? inFlight.grids
+                : (this.gridModelsInFlight = {
+                    gridName,
+                    grids: listAllGridModels(gridName).finally(() => {
+                      if (this.gridModelsInFlight?.gridName === gridName) this.gridModelsInFlight = null
+                    }),
+                  }).grids
+            reply(type, requestId, gridModelsPayload(gridName, await listing, rowState))
           })().catch(() => reply(type, requestId, { error: 'GRID_MODELS_FAILED' }))
           return
         }
@@ -2377,12 +2408,17 @@ export class BackendSocket {
             })
             return
           }
-          const moved = await this.onRetargetAgent({ agentId, grid: target.state === 'ok' ? target.override : null })
+          const override = target.state === 'ok' ? target.override : null
+          const moved = await this.onRetargetAgent({ agentId, grid: override })
           if (!moved.ok) {
             reply(type, requestId, moved.detail ? { error: moved.error, detail: moved.detail } : { error: moved.error })
             return
           }
           reply(type, requestId, { retargeted: true })
+          // The agent is on a grid model now and its pane is restarting: start that grid meanwhile if it
+          // sleeps, so the first message rarely waits on a boot (issue 03). Detached — the move is done
+          // and answered — and it decides for itself whether a wake is worth it.
+          if (override) void retargetPrewarm(override).catch(() => {})
           return
         }
 

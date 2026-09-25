@@ -4,13 +4,16 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { atomicJson, gridSelect, now, operations, PACKAGE, readConfig } from './lib/fleet.mjs';
 import { createCollector } from './lib/telemetry.mjs';
+import { daemonWake, WAKE_FAILED, WAKE_OUTCOME_MS, WAKING } from './lib/wake.mjs';
 
-export function createViewer({ workspace, port = 0, intervalMs = 8000, collect = createCollector(workspace, { intervalMs }), select = gridSelect, timer = setTimeout }) {
+export function createViewer({ workspace, port = 0, intervalMs = 8000, collect = createCollector(workspace, { intervalMs }), select = gridSelect, timer = setTimeout, startWake = daemonWake, wakeOptions = {} }) {
   const clients = new Set();
   let snapshot = { spec: 1, status: 'connecting', grid: 'Your grid', nodes: [], machines: [], models: [], events: [], operations: [], history: {}, sources: {}, summary: {}, observedAt: null, pollIntervalMs: intervalMs };
-  let stopped = false, pollTimer, opTimer, heartbeat, inFlight = false, lastPollAt = 0;
+  let stopped = false, pollTimer, opTimer, heartbeat, inFlight = false, lastPollAt = 0, readAgain = false;
+  // "Wake now" (lib/wake.mjs): the one run in flight, and what the page is told about the latest one.
+  let waking = null, wakeState = null;
   // The next tick is booked only while a pane is connected: a viewer nobody is looking at must not keep
-  // running the grid CLI every few seconds. A request for the observation still wakes one read if the
+  // running the grid CLI every few seconds. A request for the observation still starts one read if the
   // one on hand has gone stale. The observation names its own pace — a sleeping grid is looked at every
   // 30 s rather than every few (lib/telemetry.mjs) — and a stale-read request honours the same pace.
   const pace = () => snapshot.pollIntervalMs || intervalMs;
@@ -19,15 +22,27 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
     if (stopped || clients.size === 0) return;
     pollTimer = timer(poll, pace());
   };
-  const wake = () => {
+  const readIfStale = () => {
     if (stopped || inFlight || Date.now() - lastPollAt < pace()) return;
     clearTimeout(pollTimer); pollTimer = null;
     void poll();
   };
+  // A read that must land now, not at the next booked tick: a wake just ended. One already out may have
+  // started before it did, so another follows that one.
+  const readNow = () => {
+    if (stopped) return;
+    if (inFlight) { readAgain = true; return; }
+    clearTimeout(pollTimer); pollTimer = null;
+    void poll();
+  };
+  // What the page is sent: the observation, with the wake beside it while that grid is the one on
+  // screen — a run still going, or an ending young enough to still be true.
+  const current = () => wakeState && wakeState.grid === snapshot.grid
+    && (wakeState.state === 'waking' || Date.now() - Date.parse(wakeState.at) < WAKE_OUTCOME_MS) ? { ...snapshot, wake: wakeState } : snapshot;
   const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
   const json = (res, code, value) => { res.writeHead(code, { ...headers, 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
   const publish = () => {
-    const body = `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
+    const body = `event: snapshot\ndata: ${JSON.stringify(current())}\n\n`;
     for (const client of clients) {
       if (client.writableLength > 256 * 1024) { client.destroy(); clients.delete(client); }
       else client.write(body);
@@ -41,7 +56,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
       const url = new URL(req.url, `http://${req.headers.host}`);
       const origin = req.headers.origin;
       if (origin && origin !== url.origin) { json(res, 403, { error: 'Cross-origin requests are not allowed.' }); return; }
-      // The one write the viewer takes: which grid to look at. It is the CLI's own selection
+      // One of the viewer's two writes: which grid to look at. It is the CLI's own selection
       // (`grid use`), so the agent and a terminal see the same choice, and the next poll is run at
       // once so the screen changes with the click rather than up to a poll later.
       if (req.method === 'POST' && url.pathname === '/api/select') {
@@ -51,21 +66,27 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
         try { await selectGrid(grid); json(res, 200, { ok: true, grid }); } catch (err) { json(res, 409, { error: err.message }); }
         return;
       }
+      // The other: a person asked the resting grid on screen to start. Answered at once; the daemon does
+      // the waking, and how it went arrives on the stream the map already listens on.
+      if (req.method === 'POST' && url.pathname === '/api/wake') {
+        try { json(res, 202, { ok: true, wake: requestWake() }); } catch (err) { json(res, 409, { error: err.message }); }
+        return;
+      }
       if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD, POST'); json(res, 405, { error: 'This viewer is read-only. Talk to the Model Manager to make changes.' }); return; }
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return; }
-      if (url.pathname === '/api/snapshot') { json(res, 200, snapshot); wake(); return; }
+      if (url.pathname === '/api/snapshot') { json(res, 200, current()); readIfStale(); return; }
       if (url.pathname === '/events') {
         if (req.method === 'HEAD') { res.writeHead(200, headers); res.end(); return; }
         if (clients.size >= 32) { json(res, 503, { error: 'Too many viewer connections.' }); return; }
         res.writeHead(200, { ...headers, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' });
-        res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+        res.write(`event: snapshot\ndata: ${JSON.stringify(current())}\n\n`);
         clients.add(res);
         res.on('close', () => { clients.delete(res); if (clients.size === 0) { clearTimeout(pollTimer); pollTimer = null; } });
-        wake();
+        readIfStale();
         if (!pollTimer && !inFlight) schedule();
         return;
       }
-      const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/stream.js': ['stream.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/app.css': ['app.css', 'text/css; charset=utf-8'] };
+      const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/stream.js': ['stream.js', 'text/javascript; charset=utf-8'], '/wake.js': ['wake.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/app.css': ['app.css', 'text/css; charset=utf-8'] };
       if (!assets[url.pathname]) { json(res, 404, { error: 'Not found' }); return; }
       const [file, contentType] = assets[url.pathname];
       const content = await readFile(join(PACKAGE, 'viewer', file));
@@ -91,6 +112,39 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
     poll(); // not awaited — its own errors are already caught inside poll()
   }
 
+  /**
+   * Start the resting grid on screen through the daemon, or join the start already running for it: a
+   * second click is not a second wake. Anything but a resting grid is refused — an awake one has
+   * nothing to start, and no automatic path ever gets here.
+   */
+  function requestWake() {
+    const label = snapshot.grid;
+    if (waking) {
+      if (waking.grid === label) return wakeState;
+      throw new Error('Still starting the one before. Try again in a moment.');
+    }
+    if (snapshot.status !== 'asleep') throw new Error('It is not resting right now.');
+    waking = { grid: label, abort: new AbortController() };
+    wakeState = { grid: label, state: 'waking', message: WAKING, at: now() };
+    publish();
+    void runWake(label, waking.abort.signal);
+    return wakeState;
+  }
+  async function runWake(label, signal) {
+    let outcome;
+    try {
+      const config = await readConfig(workspace);
+      outcome = await startWake({ ...wakeOptions, controller: config.machines.find(m => m.id === config.controller), grid: config.grid, signal });
+    } catch { outcome = { state: 'failed', message: WAKE_FAILED }; }
+    waking = null;
+    if (stopped) return;
+    wakeState = { grid: label, state: outcome.state, message: outcome.message, at: now() };
+    publish();
+    // However it ended, look again now rather than at the resting pace: a woken grid's engines are
+    // drawn from this read — and, like every read, it carries NO_WAKE.
+    readNow();
+  }
+
   async function poll() {
     inFlight = true;
     try { snapshot = await collect(); }
@@ -100,7 +154,13 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
     }
     inFlight = false; lastPollAt = Date.now();
     if (stopped) return;
-    publish(); schedule();
+    // The daemon keeps a wake's ending until a read finds the grid serving; so does the page — a
+    // "started" line must not come back over a later sleep.
+    if (wakeState && wakeState.state !== 'waking' && wakeState.grid === snapshot.grid
+      && ['live', 'partial'].includes(snapshot.status) && snapshot.summary?.modelsServing > 0) wakeState = null;
+    publish();
+    if (readAgain) { readAgain = false; void poll(); return; }
+    schedule();
   }
   async function pollOperations() {
     const latest = await operations(workspace).catch(() => []);
@@ -117,7 +177,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 8000, collect =
         ok(server.address().port);
       });
     }),
-    close: async () => { stopped = true; clearTimeout(pollTimer); clearTimeout(opTimer); clearInterval(heartbeat); for (const client of clients) client.end(); server.closeAllConnections(); await new Promise(done => server.close(done)); },
+    close: async () => { stopped = true; waking?.abort.abort(); clearTimeout(pollTimer); clearTimeout(opTimer); clearInterval(heartbeat); for (const client of clients) client.end(); server.closeAllConnections(); await new Promise(done => server.close(done)); },
   };
 }
 

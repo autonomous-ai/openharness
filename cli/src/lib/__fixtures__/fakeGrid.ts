@@ -25,13 +25,15 @@ const verb = args[0] || ''
 // read-modify-write of one JSON document lost calls and crashed a reader that caught it half written.
 fs.appendFileSync(log, JSON.stringify(process.argv.slice(2)) + '\\n')
 const calls = fs.readFileSync(log, 'utf8').split('\\n').filter(Boolean).map((line) => JSON.parse(line))
-// A plan may answer one grid differently from another: \`info mine\` is asked before \`info\`.
-const keyed = plan[verb + ' ' + (args[1] || '')]
+// A plan may answer one grid differently from another: \`info mine\` is asked before \`info\`, and
+// \`info mine --env\` (the credential) before \`info mine\` (its \`--json\` status and address).
+const keyedFlag = plan[verb + ' ' + (args[1] || '') + ' ' + (args[2] || '')]
+const keyed = keyedFlag || plan[verb + ' ' + (args[1] || '')]
 const step = keyed || plan[verb]
 if (!step) { process.exit(0) }
 // A verb may answer differently on successive calls (\`ls\` before and after a create), so its
 // answer can be a LIST of turns; the last turn repeats once the list runs out.
-const asked = calls.filter((c) => c.includes(verb) && (!keyed || c.includes(args[1]))).length
+const asked = calls.filter((c) => c.includes(verb) && (!keyed || c.includes(args[1])) && (!keyedFlag || c.includes(args[2]))).length
 const turn = Array.isArray(step) ? (step[asked - 1] ?? step[step.length - 1]) : step
 if (turn.stdout) process.stdout.write(turn.stdout)
 if (turn.stderr) process.stderr.write(turn.stderr)
@@ -42,7 +44,8 @@ process.exit(turn.exit ?? 0)
 export interface FakeGridTurn { stdout?: string; stderr?: string; exit?: number }
 
 /** Keyed by the FIRST argument after `--remote` is stripped — `mcp` for `grid mcp config …` — or by that
- *  and the next one, `info mine`, which wins over the verb alone. */
+ *  and the next one, `info mine`, which wins over the verb alone — or by those and the one after,
+ *  `info mine --env`, which wins over both. */
 export type FakeGridPlan = Record<string, FakeGridTurn | FakeGridTurn[]>
 
 export interface FakeGrid {
