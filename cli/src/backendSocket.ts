@@ -21,7 +21,7 @@ import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/auton
 
 import { WebSocket } from 'ws'
 import { watchSocketLiveness, type LivenessWatch } from './lib/wsLiveness.js'
-import { stat, readFile } from 'fs/promises'
+import { stat, readFile, readdir } from 'fs/promises'
 import { isAbsolute, join } from 'path'
 import { hostname, homedir } from 'os'
 import { env } from './config/env.js'
@@ -2375,6 +2375,22 @@ export class BackendSocket {
                       engineTrust.record(preparedFolder)
                     }
                   } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
+                } else if (!dsh && local) {
+                  // A plain cwd on the LOCAL machine is the desktop opening a NEW folder: the desktop made it
+                  // empty and hands the path over, it has nothing in it to review, so it is trusted the way a
+                  // `new` project is. The LOCAL gate is the boundary — agent_create is not backend-only, so a
+                  // relayed/E2EE frame would otherwise name any empty path on this host and get it trusted.
+                  // A clone / the person's own repo is never empty (lib/claudeTrust.ts), and evidence beats a
+                  // client's word, so this readdir is the gate. DSH trust is decided in cli.ts where the
+                  // template count is known; leave that to it.
+                  try {
+                    const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
+                    if (empty) {
+                      const engineTrust = input.engine === 'claude' ? { record: preTrustClaudeProject }
+                        : input.engine === 'codex' ? { record: preTrustCodexProject } : null
+                      if (engineTrust) engineTrust.record(input.cwd)
+                    }
+                  } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
                 }
                 const result = await create(preparedFolder ? { ...input, cwd: preparedFolder } : input)
                 if (result.ok) return { state: 'created', agentId: result.session.agentId }
