@@ -398,14 +398,16 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         }
         PickerKind::Models => {
             picker.keep_order = true;
-            picker.set_rows(modal::model_rows(app));
+            let mut rows = modal::model_rows(app);
+            rows.extend(modal::local_model_rows(app));
+            picker.set_rows(rows);
             // Start on the model it runs, so ↑/↓ are "a little more / less" from where it is.
             if picker.query.trim() == ":" && picker.selected_id.is_none() {
                 if let Some(current) = focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.model.clone())) {
                     if let Some(at) = picker.visible.iter().position(|(i, _)| picker.rows[*i].id == current) { picker.cursor = at; picker.selected_id = Some(current) }
                 }
             }
-            picker.hints = vec![("enter", "use")];
+            picker.hints = vec![("enter", "use · start · get"), ("^s", "stop a local model")];
             picker.empty = if app.focused().is_none() { "Focus a harness to switch its model.".into() } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
@@ -490,7 +492,17 @@ fn prepare(app: &mut App, kind: &PickerKind) {
     }
 }
 
+fn load_local_models(app: &mut App) {
+    let machine = modal::models_machine(app);
+    let Some(link) = app.link(&machine) else { return };
+    app.spawn(async move { link.rpc("grid_fleet_models_list", json!({}), Duration::from_secs(30)).await }, move |app, reply| {
+        if let Ok(reply) = reply { app.local_models.insert(machine, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
+        refill(app);
+    });
+}
+
 fn load_models(app: &mut App) {
+    load_local_models(app);
     let Some((machine, agent)) = focused_agent(app) else { return };
     let Some(link) = app.link(&machine) else { return };
     let key = (machine, agent.clone());
@@ -915,6 +927,32 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             next.prefixed = true;
             fill(app, &kind, &mut next);
             app.modal = Some(Modal::Picker { kind, picker: next });
+        }
+        PickerKind::Models if id.as_deref().map(|i| i.starts_with("grid:")).unwrap_or(false) => {
+            let id = id.unwrap();
+            let Some((machine, model)) = id.trim_start_matches("grid:").split_once('\t').map(|(m, x)| (m.to_string(), x.to_string())) else { return keep(app, kind, picker) };
+            let state = app.local_models.get(&machine).and_then(|l| l.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(model.as_str()))).and_then(|m| m.get("state").and_then(|v| v.as_str())).unwrap_or("available").to_string();
+            let running = state == "running" || state == "serving";
+            let action = match (choice, running, state.as_str()) {
+                (Choice::SplitDown, true, _) => "grid_fleet_model_stop",
+                (Choice::Enter, false, "downloaded") => "grid_fleet_model_start",
+                (Choice::Enter, false, _) => {
+                    // A download is gigabytes: the first Enter asks, the second one means it.
+                    if picker.armed.as_deref() != Some(id.as_str()) { picker.armed = Some(id.clone()); picker.say("Enter again to download it"); return keep(app, kind, picker) }
+                    "grid_fleet_model_download"
+                }
+                (_, true, _) => { picker.say("Running — ^S stops it"); return keep(app, kind, picker) }
+                _ => return keep(app, kind, picker),
+            };
+            picker.armed = None;
+            let Some(link) = app.link(&machine) else { return keep(app, kind, picker) };
+            let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
+            picker.say(match action { "grid_fleet_model_stop" => format!("Stopping {label}…"), "grid_fleet_model_start" => format!("Starting {label}…"), _ => format!("Downloading {label}…") });
+            app.spawn(async move { link.rpc(action, json!({ "modelId": model }), Duration::from_secs(600)).await }, move |app, reply| {
+                match reply { Ok(_) => app.say(format!("{label}: done"), theme::ONLINE), Err(e) => app.say(format!("{label}: {e}"), theme::DANGER) }
+                load_local_models(app);
+            });
+            return keep(app, kind, picker);
         }
         PickerKind::Models => {
             let Some(model) = id else { return keep(app, kind, picker) };

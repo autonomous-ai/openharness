@@ -262,6 +262,35 @@ pub fn model_rows(app: &App) -> Vec<Row> {
     }).collect()
 }
 
+/// The machine a `:` list is about: the focused pane's, else this computer.
+pub fn models_machine(app: &App) -> String {
+    app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone())
+}
+
+/// `:`, part two: the machine's local models — start one that is downloaded, get one that is not.
+pub fn local_model_rows(app: &App) -> Vec<Row> {
+    let machine = models_machine(app);
+    let name = app.fleet.machine_name(&machine);
+    let Some(list) = app.local_models.get(&machine) else { return vec![] };
+    let gb = |b: f64| if b >= 1e9 { format!("{:.1} GB", b / 1e9) } else { format!("{:.0} MB", b / 1e6) };
+    let mut rows: Vec<(u8, Row)> = list.iter().filter_map(|m| {
+        let id = m.get("id")?.as_str()?;
+        let state = m.get("state").and_then(Value::as_str).unwrap_or("available");
+        let label = m.get("name").and_then(Value::as_str).unwrap_or(id).to_string();
+        let size = m.get("sizeBytes").and_then(Value::as_f64).map(gb).unwrap_or_default();
+        let (dot, color, rank) = match state { "running" | "serving" => ("●", theme::ONLINE, 0), "downloaded" => ("○", theme::SOFT, 1), s if s.contains("load") || s.contains("start") => ("◌", theme::WARN, 0), _ => ("·", theme::MUTED, 2) };
+        let action = match rank { 0 => "running · ^S stops", 1 => "enter starts", _ => "enter downloads" };
+        let recommended = m.get("recommended").and_then(Value::as_bool).unwrap_or(false);
+        Some((rank, Row::new(format!("grid:{machine}\t{id}"), label).group(format!("Local models · {name}"))
+            .extra(format!("{id} {} {state}", m.get("quant").and_then(Value::as_str).unwrap_or("")))
+            .lead(vec![span(format!("{dot} "), fg(color))])
+            .detail(vec![span(format!("{state}{}", if recommended { " · recommended" } else { "" }), fg(theme::MUTED))])
+            .right(format!("{size}  {action}"))))
+    }).collect();
+    rows.sort_by_key(|(rank, _)| *rank);
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
 pub fn mode_rows() -> Vec<Row> {
     let modes = [(">", "Commands", "Run anything by name", "⌥⇧P"), ("@", "Machines", "Choose a machine, then one of its harnesses", "⌥M"), ("#", "Projects", "Choose a project, then one of its harnesses", "⌥O"), (":", "Models", "Switch the focused harness's model and effort", "⌥I"), ("*", "Store", "Find a harness in the Store", "⌥S")];
     let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p}  {t}")).group("Type a prefix").detail(vec![span(*d, fg(theme::MUTED))]).right(*k)).collect();
