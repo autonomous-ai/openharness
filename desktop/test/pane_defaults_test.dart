@@ -21,8 +21,7 @@ void main() {
           Platform.environment['HARNESS_PANE_DEFAULTS_CAPTURE_DIR'];
       if (captures != null) await tester.runAsync(loadRealFonts);
       final store = MemoryStore();
-      final app = createApp(store: store);
-      app.machineStates['m']!.nodeOnline = true;
+      final app = createApp(store: store, connected: true);
       final frames = <TerminalBinaryFrame>[];
       final tab = app.activeSwarm;
       final first = app.adoptSessionForTest(terminal('a0', frames));

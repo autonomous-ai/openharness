@@ -78,8 +78,7 @@ void main() {
         final messenger = tester.binding.defaultBinaryMessenger;
         messenger.setMockMethodCallHandler(channel, (_) async => true);
         addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-        final app = createApp();
-        app.machineStates['m']!.nodeOnline = true;
+        final app = createApp(connected: true);
         app.adoptSessionForTest(terminal('a0', []));
         final work = app.activeSwarmId;
         app.newSwarm();
@@ -180,7 +179,7 @@ void main() {
   testWidgets(
     'welcome opens the shared search and supports readline selection',
     (tester) async {
-      final app = createApp();
+      final app = createApp(connected: true);
       await mount(tester, app);
       await openHarnessPicker(tester);
       await tester.pump();

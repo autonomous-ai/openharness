@@ -10,6 +10,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/app_type.dart';
 import '../shared/theme/status_line_style.dart';
 import '../state/app_state.dart';
+import '../state/harness_sessions.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../terminal/terminal_theme.dart';
@@ -293,19 +294,17 @@ class _AgentPreview extends StatelessWidget {
     final record = app.sessionPreviews.read(
       app.previewKey(machine.machine.machineId, agent),
     );
-    final offline =
-        machine.nodeOnline == false ||
-        machine.needsLink ||
-        machine.connectionStatus != ConnectionStatus.connected;
+    final unavailable = harnessSessionUnavailable(machine, agent);
+    final offline = unavailable != null;
     final waiting = offline ? null : machine.blockedAgents[agent.id];
     final working = !offline && machine.processingAgentIds.contains(agent.id);
-    final state = offline
-        ? 'Offline'
-        : waiting != null
-        ? 'Needs you'
-        : working
-        ? 'Working'
-        : 'Idle';
+    final state =
+        unavailable ??
+        (waiting != null
+            ? 'Needs you'
+            : working
+            ? 'Working'
+            : 'Idle');
     final color = offline
         ? muted.color!
         : waiting != null

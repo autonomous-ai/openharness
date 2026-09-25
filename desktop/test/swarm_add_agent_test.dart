@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,7 +17,7 @@ void main() {
   testWidgets('New Pane shortcut reuses the chosen session in this workspace', (
     tester,
   ) async {
-    final app = createApp();
+    final app = createApp(connected: true);
     final input = <TerminalBinaryFrame>[];
     final shared = app.adoptSessionForTest(terminal('a0', input));
     final source = app.activeSwarm;
