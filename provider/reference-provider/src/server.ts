@@ -44,10 +44,25 @@ async function handle(req: IncomingMessage, res: ServerResponse, store: Store): 
     sendJson(res, 404, { error: 'not found' })
     return
   }
+  // A provider is called server to server; no browser is a client. A browser always says where a POST
+  // came from, so refusing one that does keeps a web page — including one that re-points its own
+  // hostname at this port — from driving the provider, without a Host rule that a proxy in front of
+  // it would break.
+  if (req.headers.origin !== undefined || req.headers['sec-fetch-site'] !== undefined) {
+    sendJson(res, 403, { error: 'forbidden' })
+    return
+  }
 
   let rpc: RpcRequest
+  let raw: string
   try {
-    rpc = JSON.parse(await readBody(req)) as RpcRequest
+    raw = await readBody(req)
+  } catch {
+    sendJson(res, 413, { error: 'body too large' })
+    return
+  }
+  try {
+    rpc = JSON.parse(raw) as RpcRequest
   } catch {
     sendError(res, null, 'invalid_request', 'body is not JSON')
     return
@@ -254,10 +269,26 @@ function header(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(v) ? v[0] : v
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
-  let body = ''
-  for await (const chunk of req) body += chunk
-  return body
+/** A JSON-RPC request is small; anything past this is refused rather than buffered without end. */
+const MAX_BODY_BYTES = 1024 * 1024
+
+/** Rejects when the body passes MAX_BODY_BYTES. The rest is read and discarded, never kept, so memory
+ *  stays bounded and the caller can still answer 413 on a connection the client is not writing into. */
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size <= MAX_BODY_BYTES) chunks.push(chunk)
+      else chunks.length = 0
+    })
+    req.once('end', () => {
+      if (size > MAX_BODY_BYTES) reject(new Error('body too large'))
+      else resolve(Buffer.concat(chunks).toString('utf8'))
+    })
+    req.once('error', reject)
+  })
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
