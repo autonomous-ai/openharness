@@ -89,6 +89,12 @@ pub struct App {
     /// What the outer terminal's title was last set to.
     pub title: String,
     pub first_frame: bool,
+    /// Terminal frames for a stream no pane has yet — the keyframe can outrun `terminal_ready`.
+    orphans: HashMap<Uuid, (Instant, Vec<proto::Frame>)>,
+    /// Desk writes sent and not yet answered; while any are out, the desk is not reconciled.
+    desk_inflight: u32,
+    /// The desk moved while writes were out: fetch it once they land.
+    desk_stale: bool,
     /// The tab before this one, by id — ⌥` goes back to it.
     pub last_tab: Option<String>,
     /// The person's own bindings (tui.toml): chord → command, or None to leave it to the pane.
@@ -138,6 +144,9 @@ impl App {
             last_click: None,
             title: String::new(),
             first_frame: false,
+            orphans: HashMap::new(),
+            desk_inflight: 0,
+            desk_stale: false,
             last_tab: None,
             keys: Vec::new(),
             prefix_key: crate::config::Config::default().prefix,
@@ -281,6 +290,7 @@ impl App {
                 for pane in self.panes.values_mut().filter(|p| p.machine_id == machine_id) {
                     pane.stream = None;
                     pane.opening = false;
+                    pane.open_token += 1;
                     if !matches!(pane.phase, Phase::Card { .. }) {
                         pane.phase = if needs_link {
                             Phase::Card { title: "This machine is not linked here".into(), detail: format!("Link it once with its remote password (⌥M, then ^L), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), ("⌥M".into(), "machines".into())] }
@@ -420,7 +430,14 @@ impl App {
     }
 
     fn on_terminal(&mut self, frame: proto::Frame) {
-        let Some(pane) = self.panes.values_mut().find(|p| p.stream == Some(frame.stream)) else { return };
+        let Some(pane) = self.panes.values_mut().find(|p| p.stream == Some(frame.stream)) else {
+            // Hold it for a moment: its `terminal_ready` may still be on the way.
+            if self.orphans.len() < 16 {
+                let entry = self.orphans.entry(frame.stream).or_insert_with(|| (Instant::now(), Vec::new()));
+                if entry.1.len() < 64 { entry.1.push(frame) }
+            }
+            return;
+        };
         pane.last_seq = Some(pane.last_seq.map(|s| s.max(frame.seq)).unwrap_or(frame.seq));
         pane.ack_due = true;
         if frame.kind == Kind::Sync { return }
@@ -486,6 +503,11 @@ impl App {
         let old = pane.stream.take();
         if let Some(old) = old { link.send("terminal_close", json!({ "streamId": old.to_string() })); }
         let agent_id = pane.agent_id.clone();
+        let machine_id = pane.machine_id.clone();
+        // Replies from an earlier open (a socket that has since dropped, a pane re-opened) are
+        // recognised by this token and not allowed to overwrite the current state.
+        pane.open_token += 1;
+        let token = pane.open_token;
         let host = hostname();
         self.spawn(async move {
             link.request("terminal_open", json!({
@@ -497,15 +519,25 @@ impl App {
                 "client": { "kind": "tui", "name": format!("{host} terminal") },
                 "takeover": takeover,
             }), Duration::from_secs(45)).await
-        }, move |app, reply| app.opened(pane_id, reply));
+        }, move |app, reply| app.opened(pane_id, &machine_id, token, (cols, rows), reply));
     }
 
-    fn opened(&mut self, pane_id: u64, reply: Result<(String, Value), RpcError>) {
+    fn opened(&mut self, pane_id: u64, machine_id: &str, token: u64, asked: (u16, u16), reply: Result<(String, Value), RpcError>) {
+        let stream = reply.as_ref().ok().filter(|(ty, _)| ty == "terminal_ready").and_then(|(_, p)| p.get("streamId").and_then(Value::as_str)).and_then(|s| Uuid::parse_str(s).ok());
+        let current = self.panes.get(&pane_id).map(|p| p.open_token == token).unwrap_or(false);
+        if !current {
+            // The pane went away (or opened again) while this was in flight: give the terminal back,
+            // or this window would hold its keyboard lease with nothing on screen.
+            if let (Some(stream), Some(link)) = (stream, self.links.get(machine_id).and_then(|s| s.link.clone())) {
+                link.send("terminal_close", json!({ "streamId": stream.to_string() }));
+            }
+            return;
+        }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         pane.opening = false;
         match reply {
             Ok((ty, payload)) if ty == "terminal_ready" => {
-                pane.stream = payload.get("streamId").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok());
+                pane.stream = stream;
                 pane.read_only = payload.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
                 pane.input_seq = 0;
                 pane.resize_seq = 0;
@@ -515,7 +547,20 @@ impl App {
                     Phase::Watching(payload.get("heldBy").and_then(|h| h.get("name")).and_then(Value::as_str).unwrap_or("another window").to_string())
                 } else { Phase::Live };
                 let queued = std::mem::take(&mut pane.queued);
-                if !pane.read_only { for bytes in queued { self.send_input(pane_id, &bytes) } }
+                let read_only = pane.read_only;
+                // The tile changed size while this was opening: tell the far pane now.
+                if !read_only && pane.want != asked {
+                    pane.resize_seq += 1;
+                    let (seq, want) = (pane.resize_seq, pane.want);
+                    if let (Some(stream), Some(link)) = (stream, self.links.get(machine_id).and_then(|s| s.link.clone())) {
+                        link.send("terminal_resize", json!({ "streamId": stream.to_string(), "resizeSeq": seq, "cols": want.0, "rows": want.1 }));
+                    }
+                }
+                // Frames that raced ahead of this reply (the keyframe, often) are applied now.
+                if let Some(stream) = stream {
+                    for frame in self.orphans.remove(&stream).map(|(_, f)| f).unwrap_or_default() { self.on_terminal(frame) }
+                }
+                if !read_only { for bytes in queued { self.send_input(pane_id, &bytes) } }
             }
             Ok((_, payload)) => {
                 let code = payload.get("code").and_then(Value::as_str).unwrap_or("TERMINAL_OPEN_FAILED").to_string();
@@ -680,8 +725,8 @@ impl App {
 
     pub fn focus_pane(&mut self, tab: usize, pane: u64) {
         self.active = tab;
-        self.tabs[tab].focus = Some(pane);
         if self.tabs[tab].zoomed && self.tabs[tab].focus != Some(pane) { self.tabs[tab].zoomed = false }
+        self.tabs[tab].focus = Some(pane);
         self.seen(pane);
         self.fit_panes();
     }
@@ -728,6 +773,10 @@ impl App {
             (Placement::Replace, false) => {
                 let Some(focus) = self.focused() else { return };
                 let old = focus;
+                if let Some(p) = self.panes.get(&old) {
+                    let op = json!({ "op": "pane.remove", "tabId": self.tab().id, "machineId": p.machine_id, "agentId": p.agent_id });
+                    if self.tab().on_desk { self.desk_op(op) }
+                }
                 if let Some(root) = self.tab_mut().root.as_mut() { root.replace(old, id); }
                 self.tab_mut().focus = Some(id);
                 self.drop_pane(old);
@@ -869,8 +918,10 @@ impl App {
     }
 
     fn fetch_desk(&mut self) {
+        if self.desk_inflight > 0 { self.desk_stale = true; return }
         let port = self.port;
         self.spawn(async move { http_json(port, "GET", "/api/desk", None).await }, |app, desk| {
+            if app.desk_inflight > 0 { app.desk_stale = true; return }
             if let Ok(desk) = desk { app.apply_desk(&desk) }
         });
     }
@@ -957,24 +1008,36 @@ impl App {
 
     fn desk_pane_added(&mut self, tab_id: &str, machine_id: &str, agent_id: &str) {
         let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else { return };
-        if !self.tabs[index].on_desk {
+        let mut ops = Vec::new();
+        if !self.tabs[index].on_desk && self.desk_mode == DeskMode::Sync {
             self.tabs[index].on_desk = true;
             let tab = &self.tabs[index];
             let mut op = json!({ "op": "tab.create", "id": tab.id, "name": tab.name, "index": index });
             if tab.named { op["nameIsCustom"] = json!(true) }
-            self.desk_op(op);
+            ops.push(op);
         }
         let at = self.tabs[index].panes().len().saturating_sub(1);
-        self.desk_op(json!({ "op": "pane.add", "tabId": tab_id, "machineId": machine_id, "agentId": agent_id, "index": at }));
+        ops.push(json!({ "op": "pane.add", "tabId": tab_id, "machineId": machine_id, "agentId": agent_id, "index": at }));
+        self.desk_ops(ops);
     }
 
-    pub fn desk_op(&mut self, op: Value) {
-        if self.desk_mode != DeskMode::Sync { return }
+    pub fn desk_op(&mut self, op: Value) { self.desk_ops(vec![op]) }
+
+    /// Send ops as one write. The reply is the whole desk, other windows' changes included; it is
+    /// reconciled only when none of this window's writes are still out — reconciling to a desk that
+    /// has the tab but not yet its pane would close the tab this window just made.
+    pub fn desk_ops(&mut self, ops: Vec<Value>) {
+        if self.desk_mode != DeskMode::Sync || ops.is_empty() { return }
         let port = self.port;
-        self.spawn(async move { http_json(port, "POST", "/api/desk/ops", Some(&json!({ "ops": [op] }))).await }, |app, reply| {
-            if let Ok(desk) = reply {
-                if let Some(revision) = desk.get("revision").and_then(Value::as_i64) { app.desk_revision = app.desk_revision.max(revision) }
+        self.desk_inflight += 1;
+        self.spawn(async move { http_json(port, "POST", "/api/desk/ops", Some(&json!({ "ops": ops }))).await }, |app, reply| {
+            app.desk_inflight = app.desk_inflight.saturating_sub(1);
+            if app.desk_inflight > 0 { app.desk_stale = true; return }
+            match reply {
+                Ok(desk) => app.apply_desk(&desk),
+                Err(_) => app.fetch_desk(),
             }
+            if std::mem::take(&mut app.desk_stale) { app.fetch_desk() }
         });
     }
 
@@ -993,6 +1056,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        self.orphans.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(10));
         for pane in self.panes.values_mut() { pane.settle_predictions() }
         let now = Instant::now();
         for agent in self.fleet.agents.values_mut() {

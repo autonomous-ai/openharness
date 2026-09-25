@@ -90,6 +90,8 @@ pub struct Pane {
     pub predictions: Vec<(u16, u16, char, Instant)>,
     /// The match ⌥F is on.
     pub find_at: Option<alacritty_terminal::term::search::Match>,
+    /// Bumped on every open; a reply carrying an older one is stale.
+    pub open_token: u64,
     /// Inside screen's `ESC k … ESC \` title (split across chunks).
     in_screen_title: bool,
     /// An ESC ended the last chunk; the next byte decides what it was.
@@ -131,6 +133,7 @@ impl Pane {
             echo_us: Vec::new(),
             predictions: Vec::new(),
             find_at: None,
+            open_token: 0,
         }
     }
 
@@ -142,6 +145,9 @@ impl Pane {
         self.parser = Processor::new();
         self.in_screen_title = false;
         self.pending_esc = false;
+        // Predictions were placed on the old grid; a new one (maybe narrower) has no room for them.
+        self.predictions.clear();
+        self.find_at = None;
         self.feed(bytes);
     }
 
@@ -265,7 +271,7 @@ impl Pane {
         let rows = grid.screen_lines() as u16;
         let before = self.predictions.len();
         self.predictions.retain(|(col, row, c, at)| {
-            if *row >= rows { return false }
+            if *row >= rows || *col as usize >= grid.columns() { return false }
             let cell = &grid[Line(*row as i32)][Column(*col as usize)];
             cell.c != *c && at.elapsed() < patience
         });
@@ -418,6 +424,8 @@ pub fn encode_key(key: &KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
                     '^' | '6' => 0x1e,
                     '_' | '-' | '7' => 0x1f,
                     '8' | '?' => 0x7f,
+                    '/' => 0x1f,
+                    '`' => 0,
                     _ => return Some(with_alt(c.to_string().into_bytes())),
                 };
                 with_alt(vec![byte])
@@ -524,6 +532,26 @@ mod tests {
         assert_eq!(pane.strip_screen_titles(b"tle\x1b"), b"");
         assert_eq!(pane.strip_screen_titles(b"\\y\x1b"), b"y");
         assert_eq!(pane.strip_screen_titles(b"[0m"), b"\x1b[0m");
+    }
+
+    #[test]
+    fn predictions_do_not_outlive_a_narrower_keyframe() {
+        let mut pane = Pane::new(1, "m", "a", 120, 30);
+        pane.feed(b"\x1b[5;100H");
+        for c in "abc".chars() { pane.predict_char(c) }
+        assert_eq!(pane.predictions.len(), 3);
+        pane.keyframe(80, 24, b"\x1bcshell$ ");
+        pane.settle_predictions();
+        assert!(pane.predictions.is_empty());
+        // And one placed past a (somehow) narrower grid is dropped, not indexed.
+        pane.predictions.push((100, 2, 'x', Instant::now()));
+        pane.settle_predictions();
+        assert!(pane.predictions.is_empty());
+    }
+
+    #[test]
+    fn ctrl_slash_is_undo() {
+        assert_eq!(encode_key(&key(KeyCode::Char('/'), KeyModifiers::CONTROL), TermMode::empty()).unwrap(), vec![0x1f]);
     }
 
     #[test]
