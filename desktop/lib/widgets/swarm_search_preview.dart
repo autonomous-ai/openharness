@@ -152,7 +152,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
           label: 'Agent preview',
           child: Scrollbar(
             controller: _scroll,
-            child: agents.length != 1
+            child: row.isGroup || agents.length != 1
                 ? ListView.builder(
                     key: ValueKey('preview-content:${row.id}'),
                     controller: _scroll,

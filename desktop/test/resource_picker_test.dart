@@ -20,6 +20,7 @@ import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/swarm_resource_preview.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
+import 'package:harness/widgets/search_result_text.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -865,31 +866,99 @@ void main() {
   testWidgets('live store inventory updates and every resource renders', (
     tester,
   ) async {
+    final originalFont = terminalFontStore.value;
+    final originalTheme = terminalThemeStore.value;
+    addTearDown(() {
+      terminalFontStore.value = originalFont;
+      terminalThemeStore.value = originalTheme;
+    });
     final app = await fixture();
     await mount(tester, app);
     await openHarnessPicker(tester);
-    for (final (query, kind) in [
-      ('Checkout', 'harnesses'),
-      ('@', 'machines'),
-      ('#', 'projects'),
-      (':', 'models'),
-      ('*', 'store'),
-    ]) {
-      await tester.enterText(field, query);
-      await tester.pump();
-      final controller = search(tester);
-      final index = controller.rows.indexWhere(
-        (row) => switch (kind) {
-          'machines' => row.id == 'machine:m',
-          'models' => row.modelId == 'model:local:qwen',
-          _ => !row.isCreate,
-        },
-      );
-      controller.move(index - controller.cursor);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byType(SwarmResourcePreview), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await capture(tester, kind);
+    for (final narrow in [false, true]) {
+      if (narrow) {
+        tester.view.physicalSize = const Size(480, 600);
+        terminalFontStore.value = const TerminalStyle(
+          fontSize: 18,
+          fontFamily: 'Menlo',
+          height: 1.4,
+        );
+        terminalThemeStore.value = TerminalThemeChoice.tango;
+      }
+      for (final (query, kind) in [
+        ('Checkout', 'harnesses'),
+        ('@', 'machines'),
+        ('#', 'projects'),
+        (':', 'models'),
+        (':deepseek', 'api'),
+        ('*', 'store'),
+      ]) {
+        await tester.enterText(field, query);
+        await tester.pump();
+        final controller = search(tester);
+        final index = controller.rows.indexWhere(
+          (row) => switch (kind) {
+            'machines' => row.id == 'machine:m',
+            'models' => row.modelId == 'model:local:qwen',
+            _ => !row.isCreate,
+          },
+        );
+        controller.move(index - controller.cursor);
+        await tester.pump(const Duration(milliseconds: 200));
+        final preview = find.byType(SwarmResourcePreview);
+        expect(preview, findsOneWidget);
+        expect(
+          find.descendant(
+            of: preview,
+            matching: find.text(controller.selected!.title),
+          ),
+          findsWidgets,
+        );
+        final cell = terminalCellSizeOf(tester.element(field));
+        final visibleRows = [
+          for (final row in controller.rows)
+            if (find.byKey(ValueKey(row.id)).evaluate().isNotEmpty) row,
+        ];
+        for (final row in visibleRows) {
+          final result = find.byKey(ValueKey(row.id));
+          expect(tester.getSize(result).height, closeTo(cell.height, .01));
+          expect(
+            tester
+                .widgetList<SearchResultText>(
+                  find.descendant(
+                    of: result,
+                    matching: find.byType(SearchResultText),
+                  ),
+                )
+                .map((text) => text.text),
+            row.isCreate ? isEmpty : [row.title],
+          );
+        }
+        for (var i = 1; i < visibleRows.length; i++) {
+          expect(
+            tester.getTopLeft(find.byKey(ValueKey(visibleRows[i].id))).dy -
+                tester
+                    .getTopLeft(find.byKey(ValueKey(visibleRows[i - 1].id)))
+                    .dy,
+            closeTo(cell.height, .01),
+          );
+        }
+        expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+        expect(tester.takeException(), isNull);
+        await capture(tester, '$kind-single-line${narrow ? '-narrow' : ''}');
+        final createIndex = controller.rows.indexWhere((row) => row.isCreate);
+        if (createIndex >= 0) {
+          controller.move(createIndex - controller.cursor);
+          await tester.pump();
+          expect(
+            find.descendant(
+              of: preview,
+              matching: find.text(controller.createDescription),
+            ),
+            findsOneWidget,
+          );
+        }
+      }
     }
     app.machineStates['m']!.dsh.replace(const [
       DshEntry(id: 'excalidraw', name: 'Excalidraw', engine: 'codex'),
@@ -909,4 +978,45 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
+
+  testWidgets(
+    'a single-session group keeps its name and count in the preview',
+    (tester) async {
+      final app = await fixture();
+      final machine = app.machineStates['other']!;
+      machine.agents = [app.machineStates['m']!.agents.first];
+      await mount(tester, app);
+      await openHarnessPicker(tester);
+      for (final (query, name) in [
+        ('@Other computer', 'Other computer'),
+        ('#storefront', 'storefront'),
+      ]) {
+        // The project is only present on one machine in this case.
+        if (query.startsWith('#')) {
+          machine.agents = [];
+          app.notifyListeners();
+        }
+        await tester.enterText(field, query);
+        await tester.pumpAndSettle();
+        final selected = search(tester).selected!;
+        expect(selected.members, hasLength(1));
+        final preview = find.byType(SwarmResourcePreview);
+        expect(
+          find.descendant(of: preview, matching: find.text(name)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: preview, matching: find.text(selected.detail)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: preview, matching: find.text('Checkout retries')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      }
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 }

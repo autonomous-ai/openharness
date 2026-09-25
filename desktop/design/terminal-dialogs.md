@@ -63,8 +63,10 @@ when using custom row widgets.
 - Keep Cmd-O and Cmd-P search prefixes editable: Cmd-P opens an empty field and
   Cmd-O inserts `#`. Deleting a prefix returns to harness search.
   Do not draw a separate prompt character beside these inputs.
-  Cmd-P session results occupy one row: title
-  on the left and activity age on the right. The preview puts the compact
+- All Cmd-P results occupy one row: title
+  on the left and activity age, when available, on the right. Machine, project,
+  model, API connection, and Store details live in the preview. For sessions,
+  the preview puts the compact
   Standard context `machine:project  (branch)` directly below the session title,
   followed by status and harness type. Omit missing fields and preserve
   important state such as Offline.
@@ -85,11 +87,14 @@ For example, Cmd-P session results are consecutive single lines:
   Search experience                        1h
 ```
 
-The highlight covers the selected row. Machine, project, and branch metadata
-remain searchable and available to screen readers. Resource choices with
-descriptions keep two text lines followed by one blank row.
+The highlight covers the selected row. All result types, including resource
+creation entries, use consecutive single lines. Details remain searchable and
+available to screen readers. Machine and project previews retain their name
+and harness count even when they contain just one session.
 
 ![A selected session with its context in the preview](images/terminal-open-harness-preview.png)
+
+![Models use the same single-line list with details in the preview](images/terminal-open-models.png)
 
 ## Inherit the real terminal's appearance
 
