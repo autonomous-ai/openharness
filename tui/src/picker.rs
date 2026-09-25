@@ -22,17 +22,20 @@ pub struct Row {
     /// Right-aligned.
     pub right: String,
     pub disabled: bool,
+    /// Ranked above equal matches (live harnesses over paused ones).
+    pub boost: u32,
 }
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0 }
     }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
     pub fn lead(mut self, spans: Vec<Span<'static>>) -> Row { self.lead = spans; self }
     pub fn detail(mut self, spans: Vec<Span<'static>>) -> Row { self.detail = spans; self }
     pub fn right(mut self, text: impl Into<String>) -> Row { self.right = text.into(); self }
+    pub fn boost(mut self, by: u32) -> Row { self.boost = by; self }
 }
 
 pub struct Picker {
@@ -51,6 +54,10 @@ pub struct Picker {
     pub flash: Option<(String, Instant)>,
     pub empty: String,
     pub scroll: usize,
+    /// Where the terminal cursor goes: the end of the query.
+    pub cursor_pos: Option<ratatui::layout::Position>,
+    /// The query starts with a mode character (`>` `@` `#` `:` `*` `?`) that is not part of the match.
+    pub prefixed: bool,
     matcher: Matcher,
 }
 
@@ -71,6 +78,8 @@ impl Picker {
             flash: None,
             empty: "Nothing matches.".into(),
             scroll: 0,
+            cursor_pos: None,
+            prefixed: false,
             matcher: Matcher::new(Config::DEFAULT),
         }
     }
@@ -81,7 +90,8 @@ impl Picker {
     }
 
     pub fn refilter(&mut self) {
-        let query = self.query.trim();
+        let mut query = self.query.trim();
+        if self.prefixed && query.starts_with(['>', '@', '#', ':', '*', '?']) { query = query[1..].trim() }
         if query.is_empty() {
             self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
         } else {
@@ -98,7 +108,7 @@ impl Picker {
                     indices.dedup();
                     indices.retain(|i| *i < label_len);
                     // A hit in the label outranks the same hit in the detail.
-                    let bonus = if indices.is_empty() { 0 } else { 40 };
+                    let bonus = if indices.is_empty() { 0 } else { 40 } + row.boost;
                     scored.push((index, score + bonus, indices));
                 }
             }

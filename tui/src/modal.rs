@@ -33,15 +33,18 @@ pub struct What { pub engine: String, pub dsh: Option<String>, pub label: String
 
 #[derive(Clone, Debug)]
 pub enum PickerKind {
-    Open { filter: Filter, machine: Option<String> },
+    /// Harnesses — optionally inside one machine or one project folder.
+    Open { filter: Filter, machine: Option<String>, project: Option<String> },
     Palette,
+    Projects,
+    Models,
     Inbox,
     Machines,
     Layout,
     Help,
     Store,
     NewMachine,
-    NewWhat { machine: String },
+    NewWhat { machine: String, cwd: Option<String> },
     NewFolder { machine: String, what: What },
     Route { text: String },
 }
@@ -77,10 +80,12 @@ pub const ENGINES: [&str; 14] = ["claude", "codex", "opencode", "cursor", "pi", 
 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
-    ("open", "Open Harness…", "⌥O", "every harness on every machine", "Harness"),
+    ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
+    ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
+    ("models", "Models…", "⌥I", "switch this harness's model and effort", "Harness"),
     ("new", "New Harness…", "⌥N", "", "Harness"),
     ("terminal", "New Terminal", "⌥⇧T", "a shell on this pane's machine", "Harness"),
-    ("inbox", "Agents needing input", "⌥I", "", "Harness"),
+    ("inbox", "Agents needing input", "⌥⇧I", "", "Harness"),
     ("send", "Send to harness…", "⌥B", "type a task — Harness picks who", "Harness"),
     ("broadcast", "Broadcast to this tab…", "", "one message to every harness in the tab", "Harness"),
     ("clone", "Clone Harness", "⌥⇧N", "a second one with this one's history", "Harness"),
@@ -108,14 +113,16 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
 ];
 
 pub const SHORTCUTS: &[(&str, &str, &str)] = &[
-    ("Harness", "⌥O", "Open Harness — every harness on every machine"),
-    ("Harness", "⌥P", "Command palette"),
+    ("Harness", "⌥P", "Harnesses — every harness on every machine"),
+    ("Harness", "⌥⇧P", "Commands (> in the box)"),
+    ("Harness", "⌥O", "Projects (#), then one of their harnesses"),
+    ("Harness", "⌥I", "Models (:) — switch the focused harness's model"),
     ("Harness", "⌥N", "New Harness"),
     ("Harness", "⌥⇧T", "New Terminal"),
-    ("Harness", "⌥I", "Agents needing input — ⌥1…9 answers"),
+    ("Harness", "⌥⇧I", "Agents needing input — ⌥1…9 answers"),
     ("Harness", "⌥B", "Send a task — Harness routes it"),
-    ("Harness", "⌥M", "Machines"),
-    ("Harness", "⌥S", "Harness Store"),
+    ("Harness", "⌥M", "Machines (@)"),
+    ("Harness", "⌥S", "Harness Store (*)"),
     ("Tabs", "⌥T", "New tab"),
     ("Tabs", "⌥1…9", "Go to tab"),
     ("Tabs", "⌥{  ⌥}", "Previous / next tab"),
@@ -136,11 +143,12 @@ pub const SHORTCUTS: &[(&str, &str, &str)] = &[
 
 fn span(text: impl Into<String>, style: Style) -> Span<'static> { Span::styled(text.into(), style) }
 
-pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>) -> Vec<Row> {
+pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
     let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
     let open: Vec<(String, String)> = app.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
     app.fleet.ranked().into_iter()
         .filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true))
+        .filter(|a| project.map(|p| a.project_root == p || a.cwd == p).unwrap_or(true))
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
         .map(|a| {
             let state = app.fleet.state_of(a);
@@ -157,7 +165,9 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>) -> Vec<Row> 
                 };
             let right = [if many { app.fleet.machine_name(&a.machine_id) } else { String::new() }, if is_open { "open".into() } else { String::new() }, ago(a.recency())]
                 .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ");
+            let live = !matches!(state, State::Paused | State::Offline);
             Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())
+                .boost(if state == State::NeedsInput { 60 } else if live { 30 } else { 0 })
                 .extra(format!("{} {} {} {} {} {}", a.project, a.branch, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh))
                 .group(group)
                 .lead(vec![span(dot, fg(color)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
@@ -167,11 +177,89 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>) -> Vec<Row> 
         .collect()
 }
 
-pub fn open_status(app: &App, filter: Filter, machine: Option<&str>) -> String {
-    [Filter::All, Filter::NeedsInput, Filter::Running, Filter::Paused].iter().map(|f| {
-        let n = app.fleet.agents.values().filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true)).filter(|a| f.keeps(app.fleet.state_of(a))).count();
-        if *f == filter { format!("[{} {n}]", f.label()) } else { format!("{} {n}", f.label()) }
-    }).collect::<Vec<_>>().join("  ")
+/// Only says something when a filter is on — the count beside the prompt already says the rest.
+pub fn open_status(_app: &App, filter: Filter) -> String {
+    if filter == Filter::All { String::new() } else { format!("{} · tab ↹", filter.label().to_lowercase()) }
+}
+
+/// The mode a launcher query is in, by its first character.
+pub fn launcher_kind(query: &str, current: &PickerKind) -> PickerKind {
+    match query.trim_start().chars().next() {
+        Some('>') => PickerKind::Palette,
+        Some('@') => PickerKind::Machines,
+        Some('#') => PickerKind::Projects,
+        Some(':') => PickerKind::Models,
+        Some('*') => PickerKind::Store,
+        Some('?') => PickerKind::Help,
+        _ => match current { PickerKind::Open { .. } => current.clone(), _ => PickerKind::Open { filter: Filter::All, machine: None, project: None } },
+    }
+}
+
+pub fn is_launcher(kind: &PickerKind) -> bool {
+    matches!(kind, PickerKind::Open { .. } | PickerKind::Palette | PickerKind::Machines | PickerKind::Projects | PickerKind::Models | PickerKind::Store | PickerKind::Help)
+}
+
+/// (title, placeholder) for a launcher mode.
+pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
+    match kind {
+        PickerKind::Open { machine: Some(m), project: None, .. } => (format!("harnesses · @{}", app.fleet.machine_name(m)), "Search this machine's harnesses — esc back".into()),
+        PickerKind::Open { project: Some(p), .. } => (format!("harnesses · #{}", p.rsplit('/').next().unwrap_or(p)), "Search this project's harnesses — esc back".into()),
+        PickerKind::Open { .. } => ("harnesses".into(), "Search harnesses   > commands  @ machines  # projects  : models  * store  ? help".into()),
+        PickerKind::Palette => ("commands".into(), "Run anything by name".into()),
+        PickerKind::Machines => ("machines".into(), "Choose a machine, then one of its harnesses".into()),
+        PickerKind::Projects => ("projects".into(), "Choose a project, then one of its harnesses".into()),
+        PickerKind::Models => ("models".into(), "Switch the focused harness's model and effort".into()),
+        PickerKind::Store => ("store".into(), "Find a harness in the Store".into()),
+        PickerKind::Help => ("quick access".into(), "What this box can do".into()),
+        _ => (String::new(), String::new()),
+    }
+}
+
+/// `#`: every project folder with harnesses in it, grouped per machine.
+pub fn project_rows(app: &App) -> Vec<Row> {
+    let mut groups: std::collections::BTreeMap<(String, String), (usize, usize, u64)> = std::collections::BTreeMap::new();
+    for a in app.fleet.agents.values() {
+        if a.project_root.is_empty() { continue }
+        let entry = groups.entry((a.machine_id.clone(), a.project_root.clone())).or_insert((0, 0, 0));
+        entry.0 += 1;
+        if !matches!(app.fleet.state_of(a), State::Paused | State::Offline) { entry.1 += 1 }
+        entry.2 = entry.2.max(a.recency());
+    }
+    let many = app.fleet.machines.iter().filter(|m| m.usable()).count() > 1;
+    let mut rows: Vec<(u64, Row)> = groups.into_iter().map(|((machine, root), (all, live, recent))| {
+        let name = root.rsplit('/').next().unwrap_or(&root).to_string();
+        let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+        let short = if !home.is_empty() && root.starts_with(&home) { format!("~{}", &root[home.len()..]) } else { root.clone() };
+        let right = format!("{}{} harness{}{}", if many { format!("{}  ", app.fleet.machine_name(&machine)) } else { String::new() }, all, if all == 1 { "" } else { "es" }, if live > 0 { format!(" · {live} live") } else { String::new() });
+        (recent, Row::new(format!("proj:{machine}\t{root}"), name).extra(format!("{short} {}", app.fleet.machine_name(&machine)))
+            .lead(vec![span(if live > 0 { "● " } else { "○ " }, fg(if live > 0 { theme::ONLINE } else { theme::MUTED }))])
+            .detail(vec![span(short, fg(theme::MUTED))]).right(right).boost(if live > 0 { 30 } else { 0 }))
+    }).collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+/// `:`: the focused harness's models, the one it runs marked.
+pub fn model_rows(app: &App) -> Vec<Row> {
+    let Some((machine, agent)) = app.focused().and_then(|f| app.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) else { return vec![] };
+    let current = app.fleet.agent(&machine, &agent).map(|a| a.model.clone()).unwrap_or_default();
+    let list = app.models.get(&(machine, agent)).cloned().unwrap_or_default();
+    list.iter().filter_map(|m| {
+        let id = m.get("id")?.as_str()?.to_string();
+        let name = m.get("displayName").and_then(Value::as_str).unwrap_or(&id).to_string();
+        let (family, effort) = name.split_once(" / ").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((name.clone(), String::new()));
+        let on = id == current;
+        Some(Row::new(id, name.clone()).group(family).extra(effort)
+            .lead(vec![span(if on { "● " } else { "  " }, fg(theme::ONLINE))])
+            .right(if on { "current".to_string() } else { String::new() }))
+    }).collect()
+}
+
+pub fn mode_rows() -> Vec<Row> {
+    let modes = [(">", "Commands", "Run anything by name", "⌥⇧P"), ("@", "Machines", "Choose a machine, then one of its harnesses", "⌥M"), ("#", "Projects", "Choose a project, then one of its harnesses", "⌥O"), (":", "Models", "Switch the focused harness's model and effort", "⌥I"), ("*", "Store", "Find a harness in the Store", "⌥S")];
+    let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p}  {t}")).group("Type a prefix").detail(vec![span(*d, fg(theme::MUTED))]).right(*k)).collect();
+    rows.extend(help_rows());
+    rows
 }
 
 pub fn inbox_rows(app: &App) -> Vec<Row> {

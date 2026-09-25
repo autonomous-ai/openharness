@@ -31,13 +31,15 @@ pub fn handle(app: &mut App, event: CEvent) {
 fn chord(key: &KeyEvent) -> Option<&'static str> {
     Some(match key.code {
         KeyCode::Char(c) => match c {
-            'o' | 'O' => "open",
-            'p' | 'P' => "palette",
+            'p' => "open",
+            'P' => "palette",
+            'o' | 'O' => "projects",
             'n' => "new",
             'N' => "clone",
             't' => "tab",
             'T' => "terminal",
-            'i' | 'I' => "inbox",
+            'i' => "models",
+            'I' => "inbox",
             'm' | 'M' => "machines",
             's' | 'S' => "store",
             '/' | '?' => "help",
@@ -314,13 +316,15 @@ fn home_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => if rows.is_empty() { run(app, "open") } else { open(app, app.home_cursor) },
         KeyCode::Up | KeyCode::Char('k') => app.home_cursor = app.home_cursor.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => app.home_cursor = (app.home_cursor + 1).min(rows.len().saturating_sub(1)),
-        KeyCode::Char('o') => run(app, "open"),
+        KeyCode::Char('p') => run(app, "open"),
+        KeyCode::Char('o') | KeyCode::Char('#') => run(app, "projects"),
         KeyCode::Char('n') => run(app, "new"),
         KeyCode::Char('t') => run(app, "terminal"),
-        KeyCode::Char('i') => run(app, "inbox"),
-        KeyCode::Char('m') => run(app, "machines"),
-        KeyCode::Char('s') => run(app, "store"),
-        KeyCode::Char('p') => run(app, "palette"),
+        KeyCode::Char('i') | KeyCode::Char(':') => run(app, "models"),
+        KeyCode::Char('I') => run(app, "inbox"),
+        KeyCode::Char('m') | KeyCode::Char('@') => run(app, "machines"),
+        KeyCode::Char('s') | KeyCode::Char('*') => run(app, "store"),
+        KeyCode::Char('>') => run(app, "palette"),
         KeyCode::Char('b') => run(app, "send"),
         KeyCode::Char('/') | KeyCode::Char('?') => run(app, "help"),
         KeyCode::Char('q') => { if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
@@ -339,13 +343,31 @@ fn picker(app: &mut App, kind: PickerKind, title: &str, placeholder: &str) {
 /// (Re)build an overlay's rows from the fleet — called on open and whenever the fleet moves.
 pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
     match kind {
-        PickerKind::Open { filter, machine } => {
-            picker.set_rows(modal::agent_rows(app, *filter, machine.as_deref()));
-            picker.status = modal::open_status(app, *filter, machine.as_deref());
+        PickerKind::Open { filter, machine, project } => {
+            picker.set_rows(modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref()));
+            picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "open"), ("^t", "tab"), ("^v", "split right"), ("^s", "split down"), ("^r", "here"), ("tab", "filter"), ("^x", "pause/resume"), ("⌥1-9", "answer")];
             picker.empty = if app.fleet.agents.is_empty() { "No harnesses yet — ⌥N makes one.".into() } else { "Nothing matches.".into() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run")] }
+        PickerKind::Projects => {
+            picker.set_rows(modal::project_rows(app));
+            picker.hints = vec![("enter", "its harnesses"), ("^n", "new harness there")];
+            picker.empty = "No projects yet.".into();
+        }
+        PickerKind::Models => {
+            picker.keep_order = true;
+            picker.set_rows(modal::model_rows(app));
+            // Start on the model it runs, so ↑/↓ are "a little more / less" from where it is.
+            if picker.query.trim() == ":" && picker.selected_id.is_none() {
+                if let Some(current) = focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.model.clone())) {
+                    if let Some(at) = picker.visible.iter().position(|(i, _)| picker.rows[*i].id == current) { picker.cursor = at; picker.selected_id = Some(current) }
+                }
+            }
+            picker.hints = vec![("enter", "use")];
+            picker.empty = if app.focused().is_none() { "Focus a harness to switch its model.".into() } else { "Loading its models…".into() };
+            picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
+        }
         PickerKind::Inbox => {
             picker.keep_order = true;
             picker.set_rows(modal::inbox_rows(app));
@@ -360,7 +382,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "its harnesses"), ("^n", "new there"), ("^t", "terminal there"), ("^l", "link")];
         }
         PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
-        PickerKind::Help => { picker.keep_order = true; picker.set_rows(modal::help_rows()); picker.status = "⌥ = Option/Alt".into(); picker.hints = vec![] }
+        PickerKind::Help => { picker.keep_order = true; picker.set_rows(modal::mode_rows()); picker.status = "⌥ = Option/Alt".into(); picker.hints = vec![("enter", "go")] }
         PickerKind::Store => {
             let catalog = app.dsh.get(&app.fleet.local_id).cloned().unwrap_or_default();
             picker.set_rows(modal::store_rows(&catalog));
@@ -373,7 +395,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.set_rows(modal::new_machine_rows(app, &prefer));
             picker.hints = vec![("enter", "choose")];
         }
-        PickerKind::NewWhat { machine } => {
+        PickerKind::NewWhat { machine, .. } => {
             let catalog = app.dsh.get(machine).cloned().unwrap_or_default();
             picker.set_rows(modal::new_what_rows(&catalog));
             picker.status = app.fleet.machine_name(machine);
@@ -396,15 +418,68 @@ fn focused_agent(app: &App) -> Option<(String, String)> {
     app.focused().and_then(|f| app.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone()))
 }
 
+/// The one box: open it in the mode [prefix] names (`""` harnesses, `>` `@` `#` `:` `*` `?`). The
+/// same key again, while it is already in that mode, closes it.
+pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
+    if let Some(Modal::Picker { kind, picker }) = &app.modal {
+        let same_mode = modal::is_launcher(kind) && picker.query.trim().chars().next().map(|c| c.to_string()).unwrap_or_default() == prefix
+            && !matches!(kind, PickerKind::Open { filter: f, .. } if *f != filter);
+        if same_mode { app.modal = None; return }
+    }
+    let kind = match prefix { "" => PickerKind::Open { filter, machine: None, project: None }, p => modal::launcher_kind(p, &PickerKind::Palette) };
+    let (title, placeholder) = modal::launcher_title(app, &kind);
+    let mut picker = Picker::new(title, placeholder);
+    picker.prefixed = true;
+    picker.query = prefix.to_string();
+    prepare(app, &kind);
+    fill(app, &kind, &mut picker);
+    app.modal = Some(Modal::Picker { kind, picker });
+}
+
+/// What a mode needs fetched before its rows mean anything.
+fn prepare(app: &mut App, kind: &PickerKind) {
+    match kind {
+        PickerKind::Machines => app.refresh_machines(),
+        PickerKind::Store => load_dsh(app, app.fleet.local_id.clone()),
+        PickerKind::Models => load_models(app),
+        _ => {}
+    }
+}
+
+fn load_models(app: &mut App) {
+    let Some((machine, agent)) = focused_agent(app) else { return };
+    let Some(link) = app.link(&machine) else { return };
+    let key = (machine, agent.clone());
+    app.spawn(async move { link.rpc("models_list", json!({ "agentId": agent }), Duration::from_secs(20)).await }, move |app, reply| {
+        if let Ok(reply) = reply { app.models.insert(key, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
+        refill(app);
+    });
+}
+
+/// The query changed: when its first character moved the box to another mode, rebuild it as that mode.
+fn remode(app: &App, kind: PickerKind, picker: &mut Picker) -> (PickerKind, bool) {
+    if !modal::is_launcher(&kind) { return (kind, false) }
+    let next = modal::launcher_kind(&picker.query, &kind);
+    if std::mem::discriminant(&next) == std::mem::discriminant(&kind) { return (kind, false) }
+    let (title, placeholder) = modal::launcher_title(app, &next);
+    picker.title = title;
+    picker.placeholder = placeholder;
+    picker.keep_order = false;
+    picker.scroll = 0;
+    (next, true)
+}
+
 pub fn run(app: &mut App, command: &str) {
     match command {
-        "open" => picker(app, PickerKind::Open { filter: Filter::All, machine: None }, "Open Harness", "Search harnesses, projects, machines…"),
-        "palette" => picker(app, PickerKind::Palette, "Commands", "Type a command…"),
-        "inbox" => picker(app, PickerKind::Inbox, "Agents needing input", "Filter…"),
-        "machines" => { app.refresh_machines(); picker(app, PickerKind::Machines, "Machines", "Filter…") }
-        "help" => picker(app, PickerKind::Help, "Keyboard Shortcuts", "Search shortcuts…"),
-        "layout" => picker(app, PickerKind::Layout, "Layout", ""),
-        "store" => { load_dsh(app, app.fleet.local_id.clone()); picker(app, PickerKind::Store, "Harness Store", "Search the Store…") }
+        "open" => launch(app, "", Filter::All),
+        "palette" => launch(app, ">", Filter::All),
+        "projects" => launch(app, "#", Filter::All),
+        "models" => launch(app, ":", Filter::All),
+        "inbox" => picker(app, PickerKind::Inbox, "needs input", "Filter…"),
+        "machines" => launch(app, "@", Filter::All),
+        "help" => launch(app, "?", Filter::All),
+        "layout" => picker(app, PickerKind::Layout, "layout", ""),
+        "store" => launch(app, "*", Filter::All),
         "new" => {
             let usable: Vec<String> = app.fleet.machines.iter().filter(|m| m.usable()).map(|m| m.id.clone()).collect();
             if usable.len() > 1 { picker(app, PickerKind::NewMachine, "New Harness · where", "Machine…") }
@@ -450,7 +525,8 @@ pub fn run(app: &mut App, command: &str) {
             if app.tab().root.is_none() { run(app, "open"); return }
             let dir = if command == "split-right" { Dir::Horizontal } else { Dir::Vertical };
             app.modal = None;
-            picker(app, PickerKind::Open { filter: Filter::All, machine: None }, if dir == Dir::Horizontal { "Split Right · open" } else { "Split Down · open" }, "Which harness goes beside it?");
+            launch(app, "", Filter::All);
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.title = if dir == Dir::Horizontal { "split right".into() } else { "split down".into() }; picker.placeholder = "Which harness goes beside it?".into() }
             SPLIT.with(|s| s.set(Some(dir)));
         }
         "close-pane" => { if let Some(f) = app.focused() { app.close_pane(f) } else if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
@@ -523,7 +599,7 @@ pub fn refill(app: &mut App) {
 fn new_what(app: &mut App, machine: String) {
     load_dsh(app, machine.clone());
     let name = app.fleet.machine_name(&machine);
-    picker(app, PickerKind::NewWhat { machine }, &format!("New Harness · {name}"), "Claude Code, Codex, a Store harness…");
+    picker(app, PickerKind::NewWhat { machine, cwd: None }, &format!("new harness · {name}"), "Claude Code, Codex, a Store harness…");
 }
 
 /// `agent_create`, then open it. [cwd] None with an agent = a new project folder.
@@ -586,6 +662,17 @@ fn modal_key(app: &mut App, key: KeyEvent) {
         Modal::Picker { kind, mut picker } => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let alt = key.modifiers.contains(KeyModifiers::ALT);
+            // Inside a machine or a project, esc (or ⌫ on an empty query) steps back out to the list
+            // it was chosen from; anywhere else it closes.
+            let scoped = matches!(kind, PickerKind::Open { machine: Some(_), .. } | PickerKind::Open { project: Some(_), .. });
+            let back_key = key.code == KeyCode::Esc || (key.code == KeyCode::Backspace && picker.query.is_empty());
+            if scoped && back_key {
+                let prefix = if matches!(kind, PickerKind::Open { project: Some(_), .. }) { "#" } else { "@" };
+                app.modal = None;
+                launch(app, prefix, Filter::All);
+                return;
+            }
+            let before = picker.query.clone();
             match key.code {
                 KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
                 KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
@@ -599,8 +686,8 @@ fn modal_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('u') if ctrl => picker.clear_query(),
                 KeyCode::Char('w') if ctrl => picker.backspace(true),
                 KeyCode::Tab | KeyCode::BackTab => {
-                    if let PickerKind::Open { filter, machine } = kind {
-                        let kind = PickerKind::Open { filter: filter.next(), machine };
+                    if let PickerKind::Open { filter, machine, project } = kind {
+                        let kind = PickerKind::Open { filter: filter.next(), machine, project };
                         fill(app, &kind, &mut picker);
                         app.modal = Some(Modal::Picker { kind, picker });
                         return;
@@ -620,6 +707,12 @@ fn modal_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('i') if ctrl => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
                 KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
                 _ => {}
+            }
+            let mut kind = kind;
+            if picker.query != before {
+                let (next, changed) = remode(app, kind, &mut picker);
+                kind = next;
+                if changed { prepare(app, &kind); fill(app, &kind, &mut picker) }
             }
             app.modal = Some(Modal::Picker { kind, picker });
         }
@@ -693,7 +786,46 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             }
         }
         PickerKind::Palette => { if let Some(id) = id { run(app, &id) } }
-        PickerKind::Help => {}
+        PickerKind::Help => {
+            // A prefix row switches the box to that mode; a shortcut row is just a reminder.
+            let Some(id) = id else { return keep(app, kind, picker) };
+            if let Some(prefix) = id.strip_prefix("mode:") { app.modal = None; launch(app, prefix, Filter::All) }
+            else { keep(app, kind, picker) }
+        }
+        PickerKind::Projects => {
+            let Some(id) = id else { return keep(app, kind, picker) };
+            let Some((machine, root)) = id.trim_start_matches("proj:").split_once('\t').map(|(m, r)| (m.to_string(), r.to_string())) else { return };
+            if choice == Choice::New {
+                if app.link(&machine).is_none() { picker.say("That machine is not connected"); return keep(app, kind, picker) }
+                load_dsh(app, machine.clone());
+                let name = root.rsplit('/').next().unwrap_or(&root).to_string();
+                let mut next = Picker::new(format!("new harness · #{name}"), "Claude Code, Codex, a Store harness…");
+                let kind = PickerKind::NewWhat { machine, cwd: Some(root) };
+                fill(app, &kind, &mut next);
+                app.modal = Some(Modal::Picker { kind, picker: next });
+                return;
+            }
+            let kind = PickerKind::Open { filter: Filter::All, machine: Some(machine), project: Some(root) };
+            let (title, placeholder) = modal::launcher_title(app, &kind);
+            let mut next = Picker::new(title, placeholder);
+            next.prefixed = true;
+            fill(app, &kind, &mut next);
+            app.modal = Some(Modal::Picker { kind, picker: next });
+        }
+        PickerKind::Models => {
+            let Some(model) = id else { return keep(app, kind, picker) };
+            let Some((machine, agent)) = focused_agent(app) else { return };
+            let Some(link) = app.link(&machine) else { return };
+            let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
+            app.say(format!("Switching to {label}…"), theme::SOFT);
+            app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "selectedModel": model }), Duration::from_secs(60)).await }, move |app, reply| match reply {
+                Ok(reply) => {
+                    if let Some(row) = reply.get("agent") { let key = (machine.clone(), row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()); let a = crate::fleet::agent_from(&machine, row, app.fleet.agents.get(&key)); app.fleet.agents.insert(key, a); }
+                    app.say(format!("Now on {label}"), theme::ONLINE);
+                }
+                Err(e) => app.say(format!("Could not switch: {e}"), theme::DANGER),
+            });
+        }
         PickerKind::Layout => {
             if let Some(index) = id.and_then(|i| i.parse::<usize>().ok()) { app.apply_preset(Preset::ALL[index].0) }
         }
@@ -707,9 +839,10 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                     prompt(app, PromptKind::LinkPassword { machine }, &format!("Link {name}"), "Its remote password (set there with `harness remote-password set`)", "", "", true)
                 }
                 _ => {
-                    let name = app.fleet.machine_name(&machine);
-                    let mut next = Picker::new(format!("Harnesses on {name}"), "Search…");
-                    let kind = PickerKind::Open { filter: Filter::All, machine: Some(machine) };
+                    let kind = PickerKind::Open { filter: Filter::All, machine: Some(machine), project: None };
+                    let (title, placeholder) = modal::launcher_title(app, &kind);
+                    let mut next = Picker::new(title, placeholder);
+                    next.prefixed = true;
                     fill(app, &kind, &mut next);
                     app.modal = Some(Modal::Picker { kind, picker: next });
                 }
@@ -726,7 +859,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             create(app, local, What { engine, dsh: Some(dsh), label }, None, None);
         }
         PickerKind::NewMachine => { if let Some(machine) = id { new_what(app, machine) } }
-        PickerKind::NewWhat { machine } => {
+        PickerKind::NewWhat { machine, cwd: preset } => {
             let Some(id) = id else { return keep(app, kind, picker) };
             let what = if let Some(engine) = id.strip_prefix("engine:") {
                 What { engine: engine.into(), dsh: None, label: theme::engine_label(engine).into() }
@@ -736,8 +869,14 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
                 What { engine: engine.into(), dsh: Some(dsh.into()), label }
             };
-            if what.engine == "terminal" { return create(app, machine, what, None, None) }
+            if what.engine == "terminal" { return create(app, machine, what, preset, None) }
             let name = app.fleet.machine_name(&machine);
+            // The folder is already known (chosen from `#`): straight to the first message.
+            if let Some(cwd) = preset {
+                let label = what.label.clone();
+                let hint = format!("on {name} in {cwd}");
+                return prompt(app, PromptKind::NewMessage { machine, what, cwd: Some(cwd) }, &format!("New {label} harness"), "First message (optional) — Enter to start", &hint, "", false);
+            }
             let mut next = Picker::new(format!("New {} · folder", what.label), "Search folders…");
             let kind = PickerKind::NewFolder { machine: machine.clone(), what };
             fill(app, &kind, &mut next);
