@@ -69,6 +69,8 @@ fn chord(key: &KeyEvent) -> Option<&'static str> {
             'q' | 'Q' => "quit",
             'a' | 'A' => "next-waiting",
             '`' => "last-tab",
+            '<' => "tab-left",
+            '>' => "tab-right",
             '1' => "tab-1", '2' => "tab-2", '3' => "tab-3", '4' => "tab-4", '5' => "tab-5",
             '6' => "tab-6", '7' => "tab-7", '8' => "tab-8", '9' => "tab-9",
             _ => return None,
@@ -635,6 +637,8 @@ pub fn run(app: &mut App, command: &str) {
             let Some(pane) = app.focused() else { return };
             app.modal = Some(Modal::Find { pane, query: String::new(), found: None });
         }
+        "tab-left" => app.move_tab(-1),
+        "tab-right" => app.move_tab(1),
         "last-tab" => {
             let at = app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|t| &t.id == id));
             if let Some(index) = at { app.select_tab(index) }

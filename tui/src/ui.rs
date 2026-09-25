@@ -76,7 +76,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 // ── the tab strip ────────────────────────────────────────────────────────────
 
-fn tab_label(app: &App, index: usize) -> (String, Option<(char, Color)>) {
+fn tab_label(app: &App, index: usize, max: usize) -> (String, Option<(char, Color)>) {
     let tab = &app.tabs[index];
     let mut mark = None;
     for id in tab.panes() {
@@ -89,15 +89,25 @@ fn tab_label(app: &App, index: usize) -> (String, Option<(char, Color)>) {
             _ => {}
         }
     }
-    let name: String = if tab.name.chars().count() > 22 { tab.name.chars().take(21).collect::<String>() + "…" } else { tab.name.clone() };
+    let max = max.max(4);
+    let name: String = if tab.name.chars().count() > max { tab.name.chars().take(max - 1).collect::<String>() + "…" } else { tab.name.clone() };
     (name, mark)
 }
 
 /// Where each tab sits in the strip, between x=10 and [limit]: (index, x from, x to). When they do
 /// not all fit, the strip scrolls so the active tab is always in it.
+/// How long a tab's name may be: 22, less when that is what it takes for every tab to fit (never
+/// under 8 — then the strip scrolls instead).
+fn tab_name_room(app: &App, limit: u16) -> usize {
+    let room = limit.saturating_sub(12) as usize;
+    let n = app.tabs.len().max(1);
+    (room / n).saturating_sub(7).clamp(8, 22)
+}
+
 fn tab_spans(app: &App, limit: u16) -> (Vec<(usize, u16, u16)>, bool, bool) {
+    let max = tab_name_room(app, limit);
     let widths: Vec<u16> = (0..app.tabs.len()).map(|index| {
-        let (name, mark) = tab_label(app, index);
+        let (name, mark) = tab_label(app, index, max);
         (format!(" {} ", index + 1).width() + name.width() + 1 + if mark.is_some() { 2 } else { 0 }) as u16
     }).collect();
     let room = limit.saturating_sub(10 + 2);
@@ -130,7 +140,8 @@ fn tab_strip(buf: &mut Buffer, app: &mut App, area: Rect) {
     if app.daemon_down { right.push(Span::styled("daemon not running — harness start  ", bold(theme::DANGER))) }
     if waiting > 0 { right.push(Span::styled(format!("◆ {waiting} need{} input  ", if waiting == 1 { "s" } else { "" }), bold(theme::ATTENTION))) }
     if working > 0 { right.push(Span::styled(format!("{} {working} working  ", theme::spinner(app.tick)), fg(theme::ACCENT_SOFT))) }
-    right.push(Span::styled(format!("{} running  ", app.fleet.running()), fg(theme::MUTED)));
+    // The least useful part goes first when the strip is short of room.
+    if area.width >= 120 { right.push(Span::styled(format!("{} running  ", app.fleet.running()), fg(theme::MUTED))); }
     let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
     let all = app.fleet.machines.len().max(1);
     right.push(Span::styled(format!("▣ {up}/{all} ", ), fg(if up == all { theme::ONLINE } else { theme::SOFT })));
@@ -142,8 +153,9 @@ fn tab_strip(buf: &mut Buffer, app: &mut App, area: Rect) {
     if before { buf.set_string(10, 0, "‹ ", fg(theme::MUTED)); }
     if after { if let Some((_, _, to)) = spans.last() { buf.set_string(*to, 0, " ›", fg(theme::MUTED)); } }
     app.tab_hits = spans.clone();
+    let max = tab_name_room(app, right_x.saturating_sub(3));
     for (index, from, _to) in spans {
-        let (name, mark) = tab_label(app, index);
+        let (name, mark) = tab_label(app, index, max);
         let active = index == app.active;
         let base = if active { Style::default().bg(theme::SELECT).fg(theme::TEXT).add_modifier(Modifier::BOLD) } else { fg(theme::SOFT) };
         let mut x = from;
