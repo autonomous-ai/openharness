@@ -177,6 +177,7 @@ import type { CableAgent } from './cable/cableSession.js'
 import { routeVoiceTask, setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter, type RouterAgent } from './lib/voiceRouter.js'
 import { tailFile } from './lib/sessions.js'
 import { E2eeStore } from './lib/e2ee/store.js'
+import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import { connectWithPassword } from './lib/e2ee/relayClient.js'
@@ -7019,7 +7020,9 @@ const enterSafeMode = (err: unknown): void => {
   // itself was what failed, or we never got that far — take the port for the status alone, so the app
   // still reads not-ready rather than down. A port we cannot take at all leaves only a ticking clock.
   if (!daemonBoot.hookServer) {
+    const hosts = loopbackHosts(env.PORT)
     const status = createServer((req, res) => {
+      if (!isLoopbackRequest(req, hosts)) { res.writeHead(403).end(); return }
       const body = safeModeStatusBody({
         version: VERSION, pid: process.pid, startedAt: Date.now(),
         computerId: computerId(), error: disposition.reason,

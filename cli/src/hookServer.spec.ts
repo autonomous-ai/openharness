@@ -1,4 +1,4 @@
-import type { Server } from 'node:http'
+import { request, type Server } from 'node:http'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -326,5 +326,42 @@ describe('browser setup links are gone', () => {
     const response = await fetch(`${base}/api/e2ee/setup-link`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
     expect(response.status).not.toBe(200)
     expect(await response.text()).not.toContain('setup=browser')
+  })
+})
+
+describe('requests must name this server', () => {
+  // A page that re-points its hostname at 127.0.0.1 is same-origin to this port; only its Host gives it away.
+  async function send(base: string, method: string, path: string, headers: Record<string, string>): Promise<number> {
+    const url = new URL(path, base)
+    return new Promise((resolve, reject) => {
+      const r = request({ host: '127.0.0.1', port: url.port, path: url.pathname, method, headers }, (res) => { res.resume(); resolve(res.statusCode ?? 0) })
+      r.on('error', reject)
+      r.end()
+    })
+  }
+
+  it('refuses every route, reads included, when Host is not a loopback name for this port', async () => {
+    const onStatus = vi.fn(() => ({ ok: true }))
+    const onLogs = vi.fn(() => 'secret log')
+    const { base } = await start({ onStatus, onLogs })
+    const evil = { host: 'rebind.evil.example:' + new URL(base).port }
+    for (const [method, path, extra] of [
+      ['GET', '/api/status', {}], ['GET', '/api/logs', {}], ['GET', '/', {}], ['GET', '/api/machines', {}],
+      ['POST', '/api/remote-password/set', { 'x-adapter-local': '1' }], ['POST', '/api/stop', { 'x-adapter-local': '1' }],
+    ] as const) {
+      expect(await send(base, method, path, { ...evil, ...extra }), `${method} ${path}`).toBe(403)
+    }
+    expect(onStatus).not.toHaveBeenCalled()
+    expect(onLogs).not.toHaveBeenCalled()
+  })
+
+  it('still serves loopback names, and the dashboard from its own origin', async () => {
+    const { base } = await start({ onStatus: () => ({ ok: true }) })
+    const port = new URL(base).port
+    for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]) {
+      expect(await send(base, 'GET', '/api/status', { host }), host).toBe(200)
+    }
+    expect(await send(base, 'GET', '/api/status', { host: `localhost:${port}`, origin: `http://localhost:${port}` })).toBe(200)
+    expect(await send(base, 'GET', '/api/status', { host: `127.0.0.1:${port}`, origin: 'http://evil.example' })).toBe(403)
   })
 })
