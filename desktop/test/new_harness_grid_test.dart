@@ -4,12 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'support/launch_menu.dart'
-    show focusLaunchRow, openLaunchRow, typeHarnessQuery;
+    show harnessChoicesActive, focusLaunchRow, openLaunchRow;
 import 'support/mixed_agents.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -56,6 +57,8 @@ void main() {
     WidgetTester tester, {
     String focus = 'agent',
     double width = 820,
+    double height = 450,
+    double scale = 1,
     MemoryKeymap? keymap,
   }) async {
     final daemon = _Daemon();
@@ -72,6 +75,11 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData.dark(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(scale)),
+          child: child!,
+        ),
         home: KeymapProvider(
           keymap: keymap,
           child: KeymapHost(
@@ -82,7 +90,7 @@ void main() {
               body: Center(
                 child: SizedBox(
                   width: width,
-                  height: 450,
+                  height: height,
                   child: NewHarnessForm(
                     controller: box,
                     onClose: () {},
@@ -100,72 +108,132 @@ void main() {
     return (box, daemon);
   }
 
-  group('⇧⏎ starts from any field', () {
-    testWidgets('from a value row, without walking to the button', (
-      tester,
-    ) async {
-      final (_, daemon) = await mount(tester);
-      await key(tester, LogicalKeyboardKey.enter);
-      expect(
-        daemon.requests,
-        isNot(contains('agent_create')),
-        reason: 'Plain Return on a value row must still never start.',
-      );
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
-      expect(daemon.requests, contains('agent_create'));
-    });
-
-    testWidgets('taking the value highlighted in a live list first', (
-      tester,
-    ) async {
-      final (box, daemon) = await mount(tester);
-      await key(tester, LogicalKeyboardKey.arrowRight);
-      await key(tester, LogicalKeyboardKey.arrowDown);
-      final wanted = box.selected!.id;
-      expect(wanted, isNot(box.engine));
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
-      expect(
-        box.engine,
-        wanted,
-        reason: 'The highlight is what the person was looking at.',
-      );
-      expect(daemon.requests, contains('agent_create'));
-    });
-
-    testWidgets('the button prints the key that reaches it', (tester) async {
-      await mount(tester);
-      expect(find.text('[ New Harness ]'), findsOneWidget);
-      expect(find.textContaining('⇧'), findsWidgets);
-    });
-  });
-
-  testWidgets('quick start cannot launch from an empty choice list', (
+  testWidgets('Enter accepts a value before a separate Enter launches', (
     tester,
   ) async {
     final (box, daemon) = await mount(tester);
-    await openLaunchRow(tester, 'agent');
-    await typeHarnessQuery(tester, 'no-such-agent-123456');
-    await key(tester, LogicalKeyboardKey.enter, shift: true);
-    expect(box.error, 'No values match this search.');
+    await key(tester, LogicalKeyboardKey.enter);
+    expect(harnessChoicesActive(tester), isTrue);
     expect(daemon.requests, isNot(contains('agent_create')));
+    await key(tester, LogicalKeyboardKey.enter);
+    expect(box.field, NewHarnessField.launch);
+    expect(daemon.requests, isNot(contains('agent_create')));
+    expect(find.textContaining('⇧'), findsNothing);
+    await key(tester, LogicalKeyboardKey.enter, shift: true);
+    expect(daemon.requests, isNot(contains('agent_create')));
+    await key(tester, LogicalKeyboardKey.enter);
+    expect(daemon.requests, contains('agent_create'));
   });
 
   group('one grid', () {
     double heightOf(WidgetTester tester, String field) =>
         tester.getSize(find.byKey(ValueKey('new-harness-field-$field'))).height;
 
+    for (final (width, height, scale) in [
+      (823.25, 417.5, 1.0),
+      (1283.7, 587.3, 1.6),
+    ]) {
+      testWidgets(
+        'fields and action keep whole cells at $width × $height, scale $scale',
+        (tester) async {
+          tester.view.devicePixelRatio = 1;
+          tester.view.physicalSize = const Size(1400, 900);
+          addTearDown(tester.view.reset);
+          final (box, _) = await mount(
+            tester,
+            width: width,
+            height: height,
+            scale: scale,
+          );
+          await openLaunchRow(tester, 'advanced');
+          final surface = find.byKey(const ValueKey('new-harness-surface'));
+          final origin = tester.getTopLeft(surface);
+          final cell = terminalCellSizeOf(tester.element(surface));
+          Finder textIn(String key, String text) => find.descendant(
+            of: find.byKey(ValueKey(key)),
+            matching: find.text(text),
+          );
+          Finder label(String name, String text) =>
+              textIn('new-harness-field-$name', text);
+          void onGrid(Finder text) {
+            final offset = tester.getTopLeft(text) - origin;
+            expect(
+              offset.dx / cell.width,
+              closeTo((offset.dx / cell.width).roundToDouble(), .01),
+            );
+            expect(
+              offset.dy / cell.height,
+              closeTo((offset.dy / cell.height).roundToDouble(), .01),
+            );
+          }
+
+          final agent = label('agent', 'Agent');
+          final start = label('start', 'New Harness');
+          final fields = {
+            'agent': 'Agent',
+            'model': 'Model',
+            'approvals': 'Approvals',
+            if (box.usesProfile) 'profile': 'Profile',
+            'project': 'Project',
+            'advanced': 'Options',
+            'branch': 'Branch',
+            'worktree': 'Worktree',
+          };
+          for (final entry in fields.entries) {
+            final text = label(entry.key, entry.value);
+            onGrid(text);
+            expect(tester.getTopLeft(text).dx, tester.getTopLeft(agent).dx);
+          }
+          onGrid(start);
+          final lastAgentSetting = box.usesProfile
+              ? label('profile', 'Profile')
+              : label('approvals', 'Approvals');
+          expect(
+            tester.getTopLeft(label('branch', 'Branch')).dy -
+                tester.getBottomLeft(lastAgentSetting).dy,
+            closeTo(0, .01),
+          );
+          expect(
+            tester.getTopLeft(start).dy -
+                tester.getBottomLeft(label('worktree', 'Worktree')).dy,
+            closeTo(cell.height, .01),
+          );
+          final value = label('agent', box.launchAgentLabel);
+          onGrid(value);
+          expect(
+            tester.getTopLeft(value).dx - tester.getTopLeft(agent).dx,
+            closeTo(11 * cell.width, .01),
+          );
+          final size = tester.getSize(surface);
+          expect(size.width / cell.width, closeTo(56, .01));
+          expect(
+            size.height / cell.height,
+            closeTo(box.usesProfile ? 14 : 13, .01),
+          );
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+
     testWidgets('every field is exactly one row', (tester) async {
       await mount(tester);
+      await openLaunchRow(tester, 'advanced');
       final row = heightOf(tester, 'agent');
-      for (final field in ['project', 'advanced']) {
+      for (final field in [
+        'model',
+        'approvals',
+        'project',
+        'branch',
+        'worktree',
+      ]) {
         expect(heightOf(tester, field), row, reason: '$field drifted');
       }
     });
 
     testWidgets('a wrapped notice is a whole number of rows', (tester) async {
       final (box, _) = await mount(tester, focus: 'model');
-      await openLaunchRow(tester, 'model');
       final row = heightOf(tester, 'agent');
+      await openLaunchRow(tester, 'model');
       final notice = box.modelNotice;
       expect(notice, isNotNull);
       final height = tester.getSize(find.text(notice!)).height;
@@ -198,19 +266,33 @@ void main() {
       expect(left('project', box.launchProjectLabel), closeTo(column, .5));
     });
 
-    testWidgets('a blank row sets Advanced apart from the core fields', (
-      tester,
-    ) async {
-      await mount(tester);
-      // Branch is the last core field now, under Project.
-      final project = tester.getRect(
-        find.byKey(const ValueKey('new-harness-field-project')),
-      );
-      final advanced = tester.getRect(
-        find.byKey(const ValueKey('new-harness-field-advanced')),
-      );
-      expect(advanced.top - project.bottom, closeTo(project.height, .5));
-    });
+    testWidgets(
+      'Options rows are consecutive and Machine has no separate row',
+      (tester) async {
+        final (box, _) = await mount(tester);
+        await openLaunchRow(tester, 'advanced');
+        expect(
+          find.byKey(const ValueKey('new-harness-field-machine')),
+          findsNothing,
+        );
+        final fields = [
+          'advanced',
+          'model',
+          'approvals',
+          if (box.usesProfile) 'profile',
+          'branch',
+          'worktree',
+        ];
+        Rect? previous;
+        for (final field in fields) {
+          final row = tester.getRect(
+            find.byKey(ValueKey('new-harness-field-$field')),
+          );
+          if (previous != null) expect(row.top, closeTo(previous.bottom, .01));
+          previous = row;
+        }
+      },
+    );
   });
 
   group('small reads', () {
@@ -225,12 +307,6 @@ void main() {
           .hintText!;
       expect(hint, isNot(startsWith(' ')));
       expect(hint, box.hint);
-    });
-
-    testWidgets('the key hint spaces its keys: ⇧ ⏎, not ⇧⏎', (tester) async {
-      await mount(tester);
-      final hint = find.textContaining('⇧');
-      expect(tester.widget<Text>(hint).data, startsWith('⇧ '));
     });
 
     testWidgets('this computer leads the machine list', (tester) async {
@@ -264,47 +340,101 @@ void main() {
     });
   });
 
-  // One test per behaviour a coverage run found untested among the lines this
-  // branch changed. Each names the behaviour, not the line.
-  group('reached only by less common paths', () {
-    testWidgets('a field the controller moves to opens Advanced to show it', (
+  group('focus ownership', () {
+    for (final activation in ['right', 'typing', 'enter']) {
+      testWidgets('$activation enters the automatically visible chooser', (
+        tester,
+      ) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(2200, 700);
+        addTearDown(tester.view.reset);
+        final (box, daemon) = await mount(tester, focus: 'start', width: 2200);
+        final surface = find.byKey(const ValueKey('new-harness-surface'));
+        final chooser = find.byKey(
+          const ValueKey('new-harness-chooser-surface'),
+        );
+        final frame = tester.getRect(surface);
+        final originalEngine = box.engine;
+        expect(chooser, findsNothing);
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        expect(box.field, NewHarnessField.harness);
+        expect(chooser, findsOneWidget);
+        expect(harnessChoicesActive(tester), isFalse);
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          'new-harness-form',
+        );
+        // A visible chooser does not capture navigation before activation.
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        expect(box.field, NewHarnessField.projectMenu);
+        await key(tester, LogicalKeyboardKey.arrowUp);
+        expect(box.field, NewHarnessField.harness);
+        expect(box.engine, originalEngine);
+        switch (activation) {
+          case 'right':
+            await key(tester, LogicalKeyboardKey.arrowRight);
+          case 'enter':
+            await key(tester, LogicalKeyboardKey.enter);
+          case 'typing':
+            await tester.sendKeyEvent(LogicalKeyboardKey.keyC, character: 'c');
+            await tester.pumpAndSettle();
+            expect(box.query, 'c');
+            await key(tester, LogicalKeyboardKey.backspace);
+            expect(box.query, isEmpty);
+        }
+        expect(harnessChoicesActive(tester), isTrue);
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          'new-harness-query',
+        );
+        final first = box.selected!.id;
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        expect(box.selected!.id, isNot(first));
+        expect(box.field, NewHarnessField.harness);
+        expect(box.engine, originalEngine);
+        expect(tester.getRect(surface), frame);
+        await key(tester, LogicalKeyboardKey.escape);
+        expect(harnessChoicesActive(tester), isFalse);
+        expect(chooser, findsNothing);
+        expect(box.engine, originalEngine);
+        await key(tester, LogicalKeyboardKey.arrowRight);
+        final wanted = box.selected!.id;
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(box.engine, wanted);
+        expect(box.field, NewHarnessField.launch);
+        expect(chooser, findsNothing);
+        expect(tester.getRect(surface), frame);
+        await tester.sendKeyRepeatEvent(LogicalKeyboardKey.enter);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(daemon.requests, isNot(contains('agent_create')));
+        await key(tester, LogicalKeyboardKey.enter);
+        expect(daemon.requests, contains('agent_create'));
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('a controller-selected field is already visible', (
       tester,
     ) async {
       final (box, _) = await mount(tester);
-      expect(box.advancedOpen, isFalse);
       box.focusField(NewHarnessField.mode);
       await tester.pumpAndSettle();
+      expect(find.text('Options'), findsOneWidget);
       expect(box.advancedOpen, isTrue);
       expect(
-        find.byKey(const ValueKey('new-harness-field-approvals')),
-        findsOneWidget,
+        tester
+            .widget<Semantics>(
+              find.byKey(const ValueKey('new-harness-field-approvals')),
+            )
+            .properties
+            .selected,
+        isTrue,
       );
     });
 
-    testWidgets('the page keys open and close Advanced from its own row', (
-      tester,
-    ) async {
-      final (box, _) = await mount(tester, focus: 'advanced');
-      await key(tester, LogicalKeyboardKey.pageDown);
-      expect(box.advancedOpen, isTrue);
-      await key(tester, LogicalKeyboardKey.pageUp);
-      expect(box.advancedOpen, isFalse);
-    });
-
-    testWidgets('clicking the Advanced row opens and closes it', (
-      tester,
-    ) async {
-      final (box, _) = await mount(tester);
-      final advanced = find.byKey(const ValueKey('new-harness-field-advanced'));
-      await tester.tap(advanced);
-      await tester.pumpAndSettle();
-      expect(box.advancedOpen, isTrue);
-      await tester.tap(advanced);
-      await tester.pumpAndSettle();
-      expect(box.advancedOpen, isFalse);
-    });
-
-    testWidgets('⇧⏎ inside a door prompt finishes it, then starts', (
+    testWidgets('Enter finishes a project prompt before launching', (
       tester,
     ) async {
       final (box, daemon) = await mount(tester, focus: 'project');
@@ -312,12 +442,10 @@ void main() {
       await tester.pumpAndSettle();
       box.setQuery('ledger');
       await tester.pumpAndSettle();
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
-      expect(
-        box.projectLabel,
-        contains('ledger'),
-        reason: 'The name typed in the prompt is the project it starts in.',
-      );
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(box.projectLabel, contains('ledger'));
+      expect(daemon.requests, isNot(contains('agent_create')));
+      await key(tester, LogicalKeyboardKey.enter);
       expect(daemon.requests, contains('agent_create'));
     });
 
@@ -353,14 +481,6 @@ void main() {
         }
       },
     );
-
-    testWidgets('⌘. opens and closes Advanced from any field', (tester) async {
-      final (box, _) = await mount(tester);
-      await key(tester, LogicalKeyboardKey.period, cmd: true);
-      expect(box.advancedOpen, isTrue);
-      await key(tester, LogicalKeyboardKey.period, cmd: true);
-      expect(box.advancedOpen, isFalse);
-    });
 
     testWidgets('a narrow window keeps a status line on the grid', (
       tester,

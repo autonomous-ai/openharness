@@ -281,7 +281,8 @@ export async function connectWithPassword(opts: {
           if (payload.ok === true && peerPub) {
             finish({ ok: true, peerPub, fingerprint: typeof payload.fingerprint === 'string' ? payload.fingerprint : C.fingerprint(peerPub) })
           } else {
-            finish({ ok: false, error: typeof payload.error === 'string' ? payload.error : 'PAIR_FAILED' })
+            const retryAt = typeof payload.retryAt === 'number' ? payload.retryAt : undefined
+            finish({ ok: false, error: typeof payload.error === 'string' ? payload.error : 'PAIR_FAILED', ...(retryAt !== undefined ? { retryAt } : {}) })
           }
         }
       } catch {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -182,69 +182,12 @@ async function fullPair(h: ReturnType<typeof machine>, conn: string): Promise<We
 }
 
 describe('E2eeManager pairing', () => {
-  it('setup-link claim auto-pairs the browser, then hello establishes a session', () => {
-    const h = machine()
+  it('pairs nobody from an e2e_setup_claim — browser setup links were removed with the web client', () => {
+    const { mgr, sent } = machine()
     const web = new WebPeer()
-    const conn = 'setup1'
-    const setup = h.mgr.createSetupToken()
-    const claim = {
-      type: 'e2e_setup_claim',
-      payload: {
-        requestId: 'setup-r1',
-        token: setup.token,
-        identityPub: C.b64e(web.identity.pub),
-        label: 'Chrome · macOS',
-        sig: C.b64e(C.setupClaimSig(web.identity.priv, AGENT, setup.token, web.identity.pub)),
-      },
-    }
-
-    h.mgr.handleFrame(conn, claim)
-    const result = h.lastFor(conn, 'e2e_setup_claim_result')!.payload as Record<string, unknown>
-    expect(result).toMatchObject({ ok: true, requestId: 'setup-r1', fingerprint: h.mgr.fingerprint() })
-    expect(h.mgr.listPaired()[0].fingerprint).toBe(C.fingerprint(web.identity.pub))
-
-    h.mgr.handleFrame(conn, web.hello())
-    web.adapterPub = C.b64d(C.verifySetupToken(setup.token)!.payload.pub)
-    web.onWelcome(h.lastFor(conn, 'e2e_welcome')!, web.adapterPub)
-    expect(h.mgr.hasSession(conn)).toBe(true)
-  })
-
-  it('one setup link pairs multiple browsers and establishes an E2EE session for each', () => {
-    const h = machine()
-    const web1 = new WebPeer()
-    const web2 = new WebPeer()
-    const setup = h.mgr.createSetupToken()
-    h.mgr.handleFrame('setup-a', {
-      type: 'e2e_setup_claim',
-      payload: {
-        requestId: 'a',
-        token: setup.token,
-        identityPub: C.b64e(web1.identity.pub),
-        label: 'Chrome',
-        sig: C.b64e(C.setupClaimSig(web1.identity.priv, AGENT, setup.token, web1.identity.pub)),
-      },
-    })
-    h.mgr.handleFrame('setup-b', {
-      type: 'e2e_setup_claim',
-      payload: {
-        requestId: 'b',
-        token: setup.token,
-        identityPub: C.b64e(web2.identity.pub),
-        label: 'Firefox',
-        sig: C.b64e(C.setupClaimSig(web2.identity.priv, AGENT, setup.token, web2.identity.pub)),
-      },
-    })
-    expect(h.lastFor('setup-a', 'e2e_setup_claim_result')!.payload).toMatchObject({ ok: true })
-    expect(h.lastFor('setup-b', 'e2e_setup_claim_result')!.payload).toMatchObject({ ok: true })
-    expect(h.mgr.listPaired().length).toBe(2)
-
-    const adapterPub = C.b64d(C.verifySetupToken(setup.token)!.payload.pub)
-    h.mgr.handleFrame('setup-a', web1.hello())
-    web1.onWelcome(h.lastFor('setup-a', 'e2e_welcome')!, adapterPub)
-    h.mgr.handleFrame('setup-b', web2.hello())
-    web2.onWelcome(h.lastFor('setup-b', 'e2e_welcome')!, adapterPub)
-    expect(h.mgr.hasSession('setup-a')).toBe(true)
-    expect(h.mgr.hasSession('setup-b')).toBe(true)
+    mgr.handleFrame('claim-1', { type: 'e2e_setup_claim', payload: { requestId: 'r', token: 'x', identityPub: C.b64e(web.identity.pub), sig: 'x' } })
+    expect(mgr.listPaired()).toEqual([])
+    expect(sent.some((s) => s.frame.type === 'e2e_setup_claim_result')).toBe(false)
   })
 
   it('completes a full pairing, pins the browser, and establishes a session + group key', async () => {
@@ -519,6 +462,70 @@ describe('E2eeManager persistent remote-password pairing', () => {
     expect(takeLast('e2e_pw_pake').payload).toMatchObject({ round: 5, ok: true })
     // One scrypt per wrong-password attempt — see PW_SCRYPT_TEST_TIMEOUT_MS.
   }, PW_SCRYPT_TEST_TIMEOUT_MS)
+
+  it('keeps at most two password attempts in flight at once; a third is BUSY until one finishes', async () => {
+    const { mgr, takeLast, lastFor } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    const a = new PwPeer(), b = new PwPeer(), c = new PwPeer()
+    mgr.handleFrame('slot-a', await a.intent(PASSWORD))
+    mgr.handleFrame('slot-b', await b.intent(PASSWORD))
+    mgr.handleFrame('slot-c', await c.intent(PASSWORD))
+    expect(lastFor('slot-c', 'e2e_pw_pair_result')?.payload).toMatchObject({ ok: false, error: 'BUSY' })
+    expect(lastFor('slot-c', 'e2e_pw_pake')).toBeUndefined()
+    // One finishing frees its place.
+    mgr.handleFrame('slot-a', a.onPake(lastFor('slot-a', 'e2e_pw_pake')!)!)
+    mgr.handleFrame('slot-a', a.onPake(lastFor('slot-a', 'e2e_pw_pake')!)!)
+    expect(lastFor('slot-a', 'e2e_pw_pake')?.payload).toMatchObject({ round: 5, ok: true })
+    const d = new PwPeer()
+    mgr.handleFrame('slot-d', await d.intent(PASSWORD))
+    expect(takeLast('e2e_pw_pake').payload).toMatchObject({ round: 1 })
+  })
+
+  it('judges an attempt against a lockout that began after its intent, without evaluating it', async () => {
+    const { mgr, lastFor } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    const held = new PwPeer()
+    mgr.handleFrame('held', await held.intent(PASSWORD))
+    const heldRound1 = lastFor('held', 'e2e_pw_pake')!
+    for (let i = 0; i < 5; i++) {
+      const joiner = new PwPeer()
+      const conn = `pwlock-${i}`
+      mgr.handleFrame(conn, await joiner.intent(`wrong-${i}`))
+      mgr.handleFrame(conn, joiner.onPake(lastFor(conn, 'e2e_pw_pake')!)!)
+    }
+    // Now locked. The attempt opened before the lockout — even with the right password — is refused.
+    mgr.handleFrame('held', held.onPake(heldRound1)!)
+    expect(lastFor('held', 'e2e_pw_pake')?.payload).toMatchObject({ round: 5, error: 'RATE_LIMITED', retryAt: expect.any(Number) })
+    expect(mgr.listPaired()).toEqual([])
+  }, PW_SCRYPT_TEST_TIMEOUT_MS)
+
+  it('starts the lockout backoff over after a success, and after a quiet day', async () => {
+    const { mgr, lastFor } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    const lockNow = async (tag: string): Promise<number> => {
+      for (let i = 0; i < 5; i++) {
+        const joiner = new PwPeer()
+        const conn = `${tag}-${i}`
+        mgr.handleFrame(conn, await joiner.intent(`wrong-${i}`))
+        mgr.handleFrame(conn, joiner.onPake(lastFor(conn, 'e2e_pw_pake')!)!)
+      }
+      const probe = new PwPeer()
+      mgr.handleFrame(`${tag}-probe`, await probe.intent(PASSWORD))
+      return (lastFor(`${tag}-probe`, 'e2e_pw_pair_result')!.payload as { retryAt: number }).retryAt
+    }
+    const FIVE_MIN = 5 * 60_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let now = Date.now()
+      expect(await lockNow('first') - now).toBeLessThanOrEqual(FIVE_MIN + 1000)
+      // Right after it ends, the next lockout escalates (10 min)…
+      vi.setSystemTime(now += FIVE_MIN + 1000)
+      expect(await lockNow('second') - now).toBeGreaterThan(FIVE_MIN + 1000)
+      // …but a day of quiet since the last one ended starts it over.
+      vi.setSystemTime(now += 10 * FIVE_MIN + 25 * 60 * 60_000)
+      expect(await lockNow('third') - now).toBeLessThanOrEqual(FIVE_MIN + 1000)
+    } finally { vi.useRealTimers() }
+  }, PW_SCRYPT_TEST_TIMEOUT_MS * 3)
 
   it('clearRemotePassword removes it — a subsequent intent gets NO_REMOTE_PASSWORD again', async () => {
     const { mgr, takeLast } = machine()

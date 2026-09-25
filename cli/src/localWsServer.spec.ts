@@ -71,6 +71,13 @@ describe('local CLI WebSocket', () => {
     return `ws://127.0.0.1:${port}/api/local-ws`
   }
 
+  it('refuses an upgrade whose Host is not a loopback name for this port', async () => {
+    const url = await start(new FakeBackend())
+    const ws = new WebSocket(url, { headers: { host: 'rebind.evil.example:' + new URL(url).port } })
+    const status = await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))
+    expect(status).toBe(403)
+  })
+
   it('consumes validated preparation UI acknowledgements locally', async () => {
     const backend = new FakeBackend(), opened = vi.fn()
     const ws = new WebSocket(await start(backend, { onDevicePrepareOpened: opened }))

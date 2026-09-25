@@ -5,7 +5,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -22,7 +21,8 @@ import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 
-import 'keymap_host_test.dart' show MemoryKeymap, key;
+import 'keymap_host_test.dart' show MemoryKeymap;
+import 'support/launch_menu.dart' show startHarness;
 
 DshEntry _entry(String id, String name, {required bool installed}) => DshEntry(
   id: id,
@@ -323,23 +323,26 @@ void main() {
       installed: true,
     );
 
-    test('a remembered harness the Store dropped opens as Code', () async {
-      final notifier = await app(
-        remember: (n) => n.agentPreference.remember('codex', harnessId: gone),
-      );
-      final box = controller(notifier);
-      await Future<void>.delayed(Duration.zero);
-      expect(box.harnessId, isNull);
-      expect(box.harnessLabel, 'Code');
-      expect(
-        box.engine,
-        'codex',
-        reason: 'Code keeps the agent last used, which Code can run',
-      );
-      expect(harnessList(box), isNot(contains(gone)));
-    });
+    test(
+      'a remembered harness the Store dropped requires a replacement',
+      () async {
+        final notifier = await app(
+          remember: (n) => n.agentPreference.remember('codex', harnessId: gone),
+        );
+        final box = controller(notifier);
+        await Future<void>.delayed(Duration.zero);
+        expect(box.harnessId, gone);
+        expect(box.requiredChoice?.field, NewHarnessField.harness);
+        expect(
+          box.engine,
+          'codex',
+          reason:
+              'The remembered value is retained until a replacement is chosen',
+        );
+      },
+    );
 
-    test('a remembered viewer package opens as Code too', () async {
+    test('a remembered viewer package requires an agent choice', () async {
       final notifier = await app(
         catalog: [_blender, viewer],
         remember: (n) =>
@@ -347,8 +350,8 @@ void main() {
       );
       final box = controller(notifier);
       await Future<void>.delayed(Duration.zero);
-      expect(box.harnessId, isNull);
-      expect(harnessList(box), isNot(contains(viewer.id)));
+      expect(box.harnessId, viewer.id);
+      expect(box.requiredChoice?.field, NewHarnessField.harness);
     });
 
     test('before the catalog answers, recents are kept as they are', () async {
@@ -374,26 +377,30 @@ void main() {
       },
     );
 
-    test('a remembered agent the harness cannot run falls back', () async {
-      final only = DshEntry(
-        id: _blender.id,
-        name: _blender.name,
-        engine: 'claude',
-        engines: const ['claude'],
-        installed: true,
-      );
-      final notifier = await app(
-        catalog: [only],
-        remember: (n) async {
-          // Codex was remembered for it before the harness narrowed.
-          await n.agentPreference.remember('codex', harnessId: only.id);
-        },
-      );
-      final box = controller(notifier);
-      await Future<void>.delayed(Duration.zero);
-      expect(box.harnessId, only.id);
-      expect(box.engine, 'claude');
-    });
+    test(
+      'a remembered agent the harness cannot run requires a choice',
+      () async {
+        final only = DshEntry(
+          id: _blender.id,
+          name: _blender.name,
+          engine: 'claude',
+          engines: const ['claude'],
+          installed: true,
+        );
+        final notifier = await app(
+          catalog: [only],
+          remember: (n) async {
+            // Codex was remembered for it before the harness narrowed.
+            await n.agentPreference.remember('codex', harnessId: only.id);
+          },
+        );
+        final box = controller(notifier);
+        await Future<void>.delayed(Duration.zero);
+        expect(box.harnessId, only.id);
+        expect(box.engine, 'codex');
+        expect(box.requiredChoice?.field, NewHarnessField.agent);
+      },
+    );
   });
 
   group('installing on the way to start', () {
@@ -406,7 +413,7 @@ void main() {
       box.focusField(NewHarnessField.harness);
       box.applyOption(box.options.firstWhere((o) => o.id == _circuit.id));
       await tester.pump();
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await startHarness(tester);
       await tester.pump();
 
       expect(notifier.installs, [_circuit.id]);
@@ -423,6 +430,13 @@ void main() {
       );
       expect(find.text('Fetch Autonomous Circuit'), findsOneWidget);
       expect(find.text('>'), findsWidgets, reason: 'fetch is the live step');
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        box.busy,
+        isTrue,
+        reason: 'the install remains live across timer ticks',
+      );
+      expect(pane, findsOneWidget);
 
       final fetching = box.installRun!.phases.first.at;
       notifier.narrate(
@@ -481,7 +495,7 @@ void main() {
       box.focusField(NewHarnessField.harness);
       box.applyOption(box.options.firstWhere((o) => o.id == _circuit.id));
       await tester.pump();
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await startHarness(tester);
       await tester.pump();
       notifier.narrate(_circuit.id, 'setup', line: 'npm ci');
       notifier.narrate(_circuit.id, 'failed', code: 'DSH_BUSY');
@@ -523,7 +537,7 @@ void main() {
             n.agentPreference.remember('claude', harnessId: _blender.id),
       );
       await mount(tester, notifier);
-      await key(tester, LogicalKeyboardKey.enter, shift: true);
+      await startHarness(tester);
       await tester.pump();
       expect(notifier.installs, isEmpty);
       expect(find.byKey(const ValueKey('new-harness-install')), findsNothing);

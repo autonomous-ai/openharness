@@ -196,7 +196,6 @@ void main() {
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         machineId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         machineName: 'local-manual',
-        setupToken: 'ephemeral-setup-token',
       ),
     );
 

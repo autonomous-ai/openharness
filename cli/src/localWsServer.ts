@@ -5,6 +5,7 @@ import type http from 'node:http'
 import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { watchSocketLiveness } from './lib/wsLiveness.js'
+import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
   decodeTerminalLocal,
@@ -242,7 +243,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       rejectUpgrade(socket, 403, 'Forbidden')
       return
     }
-    if (req.headers.origin) {
+    // Also refuses any Origin: a browser always sends one on a WebSocket, and no browser is a client.
+    const bound = server.address()
+    if (req.headers.origin || !bound || typeof bound === 'string' || !isLoopbackRequest(req, loopbackHosts(bound.port))) {
       rejectUpgrade(socket, 403, 'Forbidden')
       return
     }

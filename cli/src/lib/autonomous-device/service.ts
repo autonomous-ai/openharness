@@ -5,6 +5,8 @@ import type { DeviceInputStatus } from './input.js'
 import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { createHash, randomUUID } from 'node:crypto'
+import type { LiveEvent } from '../normalize.js'
+import { AgentStreams, STREAM_KINDS, STREAM_TTL_DEFAULT_SEC, STREAM_TTL_MAX_SEC, StreamRequestError, type StreamKind } from './stream.js'
 
 export type AutonomousDeviceFrame = Record<string, unknown> & { type: string }
 export type ReceiptState = 'queued' | 'delivered' | 'started' | 'completed' | 'rejected' | 'unknown'
@@ -51,13 +53,14 @@ export interface AutonomousDeviceServiceOptions {
    * looks at between the dial and its turn cards.
    */
   fullText?: (agentId: string) => string | undefined
-  emit?: (frame: AutonomousDeviceFrame) => void
+  /** `deviceId` set: this frame is for that paired device alone (an agent stream), never a broadcast. */
+  emit?: (frame: AutonomousDeviceFrame, deviceId?: string) => void
 }
 interface Entry { deviceId: string; digest: string; receipt: AutonomousDeviceReceipt
   promptHash?: string; reservedAt?: number; dispatchedAt?: number; sessionId?: string; evidenceManaged?: boolean; consumed?: boolean
 }
 interface ResultRecord { deviceId: string; evidenceId: string; at: number; agentId: string; payload: Record<string, unknown> }
-const CAPABILITIES = ['focus.get', 'focus.ensure', 'focus.step', 'scroll', 'agents.list', 'turn.send', 'turn.stop', 'status', 'recap', 'question.answer', 'receipt.get'] as const
+const CAPABILITIES = ['focus.get', 'focus.ensure', 'focus.step', 'scroll', 'agents.list', 'turn.send', 'turn.stop', 'status', 'recap', 'question.answer', 'receipt.get', 'agent.subscribe', 'agent.unsubscribe'] as const
 export const AUTONOMOUS_DEVICE_CAPABILITIES: string[] = [...CAPABILITIES]
 const MUTATIONS = new Set(['turn.send', 'turn.stop', 'question.answer'])
 const STEP_RESULTS_MAX = 512
@@ -307,6 +310,8 @@ export class AutonomousDeviceService {
   constructor(private readonly options: AutonomousDeviceServiceOptions) {
     this.serverInstanceId = options.serverInstanceId ?? randomUUID()
     this.now = options.now ?? Date.now
+    this.streams = new AgentStreams({ machineId: options.machineId, serverInstanceId: this.serverInstanceId,
+      send: (deviceId, frame) => this.options.emit?.(frame, deviceId) })
     const snapshot = options.resultJournal?.load()
     if (snapshot !== undefined) {
       if (!object(snapshot) || snapshot.version !== 1 || snapshot.machineId !== options.machineId
@@ -327,6 +332,35 @@ export class AutonomousDeviceService {
       this.persist()
       // New transport instance/sequence; immutable payload retains its originating instance.
       for (const record of this.results.values()) this.retainEvent('turn.summary', record.agentId, record.payload)
+    }
+  }
+  private readonly streams: AgentStreams
+  /** Live events of one agent, for its subscribers only. Never recorded in the replay log. */
+  stream(agentId: string, events: readonly LiveEvent[]): void { this.streams.ingest(agentId, events) }
+  /** The device's last link closed: its subscriptions end with it, and a reconnect subscribes again. */
+  deviceOffline(deviceId: string): void { this.streams.dropDevice(deviceId) }
+
+  private subscription(deviceId: string, type: 'agent.subscribe' | 'agent.unsubscribe', req: Record<string, unknown>): Record<string, unknown> {
+    const fields = type === 'agent.subscribe' ? ['type', 'requestId', 'machineId', 'agentId', 'ttlSec', 'include'] : ['type', 'requestId', 'subscriptionId']
+    if (Object.keys(req).some(k => !fields.includes(k))) fail('INVALID_REQUEST', 'Unknown request field')
+    if (type === 'agent.unsubscribe') {
+      if (!UUID.test(String(req.subscriptionId))) fail('INVALID_REQUEST', 'subscriptionId must be a UUIDv4')
+      return { unsubscribed: this.streams.unsubscribe(deviceId, String(req.subscriptionId)) }
+    }
+    if (typeof req.agentId !== 'string' || !req.agentId || typeof req.machineId !== 'string') fail('MISSING_TARGET', 'machineId and agentId are required')
+    if (req.machineId !== this.options.machineId) fail('MACHINE_MISMATCH', 'Only the paired machine is available')
+    const ttlSec = req.ttlSec ?? STREAM_TTL_DEFAULT_SEC
+    if (!Number.isInteger(ttlSec) || (ttlSec as number) < 1 || (ttlSec as number) > STREAM_TTL_MAX_SEC) fail('INVALID_REQUEST', `ttlSec must be an integer from 1 to ${STREAM_TTL_MAX_SEC}`)
+    const include = req.include ?? STREAM_KINDS
+    if (!Array.isArray(include) || !include.length || new Set(include).size !== include.length
+      || include.some(k => !(STREAM_KINDS as readonly unknown[]).includes(k))) fail('INVALID_REQUEST', `include must be distinct values of ${STREAM_KINDS.join(', ')}`)
+    const agentId = req.agentId
+    if (!this.options.agents().some(a => a.agentId === agentId)) fail('AGENT_NOT_FOUND', 'Agent is not available on the paired machine')
+    try {
+      return { machineId: this.options.machineId, agentId, include, ...this.streams.subscribe(deviceId, agentId, ttlSec as number, new Set(include as StreamKind[])) }
+    } catch (e) {
+      if (e instanceof StreamRequestError) fail(e.code, e.message)
+      throw e
     }
   }
   private key(deviceId: string, key: string): string { return `${deviceId}:${key}` }
@@ -416,6 +450,7 @@ export class AutonomousDeviceService {
       this.entries.delete(key)
     }
     for (const [key, step] of this.steps) if (step.deviceId === deviceId) this.steps.delete(key)
+    this.streams.dropDevice(deviceId)
     for (const [key, result] of this.results) if (result.deviceId === deviceId) this.results.delete(key)
     this.persist()
     // A newly paired identity cannot replay the previous device's request receipts.
@@ -509,6 +544,7 @@ export class AutonomousDeviceService {
       if (!UUID.test(String(req.requestId))) fail('INVALID_REQUEST', 'requestId must be a UUIDv4')
       if (type === 'input.status.v1' || !this.capabilities.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
       if ((DEVICE_STORE_CAPABILITIES as readonly string[]).includes(type)) return response(await this.options.store!.request(deviceId, req))
+      if (type === 'agent.subscribe' || type === 'agent.unsubscribe') return response(this.subscription(deviceId, type, req))
       const allowed = ['type', 'requestId', ...(['agents.list', 'focus.get', 'focus.ensure'].includes(type) ? [] : type === 'receipt.get' ? ['idempotencyKey'] : type === 'focus.step' ? ['direction', 'idempotencyKey', 'focusRevision'] : type === 'scroll' ? ['phase', 'dy', 'velocity'] : ['machineId', 'agentId']),
         ...(MUTATIONS.has(type) ? ['idempotencyKey'] : []), ...(type === 'turn.send' ? ['text', 'focusRevision'] : type === 'question.answer' ? ['questionRequestId', 'answers', 'focusRevision'] : type === 'recap' ? ['n'] : [])]
       if (Object.keys(req).some(k => !allowed.includes(k))) fail('INVALID_REQUEST', 'Unknown request field')

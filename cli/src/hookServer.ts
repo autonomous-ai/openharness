@@ -23,6 +23,7 @@ import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import type { CommandBarService } from './lib/commandBar.js'
 import { handleCommandBarHttp } from './lib/commandBarHttp.js'
+import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -95,8 +96,6 @@ export interface HookServerHandlers {
   }) => void
   /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
   onPair?: (code: string) => Promise<PairOutcome>
-  /** `adapter browser-link` — mint a setup-link token from the running daemon. */
-  onSetupLink?: () => PairOutcome
   /** `harness pairings` — list E2EE-paired browsers. */
   onListPairs?: () => PairOutcome
   /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
@@ -373,12 +372,26 @@ export function startHookServer(
   handlers: HookServerHandlers,
 ): Promise<{ server: http.Server; port: number }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
+  // Filled in once the port is bound: the Host a request must name is the port actually taken.
+  let hosts: ReadonlySet<string> = new Set()
+  let lastRefusalLogAt = 0
   const server = http.createServer((req, res) => {
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
       const json = (code: number, body: unknown): void => {
         res.writeHead(code, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(body))
+      }
+      // Before any route, reads included. See lib/loopbackRequest.ts.
+      if (!isLoopbackRequest(req, hosts)) {
+        // At most one line a minute: enough to explain a client that was refused, not a lever for a
+        // page to flood the log. Host and Origin are the sender's, so they are escaped and bounded.
+        if (Date.now() - lastRefusalLogAt > 60_000) {
+          lastRefusalLogAt = Date.now()
+          const shown = (v: unknown) => JSON.stringify(String(v ?? '').slice(0, 80))
+          console.warn(`[hooks] refused ${req.method} ${url.slice(0, 80)} · host=${shown(req.headers.host)} origin=${shown(req.headers.origin)}`)
+        }
+        json(403, { error: 'FORBIDDEN_HOST' }); return
       }
       // A handler that throws must still answer: this whole function is a void-discarded async, so
       // a throw here is an unhandledRejection and a request that hangs until the caller gives up —
@@ -606,14 +619,6 @@ export function startHookServer(
         return
       }
 
-      // `harness browser-link` → mint a reusable 7-day setup token using the running daemon's E2EE
-      // identity. The signed token is self-contained, so it remains valid across daemon restarts.
-      if (req.method === 'POST' && url === '/api/e2ee/setup-link') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSetupLink) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onSetupLink(); json(out.status, out.body); return
-      }
-
       // `harness remote-password set` → stretch + persist a new persistent remote password on the
       // running daemon's live E2EE state (so an in-progress `harness link connect` from another
       // machine sees it immediately, with no daemon restart needed).
@@ -744,6 +749,7 @@ export function startHookServer(
     })
     server.listen(port, '127.0.0.1', () => {
       const actual = (server.address() as AddressInfo).port
+      hosts = loopbackHosts(actual)
       console.log(`[hooks] listening on 127.0.0.1:${actual} (SessionStart/SessionEnd callbacks)`)
       resolve({ server, port: actual })
     })

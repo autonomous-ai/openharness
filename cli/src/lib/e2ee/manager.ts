@@ -86,6 +86,9 @@ const MAX_SESSIONS = 64
 // than the live-code flow's (30s vs 15s) since this crosses a machine-to-machine relay hop instead of
 // a browser tab that's already open and watching.
 const PW_ROUND_TIMEOUT_MS = 30_000
+/** Password-PAKE attempts in flight at once, across every connection. The lockout counts failures as
+ *  they are judged, so it bounds guesses only if attempts cannot pile up ahead of it. */
+const MAX_PW_SLOTS = 2
 
 interface PwPairSlot {
   connId: string
@@ -135,9 +138,6 @@ export class E2eeManager {
   }
 
   fingerprint(): string { return this.store.fingerprint() }
-  createSetupToken(machineId = this.deps.machineId): { token: string; expiresAt: number; fingerprint: string } {
-    return this.store.createSetupToken(machineId)
-  }
 
   // ── persistent remote password (`harness remote-password set|clear|status`) ──────────────────────
   setRemotePassword(password: string): Promise<{ fingerprint: string }> {
@@ -376,7 +376,6 @@ export class E2eeManager {
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     switch (type) {
       case 'e2e_status': return this.onStatus(connId, payload)
-      case 'e2e_setup_claim': return this.onSetupClaim(connId, payload)
       case 'e2e_pair_intent': return this.onPairIntent(connId, payload)
       case 'e2e_pair_cancel': return this.onPairCancel(connId, payload)
       case 'e2e_pake': return this.onPake(connId, payload)
@@ -496,25 +495,6 @@ export class E2eeManager {
     if (reply) this.deps.sendTo(connId, reply)
   }
 
-  private onSetupClaim(connId: string, p: Record<string, unknown>): boolean {
-    const requestId = p.requestId
-    const token = typeof p.token === 'string' ? p.token : ''
-    const identityPub = typeof p.identityPub === 'string' ? p.identityPub : ''
-    const sig = typeof p.sig === 'string' ? p.sig : ''
-    const label = typeof p.label === 'string' ? p.label.slice(0, 60) : 'browser'
-    const fail = (error: string): void => {
-      this.deps.sendTo(connId, { type: 'e2e_setup_claim_result', payload: { requestId, error } })
-    }
-    if (!token || !identityPub || !sig) { fail('BAD_CLAIM'); return true }
-    const validated = this.store.validateSetupToken(token, this.deps.machineId)
-    if (!validated.ok) { fail(validated.error); return true }
-    const pub = C.b64d(identityPub)
-    if (!C.setupClaimVerify(pub, this.deps.machineId, token, C.b64d(sig))) { fail('BAD_SIG'); return true }
-    this.store.addPaired(identityPub, label, this.now(), 'web')
-    this.deps.sendTo(connId, { type: 'e2e_setup_claim_result', payload: { requestId, ok: true, fingerprint: validated.fingerprint } })
-    return true
-  }
-
   /** Called by the hook server when the user runs `harness pair <code>`. Resolves when done/failed. */
   onPair(code: string): Promise<PairResult> {
     return new Promise<PairResult>((resolve) => {
@@ -605,6 +585,7 @@ export class E2eeManager {
     const sidB64 = typeof p.sid === 'string' ? p.sid : ''
     if (!sidB64) { fail('BAD_INTENT'); return true }
     if (this.pwSlots.has(connId)) this.clearPwSlot(connId) // a retry on the same conn replaces the old attempt
+    if (this.pwSlots.size >= MAX_PW_SLOTS) { fail('BUSY'); return true }
     const verifier = this.store.remotePasswordVerifier()
     if (!verifier) { fail('NO_REMOTE_PASSWORD'); return true } // race: cleared between the two checks above
     const sid = C.b64d(sidB64)
@@ -626,6 +607,10 @@ export class E2eeManager {
     const ci = pwContext(this.deps.machineId)
     try {
       if (round === 2) {
+        // Judged against the lockout as it stands NOW, not as it stood at the intent: a lockout that
+        // began meanwhile covers this attempt too, and a refused attempt is not counted or evaluated.
+        const lockedUntil = this.store.pwLockedUntil()
+        if (lockedUntil) { this.failPwPair(connId, 'RATE_LIMITED', false, { retryAt: lockedUntil }); return true }
         const Yb = C.b64d(String(p.yb))
         const K = C.cpaceShared(Yb, slot.y)
         const isk = C.cpaceISK(slot.sid, K, slot.Ya, Yb)
@@ -671,11 +656,11 @@ export class E2eeManager {
   /** `countsAsFailure` is true only for an actual wrong-password verification failure — a timeout or
    *  protocol hiccup (dropped connection, stale round) doesn't prove anything about a guessing
    *  attempt and shouldn't cost the caller part of their lockout budget. */
-  private failPwPair(connId: string, error: string, countsAsFailure = false): void {
+  private failPwPair(connId: string, error: string, countsAsFailure = false, extra?: Record<string, unknown>): void {
     const slot = this.pwSlots.get(connId)
     if (!slot) return
     this.clearPwSlot(connId)
-    this.deps.sendTo(connId, { type: 'e2e_pw_pake', payload: { sid: slot.sidB64, round: 5, error } })
+    this.deps.sendTo(connId, { type: 'e2e_pw_pake', payload: { sid: slot.sidB64, round: 5, error, ...extra } })
     if (countsAsFailure) {
       const { lockedUntil } = this.store.notePwFailure()
       if (lockedUntil) this.notifyRemotePasswordLocked(lockedUntil) // fresh lockout — pwLockedUntil() was

@@ -43,6 +43,7 @@ import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { AppError } from '../errors/index.js'
 import type { Machine } from '@prisma/client'
+import { isBackendOnlyDownType } from './backendOnlyFrames.js'
 import {
   VoiceQuotaExceededError,
   voiceQuotaService,
@@ -1120,6 +1121,9 @@ function relay(device: WebSocket, opts: RelayOpts): void {
 
   const handleFrame = async (msg: CommanderMsg): Promise<void> => {
     const type = msg.type
+    // A device is a client: whatever it sends is relayed down under its own connId, so the backend's own
+    // control frames are refused here as on the web socket (lib/backendOnlyFrames.ts).
+    if (isBackendOnlyDownType(type)) return
     if (type === 'machine_select') { await bindMachine(payloadOf(msg).machineId); return }
     if (type === 'machine_deselect') {
       selectGen++ // cancel any in-flight bindMachine

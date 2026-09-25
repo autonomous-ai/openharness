@@ -15,6 +15,7 @@ import * as mediaPreview from './lib/mediaPreview.js'
 import * as gitProject from './lib/gitProject.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
+import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as storeCatalog from './dsh/catalog.js'
 import { randomUUID } from 'node:crypto'
@@ -212,6 +213,12 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
+// and an unmocked run of these specs used to write test paths into the developer's own config.
+vi.mock('./lib/claudeTrust.js', () => ({
+  claudeTrusts: vi.fn(() => false), codexTrusts: vi.fn(() => false),
+  preTrustClaudeProject: vi.fn(() => 'trusted'), preTrustCodexProject: vi.fn(() => 'trusted'),
+}))
 
 function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<string, unknown>> {
   return ws.sent.map((s) => JSON.parse(s) as Record<string, unknown>)
@@ -435,14 +442,14 @@ describe('BackendSocket outbound queue', () => {
     ws.open()
 
     const frame = {
-      type: 'e2e_setup_claim',
-      payload: { requestId: 'setup-1', token: 'signed-setup-token' },
+      type: 'e2e_status',
+      payload: { requestId: 'status-1' },
     }
     ws.message({ t: 'down', connId: 'web-1', frame })
 
     await vi.waitFor(() => expect(handle).toHaveBeenCalledWith('web-1', frame))
     expect(parseSent(ws).some((item) =>
-      (item.frame as { type?: string } | undefined)?.type === 'e2e_setup_claim_result',
+      (item.frame as { type?: string } | undefined)?.type === 'e2e_status_result',
     )).toBe(false)
     await socket.stop()
   })
@@ -1173,6 +1180,33 @@ describe('BackendSocket outbound queue', () => {
     } finally {
       finish?.('/remote/Harness Projects/repo')
       await socket.unregisterLocalClient('local:project')
+      await socket.stop()
+    }
+  })
+
+  it.each([
+    { name: 'a new empty folder', project: { projectSource: 'new' }, sourceTrusted: false, trusts: true },
+    { name: 'a clone', project: { projectSource: 'remote', repositoryUrl: 'owner/repo' }, sourceTrusted: false, trusts: false },
+    { name: 'the person\'s own repo (branch)', project: { projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature' }, sourceTrusted: true, trusts: false },
+    { name: 'a worktree of an untrusted repo', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: false, trusts: false },
+    { name: 'a worktree of a repo Claude already trusts', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: true, trusts: true },
+  ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
+    // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    vi.spyOn(projectFolder, 'prepareProjectFolder').mockResolvedValue('/work/prepared')
+    vi.mocked(claudeTrust.claudeTrusts).mockReturnValue(sourceTrusted)
+    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
+    socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
+    try {
+      socket.handleLocalFrame('local:trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', ...project } })
+      await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
+      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith('/work/prepared')
+      else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
+      if (project.projectSource === 'worktree') expect(claudeTrust.claudeTrusts).toHaveBeenCalledWith('/work/repo')
+    } finally {
+      await socket.unregisterLocalClient('local:trust')
       await socket.stop()
     }
   })
@@ -2011,7 +2045,7 @@ describe('agent_retarget onto a Local model resolves web tools', () => {
     const ws = wsMock.instances[0]
     ws.open()
     // The grid name is the backend's, pushed on connect; the daemon holds it in memory only.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
     ws.message(sealedDown(socket, 'web-1', 'agent_retarget', { requestId: 'r', agentId: 'a1', gridModel: model }))
     await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'agent_retarget_result')).toBe(true), { timeout: 10_000 })
     const reply = parseSent(ws)
@@ -2168,7 +2202,7 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
     ws.message(sealedDown(socket, 'web-1', 'grid_models_list', { requestId: 'r' }))
     await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'grid_models_list_result')).toBe(true), { timeout: 10_000 })
     const reply = parseSent(ws)
@@ -2252,18 +2286,18 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     ws.open()
 
     // Connect frame: name and grid together.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(socket.gridName()).toBe('someone-7f3a91c4'))
 
     // A rename pushes `{ name }` alone — it must NOT wipe the grid name (the bug that left the picker
     // empty the moment a machine was renamed). Wait until the rename is observably processed, then
     // confirm the grid name survived it.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'renamed' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'renamed' } } })
     await vi.waitFor(() => expect(namesSeen).toContain('renamed'))
     expect(socket.gridName()).toBe('someone-7f3a91c4')
 
     // An explicit null is the account genuinely having no grid, and does clear it.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'renamed', gridName: null } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'renamed', gridName: null } } })
     await vi.waitFor(() => expect(socket.gridName()).toBeNull())
 
     await socket.stop()
@@ -2277,11 +2311,11 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     const ws = wsMock.instances[0]
     ws.open()
     expect(socket.machineName()).toBeNull()
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: ' M2 ', gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: ' M2 ', gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(socket.machineName()).toBe('M2'))
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'Studio' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'Studio' } } })
     await vi.waitFor(() => expect(socket.machineName()).toBe('Studio'))
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(namesSeen).toHaveLength(3))
     expect(socket.machineName()).toBe('Studio')
     await socket.stop()
@@ -2296,7 +2330,7 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     ws.open()
 
     // The backend's own frame sets it, as always.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: 'someone-7f3a91c4' } } })
     await vi.waitFor(() => expect(socket.gridName()).toBe('someone-7f3a91c4'))
 
     // Now the same frame from a process on this machine, through the local socket — the shape of the
@@ -2550,6 +2584,27 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     expect(onMessage).not.toHaveBeenCalled()
   })
 
+  it('takes backend-only frames only on the backend\'s own address (connId \'\'), never one a client sent', async () => {
+    // The backend writes these with connId ''; a client's frame carries its own connId whichever socket
+    // relayed it, so a client-addressed machine_meta must not repoint this computer's grid.
+    const { socket, dispatch } = harness()
+    const onMachineMeta = vi.fn()
+    socket.onMachineMeta = onMachineMeta
+    const onRevoked = vi.fn()
+    socket.onRevoked = onRevoked
+    for (const connId of ['web-1', 'device-conn-7']) {
+      await dispatch({ type: 'machine_meta', payload: { name: 'x', gridName: 'someone-else' } }, connId)
+      await dispatch({ type: 'machine_revoked', payload: {} }, connId)
+      await dispatch({ type: '__clients', payload: { commander: 9 } }, connId)
+    }
+    expect(onMachineMeta).not.toHaveBeenCalled()
+    expect(onRevoked).not.toHaveBeenCalled()
+    expect(socket.gridName()).toBeNull()
+    await dispatch({ type: 'machine_meta', payload: { name: 'mac', gridName: 'mine-1234' } }, '')
+    expect(onMachineMeta).toHaveBeenCalledWith('mac')
+    expect(socket.gridName()).toBe('mine-1234')
+  })
+
   it('never opens a SEALED backend-only frame: a paired client must not speak as the backend', async () => {
     // Opening every sealed type is what lets a paired client reach any RPC — and it would also let one seal
     // `machine_meta` and repoint this computer's grid. The backend has no key, so its frames are never sealed.
@@ -2569,6 +2624,12 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await dispatch({ type: 'x\n2026-09-25 [backend] forged', payload: {} }, 'web-1')
     expect(warn.mock.calls.flat().join(' ')).not.toContain('\n2026')
+  })
+
+  it('answers a sealed e2ee_browser_link_create UNSUPPORTED — setup links are gone', async () => {
+    const { socket, replies, dispatch } = harness()
+    await dispatch(sealedDown(socket, 'web-1', 'e2ee_browser_link_create', { requestId: 'r' }).frame, 'web-1')
+    expect(replies).toEqual([{ connId: 'web-1', type: 'e2ee_browser_link_create', payload: { error: 'UNSUPPORTED' } }])
   })
 
   it('leaves trusted local clients in cleartext', async () => {
