@@ -65,6 +65,24 @@ millisecond. On another machine it is the network: when a pane measures slow (�
 characters are echoed locally — underlined until the far side confirms them, the way mosh does.
 `HARNESS_TUI_PREDICT=off` turns that off, `=always` forces it on.
 
+## Your keys
+
+`~/.config/harness/tui.toml` (or `$XDG_CONFIG_HOME/harness/tui.toml`):
+
+```toml
+prefix = "ctrl+a"          # instead of ctrl+space
+desk = "sync"              # sync | read | off
+predict = "auto"           # auto | always | off
+notify = true              # OS notifications through the terminal
+
+[keys]
+"alt+h" = "none"           # give ⌥h back to the pane (vim, readline…)
+"alt+x" = "close-pane"
+"super+k" = "palette"
+```
+
+`harness tui --keys` lists every command a key can run, and reports problems in the file.
+
 ## Environment
 
 | Variable | |

@@ -4,6 +4,7 @@
 
 mod app;
 mod clipboard;
+mod config;
 mod daemon;
 mod event;
 mod fleet;
@@ -70,8 +71,13 @@ impl Drop for Restore {
     }
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
+    // Before any thread exists: the file may set environment switches.
+    let config = config::load();
+    tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config))
+}
+
+async fn run(config: config::Config) -> io::Result<()> {
     let started = Instant::now();
     let mark = |what: &str| {
         if let Ok(path) = std::env::var("HARNESS_TUI_DEBUG") {
@@ -81,6 +87,13 @@ async fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") { usage(); return Ok(()) }
     if args.iter().any(|a| a == "--version" || a == "-V") { println!("harness-tui {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
+    if args.iter().any(|a| a == "--keys") {
+        println!("Commands a key can run in {} ([keys] \"alt+x\" = \"<command>\", or \"none\"):\n", config::path().display());
+        for (id, title, keys, _, _) in modal::COMMANDS { println!("  {id:<14} {title:<28} {keys}") }
+        for id in ["focus-left", "focus-right", "focus-up", "focus-down", "grow-left", "grow-right", "grow-up", "grow-down", "tab-1 … tab-9", "send", "take"] { println!("  {id}") }
+        for p in &config.problems { println!("\n  ! {p}") }
+        return Ok(())
+    }
     let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok())
         .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(18473u16);
@@ -129,6 +142,9 @@ async fn main() -> io::Result<()> {
 
     mark("terminal ready");
     let mut app = app::App::new(port, tx.clone(), size);
+    if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
+    app.keys = config.keys;
+    app.prefix_key = config.prefix;
     app.boot();
 
     let frame_budget = Duration::from_millis(6);

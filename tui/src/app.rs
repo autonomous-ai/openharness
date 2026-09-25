@@ -89,6 +89,9 @@ pub struct App {
     /// What the outer terminal's title was last set to.
     pub title: String,
     pub first_frame: bool,
+    /// The person's own bindings (tui.toml): chord → command, or None to leave it to the pane.
+    pub keys: Vec<(crate::config::Chord, Option<String>)>,
+    pub prefix_key: crate::config::Chord,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
     pub fleet_marked: bool,
@@ -133,6 +136,8 @@ impl App {
             last_click: None,
             title: String::new(),
             first_frame: false,
+            keys: Vec::new(),
+            prefix_key: crate::config::Config::default().prefix,
             terminal_focused: true,
             fleet_marked: false,
         }
