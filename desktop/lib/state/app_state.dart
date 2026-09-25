@@ -2978,18 +2978,30 @@ class AppNotifier extends ChangeNotifier {
   /// them under the one it does, and remember it for next time.
   Future<void> _followLocalMachineId(int revision) async {
     final store = _paneLayout;
-    final current = localMachineState?.machine.machineId;
+    final local = localMachineState?.machine;
+    final current = local?.machineId;
     if (store == null || current == null) return;
     final remembered = await store.loadLocalMachineId();
     if (!_authWorkCurrent(revision)) return;
     var from = remembered != null && remembered != current ? remembered : null;
+    // THIS COMPUTER'S OWN ID, on a tile, is this computer under the identity it
+    // had while signed out — and that is a fact rather than a reading. The
+    // daemon serves this machine under `computerId()` with no account and under
+    // the account's `machineId` with one, and the machine row carries BOTH, so
+    // a tile keyed by the first is one this window made before signing in.
+    //
+    // It outranks the remembered id because the remembered id can be wrong in
+    // the one direction that matters: a pass that could not re-seat used to
+    // record the new id anyway, erasing the only clue the next pass had. Seen
+    // on a real desk — two harnesses made signed-out, `local_machine_id` already
+    // the account's, and no way back (owner, 2026-09-24).
+    final strandedOnThisComputer = _strandedGuestTiles(local);
+    if (strandedOnThisComputer != null) from = strandedOnThisComputer;
     // A guest's list is this computer and nothing else, so a tile waiting for a
     // machine the list does not have can only be this computer under the account
-    // it left — IF every such tile names the same one. That reading beats the
-    // remembered id: a desk saved before the id was remembered, or remembered by
-    // a launch that could not re-seat, still comes home. Signed in, an unknown id
-    // is a machine that was deleted, and nothing is inferred.
-    if (isGuest) {
+    // it left — IF every such tile names the same one. Kept for the desk saved
+    // before any of the ids above were recorded.
+    if (from == null && isGuest) {
       final unknown = {
         for (final pane in allPanes)
           if (!machineStates.containsKey(pane.machineId)) pane.machineId,
@@ -3002,7 +3014,32 @@ class AppNotifier extends ChangeNotifier {
       await _reseatDesk(from: from, to: current, dropOthers: isGuest);
       if (!_authWorkCurrent(revision)) return;
     }
-    await store.saveLocalMachineId(current);
+    // ONLY ONCE THE DESK REALLY NAMES THIS MACHINE.
+    //
+    // This used to run whatever happened above, which is what made a single
+    // missed re-seat permanent: the id it wrote was the evidence the next launch
+    // needed. If tiles are still sitting on this computer's signed-out id, the
+    // desk has not been re-seated and the old id has to stand.
+    if (_strandedGuestTiles(local) == null) {
+      await store.saveLocalMachineId(current);
+    }
+  }
+
+  /// This computer's signed-out id, when tiles are still keyed by it.
+  ///
+  /// Returns the id AS THE TILES SPELL IT — the re-key rewrites what is on the
+  /// desk, and the two sides spell the same id differently. See [sameMachineId].
+  String? _strandedGuestTiles(Machine? local) {
+    final computerId = local?.computerId;
+    if (computerId == null || computerId.isEmpty) return null;
+    if (sameMachineId(computerId, local!.machineId)) return null;
+    for (final pane in allPanes) {
+      if (sameMachineId(pane.machineId, computerId) &&
+          !machineStates.containsKey(pane.machineId)) {
+        return pane.machineId;
+      }
+    }
+    return null;
   }
 
   /// The account left this window — signed out from Settings, or a session that
