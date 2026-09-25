@@ -89,6 +89,8 @@ pub struct App {
     /// What the outer terminal's title was last set to.
     pub title: String,
     pub first_frame: bool,
+    /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
+    pub terminal_focused: bool,
     pub fleet_marked: bool,
 }
 
@@ -131,6 +133,7 @@ impl App {
             last_click: None,
             title: String::new(),
             first_frame: false,
+            terminal_focused: true,
             fleet_marked: false,
         }
     }
@@ -342,14 +345,18 @@ impl App {
             }
             "turn_ended" => {
                 let visible = self.visible_agents();
+                let opened: Vec<(String, String)> = self.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
                 if let Some(agent) = self.fleet.event_agent(machine_id, &payload) {
                     agent.working = false;
                     agent.active_at = fleet::now_ms();
-                    if !visible.contains(&agent.key()) {
+                    // Only harnesses you have on a tab: a hundred others finish turns all day.
+                    let name = agent.name.clone();
+                    let mine = opened.contains(&agent.key());
+                    if mine && !visible.contains(&agent.key()) {
                         agent.unread = true;
-                        let name = agent.name.clone();
                         self.say(format!("● {name} finished"), theme::ONLINE);
                     }
+                    if mine && !self.terminal_focused { crate::notify("Harness", &format!("{name} finished")) }
                 }
             }
             "commander_question" => {
@@ -358,11 +365,13 @@ impl App {
                     let next = fleet::question_from(&payload, agent.question.as_ref());
                     let fresh = next.as_ref().map(|q| agent.question.as_ref().map(|p| p.request_id != q.request_id).unwrap_or(true)).unwrap_or(false);
                     if next.is_some() { agent.question = next }
+                    let name = agent.name.clone();
+                    let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
-                        let name = agent.name.clone();
-                        self.say(format!("◆ {name} needs input — ⌥I"), theme::ATTENTION);
+                        self.say(format!("◆ {name} needs input — ⌥⇧I"), theme::ATTENTION);
                         crate::bell();
                     }
+                    if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
                 }
             }
             "commander_question_close" => {

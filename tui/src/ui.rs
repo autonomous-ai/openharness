@@ -151,7 +151,7 @@ fn header(buf: &mut Buffer, fleet: &crate::fleet::Fleet, pane: &Pane, rect: Rect
     if let Some(agent) = agent {
         let (mark, color) = engine_mark(&agent.engine);
         spans.push(Span::styled(format!("{mark} "), fg(color)));
-        spans.push(Span::styled(agent.name.clone(), if active { bold(theme::TEXT) } else { fg(theme::SOFT) }));
+        spans.push(Span::styled(agent.name.clone(), if active { bold(Color::Reset) } else { fg(theme::SOFT) }));
         let state = fleet.state_of(agent);
         let (dot, word, color) = state_mark(state);
         let dot = if state == State::Working { theme::spinner(tick) } else { dot };
@@ -343,7 +343,7 @@ fn home(buf: &mut Buffer, app: &App, area: Rect) {
                 Span::styled(format!("{} ", index + 1), bg.fg(theme::ACCENT)),
                 Span::styled(format!("{dot} "), bg.fg(color)),
                 Span::styled(format!("{mark} "), bg.fg(mark_color)),
-                Span::styled(format!("{name:<name_w$}  "), bg.fg(theme::TEXT).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{name:<name_w$}  "), bg.fg(if selected { theme::TEXT } else { Color::Reset }).add_modifier(Modifier::BOLD)),
                 Span::styled(detail_text, bg.fg(detail.1)),
                 Span::styled(" ".repeat(pad), bg),
                 Span::styled(right, bg.fg(theme::MUTED)),
