@@ -1062,7 +1062,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// text at all, so a naive body finds `null` and returns, silently: the single
   /// most common thing anyone pastes into a coding agent did nothing, with no
   /// error and nothing in a log. [NativeClipboard] closes that gap with a native
-  /// platform-channel read for an actual image (macOS, Linux, iOS; see its doc).
+  /// platform-channel read for an actual image (all but Windows; see its doc).
   ///
   /// The engines running in these panes read the system clipboard THEMSELVES —
   /// Claude Code attaches an image on Ctrl+V — so on a LOCAL pane that is already
