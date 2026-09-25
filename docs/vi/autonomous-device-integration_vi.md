@@ -189,3 +189,22 @@ native queue, daemon queue và trạng thái xác nhận input. Không đổi ng
 nhận không có nghĩa task hoàn tất. Các lượt chồng nhau thiếu correlation phải giữ `unknown`.
 Xem [chi tiết engine, kiểm thử và phần OS cần phối hợp](../in-flight-agent-input.md). OS cần lưu
 nhiều delivery và không gán summary/recap theo session cho câu bổ sung mới nhất.
+
+
+### Correlation kết quả trong luồng Device hiện tại
+
+`turn.summary` tiếp tục là kết quả cuối, hoạt động mặc định. Metadata bổ sung nằm trong
+payload: `resultId`, `serverInstanceId` gốc, `correlation.scope`,
+`correlation.inputs[{deliveryId,idempotencyKey}]`, `engineTurnId` tuỳ chọn và `outcome`.
+A/B cùng được xử lý nhận một summary chung; C còn queued không bị hoàn tất.
+Task đơn giữ key/turnId cũ; group không gán đại key của một input.
+
+OS dùng fullText ngay trong event, dedupe theo device + instance gốc + resultId và chỉ TTS
+một lần. turn.done/receipt.updated không phát thêm kết quả. Reservation/receipt/kết quả
+đã được lưu bền; restart đổi instance của transport nhưng không đổi identity/nội dung/
+membership của kết quả đã commit. Input chưa rõ sau restart vẫn unknown, không tự gửi lại.
+
+Không có flag hay negotiation riêng. OS cũ chỉ hiểu một input chưa thể xử lý group đúng;
+phải cập nhật cả hai phía theo [contract và fixtures hiện tại](../autonomous-device-result-correlation.md).
+Engine legacy giữ đường cũ. Thiếu evidence ở engine native báo unknown, không lấy latest
+recap để đoán. Chưa xác nhận end-to-end app → OS → TTS; không đồng nghĩa Lamp đã được sửa xong.

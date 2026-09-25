@@ -1,5 +1,5 @@
 import { DeviceResultPayloadSchema } from './resultContract.js'
-import { DeviceResultEvidence, RESULT_CAPABILITY, inputHash, type ResultEvidence } from './resultEvidence.js'
+import { DeviceResultEvidence, inputHash, type ResultEvidence } from './resultEvidence.js'
 import type { DeviceResultJournal } from './resultJournal.js'
 import type { DeviceInputStatus } from './input.js'
 import type { AutonomousDeviceStore } from './store.js'
@@ -19,9 +19,6 @@ export interface AutonomousDeviceAgent { agentId: string; name: string; engine: 
 const AGENT_RECAP_MAX_CHARS = 200
 export interface AutonomousDeviceDelivery { deliveryId: string; sessionId: string; state: ReceiptState; reason?: string }
 export interface AutonomousDeviceServiceOptions {
-  /** Producer remains opt-in until OS implements v2; evidence tracking is independent. */
-  resultsEnabled?: boolean
-  trackResultEvidence?: boolean
   resultJournal?: Pick<DeviceResultJournal, 'load' | 'save'>
   inputConsumed?: (agentId: string, text: string) => void
   store?: AutonomousDeviceStore
@@ -104,7 +101,6 @@ export class AutonomousDeviceService {
     (agent, ids) => this.evidenceUnknown(agent, ids),
   )
   observeTranscript(agentId: string, sessionId: string, engine: string, line: string): void {
-    if (!this.options.trackResultEvidence) return
     if (this.transcriptSessions.get(agentId) !== sessionId) {
       this.evidence.forget(agentId)
       this.transcriptSessions.set(agentId, sessionId)
@@ -158,7 +154,9 @@ export class AutonomousDeviceService {
       correlation: { scope: entries.length === 1 ? 'input' : 'group',
         inputs: entries.map(e => ({ deliveryId: e!.receipt.deliveryId, idempotencyKey: e!.receipt.idempotencyKey })),
         ...(evidence.engineTurnId ? { engineTurnId: evidence.engineTurnId } : {}) },
-      outcome: evidence.outcome, fullText: evidence.fullText })
+      outcome: evidence.outcome, fullText: evidence.fullText, kind: 'summary',
+      text: evidence.fullText.replace(/\s+/g, ' ').trim().slice(0, AGENT_RECAP_MAX_CHARS),
+      ...(entries.length === 1 ? { idempotencyKey: first.receipt.idempotencyKey, turnId: first.receipt.turnId } : {}) })
     if (Buffer.byteLength(JSON.stringify(payload)) > 32 * 1024) { this.evidenceUnknown(agentId, evidence.inputs); return }
     this.results.set(evidenceId, { deviceId: first.deviceId, evidenceId, agentId, at: this.now(), payload })
     // Commit the immutable result and all its proven receipts together before publishing anything.
@@ -174,11 +172,10 @@ export class AutonomousDeviceService {
       throw error
     }
     // Retain the result envelope before any network callback can fail.
-    if (this.options.resultsEnabled) this.event('turn.result', agentId, payload)
+    this.event('turn.summary', agentId, payload)
     for (const entry of entries) this.event('receipt.updated', agentId, { receipt: structuredClone(entry!.receipt), idempotencyKey: entry!.receipt.idempotencyKey })
   }
-  canSendResult(deviceId: string, frame: AutonomousDeviceFrame, capabilities: readonly string[]): boolean {
-    if (!this.options.resultsEnabled || !capabilities.includes(RESULT_CAPABILITY)) return false
+  canSendResult(deviceId: string, frame: AutonomousDeviceFrame): boolean {
     const payload = frame.payload as Record<string, unknown> | undefined
     return [...this.results.values()].some(r => r.deviceId === deviceId && r.agentId === frame.agentId
       && r.payload.resultId === payload?.resultId && canonical(r.payload) === canonical(payload) && r.at >= this.now() - TTL)
@@ -308,7 +305,7 @@ export class AutonomousDeviceService {
       this.prune()
       this.persist()
       // New transport instance/sequence; immutable payload retains its originating instance.
-      if (options.resultsEnabled) for (const record of this.results.values()) this.retainEvent('turn.result', record.agentId, record.payload)
+      for (const record of this.results.values()) this.retainEvent('turn.summary', record.agentId, record.payload)
     }
   }
   private key(deviceId: string, key: string): string { return `${deviceId}:${key}` }
@@ -424,7 +421,7 @@ export class AutonomousDeviceService {
     if (!this.resume(resume).resumed) {
       send({ type: 'resync', reason: resume?.serverInstanceId === this.serverInstanceId ? 'cursor_too_old' : 'instance_changed', serverInstanceId: this.serverInstanceId, cursor: this.sequence })
       // Reconcile immutable retained results even when the ordinary event cursor expired.
-      for (const record of this.results.values()) if (record.at >= this.now() - TTL) send(this.retainEvent('turn.result', record.agentId, structuredClone(record.payload)))
+      for (const record of this.results.values()) if (record.at >= this.now() - TTL) send(this.retainEvent('turn.summary', record.agentId, structuredClone(record.payload)))
       return
     }
     for (const event of this.events) if (Number(event.eventId) > Number(resume?.cursor)) send(structuredClone(event))
@@ -461,23 +458,34 @@ export class AutonomousDeviceService {
     const p = object(frame.payload) ? frame.payload : {}
     if (frame.type === 'commander_question' && agentId && typeof p.requestId === 'string') {
       this.questions.set(agentId, { requestId: p.requestId, questions: p.questions })
-      this.event('question.open', agentId, { questionRequestId: p.requestId, questions: p.questions })
+      const candidates = [...this.entries.values()].filter(e => e.receipt.agentId === agentId && e.consumed
+        && e.receipt.serverInstanceId === this.serverInstanceId
+        && !['completed', 'rejected'].includes(e.receipt.state))
+      const single = candidates.length === 1 ? candidates[0] : this.turns.get(agentId)
+      this.event('question.open', agentId, { questionRequestId: p.requestId, questions: p.questions,
+        ...(single ? { idempotencyKey: single.receipt.idempotencyKey, turnId: single.receipt.turnId } : {}) })
     } else if (frame.type === 'commander_question_close' && agentId) {
       if (this.questions.get(agentId)?.requestId === p.requestId) this.questions.delete(agentId)
       this.event('question.close', agentId, { questionRequestId: p.requestId })
     } else if (frame.type === 'commander_event' && agentId && ['summary', 'tool', 'error'].includes(String(p.kind))) {
+      // Device native results already use turn.summary with exact engine evidence. The
+      // legacy mirror's asynchronous/latest recap must never emit a second final reply.
+      // Other engines and sessions without native Device reservations keep their path.
+      this.prune()
+      if (p.kind === 'summary' && ([...this.entries.values()].some(e => e.evidenceManaged && e.receipt.agentId === agentId)
+        || [...this.results.values()].some(r => r.agentId === agentId))) return
       const full = p.kind === 'summary' ? this.options.fullText?.(agentId) : undefined
       this.event(p.kind === 'summary' ? 'turn.summary' : p.kind === 'tool' ? 'turn.tool' : 'agent.error', agentId, full ? { ...p, fullText: full } : p)
     }
   }
-  get capabilities(): string[] { return [...AUTONOMOUS_DEVICE_CAPABILITIES, 'input.status.v1', ...(this.options.resultsEnabled ? [RESULT_CAPABILITY] : []), ...(this.options.store ? DEVICE_STORE_CAPABILITIES : [])] }
+  get capabilities(): string[] { return [...AUTONOMOUS_DEVICE_CAPABILITIES, 'input.status.v1', ...(this.options.store ? DEVICE_STORE_CAPABILITIES : [])] }
   async request(deviceId: string, req: Record<string, unknown>): Promise<AutonomousDeviceFrame> {
     const type = typeof req.type === 'string' ? req.type : 'invalid'
     const response = (data: Record<string, unknown>): AutonomousDeviceFrame => ({ type: `${type}_result`, requestId: req.requestId, ...data })
     let reserved: Entry | undefined
     try {
       if (!UUID.test(String(req.requestId))) fail('INVALID_REQUEST', 'requestId must be a UUIDv4')
-      if (type === RESULT_CAPABILITY || type === 'input.status.v1' || !this.capabilities.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
+      if (type === 'input.status.v1' || !this.capabilities.includes(type)) fail('UNSUPPORTED_CAPABILITY', 'Operation is not supported')
       if ((DEVICE_STORE_CAPABILITIES as readonly string[]).includes(type)) return response(await this.options.store!.request(deviceId, req))
       const allowed = ['type', 'requestId', ...(['agents.list', 'focus.get', 'focus.ensure'].includes(type) ? [] : type === 'receipt.get' ? ['idempotencyKey'] : type === 'focus.step' ? ['direction', 'idempotencyKey', 'focusRevision'] : type === 'scroll' ? ['phase', 'dy', 'velocity'] : ['machineId', 'agentId']),
         ...(MUTATIONS.has(type) ? ['idempotencyKey'] : []), ...(type === 'turn.send' ? ['text', 'focusRevision'] : type === 'question.answer' ? ['questionRequestId', 'answers', 'focusRevision'] : type === 'recap' ? ['n'] : [])]
@@ -529,7 +537,7 @@ export class AutonomousDeviceService {
       }
       if (type === 'question.answer' && this.questions.get(agentId)?.requestId !== req.questionRequestId) fail('QUESTION_STALE', 'Question is no longer open')
       this.reserveCapacity()
-      const entry: Entry = { deviceId, digest, ...(type === 'turn.send' && this.options.trackResultEvidence && ['claude', 'codex'].includes(agent.engine) ? { promptHash: inputHash(String(req.text)), reservedAt: this.now(), evidenceManaged: true } : {}), receipt: { idempotencyKey: String(req.idempotencyKey), deliveryId: randomUUID(), operation: type,
+      const entry: Entry = { deviceId, digest, ...(type === 'turn.send' && ['claude', 'codex'].includes(agent.engine) ? { promptHash: inputHash(String(req.text)), reservedAt: this.now(), evidenceManaged: true } : {}), receipt: { idempotencyKey: String(req.idempotencyKey), deliveryId: randomUUID(), operation: type,
         machineId: this.options.machineId, agentId, state: 'queued', turnId: null, serverInstanceId: this.serverInstanceId, error: null, at: this.now() } }
       this.entries.set(key, entry); this.deliveries.set(entry.receipt.deliveryId, entry); reserved = entry
       this.persist() // durable reservation MUST precede any engine write

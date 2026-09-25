@@ -1,6 +1,6 @@
 {
   "type": "event",
-  "kind": "turn.result",
+  "kind": "turn.summary",
   "agentId": "agent-fixture",
   "serverInstanceId": "transport-instance",
   "eventId": 42,
@@ -22,6 +22,8 @@
       ]
     },
     "outcome": "completed",
-    "fullText": "Finished: two red planes and two blue planes."
+    "fullText": "Finished: two red planes and two blue planes.",
+    "kind": "summary",
+    "text": "Finished: two red planes and two blue planes."
   }
 }

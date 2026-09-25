@@ -19,7 +19,7 @@
     {
       "event": {
         "type": "event",
-        "kind": "turn.result",
+        "kind": "turn.summary",
         "agentId": "agent-fixture",
         "serverInstanceId": "transport-instance",
         "eventId": 42,
@@ -41,7 +41,9 @@
             ]
           },
           "outcome": "completed",
-          "fullText": "Finished: two red planes and two blue planes."
+          "fullText": "Finished: two red planes and two blue planes.",
+          "kind": "summary",
+          "text": "Finished: two red planes and two blue planes."
         }
       },
       "expected": {
@@ -58,7 +60,7 @@
     {
       "event": {
         "type": "event",
-        "kind": "turn.result",
+        "kind": "turn.summary",
         "agentId": "agent-fixture",
         "serverInstanceId": "transport-instance",
         "eventId": 42,
@@ -80,7 +82,9 @@
             ]
           },
           "outcome": "completed",
-          "fullText": "Finished: two red planes and two blue planes."
+          "fullText": "Finished: two red planes and two blue planes.",
+          "kind": "summary",
+          "text": "Finished: two red planes and two blue planes."
         }
       },
       "expected": {
@@ -105,7 +109,7 @@
     {
       "event": {
         "type": "event",
-        "kind": "turn.result",
+        "kind": "turn.summary",
         "agentId": "agent-fixture",
         "serverInstanceId": "new-transport-instance",
         "eventId": 2,
@@ -127,7 +131,9 @@
             ]
           },
           "outcome": "completed",
-          "fullText": "Finished: two red planes and two blue planes."
+          "fullText": "Finished: two red planes and two blue planes.",
+          "kind": "summary",
+          "text": "Finished: two red planes and two blue planes."
         }
       },
       "expected": {
@@ -141,7 +147,7 @@
     {
       "event": {
         "type": "event",
-        "kind": "turn.result",
+        "kind": "turn.summary",
         "agentId": "agent-fixture",
         "serverInstanceId": "new-transport-instance",
         "eventId": 3,
@@ -159,7 +165,11 @@
             ]
           },
           "outcome": "completed",
-          "fullText": "C completed separately."
+          "fullText": "C completed separately.",
+          "kind": "summary",
+          "text": "C completed separately.",
+          "idempotencyKey": "key-C",
+          "turnId": "receipt-turn-C"
         }
       },
       "expected": {

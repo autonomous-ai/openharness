@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 
-export const RESULT_CAPABILITY = 'turn.correlation.v2'
 export const inputHash = (text: string): string => createHash('sha256').update(text.replace(/\r\n/g, '\n').trim()).digest('hex')
 export interface ResultEvidence {
   evidenceId: string

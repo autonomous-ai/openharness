@@ -5824,8 +5824,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   deviceStore.startUiDelivery()
   autonomousDeviceService = new AutonomousDeviceService({
     store: deviceStore,
-    trackResultEvidence: true,
-    resultsEnabled: process.env.HARNESS_DEVICE_RESULTS_V2 === '1',
     resultJournal: new DeviceResultJournal(join(env.ADAPTER_DATA_DIR, 'device-results.json')),
     inputConsumed: (id, text) => deviceInput.onTurnStarted(id, text),
     machineId: backend.machineId,

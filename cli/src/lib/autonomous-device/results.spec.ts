@@ -7,16 +7,15 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceService, type AutonomousDeviceServiceOptions } from './service.js'
 import { DeviceResultJournal } from './resultJournal.js'
-import { RESULT_CAPABILITY } from './resultEvidence.js'
 
-const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../../docs/contracts/turn-correlation-v2/${name}.json`, import.meta.url), 'utf8'))
+const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../../../docs/contracts/device-summary-correlation/${name}.json`, import.meta.url), 'utf8'))
 const claude = fixture('claude-native-queue'), codex = fixture('codex-steering')
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 function setup(engine = 'claude', overrides: Partial<AutonomousDeviceServiceOptions> = {}) {
   const events: any[] = [], submit = vi.fn()
   const service = new AutonomousDeviceService({ machineId: 'machine', serverInstanceId: 'instance',
-    now: () => Date.parse('2026-09-24T00:00:00Z'), trackResultEvidence: true, resultsEnabled: true,
+    now: () => Date.parse('2026-09-24T00:00:00Z'),
     agents: () => [{ agentId: 'agent', engine, name: 'Agent', state: 'working' }], submit,
     cancelDelivery: () => true, stop: async () => true, answer: async () => true, recent: () => [],
     emit: event => events.push(event), ...overrides })
@@ -30,7 +29,7 @@ function setup(engine = 'claude', overrides: Partial<AutonomousDeviceServiceOpti
     return receipt
   }
   const ingest = (row: unknown) => service.observeTranscript('agent', 'session', engine, JSON.stringify(row))
-  const results = () => events.filter(e => e.kind === 'turn.result')
+  const results = () => events.filter(e => e.kind === 'turn.summary')
   return { service, send, ingest, results, events, submit }
 }
 
@@ -56,7 +55,7 @@ describe('Device result membership from captured engine evidence', () => {
     expect(f.results()).toEqual([original])
     const replay: any[] = []
     f.service.replay({ serverInstanceId: 'instance', cursor: 0 }, e => replay.push(e))
-    expect(replay.find(e => e.kind === 'turn.result')).toEqual(original)
+    expect(replay.find(e => e.kind === 'turn.summary')).toEqual(original)
     await f.send('B', capture.inputs[1]) // lost RPC acknowledgment
     expect(f.submit).toHaveBeenCalledTimes(3)
   })
@@ -136,13 +135,12 @@ describe('result persistence, opt-in and authorization', () => {
     const replay: any[] = []
     restarted.service.replay({ serverInstanceId: 'instance', cursor: 0 }, e => replay.push(e))
     expect(replay[0]).toMatchObject({ type: 'resync', reason: 'instance_changed' })
-    expect(replay.find(e => e.kind === 'turn.result')).toMatchObject({ serverInstanceId: 'new-instance', payload })
-    const event = replay.find(e => e.kind === 'turn.result')
-    expect(restarted.service.canSendResult('owner', event, [RESULT_CAPABILITY])).toBe(true)
-    expect(restarted.service.canSendResult('other', event, [RESULT_CAPABILITY])).toBe(false)
-    expect(restarted.service.canSendResult('owner', event, [])).toBe(false)
+    expect(replay.find(e => e.kind === 'turn.summary')).toMatchObject({ serverInstanceId: 'new-instance', payload })
+    const event = replay.find(e => e.kind === 'turn.summary')
+    expect(restarted.service.canSendResult('owner', event)).toBe(true)
+    expect(restarted.service.canSendResult('other', event)).toBe(false)
     restarted.service.revoke('owner')
-    expect(restarted.service.canSendResult('owner', event, [RESULT_CAPABILITY])).toBe(false)
+    expect(restarted.service.canSendResult('owner', event)).toBe(false)
     expect(setup('claude', { resultJournal: journal }).service.receipt('owner', 'A')).toBeNull()
   })
 
@@ -153,22 +151,13 @@ describe('result persistence, opt-in and authorization', () => {
     expect(f.submit).not.toHaveBeenCalled()
   })
 
-  it('is off by default and never advertises the capability as an RPC', async () => {
-    const f = setup('claude', { resultsEnabled: false })
-    expect(f.service.capabilities).not.toContain(RESULT_CAPABILITY)
-    await f.send('A', claude.inputs[0]); await f.send('B', claude.inputs[1])
-    for (const row of claude.records) f.ingest(row)
-    expect(f.results()).toHaveLength(0)
-    expect(await f.service.request('owner', { type: RESULT_CAPABILITY, requestId: randomUUID() })).toMatchObject({ error: { code: 'UNSUPPORTED_CAPABILITY' } })
-  })
-
   it('expires result access after the documented retention period', async () => {
     let now = Date.parse('2026-09-24T00:00:00Z')
     const f = setup('claude', { now: () => now }); await f.send('A', claude.inputs[0]); await f.send('B', claude.inputs[1])
     for (const row of claude.records) f.ingest(row)
     const event = f.results()[0]
     now += 30 * 60_000 + 1
-    expect(f.service.canSendResult('owner', event, [RESULT_CAPABILITY])).toBe(false)
+    expect(f.service.canSendResult('owner', event)).toBe(false)
     expect(f.service.receipt('owner', 'A')).toBeNull()
   })
 })
@@ -178,7 +167,7 @@ it('publishes the exact runtime result schema and valid shared OS fixtures', () 
   expect(fixture('result.schema')).toEqual(z.toJSONSchema(DeviceResultSchema))
   DeviceResultSchema.parse(fixture('group-result'))
   DeviceResultSchema.parse(fixture('input-result'))
-  for (const step of fixture('os-replay-cases').steps) if (step.event.kind === 'turn.result') DeviceResultSchema.parse(step.event)
+  for (const step of fixture('os-replay-cases').steps) if (step.event.kind === 'turn.summary') DeviceResultSchema.parse(step.event)
   const invalid = fixture('group-result')
   invalid.payload.correlation.scope = 'input'
   expect(DeviceResultSchema.safeParse(invalid).success).toBe(false)
@@ -201,7 +190,7 @@ it('does not complete a result when journal commit fails and does not trust unwr
   expect(unwritten.service.receipt('owner', 'A')?.state).toBe('queued')
 })
 
-it('keeps different Codex turn IDs separate and rejects mismatched completion IDs', async () => {
+it('keeps reordered Codex completions separate and rejects mismatched completion IDs', async () => {
   const f = setup('codex'); await f.send('A', codex.inputs[0]); await f.send('B', codex.inputs[1])
   const users = codex.records.filter((r: any) => r.type === 'response_item' && r.payload.internal_chat_message_metadata_passthrough.content_item_kinds.includes('user.text'))
   f.ingest(users[0])
@@ -209,10 +198,11 @@ it('keeps different Codex turn IDs separate and rejects mismatched completion ID
   const completion = codex.records.at(-1)
   f.ingest({ ...completion, ordinal: 900, payload: { ...completion.payload, turn_id: 'wrong-turn' } })
   expect(f.results()).toHaveLength(0)
-  f.ingest(completion)
-  expect(f.results()[0].payload.correlation.inputs.map((i: any) => i.idempotencyKey)).toEqual(['A'])
   f.ingest({ ...completion, ordinal: 901, payload: { ...completion.payload, turn_id: 'turn-B' } })
-  expect(f.results()[1].payload.correlation.inputs.map((i: any) => i.idempotencyKey)).toEqual(['B'])
+  expect(f.results()[0].payload.correlation.inputs.map((i: any) => i.idempotencyKey)).toEqual(['B'])
+  expect(f.service.receipt('owner', 'A')?.state).toBe('started')
+  f.ingest(completion)
+  expect(f.results()[1].payload.correlation.inputs.map((i: any) => i.idempotencyKey)).toEqual(['A'])
 })
 
 it('rejects oversize results without truncating or announcing completion', async () => {
@@ -225,14 +215,14 @@ it('rejects oversize results without truncating or announcing completion', async
 })
 
 it('retains the committed result when transport emission loses its acknowledgment', async () => {
-  const f = setup('claude', { emit: event => { if (event.kind === 'turn.result') throw new Error('socket closed') } })
+  const f = setup('claude', { emit: event => { if (event.kind === 'turn.summary') throw new Error('socket closed') } })
   await f.send('A', claude.inputs[0]); await f.send('B', claude.inputs[1])
   for (const row of claude.records.slice(0, -1)) f.ingest(row)
   const before = f.service.resume().cursor
   expect(() => f.ingest(claude.records.at(-1))).toThrow('socket closed')
   const replay: any[] = []
   f.service.replay({ serverInstanceId: 'instance', cursor: before }, e => replay.push(e))
-  expect(replay.filter(e => e.kind === 'turn.result')).toHaveLength(1)
+  expect(replay.filter(e => e.kind === 'turn.summary')).toHaveLength(1)
   expect(f.service.receipt('owner', 'B')?.state).toBe('completed')
 })
 
@@ -243,4 +233,63 @@ it('cannot match a dispatched input against a different engine session after reb
   for (const row of claude.records) f.ingest(row) // fixture ingests into session, not old-session
   expect(f.results()).toHaveLength(0)
   expect(f.service.receipt('owner', 'A')?.state).not.toBe('completed')
+})
+
+it('keeps a single task compatible and suppresses late mirror recaps after final/restart', async () => {
+  let snapshot: any
+  const journal = { load: () => snapshot, save: (value: unknown) => { snapshot = structuredClone(value) } }
+  const f = setup('claude', { resultJournal: journal })
+  const a = await f.send('A', claude.inputs[0])
+  f.ingest(claude.records[0])
+  f.ingest({ type: 'assistant', uuid: 'single-final', parentUuid: claude.records[0].uuid,
+    message: { id: 'single-answer', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Single answer.' }] } })
+  expect(f.results()[0].payload).toMatchObject({ idempotencyKey: 'A', fullText: 'Single answer.', text: 'Single answer.',
+    correlation: { scope: 'input', inputs: [{ deliveryId: a.deliveryId, idempotencyKey: 'A' }] } })
+  f.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'Delayed recap' } })
+  expect(f.results()).toHaveLength(1)
+  const restarted = setup('claude', { resultJournal: journal, serverInstanceId: 'new' })
+  restarted.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'Replayed old recap' } })
+  expect(restarted.results()).toHaveLength(0)
+})
+
+it('preserves structured question/answer RPCs without treating an answer acknowledgment as task completion', async () => {
+  const answer = vi.fn(async () => true)
+  const f = setup('claude', { answer })
+  await f.send('A', claude.inputs[0]); f.ingest(claude.records[0])
+  f.service.commander({ type: 'commander_question', agentId: 'agent', payload: { requestId: 'question', questions: [{ question: 'Which two?' }] } })
+  expect(f.events.find(e => e.kind === 'question.open').payload).toMatchObject({ questionRequestId: 'question', idempotencyKey: 'A' })
+  const req = { type: 'question.answer', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: 'answer-key', questionRequestId: 'question', answers: { planes: 'Outer' } }
+  expect((await f.service.request('owner', req)).receipt).toMatchObject({ state: 'completed' })
+  await f.service.request('owner', { ...req, requestId: randomUUID() })
+  expect(answer).toHaveBeenCalledTimes(1)
+  expect(f.service.receipt('owner', 'A')?.state).toBe('started')
+  expect(f.results()).toHaveLength(0)
+  f.ingest({ type: 'assistant', uuid: 'answered-final', parentUuid: claude.records[0].uuid,
+    message: { id: 'answered-message', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Done after answering.' }] } })
+  expect(f.results()[0].payload.correlation.inputs.map((i: any) => i.idempotencyKey)).toEqual(['A'])
+})
+
+it('keeps legacy engine task and question summaries on their existing path', async () => {
+  const f = setup('commandcode', { fullText: () => 'Complete legacy answer' })
+  const a = await f.send('A', 'Legacy task')
+  f.service.delivery({ deliveryId: a.deliveryId, sessionId: 'agent', state: 'started' })
+  f.service.turnStarted('agent')
+  f.service.turnEnded('agent')
+  f.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'Legacy preview' } })
+  expect(f.service.receipt('owner', 'A')?.state).toBe('completed')
+  expect(f.results()[0].payload).toEqual({ kind: 'summary', text: 'Legacy preview', fullText: 'Complete legacy answer' })
+})
+
+it('rejects tampered agent, key, delivery and owner on a retained summary', async () => {
+  const f = setup(); await f.send('A', claude.inputs[0]); await f.send('B', claude.inputs[1])
+  for (const row of claude.records) f.ingest(row)
+  const event = f.results()[0]
+  expect(event.payload).not.toHaveProperty('idempotencyKey')
+  expect(event.payload).not.toHaveProperty('turnId')
+  expect(f.service.canSendResult('wrong-owner', event)).toBe(false)
+  expect(f.service.canSendResult('owner', { ...event, agentId: 'wrong-agent' })).toBe(false)
+  for (const field of ['deliveryId', 'idempotencyKey']) {
+    const altered = structuredClone(event); altered.payload.correlation.inputs[0][field] = 'wrong'
+    expect(f.service.canSendResult('owner', altered)).toBe(false)
+  }
 })

@@ -5,7 +5,7 @@ import { type AutonomousDeviceService, type AutonomousDeviceFrame } from './serv
 type Frame = Record<string, unknown>
 /** Application RPC over the existing relay E2EE session. No socket, identity, PAKE or trust of its own. */
 export class AutonomousDeviceRelay {
-  private readonly clients = new Map<string, { identity: string; tokens: number; at: number; active: number; capabilities: string[] }>()
+  private readonly clients = new Map<string, { identity: string; tokens: number; at: number; active: number }>()
   constructor(private readonly crypto: Pick<E2eeManager, 'sessionIdentity' | 'sessionRole' | 'unwrapDown' | 'wrapTarget'>,
     private readonly send: (connId: string, frame: Frame) => void,
     private readonly service: AutonomousDeviceService, private readonly machineId: string, private readonly onReady?: () => void,
@@ -28,11 +28,7 @@ export class AutonomousDeviceRelay {
     if (req.type === 'hello') {
       if (req.proto !== 1 || typeof req.requestId !== 'string') { reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'PROTO_UNSUPPORTED', message: 'Protocol 1 required' } }); return }
       const current = this.clients.get(connId)
-      if (req.capabilities !== undefined && (!Array.isArray(req.capabilities) || req.capabilities.some(c => typeof c !== 'string'))) {
-        reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'INVALID_REQUEST', message: 'capabilities must be a string array' } }); return
-      }
-      const capabilities = (req.capabilities as string[] | undefined) ?? []
-      this.clients.set(connId, { ...(current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 }), capabilities })
+      this.clients.set(connId, current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 })
       const resume = req.resume as { serverInstanceId?: unknown; cursor?: unknown } | undefined
       reply({ type: 'hello_result', requestId: req.requestId, proto: 1, machineId: this.machineId, serverInstanceId: this.service.serverInstanceId, capabilities: this.service.capabilities, ...this.service.resume(resume) })
       this.service.replay(resume, event => this.sendEvent(connId, identity, event))
@@ -60,8 +56,11 @@ export class AutonomousDeviceRelay {
     try { reply(await this.service.request(identity, req)) } finally { client.active-- }
   }
   private sendEvent(connId: string, identity: string, event: AutonomousDeviceFrame): void {
-    if (event.kind === 'turn.result' && !this.service.canSendResult(identity, event, this.clients.get(connId)?.capabilities ?? [])) return
     const p = event.payload as Frame | undefined
+    if (event.kind === 'turn.summary' && p?.resultId !== undefined) {
+      if (this.service.canSendResult(identity, event)) this.sendTo(connId, identity, 'autonomous_device_event', event)
+      return
+    }
     if (typeof p?.idempotencyKey === 'string') {
       const own = this.service.receipt(identity, p.idempotencyKey)
       const receipt = p.receipt as Frame | undefined

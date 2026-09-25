@@ -1,6 +1,6 @@
 {
   "type": "event",
-  "kind": "turn.result",
+  "kind": "turn.summary",
   "agentId": "agent-fixture",
   "serverInstanceId": "transport-instance",
   "eventId": 43,
@@ -18,6 +18,10 @@
       ]
     },
     "outcome": "completed",
-    "fullText": "C completed separately."
+    "fullText": "C completed separately.",
+    "kind": "summary",
+    "text": "C completed separately.",
+    "idempotencyKey": "key-C",
+    "turnId": "receipt-turn-C"
   }
 }
