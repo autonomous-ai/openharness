@@ -13,15 +13,13 @@
  * assumed:
  *
  *   * claude reads `<cwd>/.mcp.json` — `claude mcp list` in the workspace lists `e2e_calc` and a
- *     headless run really reaches the server. It reaches it ONLY when the engine was launched with
- *     `--dangerously-skip-permissions` (permission mode `full`): in any other mode the call comes
- *     back as "permission to use the `mcp__e2e_calc__add` tool wasn't granted", and neither
- *     `enableAllProjectMcpServers` nor a pre-written approval changes that. `runGridSwitchTrace`
- *     creates the agent in `full` for this reason.
+ *     headless run really reaches the server. The agent runs in the app's default mode (`auto`), so
+ *     the project's `.claude/settings.json` allows the steps' tools the way a person who answered
+ *     "don't ask again" has them (`allowClaudeProjectTools`).
  *   * codex has NO project-level MCP config. A `<cwd>/.codex/config.toml` is never read (from inside
  *     such a workspace, `codex mcp list` does not list the server), so registration goes through
- *     codex's own `codex mcp add`, which writes `~/.codex/config.toml` — and `removeCodexMcp` takes
- *     the entry out again when the run is over.
+ *     codex's own `codex mcp add`, which writes `~/.codex/config.toml`, with its tools always allowed
+ *     (`approveCodexMcpTools`) — and `removeCodexMcp` takes the entry out again when the run is over.
  */
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, renameSync, realpathSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -111,6 +109,32 @@ rl.on('line', (line) => {
 `
 
 export const MCP_SERVER_NAME = 'e2e_calc'
+/** The tools `CALC_MCP_MJS` serves. */
+export const CALC_MCP_TOOLS = ['add', 'sub'] as const
+
+/**
+ * What a person using claude in this project has long since answered "Yes, and don't ask again"
+ * to: the file tools, the project's script, reading a file with cat, and the project's MCP server —
+ * kept by claude in the project's `.claude/settings.json` (`permissions.allow`), with the `.mcp.json`
+ * server approved in the same file (`enabledMcpjsonServers`). Measured on claude 2.1.274 + Haiku in
+ * `auto`: without it the first step stopped on "This command requires approval" for
+ * `bash tools/calc.sh add 40 2`.
+ */
+export function allowClaudeProjectTools(cwd: string): void {
+  mkdirSync(join(cwd, '.claude'), { recursive: true })
+  const settings = {
+    permissions: {
+      allow: [
+        'Read', 'Write', 'Edit',
+        'Bash(tools/calc.sh:*)', 'Bash(./tools/calc.sh:*)', 'Bash(bash tools/calc.sh:*)', 'Bash(sh tools/calc.sh:*)',
+        'Bash(cat:*)',
+        `mcp__${MCP_SERVER_NAME}`,
+      ],
+    },
+    enabledMcpjsonServers: [MCP_SERVER_NAME],
+  }
+  writeFileSync(join(cwd, '.claude', 'settings.json'), JSON.stringify(settings, null, 2) + '\n')
+}
 
 export function logPath(cwd: string, kind: LogKind): string {
   return join(cwd, '.e2e', kind === 'tool' ? 'calc-tool.log' : 'calc-mcp.log')
@@ -150,6 +174,21 @@ export function registerCodexMcp(mcpServer: string, mcpLog: string, bin = 'codex
   return { ok: true }
 }
 
+/**
+ * Mark the server's tools as always allowed, the entry codex writes itself when a person answers a
+ * tool's approval with "always allow" — how every MCP tool on a working developer's machine ends up
+ * (`[mcp_servers.<server>.tools.<tool>] approval_mode = "approve"`). Without it a tool with no
+ * `readOnlyHint` needs approval on every call (codex-rs/core/src/mcp_tool_call.rs
+ * `requires_mcp_tool_approval`), and in `auto` that approval is codex's reviewer, which asks for a
+ * model named `codex-auto-review` — one only OpenAI serves: on the grid it answered 503 and codex
+ * refused the call (openai/codex#24879). Nested under the server's table, so `codex mcp remove`
+ * takes it out with the server.
+ */
+export function approveCodexMcpTools(configPath: string, tools: readonly string[]): void {
+  const lines = tools.map((t) => `\n[mcp_servers.${MCP_SERVER_NAME}.tools.${t}]\napproval_mode = "approve"\n`).join('')
+  writeFileSync(configPath, lines, { flag: 'a' })
+}
+
 /** Take the entry back out — the run's own cleanup, so the next run starts from a clean config. */
 export function removeCodexMcp(bin = 'codex'): boolean {
   try {
@@ -167,7 +206,7 @@ export function removeCodexMcp(bin = 'codex'): boolean {
  * that command writes the developer's own `~/.codex/config.toml`, and a unit test has no business
  * leaving an entry there pointing at a temp folder it is about to delete.
  */
-export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?: string } = {}): WorkspaceLayout {
+export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?: string; codexConfig?: string } = {}): WorkspaceLayout {
   mkdirSync(join(cwd, 'tools'), { recursive: true })
   mkdirSync(join(cwd, '.e2e'), { recursive: true })
   const tool = join(cwd, 'tools', 'calc.sh')
@@ -176,12 +215,15 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
   for (const kind of ['tool', 'mcp'] as const) writeFileSync(logPath(cwd, kind), '', { flag: 'a' })
 
   // read / write / edit (smokeChecks.ts): one set of files per side, so the grid side can never pass
-  // on what the first side left. The secret is made HERE, fresh for every run, and written nowhere
+  // (named `info-N.txt`, not `secret-N.txt`: gpt-6-luna refused outright to read a file called
+  // "secret" — "I can't provide the contents of a file named notes/secret-1.txt" — and a test that
+  // provokes a refusal measures the refusal, not the switch)
+  // on what the first side left. The token is made HERE, fresh for every run, and written nowhere
   // but its file — not in a prompt, not in a log — so the only way to name it is to read it.
   mkdirSync(join(cwd, 'notes'), { recursive: true })
   mkdirSync(join(cwd, 'out'), { recursive: true })
   for (const n of [1, 2]) {
-    writeFileSync(join(cwd, 'notes', `secret-${n}.txt`), `${freshToken()}\n`)
+    writeFileSync(join(cwd, 'notes', `info-${n}.txt`), `${freshToken()}\n`)
     writeFileSync(join(cwd, 'notes', `todo-${n}.txt`), `# todo ${n}\nstatus: pending\n`)
   }
 
@@ -195,8 +237,9 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
   if (engine === 'codex') {
     const registered = registerCodexMcp(mcpServer, mcpLog, opts.codexBin ?? 'codex')
     if (registered.ok) {
-      mcpConfig = join(homedir(), '.codex', 'config.toml')
-      mcpNote = `registered with \`codex mcp add\` (codex does not read a project-level .codex/config.toml)`
+      mcpConfig = opts.codexConfig ?? join(homedir(), '.codex', 'config.toml')
+      approveCodexMcpTools(mcpConfig, CALC_MCP_TOOLS)
+      mcpNote = `registered with \`codex mcp add\`, tools ${CALC_MCP_TOOLS.join('/')} always allowed (codex does not read a project-level .codex/config.toml)`
     } else {
       mcpNote = `codex mcp add failed: ${registered.detail}`
     }
@@ -204,7 +247,8 @@ export function prepareWorkspace(cwd: string, engine: string, opts: { codexBin?:
     mcpConfig = join(cwd, '.mcp.json')
     writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { command: 'node', args: [mcpServer, mcpLog] } } }, null, 2) + '\n')
     preApproveClaudeMcp(cwd, [MCP_SERVER_NAME])
-    mcpNote = 'project .mcp.json — reachable only in permission mode `full`'
+    allowClaudeProjectTools(cwd)
+    mcpNote = 'project .mcp.json; the steps\' tools always allowed in .claude/settings.json'
   }
   return { tool, mcpServer, mcpConfig, mcpNote }
 }

@@ -268,7 +268,7 @@ function fakeLogs() {
  */
 function fakeAgent(opts: { lie?: CheckId[] } = {}) {
   const files: Record<string, string> = {
-    'notes/secret-1.txt': 'kiwi-4821-tulip\n', 'notes/secret-2.txt': 'otter-1234-ember\n',
+    'notes/info-1.txt': 'kiwi-4821-tulip\n', 'notes/info-2.txt': 'otter-1234-ember\n',
     'notes/todo-1.txt': '# todo 1\nstatus: pending\n', 'notes/todo-2.txt': '# todo 2\nstatus: pending\n',
   }
   const logs = fakeLogs()
@@ -279,7 +279,7 @@ function fakeAgent(opts: { lie?: CheckId[] } = {}) {
       if (!lie.has('bash')) logs.lines.tool.push(`t add ${m[1]} ${m[2]} = ${+m[1] + +m[2]}`)
       return `The result is ${+m[1] + +m[2]}.`
     }
-    if ((m = p.match(/Read (notes\/secret-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
+    if ((m = p.match(/Read (notes\/info-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
     if ((m = p.match(/Create the file (\S+) with this text: (.*) \(ref-/))) {
       if (!lie.has('write')) files[m[1]] = `${m[2]}\n`
       return 'Done.'
@@ -320,7 +320,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
   it('saying is not doing: each step fails when the tool only claims it, with what was missing', async () => {
     const notes: Record<CheckId, RegExp> = {
       bash: /no tool log line for "add 40 2 = 42"/,
-      read: /notes\/secret-1\.txt's token never appeared/,
+      read: /notes\/info-1\.txt's token never appeared/,
       write: /out\/hello-1\.txt does not exist/,
       edit: /notes\/todo-1\.txt is "# todo 1\\nstatus: pending"/,
       mcp: /no mcp log line for "add 30 12 = 42"/,
@@ -347,7 +347,7 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect(out.note).toBe('out/hello-1.txt is "hello from step one"')
   })
 
-  it('read with no secret file in the workspace is the run\'s setup failing, said as such', async () => {
+  it('read with no info file in the workspace is the run\'s setup failing, said as such', async () => {
     const { pane, probe } = fakeAgent()
     const out = await runCheck(pane, '%1', READ_STEP, { ...probe, readFile: () => null })
     expect(out.status).toBe('stuck')
@@ -485,7 +485,7 @@ describe('session tools and models (read from the engine\'s own session file)', 
       const rec = (o: object) => JSON.stringify(o)
       const reply = (model: string, ...tools: string[]) => rec({ type: 'assistant', message: { model, content: tools.map((name) => ({ type: 'tool_use', name, input: {} })) } })
       writeFileSync(join(dir, 's.jsonl'), [
-        rec({ type: 'user', message: { role: 'user', content: 'Read notes/secret-1.txt and tell me what it says. (ref-cccccc)' } }),
+        rec({ type: 'user', message: { role: 'user', content: 'Read notes/info-1.txt and tell me what it says. (ref-cccccc)' } }),
         reply('claude-haiku-4-5-20251001', 'Read'),
         rec({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'kiwi-4821-tulip' }] } }),
         reply('claude-haiku-4-5-20251001'),
@@ -535,9 +535,12 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       const argvLog = join(cwd, 'fake-codex.log')
       writeFileSync(codexBin, `#!/bin/sh\necho "$@" >> ${JSON.stringify(argvLog)}\n[ "$2" = list ] && echo "e2e_calc node /x/calc-mcp.mjs"\nexit 0\n`)
       chmodSync(codexBin, 0o755)
-      const laid = prepareWorkspace(cwd, 'codex', { codexBin })
+      // The tool approvals are appended to codex's config: a copy here, never the developer's own.
+      const codexConfig = join(cwd, 'codex-config.toml')
+      writeFileSync(codexConfig, 'model = "gpt-6-luna"\n')
+      const laid = prepareWorkspace(cwd, 'codex', { codexBin, codexConfig })
       // The read / write / edit steps' files: a fresh unguessable secret per side, a todo to edit.
-      const secrets = [1, 2].map((n) => readWorkspaceFile(cwd, `notes/secret-${n}.txt`)?.trim() ?? '')
+      const secrets = [1, 2].map((n) => readWorkspaceFile(cwd, `notes/info-${n}.txt`)?.trim() ?? '')
       for (const t of secrets) expect(t).toMatch(/^[a-z]+-\d{4}-[a-z]+$/)
       expect(secrets[0]).not.toBe(secrets[1])
       expect(readWorkspaceFile(cwd, 'notes/todo-1.txt')).toContain('status: pending')
@@ -546,7 +549,7 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       // Fresh per run: two workspaces never share a secret.
       const other = mkdtempSync(join(tmpdir(), 'wd-ws-'))
       prepareWorkspace(other, 'claude')
-      expect(readWorkspaceFile(other, 'notes/secret-1.txt')).not.toBe(readWorkspaceFile(cwd, 'notes/secret-1.txt'))
+      expect(readWorkspaceFile(other, 'notes/info-1.txt')).not.toBe(readWorkspaceFile(cwd, 'notes/info-1.txt'))
       rmSync(other, { recursive: true, force: true })
       // The registration is codex's own command, with the server and its log as argv — and a stale
       // entry is removed before the add, so an interrupted run cannot leave one behind.
@@ -565,8 +568,13 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       // it would write the developer's own ~/.codex/config.toml. What is pinned is that the run says
       // out loud which of the two happened.
       expect(existsSync(join(cwd, '.codex', 'config.toml'))).toBe(false)
-      expect(laid.mcpConfig === null || laid.mcpConfig.endsWith(join('.codex', 'config.toml'))).toBe(true)
-      expect(laid.mcpNote).toMatch(laid.mcpConfig ? /codex mcp add/ : /codex mcp add failed/)
+      expect(laid.mcpConfig).toBe(codexConfig)
+      expect(laid.mcpNote).toMatch(/codex mcp add/)
+      // Its tools always allowed, as on a developer's machine: codex then never sends them to its
+      // reviewer, whose `codex-auto-review` model the grid does not serve (openai/codex#24879).
+      const toml = readFileSync(codexConfig, 'utf8')
+      expect(toml.startsWith('model = "gpt-6-luna"\n')).toBe(true) // appended, nothing rewritten
+      for (const tool of ['add', 'sub']) expect(toml).toContain(`[mcp_servers.e2e_calc.tools.${tool}]\napproval_mode = "approve"\n`)
       // The script answers and leaves its line in the tool log.
       expect(execFileSync('sh', [join(cwd, 'tools', 'calc.sh'), 'add', '40', '2']).toString().trim()).toBe('42')
       expect(readLog(cwd, 'tool').at(-1)).toContain('add 40 2 = 42')
@@ -578,10 +586,11 @@ describe('workspace (the person\'s project the agent is created in)', () => {
       // claude gets .mcp.json instead.
       const claude = prepareWorkspace(cwd, 'claude')
       expect(JSON.parse(readFileSync(join(cwd, '.mcp.json'), 'utf8')).mcpServers.e2e_calc.command).toBe('node')
-      // The note carries the other half of what was measured: claude reads .mcp.json, but only a
-      // `full` agent may call the server's tools.
       expect(claude.mcpConfig).toBe(join(cwd, '.mcp.json'))
-      expect(claude.mcpNote).toContain('full')
+      // …and the project settings a person who said "don't ask again" has: the steps' tools allowed.
+      const settings = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.json'), 'utf8'))
+      expect(settings.permissions.allow).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash(bash tools/calc.sh:*)', 'mcp__e2e_calc']))
+      expect(settings.enabledMcpjsonServers).toEqual(['e2e_calc'])
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }

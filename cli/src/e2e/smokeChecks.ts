@@ -70,7 +70,7 @@ const MISS = {
  */
 const side = (n: 1 | 2, a: number, b: number, c: number, d: number): SmokeCheck[] => [
   { id: 'bash', prompt: `Run tools/calc.sh add ${a} ${b} and tell me the result.`, log: 'tool', logPattern: `add ${a} ${b} = ${a + b}`, onMiss: MISS.bash },
-  { id: 'read', prompt: `Read notes/secret-${n}.txt and tell me what it says.`, answerFromFile: `notes/secret-${n}.txt`, onMiss: MISS.read },
+  { id: 'read', prompt: `Read notes/info-${n}.txt and tell me what it says.`, answerFromFile: `notes/info-${n}.txt`, onMiss: MISS.read },
   { id: 'write', prompt: `Create the file out/hello-${n}.txt with this text: hello from step ${n}`, file: { path: `out/hello-${n}.txt`, equals: `hello from step ${n}` }, onMiss: MISS.write },
   { id: 'edit', prompt: `In notes/todo-${n}.txt, change pending to done.`, file: { path: `notes/todo-${n}.txt`, contains: 'status: done', lacks: 'pending' }, onMiss: MISS.edit },
   { id: 'mcp', prompt: `Use the MCP server e2e_calc to add ${c} and ${d}.`, log: 'mcp', logPattern: `add ${c} ${d} = ${c + d}`, onMiss: MISS.mcp },

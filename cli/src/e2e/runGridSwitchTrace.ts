@@ -34,7 +34,7 @@ import { probeLeg, realTmux, waitForPaneSettle } from './paneProbe.js'
 import { firstStuck, plannedLegs, quotaHit, LEGS, type LegOutcome, type LogKind } from './smokeChecks.js'
 
 const LAST_LEG = LEGS[LEGS.length - 1]
-import { prepareWorkspace, readLog, readWorkspaceFile, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
+import { prepareWorkspace, readLog, readWorkspaceFile, removeCodexMcp } from './workspace.js'
 import { sessionName, workspaceDirName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
 import { outDir, runDir } from './artifacts.js'
@@ -114,7 +114,13 @@ let registeredCodexMcp = false
 // both in the trace, because an MCP step that never fired is read very differently once you know
 // the server was never registered or the engine was launched in a mode that refuses it.
 let mcpSetup: { config: string | null; note: string } | null = null
-const permissionMode = process.env.E2E_PERMISSION_MODE ?? 'full'
+// The app's own default (`kDefaultPermissionMode` in desktop/lib/core/permission_modes.dart), and
+// on purpose not overridable: the run creates agents exactly as a person does. It ran in `full`
+// until 2026-09-25, and that alone made codex 0.157.0 fail a switch the app does fine — `full`
+// launches codex with no `-c`, which starts codex's background daemon, and the daemon kept the
+// conversation after the switch ("This conversation is open in another app"). `auto`'s
+// `--approve-for-me` is three `-c` overrides to codex, and codex never starts the daemon for those.
+const permissionMode = 'auto'
 const created = !agentId
 let error: string | null = null
 // Named before anything runs so the scratch folder and the trace share it; the grid model is
@@ -153,18 +159,11 @@ try {
     // The scratch folder is this run's own, so answer the engine's "trust this folder?" the way the
     // daemon does for a workspace it made — otherwise the first check would be typed into that dialog.
     try {
-      if (engine === 'claude') {
-        preTrustClaudeProject(cwd)
-        // `full` means `--dangerously-skip-permissions`, and an interactive claude meets that with a
-        // warning whose default answer exits the engine. Accept it here, before the pane exists.
-        if (permissionMode === 'full') console.error(`[grid-e2e] bypass-permissions warning: ${preAcceptClaudeBypassMode()}`)
-      }
+      if (engine === 'claude') preTrustClaudeProject(cwd)
       if (engine === 'codex') preTrustCodexProject(cwd)
     } catch (err) {
       console.error(`[grid-e2e] pre-trust ${cwd}: ${(err as Error).message}`)
     }
-    // `full` unless someone deliberately narrows it: see gridSwitchDriver.createAgent for why the
-    // MCP steps depend on it.
     // REGISTRATION_FAILED right after the daemon starts is not the test's to report: the saved
     // registry still holds an agent from before the restart (a container, a reboot), tmux numbers
     // the new pane %0 again, and the stale row owns that key until discovery confirms it gone —
@@ -227,7 +226,7 @@ const report = {
       pane,
       /** The folder the agent worked in: tools/calc.sh, the MCP config, and .e2e/*.log with every tool/MCP call. */
       workspace,
-      /** The mode the engine was launched in. `full` is what lets claude call an MCP tool at all. */
+      /** The mode the engine was launched in — always the app's default, `auto`. */
       permissionMode,
       /** Where this engine's MCP server was registered, and how — null config means the MCP steps could not pass. */
       mcp: mcpSetup,
