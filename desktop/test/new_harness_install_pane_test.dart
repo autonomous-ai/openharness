@@ -1,5 +1,5 @@
 // New Harness lists every harness the machine's catalog has — recent ones,
-// then Code, then installed, then the rest of the Store — opens on the last
+// then coding agents, then installed, then the rest of the Store — opens on the last
 // harness and agent used, and installs a missing harness on the way to
 // starting, narrating that install in the right pane on the form's grid.
 import 'dart:async';
@@ -236,7 +236,7 @@ void main() {
 
   group('the harness list', () {
     test(
-      'recent harnesses, then Code, then installed, then the Store',
+      'recent harnesses, then coding agents, then installed, then the Store',
       () async {
         final notifier = await app(
           remember: (n) async {
@@ -248,22 +248,29 @@ void main() {
         expect(ids.where(_isHarnessRow).toList(), [
           _workshop.id, // most recent first
           _solid.id, // recent, though not installed
-          NewHarnessController.codingId,
           _blender.id, // installed
           _circuit.id, // the rest of the Store
         ]);
       },
     );
 
-    test('with no history, Code leads and every harness is listed', () async {
-      final ids = harnessList(controller(await app()));
-      expect(ids.first, NewHarnessController.codingId);
-      expect(
-        ids,
-        containsAllInOrder([_blender.id, _workshop.id, _circuit.id, _solid.id]),
-        reason: 'installed before not installed, catalog order within each',
-      );
-    });
+    test(
+      'with no history, Claude Code leads and every harness is listed',
+      () async {
+        final ids = harnessList(controller(await app()));
+        expect(ids.first, 'claude');
+        expect(
+          ids,
+          containsAllInOrder([
+            _blender.id,
+            _workshop.id,
+            _circuit.id,
+            _solid.id,
+          ]),
+          reason: 'installed before not installed, catalog order within each',
+        );
+      },
+    );
 
     test('a harness that is not installed is searchable and says so', () async {
       final box = controller(await app());
@@ -354,7 +361,7 @@ void main() {
       expect(box.harnessId, gone, reason: 'nothing says it is gone yet');
       final ids = harnessList(box);
       expect(ids.first, gone);
-      expect(ids[1], NewHarnessController.codingId);
+      expect(ids[1], 'claude');
     });
 
     test(
@@ -504,9 +511,7 @@ void main() {
       );
 
       box.focusField(NewHarnessField.harness);
-      box.applyOption(
-        box.options.firstWhere((o) => o.id == NewHarnessController.codingId),
-      );
+      box.applyOption(box.options.firstWhere((o) => o.id == 'claude'));
       await tester.pump();
       expect(box.installRun, isNull, reason: 'another choice clears it');
       expect(tester.takeException(), isNull);

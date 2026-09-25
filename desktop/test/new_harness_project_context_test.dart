@@ -286,8 +286,15 @@ void main() {
       '/work/website',
       '/work/robotics',
       '/work/release-notes',
+      '/work/helmet',
+      '/work/openharness/.worktrees/keyboard',
+      '/work/openharness',
     ]);
-    expect(recent.every((row) => row.machineId == 'm'), isTrue);
+    expect(recent.map((row) => row.machineId).toSet(), {
+      'm',
+      'studio',
+      'build',
+    });
     box.focusField(NewHarnessField.project);
     // All recents live in the menu; the folder prompt does not repeat them.
     box.setQuery('release');
@@ -297,7 +304,7 @@ void main() {
     box.accept();
     expect(
       box.options
-          .where((row) => !row.synthetic)
+          .where((row) => !row.synthetic && row.machineId == 'studio')
           .map((row) => row.project?.folder),
       ['/work/helmet', '/work/openharness/.worktrees/keyboard'],
     );
@@ -343,9 +350,12 @@ void main() {
           '/work/product-video',
           '/work/robotics',
           '/work/release-notes',
+          '/work/helmet',
+          '/work/openharness/.worktrees/keyboard',
+          '/work/openharness',
         ],
       );
-      expect(find.text('product-video'), findsOneWidget);
+      expect(find.text('M2:product-video'), findsOneWidget);
       expect(box.selected?.id, selected);
       var changes = 0;
       box.addListener(() => changes++);
@@ -410,12 +420,13 @@ void main() {
       expect(box.field, NewHarnessField.projectMenu);
       expect(box.query, isEmpty);
       box.setQuery('payments');
-      expect(box.selected!.project!.folder, '/work/remote-payments');
+      expect(box.selected!.project!.folder, '/work/team/payments-processing');
       expect(
         box.options
             .where((row) => !row.synthetic)
-            .every((row) => row.machineId == 'studio'),
-        isTrue,
+            .map((row) => row.machineId)
+            .toSet(),
+        {'m', 'studio'},
       );
     },
   );
@@ -444,6 +455,10 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       expect(box.error, 'Type a project name.');
+      if (box.field == NewHarnessField.machine) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+      }
       await typeHarnessQuery(tester, 'payments processing');
       await tester.pump();
       expect(find.text('Create payments-processing'), findsOneWidget);
@@ -500,7 +515,7 @@ void main() {
       final recent = box.options.singleWhere(
         (row) => row.project?.folder == '/work/payments-processing',
       );
-      expect(recent.title, 'payments-processing');
+      expect(recent.title, 'iMac · Office:payments-processing');
       box.accept(recent);
       expect(box.machineId, 'studio');
       expect(box.project.folder, '/work/payments-processing');
@@ -534,11 +549,10 @@ void main() {
       final project = find.byKey(const ValueKey('new-harness-field-project'));
       expect(tester.getRect(agent).top, lessThan(tester.getRect(project).top));
       expect(input, findsNothing);
-      expect(find.text(box.projectLabel), findsOneWidget);
-      expect(find.text('M2'), findsOneWidget);
+      expect(find.text(box.launchProjectLabel), findsOneWidget);
       expect(
         find.byKey(const ValueKey('new-harness-field-machine')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.byKey(const ValueKey('new-harness-field-mode')),
@@ -546,7 +560,7 @@ void main() {
       );
       expect(find.text('Auto-approve'), findsNothing);
       for (final (name, field) in [
-        ('agent', NewHarnessField.agent),
+        ('agent', NewHarnessField.harness),
         ('machine', NewHarnessField.machine),
         ('project', NewHarnessField.projectMenu),
       ]) {
@@ -571,6 +585,10 @@ void main() {
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
+      if (box.field == NewHarnessField.machine) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+      }
       await typeHarnessQuery(tester, 'payments processing');
       await tester.pump();
       expect(find.text('Create payments-processing'), findsOneWidget);
@@ -645,50 +663,55 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  test(
-    'project choices belong only to the selected machine, including stale rows',
-    () async {
-      final app = createApp();
-      seedMixedAgents(app);
-      await app.projectHistory.select('m', '/work/payments');
-      await app.projectHistory.select('studio', '/work/payments');
-      await app.projectHistory.select('build', '/work/payments');
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'codex',
-        folder: '/work/payments',
-      );
-      addTearDown(box.dispose);
-      addTearDown(app.dispose);
-      box.focusField(NewHarnessField.projectMenu);
-      final recents = box.options
-          .where((row) => row.project?.folder == '/work/payments')
-          .toList();
-      expect(recents, hasLength(1));
-      expect(recents.single.machineId, 'm');
-      chooseMachine(box);
-      box.setQuery('build');
-      box.accept();
-      expect(box.field, NewHarnessField.machine);
-      expect(box.error, contains('offline'));
-      box.setQuery('Office');
-      box.accept();
-      expect(box.machineId, 'studio');
-      expect(box.field, NewHarnessField.projectMenu);
-      final remote = box.options.singleWhere(
-        (row) => row.project?.folder == '/work/payments',
-      );
-      expect(remote.machineId, 'studio');
-      expect(remote.detail, 'iMac · Office:/work/payments');
-      box.accept(recents.single);
-      expect(box.machineId, 'studio');
-      expect(box.error, contains('machine has changed'));
-      box.accept(remote);
-      expect(box.project.folder, '/work/payments');
-      expect(box.field, NewHarnessField.launch);
-    },
-  );
+  test('project choices carry their machine and reject newly unavailable destinations', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    await app.projectHistory.select('m', '/work/payments');
+    await app.projectHistory.select('studio', '/work/payments');
+    await app.projectHistory.select('build', '/work/payments');
+    final box = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/work/payments',
+    );
+    addTearDown(box.dispose);
+    addTearDown(app.dispose);
+    box.focusField(NewHarnessField.projectMenu);
+    final recents = box.options
+        .where((row) => row.project?.folder == '/work/payments')
+        .toList();
+    expect(recents, hasLength(3));
+    final local = recents.firstWhere((row) => row.machineId == 'm');
+    expect(recents.last.enabled, isFalse);
+    chooseMachine(box);
+    box.setQuery('build');
+    box.accept();
+    expect(box.field, NewHarnessField.machine);
+    expect(box.error, contains('offline'));
+    box.setQuery('Office');
+    box.accept();
+    expect(box.machineId, 'studio');
+    expect(box.field, NewHarnessField.projectMenu);
+    final remote = box.options.singleWhere(
+      (row) =>
+          row.project?.folder == '/work/payments' && row.machineId == 'studio',
+    );
+    expect(remote.machineId, 'studio');
+    expect(remote.detail, 'iMac · Office:/work/payments');
+    box.accept(local);
+    expect(box.machineId, 'm');
+    expect(box.error, isNull);
+    box.focusField(NewHarnessField.projectMenu);
+    app.machineStates['studio']!.nodeOnline = false;
+    box.accept(remote);
+    expect(box.machineId, 'm');
+    expect(box.error, contains('unavailable'));
+    app.machineStates['studio']!.nodeOnline = true;
+    box.accept(remote);
+    expect(box.project.folder, '/work/payments');
+    expect(box.field, NewHarnessField.launch);
+  });
 
   testWidgets(
     'remote home resolves tilde completion and an existing named project',

@@ -8,7 +8,8 @@ import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
-import 'support/launch_menu.dart' show focusLaunchRow;
+import 'support/launch_menu.dart'
+    show focusLaunchRow, openLaunchRow, typeHarnessQuery;
 import 'support/mixed_agents.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -138,6 +139,17 @@ void main() {
     });
   });
 
+  testWidgets('quick start cannot launch from an empty choice list', (
+    tester,
+  ) async {
+    final (box, daemon) = await mount(tester);
+    await openLaunchRow(tester, 'agent');
+    await typeHarnessQuery(tester, 'no-such-agent-123456');
+    await key(tester, LogicalKeyboardKey.enter, shift: true);
+    expect(box.error, 'No values match this search.');
+    expect(daemon.requests, isNot(contains('agent_create')));
+  });
+
   group('one grid', () {
     double heightOf(WidgetTester tester, String field) =>
         tester.getSize(find.byKey(ValueKey('new-harness-field-$field'))).height;
@@ -145,13 +157,14 @@ void main() {
     testWidgets('every field is exactly one row', (tester) async {
       await mount(tester);
       final row = heightOf(tester, 'agent');
-      for (final field in ['harness', 'model', 'machine', 'project']) {
+      for (final field in ['project', 'advanced']) {
         expect(heightOf(tester, field), row, reason: '$field drifted');
       }
     });
 
     testWidgets('a wrapped notice is a whole number of rows', (tester) async {
       final (box, _) = await mount(tester, focus: 'model');
+      await openLaunchRow(tester, 'model');
       final row = heightOf(tester, 'agent');
       final notice = box.modelNotice;
       expect(notice, isNotNull);
@@ -162,6 +175,7 @@ void main() {
 
     testWidgets('the right pane has one text column', (tester) async {
       final (box, _) = await mount(tester, focus: 'model');
+      await openLaunchRow(tester, 'model');
       double left(Finder finder) => tester.getTopLeft(finder).dx;
       final column = left(find.byKey(const ValueKey('new-harness-query')));
       expect(left(find.text(box.modelNotice!)), closeTo(column, .5));
@@ -181,8 +195,7 @@ void main() {
           )
           .dx;
       final column = left('agent', box.agentLabel);
-      expect(left('machine', box.machineLabel), closeTo(column, .5));
-      expect(left('project', box.projectLabel), closeTo(column, .5));
+      expect(left('project', box.launchProjectLabel), closeTo(column, .5));
     });
 
     testWidgets('a blank row sets Advanced apart from the core fields', (
@@ -191,7 +204,7 @@ void main() {
       await mount(tester);
       // Branch is the last core field now, under Project.
       final project = tester.getRect(
-        find.byKey(const ValueKey('new-harness-field-branch')),
+        find.byKey(const ValueKey('new-harness-field-project')),
       );
       final advanced = tester.getRect(
         find.byKey(const ValueKey('new-harness-field-advanced')),
@@ -211,7 +224,7 @@ void main() {
           .decoration!
           .hintText!;
       expect(hint, isNot(startsWith(' ')));
-      expect(hint, 'Search ${box.field.name}');
+      expect(hint, box.hint);
     });
 
     testWidgets('the key hint spaces its keys: ⇧ ⏎, not ⇧⏎', (tester) async {
@@ -227,7 +240,7 @@ void main() {
       final last = box.options.lastWhere((row) => !row.synthetic);
       expect(last.id, isNot(box.options.first.id));
       box.app.stateOf(last.id)!.localOnly = true;
-      box.focusField(NewHarnessField.agent);
+      box.focusField(NewHarnessField.harness);
       box.focusField(NewHarnessField.machine);
       await tester.pumpAndSettle();
       expect(box.options.firstWhere((row) => !row.synthetic).id, last.id);
@@ -318,22 +331,22 @@ void main() {
             '{"keys":"ctrl+h","command":"picker.complete_back","when":"picker"}]}',
           );
         final (box, _) = await mount(tester, keymap: keymap);
-        expect(box.field, NewHarnessField.agent);
+        expect(box.field, NewHarnessField.harness);
         for (final (move, back) in [
           (LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP),
           (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
         ]) {
           // The list closed: they walk the rows.
           await key(tester, move, ctrl: true);
-          expect(box.field, NewHarnessField.model);
+          expect(box.field, NewHarnessField.projectMenu);
           await key(tester, back, ctrl: true);
-          expect(box.field, NewHarnessField.agent);
+          expect(box.field, NewHarnessField.harness);
           // The list open: they walk the choices, and the row stays put.
           await key(tester, LogicalKeyboardKey.arrowRight);
           final first = box.selected!.id;
           await key(tester, move, ctrl: true);
           expect(box.selected!.id, isNot(first));
-          expect(box.field, NewHarnessField.agent);
+          expect(box.field, NewHarnessField.harness);
           await key(tester, back, ctrl: true);
           expect(box.selected!.id, first);
           await key(tester, LogicalKeyboardKey.escape);

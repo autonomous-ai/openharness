@@ -120,9 +120,9 @@ void main() {
         (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
       ]) {
         await key(tester, forward, ctrl: true);
-        expect(box.field, NewHarnessField.agent);
-        await key(tester, backward, ctrl: true);
         expect(box.field, NewHarnessField.harness);
+        await key(tester, backward, ctrl: true);
+        expect(box.field, NewHarnessField.launch);
         await key(tester, forward, ctrl: true);
         await key(tester, LogicalKeyboardKey.enter);
         final cursor = box.cursor;
@@ -160,6 +160,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
       final form = find.byType(NewHarnessForm);
       final original = tester.widget<NewHarnessForm>(form).controller;
+      await openLaunchRow(tester, 'project');
       final field = find.byKey(const ValueKey('new-harness-query'));
       await tester.tap(field);
       const composing = TextEditingValue(

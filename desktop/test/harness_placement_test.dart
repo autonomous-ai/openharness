@@ -214,6 +214,8 @@ void main() {
           ),
         );
         await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
         await tester.enterText(input, 'acme/terminal-tools');
         await tester.pump(const Duration(milliseconds: 250));
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -390,6 +392,8 @@ void main() {
             ),
           ),
         );
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();
         await tester.enterText(input, projectQuery);
         await tester.pump(const Duration(milliseconds: 250));

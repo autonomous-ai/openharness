@@ -147,6 +147,33 @@ come from Harness's own Terminal preferences, not Apple Terminal or iTerm.
 
 ## Keep the terminal interaction
 
+Cmd-N opens with **Agent**, **Project**, **Options**, and the selected
+`[ New Harness ]` action. Enter launches with the displayed settings. Options
+starts collapsed on a fresh draft and expands Model, Branch, Worktree,
+Approvals, and Profile in place. Keep Worktree as `[x]` / `[ ]`.
+
+![Cmd-N with two main fields and a launch summary](images/terminal-new-harness-minimal.png)
+
+The right pane shows the resolved machine, full folder, model, and applicable
+Git and agent settings. Enter or typing on a field replaces that summary with
+its searchable choices; accepting a value restores the summary. Narrow windows
+show the active choices in place of the form. No permanent Machine field or
+additional top-level Harness field.
+
+Agent offers Codex, Claude Code, Terminal, and specialized harnesses together.
+A direct agent completes the choice. A specialized harness such as Blender
+opens `Run Blender with` in the same pane, offering compatible coding agents
+with its remembered choice selected. The left value then reads
+`Blender · Codex`.
+
+Project searches existing `machine:project` pairs across the inventory; names,
+machine names, and paths are searchable. Put local projects first before a
+search, and dim unavailable destinations with a short reason. Selecting a
+project commits both its machine and folder. New Folder, Open Folder, and Clone
+Repository first ask for a machine (local selected), then a name, path/browser,
+or repository URL. Escape retraces these steps. Searching or moving the
+highlight never creates a folder or starts a harness.
+
 Arrows navigate the active choices; Enter accepts the current choice; Escape
 goes back or dismisses according to the existing workflow. An editor still
 accepts ordinary text, including `j` and `k`. Preserve composition, paste,

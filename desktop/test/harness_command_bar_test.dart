@@ -425,7 +425,7 @@ void main() {
       expect(prompt.engine, 'claude');
       expect(prompt.project.folder, isNull);
       expect(prompt.task, 'Plan the arm calibration');
-      expect(prompt.field, NewHarnessField.harness);
+      expect(prompt.field, NewHarnessField.launch);
       expect(
         find.byKey(const ValueKey('new-harness-field-project')),
         findsOneWidget,

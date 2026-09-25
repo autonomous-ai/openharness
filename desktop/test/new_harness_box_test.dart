@@ -890,14 +890,14 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(box.field, NewHarnessField.harness);
+    expect(box.field, NewHarnessField.launch);
     await openLaunchRow(tester, 'agent');
     await typeHarnessQuery(tester, 'clau');
     expect(box.engine, 'codex');
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(box.engine, 'claude');
-    expect(box.field, NewHarnessField.agent);
+    expect(box.field, NewHarnessField.harness);
     expect(closed, 0);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();

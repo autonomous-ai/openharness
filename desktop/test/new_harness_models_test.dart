@@ -369,6 +369,7 @@ void main() {
       expect(box.engine, 'terminal');
       expect(box.model, isNull);
       expect(box.draft.model, isNull);
+      await openLaunchRow(tester, 'advanced');
       expect(find.text('Not used by Terminal'), findsOneWidget);
       await startHarness(tester);
       await tester.pumpAndSettle();
@@ -575,7 +576,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        final order = ['harness', 'agent', 'model', 'machine', 'project'];
+        final order = ['agent', 'project', 'advanced'];
         final positions = [
           for (final name in order)
             tester
