@@ -150,6 +150,7 @@ class SheetSearchField extends StatelessWidget {
     required this.onClear,
     required this.hintText,
     this.onCancel,
+    this.cancelLabel = 'Cancel',
   });
 
   final TextEditingController controller;
@@ -157,6 +158,10 @@ class SheetSearchField extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
   final String hintText;
+
+  /// The word [onCancel] wears: "Cancel" while it ends a search, "Close" while
+  /// it closes the sheet.
+  final String cancelLabel;
 
   /// "Cancel", beside the box. Null leaves it out.
   ///
@@ -226,7 +231,7 @@ class SheetSearchField extends StatelessWidget {
               ),
             ),
           ),
-          _CancelButton(onTap: onCancel),
+          _CancelButton(onTap: onCancel, label: cancelLabel),
         ],
       ),
     );
@@ -240,9 +245,10 @@ class SheetSearchField extends StatelessWidget {
 /// would jump back to its full width over a gap. And the tap that ended the
 /// search must not land on it a second time on the way out.
 class _CancelButton extends StatelessWidget {
-  const _CancelButton({required this.onTap});
+  const _CancelButton({required this.onTap, required this.label});
 
   final VoidCallback? onTap;
+  final String label;
 
   static const Duration _slide = Duration(milliseconds: 250);
 
@@ -280,7 +286,7 @@ class _CancelButton extends StatelessWidget {
               height: SheetSearchField._height,
               child: Center(
                 child: Text(
-                  'Cancel',
+                  label,
                   maxLines: 1,
                   style: TextStyle(
                     // The accent the caret already wears: the word belongs to

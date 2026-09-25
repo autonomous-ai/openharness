@@ -1283,6 +1283,70 @@ void main() {
     expect(closed, 1);
   });
 
+  // The sheet stands full height, so the dimmed strip above it is too thin
+  // to tap and half its height too far to pull. It needs a way out that
+  // costs one tap or a short pull from anywhere on it.
+  group('terminal search: the sheet closes without a long pull', () {
+    Future<int Function()> openSheet(
+      WidgetTester tester, {
+      int agents = 1,
+    }) async {
+      final app = _app([
+        _machine('box', [
+          for (var i = 0; i < agents; i++) _agent('${3100 + i}', minutesAgo: i),
+        ]),
+      ]);
+      addTearDown(app.dispose);
+      var closed = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalSearchOverlay(
+              notifier: app,
+              animation: const AlwaysStoppedAnimation(1),
+              onClose: () => closed++,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return () => closed;
+    }
+
+    testWidgets('Close sits beside the field and closes it in one tap', (
+      tester,
+    ) async {
+      final closed = await openSheet(tester);
+      await tester.pump(const Duration(milliseconds: 400));
+
+      await tester.tap(find.text('Close'));
+      await tester.pump();
+      expect(closed(), 1);
+    });
+
+    // Enough rows to scroll, so the pull goes through the list's own drag:
+    // the list is at its top, and the overscroll moves the sheet instead.
+    testWidgets('a short pull down on the list closes it', (tester) async {
+      final closed = await openSheet(tester, agents: 30);
+      final list = find.byType(Scrollable).last;
+
+      await tester.drag(list, const Offset(0, 160));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(closed(), 1);
+    });
+
+    testWidgets('a nudge settles back up, and leaves it open', (tester) async {
+      final closed = await openSheet(tester, agents: 30);
+      final list = find.byType(Scrollable).last;
+
+      await tester.drag(list, const Offset(0, 40));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(closed(), 0);
+    });
+  });
+
   testWidgets('one bar: no Cancel beside it, and its chevron closes search', (
     tester,
   ) async {

@@ -17,6 +17,7 @@ import 'phone_search_controller.dart';
 import 'phone_search_field.dart';
 import 'phone_search_results.dart';
 import 'sheet_list.dart';
+import 'sheet_pull.dart';
 
 /// The terminal's way to another agent: a sheet up from the bottom, over the
 /// terminal, holding the account's tabs with a search field across its top.
@@ -132,6 +133,14 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// A fling down faster than this closes the sheet however little it moved —
   /// [BottomSheet]'s own figure, so this sheet lets go like the others do.
   static const double _flingSpeed = 700;
+
+  /// How far a pull has to bring the sheet down to close it — or half its
+  /// height, where that is less (a keyboard standing under it).
+  ///
+  /// ⚠️ **Not [BottomSheet]'s half on its own.** That rule was written for a
+  /// sheet a share of the screen high; this one stands full height, so half of
+  /// it was a drag most of the way down the phone.
+  static const double _closeDistance = 120;
 
   /// How close under the status bar the sheet's top edge stands while it
   /// reads the tabs: a strip of the dimmed page left showing, which is what
@@ -345,16 +354,24 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     openDeskAgent(context, notifier, group, entry);
   }
 
-  void _onPull(DragUpdateDetails details) {
-    final height = _sheetKey.currentContext?.size?.height ?? 0;
+  double get _sheetHeight => _sheetKey.currentContext?.size?.height ?? 0;
+
+  /// Moves the sheet [points] down — from its own drag, or from a list's
+  /// overscroll ([SheetPull]). Never above where it stands open.
+  void _pullBy(double points) {
+    final height = _sheetHeight;
     if (height <= 0) return;
-    _pull.value += details.primaryDelta! / height;
+    _pull.value = math.max(0, _pull.value + points / height);
   }
 
-  /// Let go: closed on a fling down or past half its height — [BottomSheet]'s
-  /// own rule — and back up otherwise.
-  void _onRelease(DragEndDetails details) {
-    if ((details.primaryVelocity ?? 0) > _flingSpeed || _pull.value > 0.5) {
+  /// Let go: closed on a fling down or past [_closeDistance], and back up
+  /// otherwise. A release with no pull behind it — a list's own scroll
+  /// ending — leaves the sheet alone.
+  void _release(double velocity) {
+    if (_pull.value == 0) return;
+    final pulled = _pull.value * _sheetHeight;
+    final closeAt = math.min(_closeDistance, _sheetHeight / 2);
+    if (velocity > _flingSpeed || pulled > closeAt) {
       _close();
       return;
     }
@@ -495,8 +512,8 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
       key: _sheetKey,
       // The whole sheet can be pulled down, as a route's sheet can. The lists
       // in it scroll on the same drag and win it where they are.
-      onVerticalDragUpdate: _onPull,
-      onVerticalDragEnd: _onRelease,
+      onVerticalDragUpdate: (details) => _pullBy(details.primaryDelta!),
+      onVerticalDragEnd: (details) => _release(details.primaryVelocity ?? 0),
       onVerticalDragCancel: _settle,
       child: CustomPaint(
         foregroundPainter: _TopRim(color: AppGlass.hair),
@@ -537,10 +554,20 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                       // search — the caret stays where the next query will go.
                       _focus.requestFocus();
                     },
-                    onCancel: _searching ? _cancel : null,
+                    // Always a way out on the sheet's face: Cancel ends the
+                    // search, Close the sheet — a full-height sheet leaves too
+                    // little dimmed page to tap and too far to pull.
+                    onCancel: _searching ? _cancel : _close,
+                    cancelLabel: _searching ? 'Cancel' : 'Close',
                   ),
                 ),
-                Expanded(child: _content()),
+                Expanded(
+                  child: SheetPull(
+                    onPull: _pullBy,
+                    onRelease: _release,
+                    child: _content(),
+                  ),
+                ),
               ],
             ),
           ),
