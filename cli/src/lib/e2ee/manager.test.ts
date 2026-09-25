@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -462,6 +462,70 @@ describe('E2eeManager persistent remote-password pairing', () => {
     expect(takeLast('e2e_pw_pake').payload).toMatchObject({ round: 5, ok: true })
     // One scrypt per wrong-password attempt — see PW_SCRYPT_TEST_TIMEOUT_MS.
   }, PW_SCRYPT_TEST_TIMEOUT_MS)
+
+  it('keeps at most two password attempts in flight at once; a third is BUSY until one finishes', async () => {
+    const { mgr, takeLast, lastFor } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    const a = new PwPeer(), b = new PwPeer(), c = new PwPeer()
+    mgr.handleFrame('slot-a', await a.intent(PASSWORD))
+    mgr.handleFrame('slot-b', await b.intent(PASSWORD))
+    mgr.handleFrame('slot-c', await c.intent(PASSWORD))
+    expect(lastFor('slot-c', 'e2e_pw_pair_result')?.payload).toMatchObject({ ok: false, error: 'BUSY' })
+    expect(lastFor('slot-c', 'e2e_pw_pake')).toBeUndefined()
+    // One finishing frees its place.
+    mgr.handleFrame('slot-a', a.onPake(lastFor('slot-a', 'e2e_pw_pake')!)!)
+    mgr.handleFrame('slot-a', a.onPake(lastFor('slot-a', 'e2e_pw_pake')!)!)
+    expect(lastFor('slot-a', 'e2e_pw_pake')?.payload).toMatchObject({ round: 5, ok: true })
+    const d = new PwPeer()
+    mgr.handleFrame('slot-d', await d.intent(PASSWORD))
+    expect(takeLast('e2e_pw_pake').payload).toMatchObject({ round: 1 })
+  })
+
+  it('judges an attempt against a lockout that began after its intent, without evaluating it', async () => {
+    const { mgr, lastFor } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    const held = new PwPeer()
+    mgr.handleFrame('held', await held.intent(PASSWORD))
+    const heldRound1 = lastFor('held', 'e2e_pw_pake')!
+    for (let i = 0; i < 5; i++) {
+      const joiner = new PwPeer()
+      const conn = `pwlock-${i}`
+      mgr.handleFrame(conn, await joiner.intent(`wrong-${i}`))
+      mgr.handleFrame(conn, joiner.onPake(lastFor(conn, 'e2e_pw_pake')!)!)
+    }
+    // Now locked. The attempt opened before the lockout — even with the right password — is refused.
+    mgr.handleFrame('held', held.onPake(heldRound1)!)
+    expect(lastFor('held', 'e2e_pw_pake')?.payload).toMatchObject({ round: 5, error: 'RATE_LIMITED', retryAt: expect.any(Number) })
+    expect(mgr.listPaired()).toEqual([])
+  }, PW_SCRYPT_TEST_TIMEOUT_MS)
+
+  it('starts the lockout backoff over after a success, and after a quiet day', async () => {
+    const { mgr, lastFor } = machine()
+    await mgr.setRemotePassword(PASSWORD)
+    const lockNow = async (tag: string): Promise<number> => {
+      for (let i = 0; i < 5; i++) {
+        const joiner = new PwPeer()
+        const conn = `${tag}-${i}`
+        mgr.handleFrame(conn, await joiner.intent(`wrong-${i}`))
+        mgr.handleFrame(conn, joiner.onPake(lastFor(conn, 'e2e_pw_pake')!)!)
+      }
+      const probe = new PwPeer()
+      mgr.handleFrame(`${tag}-probe`, await probe.intent(PASSWORD))
+      return (lastFor(`${tag}-probe`, 'e2e_pw_pair_result')!.payload as { retryAt: number }).retryAt
+    }
+    const FIVE_MIN = 5 * 60_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let now = Date.now()
+      expect(await lockNow('first') - now).toBeLessThanOrEqual(FIVE_MIN + 1000)
+      // Right after it ends, the next lockout escalates (10 min)…
+      vi.setSystemTime(now += FIVE_MIN + 1000)
+      expect(await lockNow('second') - now).toBeGreaterThan(FIVE_MIN + 1000)
+      // …but a day of quiet since the last one ended starts it over.
+      vi.setSystemTime(now += 10 * FIVE_MIN + 25 * 60 * 60_000)
+      expect(await lockNow('third') - now).toBeLessThanOrEqual(FIVE_MIN + 1000)
+    } finally { vi.useRealTimers() }
+  }, PW_SCRYPT_TEST_TIMEOUT_MS * 3)
 
   it('clearRemotePassword removes it — a subsequent intent gets NO_REMOTE_PASSWORD again', async () => {
     const { mgr, takeLast } = machine()
