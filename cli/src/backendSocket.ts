@@ -2,6 +2,7 @@ import { readGitPullRequest } from './lib/gitPullRequest.js'
 import type { HarnessShareOwner } from './sharing/owner.js'
 import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
 import { AutonomousDeviceRelay } from './lib/autonomous-device/relay.js'
+import { deviceDump } from './lib/autonomous-device/dump.js'
 import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/autonomous-device/service.js'
 /**
  * BackendSocket — the CLI's dial-out connection to the backend's `/api/adapter-ws`.
@@ -684,12 +685,18 @@ export class BackendSocket {
   private readonly directDeviceSinks = new Map<string, (frame: Record<string, unknown>) => void>()
   private readonly directDevicePins = new Map<string, string>()
   onDirectDeviceRevoked?: (fingerprint: string) => void
+  /** A connection that is, or is pairing as, an Autonomous device — what the device dump records. */
+  private isDeviceConn(connId: string): boolean {
+    return this.directDeviceSinks.has(connId) || this.e2ee.sessionRole(connId) === 'device'
+      || (this.e2ee.pendingConnection() === connId && this.e2ee.pendingPair()?.role === 'device')
+  }
   attachDirectDevice(connId: string, send: (frame: Record<string, unknown>) => void): void { this.directDeviceSinks.set(connId, send) }
   detachDirectDevice(connId: string): void { this.directDeviceSinks.delete(connId); this.directDevicePins.delete(connId); this.e2ee.dropSession(connId); this.autonomousDeviceRelay?.drop(connId); this.onCommanderPresenceChanged?.(this.hasCommander()) }
   pairedDirectFingerprint(connId: string): string | null { const pub = this.directDevicePins.get(connId); return pub ? fingerprint(b64d(pub)) : null }
   async receiveDirectDevice(connId: string, frame: Record<string, unknown>, pairingAllowed: boolean): Promise<void> {
     if (!this.directDeviceSinks.has(connId)) return
     const type = frame.type
+    if (type !== 'autonomous_device_request') deviceDump.record('in', 'wire', connId, frame) // requests: decrypted in the relay
     if (type === 'machine_selected') return
     if (type === 'autonomous_device_request') { await this.autonomousDeviceRelay?.handle(connId, frame); return }
     const controls = pairingAllowed ? ['e2e_pair_intent', 'e2e_pair_cancel', 'e2e_pake', 'e2e_hello', 'e2e_status'] : ['e2e_hello', 'e2e_status']
@@ -709,7 +716,7 @@ export class BackendSocket {
   }
   directAutonomousDeviceSessions(): number { return this.autonomousDeviceRelay?.count(id => this.directDeviceSinks.has(id)) ?? 0 }
   autonomousDeviceConnected(): boolean { return this.autonomousDeviceRelay?.connected() ?? false }
-  emitAutonomousDeviceEvent(frame: AutonomousDeviceFrame): void { this.autonomousDeviceRelay?.emit(frame) }
+  emitAutonomousDeviceEvent(frame: AutonomousDeviceFrame, deviceId?: string): void { this.autonomousDeviceRelay?.emit(frame, deviceId) }
 
   /** Live backend link state (local dashboard + E2EE gating). */
   isConnected(): boolean {
@@ -1057,6 +1064,8 @@ export class BackendSocket {
   }
 
   sendTo(connId: string, frame: Frame): void {
+    // Handshake frames only: device RPC, legacy replies and broadcasts are recorded in the clear where built.
+    if (typeof frame.type === 'string' && frame.type.startsWith('e2e_') && deviceDump.enabled && this.isDeviceConn(connId)) deviceDump.record('out', 'wire', connId, frame)
     const direct = this.directDeviceSinks.get(connId)
     if (direct) { direct(frame); return }
     const local = this.localClients.get(connId)
@@ -1128,6 +1137,7 @@ export class BackendSocket {
   sendCommander(frame: Frame): void {
     this.onOutboundCommander?.(frame)
     if (env.LOG_FRAMES) logFrame('→', 'device', frame)
+    deviceDump.record('out', 'commander', undefined, frame)
     this.enqueue({ t: 'up', webEligible: false, commanderEligible: true, frame: this.e2ee.wrapCommander(frame) })
   }
 
@@ -1376,6 +1386,7 @@ export class BackendSocket {
    *  is never returned plaintext: even legacy backend nodeRequest (`connId === ''`) gets only an error. */
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = `${type}_result`
+    if (connId && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('out', 'legacy', connId, { type: resultType, payload: { requestId, ...payload } })
     // Before the E2EE wrap: an RPC reply is only readable here.
     if (env.LOG_FRAMES && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'git_pull_request' && !SHARE_REQUEST_TYPES.has(type)) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
@@ -1453,7 +1464,11 @@ export class BackendSocket {
         this.sendTo(connId, { type: 'local_protocol_error', payload: { error: 'LOCAL_E2EE_UNSUPPORTED' } })
         return
       }
+      const deviceBefore = deviceDump.enabled && (this.isDeviceConn(connId) || (type === 'e2e_pair_intent' && (frame.payload as { role?: unknown } | undefined)?.role === 'device'))
+      if (deviceBefore) deviceDump.record('in', 'wire', connId, frame)
       this.e2ee.handleFrame(connId, frame)
+      // A reconnecting device is only known as one once its hello has been accepted.
+      if (!deviceBefore && deviceDump.enabled && this.isDeviceConn(connId)) deviceDump.record('in', 'wire', connId, frame)
       return
     }
     if (type === 'autonomous_device_request') {
@@ -1487,6 +1502,7 @@ export class BackendSocket {
         return
       }
     }
+    if (!local && deviceDump.enabled && this.e2ee.sessionRole(connId) === 'device') deviceDump.record('in', 'legacy', connId, frame)
     if (!local && TERMINAL_P2P_SIGNAL_TYPES.has(type)) {
       await this.terminalP2p.handleSignal(connId, type, frame.payload)
       return
