@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { gridSpawn, backHomeSpawn } from './gridArgv.js'
 import { MockVersionSource, NpmVersionSource } from './versionSource.js'
 import { compareVersions, planMatrixRuns } from './trigger.js'
-import { sessionName } from './sessionName.js'
+import { sessionName, workspaceDirName } from './sessionName.js'
 import { buildMatrixEntry } from './matrix.js'
 import type { AgentEngine } from '../engines/types.js'
 import { SMOKE_CHECKS, SCENARIO, LEGS, firstStuck, plannedLegs, quotaHit, scenarioFor, type CheckId } from './smokeChecks.js'
@@ -144,6 +144,16 @@ describe('trigger (current vs latest)', () => {
     expect(compareVersions('0.155.0', '0.155.1')).toBe(-1)
     expect(compareVersions('0.156.0', '0.155.1')).toBe(1)
     expect(compareVersions('2.1.279', '2.1.279')).toBe(0)
+  })
+})
+
+describe('workspace folder name (what claude 2.1.274 tripped on)', () => {
+  it('keeps the session readable but drops every character a tool might rewrite', () => {
+    const session = sessionName({ engine: 'claude', version: '2.1.274', testcase: 'grid-switch', at: new Date('2026-09-24T20:22:39Z') })
+    expect(session).toContain('->') // the bundle keeps its readable name
+    const dir = workspaceDirName(session)
+    expect(dir).toBe('claude-2.1.274_to_grid-switch-none--20260924T202239Z')
+    expect(dir).toMatch(/^[A-Za-z0-9._-]+$/)
   })
 })
 

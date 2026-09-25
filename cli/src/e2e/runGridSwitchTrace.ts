@@ -35,7 +35,7 @@ import { firstStuck, plannedLegs, quotaHit, LEGS, type LegOutcome, type LogKind 
 
 const LAST_LEG = LEGS[LEGS.length - 1]
 import { prepareWorkspace, readLog, readWorkspaceFile, removeCodexMcp, preAcceptClaudeBypassMode } from './workspace.js'
-import { sessionName } from './sessionName.js'
+import { sessionName, workspaceDirName } from './sessionName.js'
 import { TESTCASE } from './matrix.js'
 import { outDir, runDir } from './artifacts.js'
 import { env } from '../config/env.js'
@@ -142,7 +142,7 @@ try {
   if (created) {
     // realpath: $TMPDIR is a symlink on macOS (`/var/…` → `/private/var/…`) and the engine keys its
     // trust on the resolved path — a trust written for the symlink is never matched.
-    const cwd = realpathSync(mkdirAll(join(outDir(), 'agents', sessionName({ engine, version, testcase: TESTCASE, at: startedAt }))))
+    const cwd = realpathSync(mkdirAll(join(outDir(), 'agents', workspaceDirName(sessionName({ engine, version, testcase: TESTCASE, at: startedAt })))))
     // The person's project: a script tool, an MCP server registered for this engine, and their logs.
     const laid = prepareWorkspace(cwd, engine)
     workspace = cwd
