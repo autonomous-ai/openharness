@@ -4,7 +4,7 @@
 
 **Do not open a GitHub issue.** Issues are public, and a report filed there is disclosure.
 
-Email **security@autonomous.ai** with enough detail to reproduce. We will acknowledge within three
+Email **dee@autonomous.ai** with enough detail to reproduce. We will acknowledge within three
 working days and keep you updated until it is resolved. If you would like credit in the fix, say so.
 
 ## In scope

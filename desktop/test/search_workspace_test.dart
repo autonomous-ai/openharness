@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -37,7 +38,7 @@ void main() {
         );
         await mount(tester, app, map, native: native);
         final field = find.byKey(const ValueKey('swarm-search-input'));
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         final controller = tester.widget<TextField>(field).controller!;
         final focus = tester.widget<TextField>(field).focusNode!;
         final selected = find.byWidgetPredicate(
@@ -66,9 +67,13 @@ void main() {
           find.byKey(const ValueKey('swarm-search-preview')),
           findsNothing,
         );
+        expect(
+          find.byKey(const ValueKey('swarm-search-type-hints')),
+          findsOneWidget,
+        );
         await key(tester, LogicalKeyboardKey.escape);
         expect(field, findsNothing);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+        await openHarnessPicker(tester);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
         expect(

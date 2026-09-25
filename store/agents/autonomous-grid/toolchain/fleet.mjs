@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { verifyModel } from '../lib/verify.mjs';
 import { join, resolve } from 'node:path';
-import { atomicJson, DEFAULT_CONFIG, execute, readConfig, runTracked } from '../lib/fleet.mjs';
+import { atomicJson, DEFAULT_CONFIG, execute, harnessNameFor, nameJoin, readConfig, runTracked } from '../lib/fleet.mjs';
 import { createCollector } from '../lib/telemetry.mjs';
 import { discoverMachines } from '../lib/harness.mjs';
 import { connectWorkspace, initializeWorkspace, mergeMachines, readStatus } from '../lib/connect.mjs';
@@ -50,6 +51,15 @@ try {
     process.exitCode = snapshot.status === 'unavailable' ? 1 : 0;
   } else if (command === 'config') {
     console.log(JSON.stringify(await readConfig(workspace), null, 2));
+  } else if (command === 'verify') {
+    const flags = new Map();
+    for (let i = 0; i < args.length; i += 2) {
+      if (!['--grid', '--model'].includes(args[i]) || !args[i + 1] || flags.has(args[i])) throw new Error('Use: fleet verify --grid NAME --model MODEL');
+      flags.set(args[i], args[i + 1]);
+    }
+    const config = await readConfig(workspace);
+    const machine = config.machines.find(m => m.id === config.controller);
+    console.log(JSON.stringify(await verifyModel(workspace, machine, config.mode, flags.get('--grid') || config.grid, flags.get('--model'))));
   } else if (command === 'run') {
     const boundary = args.indexOf('--');
     if (boundary < 0 || boundary === args.length - 1) throw new Error('Use: fleet run [--machine ID] -- <grid arguments>');
@@ -67,7 +77,9 @@ try {
     if (!machine) throw new Error(`Unknown machine ${machineId}. Add it to grid-fleet.json first.`);
     const abort = new AbortController();
     process.once('SIGINT', () => abort.abort()); process.once('SIGTERM', () => abort.abort());
-    const result = await runTracked(workspace, machine, config.mode, gridArgs, { signal: abort.signal, thinking });
+    // A join is labelled with the machine's name as Harness Machines shows it, read now — see nameJoin.
+    const named = gridArgs[0] === 'join' ? nameJoin(gridArgs, harnessNameFor(machine, await discoverMachines().catch(() => []))) : gridArgs;
+    const result = await runTracked(workspace, machine, config.mode, named, { signal: abort.signal, thinking });
     if (!result.ok && result.error) console.error(result.error);
     process.exitCode = result.code;
   } else {
@@ -77,6 +89,8 @@ try {
   fleet connect --mode MODE --grid NAME [--remember]
                                    Select a reachable grid; optionally reuse it in new workspaces
   fleet status [--json]             Read the viewer's observations without network access
+  fleet verify --grid NAME --model MODEL
+                                   Verify a first reply and publish readiness to Models
   fleet doctor                     Check Grid and Node
   fleet discover [--add]            Discover your Harness machines
   fleet config                     Validate and print fleet inventory

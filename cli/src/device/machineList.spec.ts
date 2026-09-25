@@ -39,6 +39,21 @@ describe('sameComputer', () => {
 })
 
 describe('MachineListCache', () => {
+  it('tells a listener every list it takes, and a sign-out as null — a failed read tells nothing', async () => {
+    const told: Array<Record<string, unknown> | null> = []
+    let answer: () => Promise<{ status: number; body: Record<string, unknown> }> = ok([row()])
+    const cache = new MachineListCache(() => answer(), () => 'z', () => {}, DIR())
+    cache.listen((body) => told.push(body))
+
+    await cache.refresh()
+    answer = async () => { throw new Error('offline') }
+    await cache.refresh()
+    answer = async () => ({ status: 401, body: {} })
+    await cache.refresh()
+
+    expect(told).toEqual([{ machines: [row()] }, null])
+  })
+
   it('marks the row whose computerId is this computer as local', async () => {
     const cache = new MachineListCache(
       ok([row({ machineId: 'mine', computerId: 'AA-BB-CC-DD' }), row({ machineId: 'other', computerId: 'ffff' })]),

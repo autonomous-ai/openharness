@@ -74,6 +74,15 @@ describe('parseGridLaunchOverride', () => {
     expect(parseGridLaunchOverride({ ...WIRE, model: '   ' }).state).toBe('invalid')
   })
 
+  it('keeps a context window, and drops a malformed one without refusing the launch', () => {
+    // A hint, not a credential: a persisted launch whose window is garbled must still relaunch.
+    expect(parseGridLaunchOverride({ ...WIRE, contextWindow: 131072 }))
+      .toEqual({ state: 'ok', override: { ...OVERRIDE, contextWindow: 131072 } })
+    for (const contextWindow of ['131072', 1.5, -1, 0, 100, 2 ** 40, null]) {
+      expect(parseGridLaunchOverride({ ...WIRE, contextWindow })).toEqual({ state: 'ok', override: OVERRIDE })
+    }
+  })
+
   it('refuses a grid that is not an object', () => {
     expect(parseGridLaunchOverride('autonomous.ai').state).toBe('invalid')
     expect(parseGridLaunchOverride([WIRE]).state).toBe('invalid')
@@ -326,8 +335,10 @@ describe('gridEnvVarNames', () => {
   it('names every variable claude is launched with', () => {
     // GRID_API_KEY among them: the probe asks for a launch with web tools, and moving an agent to
     // another grid has to take the old grid's MCP credential out of the pane with everything else.
+    // CLAUDE_CODE_MAX_CONTEXT_TOKENS too: a window told for a grid model must not follow the agent
+    // back onto its own login, where it would describe a model it is no longer talking to.
     expect(gridEnvVarNames('claude').sort())
-      .toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'GRID_API_KEY'])
+      .toEqual(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'GRID_API_KEY'])
   })
 
   it("names the scope Hermes' web tools are written into", () => {
@@ -483,10 +494,22 @@ describe('opencode declares the grid as a provider', () => {
     expect(config().provider['autonomous-ai'].options.baseURL).toBe(base.baseUrl)
   })
 
-  it('omits `limit` entirely rather than writing half of one', () => {
+  it('omits `limit` entirely when the window is unknown, rather than writing half of one', () => {
     // OpenCode requires `context` and `output` together and rejects the config given only one.
     const models = config('DeepSeek-V4-Flash-0731').provider['autonomous-ai'].models
     for (const entry of Object.values(models)) expect(entry).not.toHaveProperty('limit')
+  })
+
+  it.each([
+    [262144, 32000],
+    [131072, 32000],
+    [65536, 16384],
+  ])('writes both halves of `limit` for a %i window', (contextWindow, output) => {
+    // Without it OpenCode never knew how much room was left, and ran on until the relay refused.
+    const built = buildGridEngineLaunch('opencode', { ...base, model: 'Qwen', contextWindow }, PLAIN_MACHINE)
+    if (!built.ok) throw new Error('opencode refused')
+    const entry = JSON.parse(built.launch.configDir!.files[0].content).provider['autonomous-ai'].models.Qwen
+    expect(entry.limit).toEqual({ context: contextWindow, output })
   })
 
   it('points OPENCODE_CONFIG at the file, not at the directory holding it', () => {
@@ -827,5 +850,34 @@ describe('web search status — what the app is told about the launch it got', (
         }
       }
     }
+  })
+})
+
+describe('each engine is told the real context window', () => {
+  // ⚠️ Every one of these assumed a window for a model it did not recognise — Claude Code 200K, Pi
+  // 200K, Codex and OpenCode nothing — so none compacted before a smaller grid engine refused the
+  // request as too long, and the session died where it should have summarised.
+  const WITH_WINDOW: GridLaunchOverride = { ...WITH_MODEL, contextWindow: 131072 }
+
+  it('Claude Code, through the variable its docs give for unrecognised model ids', () => {
+    expect(launchOf('claude', WITH_WINDOW).env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('131072')
+    expect(launchOf('claude', WITH_MODEL).env).not.toHaveProperty('CLAUDE_CODE_MAX_CONTEXT_TOKENS')
+  })
+
+  it('Codex, with the window and a compaction point inside it', () => {
+    const args = launchOf('codex', WITH_WINDOW).args
+    expect(args).toContain('model_context_window=131072')
+    expect(args).toContain('model_auto_compact_token_limit=117964')
+    expect(args[args.indexOf('model_context_window=131072') - 1]).toBe('-c')
+    expect(launchOf('codex', WITH_MODEL).args.join(' ')).not.toContain('model_context_window')
+  })
+
+  it('Pi, in the window its models file declares', () => {
+    const models = (launch: ReturnType<typeof launchOf>) =>
+      JSON.parse(launch.configDir!.files.find((f) => f.name === 'models.json')!.content)
+    const [model] = Object.values<any>(models(launchOf('pi', WITH_WINDOW)).providers)[0].models
+    expect(model.contextWindow).toBe(131072)
+    const [unknown] = Object.values<any>(models(launchOf('pi', WITH_MODEL)).providers)[0].models
+    expect(unknown.contextWindow).toBe(200000)
   })
 })

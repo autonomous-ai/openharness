@@ -55,7 +55,7 @@ const _pcb = StoreStory(
   benefit: 'Turn an idea into a circuit board.',
   headline: 'That board in your head?\nMake it real.',
   description: 'Design circuits, lay out a board, and inspect it in 3D.',
-  asset: 'assets/store/copper-board.png',
+  asset: 'assets/store/copper-board.jpg',
   caption: 'Terminal keyboard · Autonomous Circuit example board',
   prompts: [
     'Design a six-key USB macropad. Start with the schematic.',
@@ -67,9 +67,9 @@ const storeStories = <String, StoreStory>{
   'autonomous/autonomous-grid': StoreStory(
     benefit: 'Your machines. Your models. One conversation.',
     headline: 'Meet your\npersonal AI fleet.',
-    description: 'Deploy open-weight models by talking to Grid.\nWatch your machines, models, and performance live.',
-    asset: 'assets/store/grid-fleet.png',
-    caption: 'Grid Viewer · Illustrative telemetry',
+    description: 'Deploy open-weight models by talking to Model Manager.\nWatch your machines, models, and performance live.',
+    asset: 'assets/store/grid-fleet.jpg',
+    caption: 'Model Manager · Illustrative telemetry',
     prompts: [
       'Discover my machines and deploy an open-weight model that fits.',
       'Find the best placement for a coding model and a fast chat model across my fleet.',
@@ -79,7 +79,7 @@ const storeStories = <String, StoreStory>{
     benefit: 'Your imagination, in three dimensions.',
     headline: 'You can\ndesign in 3D.',
     description: 'Describe a scene. Shape every detail.\nMake something you never thought you could.',
-    asset: 'assets/store/blender-studio.png',
+    asset: 'assets/store/blender-studio.jpg',
     caption: 'A scene made with Blender · Original Harness artwork',
     prompts: [
       'Create a sculptural scene with an orange arch, a chrome sphere, and soft studio lighting.',

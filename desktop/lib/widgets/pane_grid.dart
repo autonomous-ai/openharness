@@ -1,5 +1,6 @@
 import '../sharing/shared_harness_panel.dart';
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -26,16 +27,14 @@ import '../terminal/terminal_session.dart';
 import '../theme/app_theme.dart';
 import 'agent_drag.dart';
 import 'harness_join_guide_screen.dart';
+import 'link_machine_screen.dart';
 import 'new_agent_dialog.dart';
 import 'delete_agent_dialog.dart';
-import 'fork_agent_dialog.dart';
 import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
 import 'box_chrome.dart';
-import 'pane_split_edges.dart';
-import 'pane_minimize.dart';
 
 /// Terminal views arranged by the chosen preset. Swarms keep each view under
 /// one stable parent as its rectangle, visibility and keyboard focus change.
@@ -45,13 +44,11 @@ class PaneGrid extends StatelessWidget {
     required this.notifier,
     this.swarmMode = false,
     this.empty,
-    this.onSplit,
   });
 
   final AppNotifier notifier;
   final bool swarmMode;
   final Widget? empty;
-  final void Function(int paneId, PaneResizeAxis axis)? onSplit;
 
   @override
   Widget build(BuildContext context) {
@@ -64,7 +61,6 @@ class PaneGrid extends StatelessWidget {
             notifier: notifier,
             dragging: dragging,
             empty: empty,
-            onSplit: onSplit,
           );
         }
         final panes = notifier.panes;
@@ -225,12 +221,10 @@ class _SwarmCanvas extends StatefulWidget {
     required this.notifier,
     required this.dragging,
     this.empty,
-    this.onSplit,
   });
   final AppNotifier notifier;
   final AgentDragRef? dragging;
   final Widget? empty;
-  final void Function(int paneId, PaneResizeAxis axis)? onSplit;
   @override
   State<_SwarmCanvas> createState() => _SwarmCanvasState();
 }
@@ -448,16 +442,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       upload: session.uploadProgress,
       focused: app.isPaneFocused(pane.id),
       focusRequest: app.isPaneFocused(pane.id) ? app.paneFocusRequest : 0,
+      focusByUser: app.paneFocusByUser,
       single: app.panes.length == 1,
       pinned: app.isPanePinned(pane),
       zoomed: app.zoomedPaneId == pane.id,
-      canSplit: app.canAddPane,
-      splitRight:
-          widget.onSplit != null &&
-          app.preparePaneSplit(PaneResizeAxis.x, paneId: pane.id) != null,
-      splitDown:
-          widget.onSplit != null &&
-          app.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) != null,
       composer: pane.composerVisible,
       blocked:
           app.questionFor(pane.machineId, pane.agentId ?? session.agentId) !=
@@ -565,7 +553,6 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                     dragging: widget.dragging,
                                     visible: rectangles.containsKey(pane.id),
                                     swarmMode: true,
-                                    onSplit: widget.onSplit,
                                   ),
                                 ),
                               ),
@@ -1158,7 +1145,6 @@ class _PaneCell extends StatelessWidget {
     required this.dragging,
     this.visible = true,
     this.swarmMode = false,
-    this.onSplit,
   });
 
   final AppNotifier notifier;
@@ -1166,15 +1152,13 @@ class _PaneCell extends StatelessWidget {
   final AgentDragRef? dragging;
   final bool visible;
   final bool swarmMode;
-  final void Function(int paneId, PaneResizeAxis axis)? onSplit;
 
   bool get _single => notifier.panes.length == 1;
 
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    return PaneMinimizeSurface(
-      paneId: pane.id,
+    return RepaintBoundary(
       child: LayoutBuilder(
         builder: (context, constraints) {
           if (visible) pane.lastViewSize = constraints.biggest;
@@ -1198,119 +1182,77 @@ class _PaneCell extends StatelessWidget {
       // step with the one the keyboard already went to.
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => notifier.focusPane(pane.id),
-      child: ValueListenableBuilder<PaneDragRef?>(
-        valueListenable: paneDragging,
-        builder: (context, inFlight, child) => onSplit == null
-            ? child!
-            : PaneSplitEdges(
-                enabled:
-                    swarmMode &&
-                    visible &&
-                    agentId != null &&
-                    notifier.zoomedPaneId == null &&
-                    notifier.canAddPane &&
-                    dragging == null &&
-                    inFlight == null,
-                canSplitRight:
-                    notifier.preparePaneSplit(
-                      PaneResizeAxis.x,
-                      paneId: pane.id,
-                    ) !=
-                    null,
-                canSplitDown:
-                    notifier.preparePaneSplit(
-                      PaneResizeAxis.y,
-                      paneId: pane.id,
-                    ) !=
-                    null,
-                onSplit: onSplit == null
-                    ? null
-                    : (axis) => onSplit!(pane.id, axis),
-                child: child!,
-              ),
-        child: Container(
-          decoration: BoxDecoration(
-            // UNCHANGED, and deliberately: the terminal renders its own background
-            // inside this box, so a tile that stops matching the window colour
-            // shows a seam between the header strip and the terminal under it.
-            // What changes to make the gaps visible is the field BEHIND the grid
-            // (see _GridField), which is the part the gaps actually show.
-            color: grid.AppPalette.windowBg,
-            borderRadius: BorderRadius.circular(_paneRadius),
-            // The rim is always drawn — it is what gives an unfocused card its
-            // edge, now that no shared line does. It only CHANGES COLOUR on
-            // focus, so nothing resizes as focus moves.
-            border: Border.all(
-              // FOCUS IS THE ENGINE'S OWN COLOUR, not the app's blue.
-              //
-              // One colour per pane, and only its EXTENT changes: the engine's
-              // line runs along the top edge normally and around all four when
-              // the pane is focused. The blue ring said the same thing in a
-              // second colour — and, worse, the old treatment blanked the band
-              // underneath it, so the focused pane was the one pane on the grid
-              // that no longer told you which engine it was running. It went
-              // quiet exactly when you looked at it.
-              //
-              // Only meaningful with company: a ring around the only tile would
-              // be decoration, since there is nowhere else focus could be.
-              color: !_single && focused ? AppColors.accent : AppColors.border,
-              width: 1,
-            ),
+      child: Container(
+        decoration: BoxDecoration(
+          // UNCHANGED, and deliberately: the terminal renders its own background
+          // inside this box, so a tile that stops matching the window colour
+          // shows a seam between the header strip and the terminal under it.
+          // What changes to make the gaps visible is the field BEHIND the grid
+          // (see _GridField), which is the part the gaps actually show.
+          color: grid.AppPalette.windowBg,
+          borderRadius: BorderRadius.circular(_paneRadius),
+          // The rim is always drawn — it is what gives an unfocused card its
+          // edge, now that no shared line does. It only CHANGES COLOUR on
+          // focus, so nothing resizes as focus moves.
+          border: Border.fromBorderSide(
+            // A lone pane needs no focus distinction. Dialogs use this same
+            // rim in its focused state while they own the keyboard.
+            terminalPaneBorder(focused: !_single && focused),
           ),
-          // Attention, drawn OVER the terminal and inside the border above, so a
-          // pane can carry both at once — this one is blocked AND focused is a
-          // normal state, not a conflict to resolve. It is amber and 2px against
-          // the border's 1px accent precisely so the two never read as each
-          // other. Unlike focus, it shows on a single pane too: with one tile
-          // there is nowhere else focus could be, but there is very much a
-          // question waiting.
-          foregroundDecoration: blocked
-              ? BoxDecoration(
-                  border: Border.all(color: grid.AppPalette.warn, width: 2),
-                  borderRadius: BorderRadius.circular(_paneRadius),
-                )
-              : null,
-          // Keeps a terminal's constant repainting inside its own layer instead
-          // of dirtying the whole grid. No key: nothing reads this boundary, it
-          // only has to exist.
-          child: ClipRRect(
-            // Clipped HERE rather than through Container's own clipBehavior.
-            //
-            // Both clip, but they clip to different shapes: Container's is the
-            // decoration's OUTER edge, so the child fills the full radius and
-            // paints under the rim, leaving a square-shouldered corner peeking
-            // through the 1px the rim occupies. This one takes the rim's pixel
-            // off the radius, so the fill stops exactly where the rim starts.
-            //
-            // TerminalPanel opens with a ColoredBox across its whole box, and
-            // that is what was reaching the corners.
-            borderRadius: BorderRadius.circular(_paneRadius - 1),
-            child: RepaintBoundary(
-              child: _FileDropZone(
+        ),
+        // Attention, drawn OVER the terminal and inside the border above, so a
+        // pane can carry both at once — this one is blocked AND focused is a
+        // normal state, not a conflict to resolve. It is amber and 2px against
+        // the border's 1px accent precisely so the two never read as each
+        // other. Unlike focus, it shows on a single pane too: with one tile
+        // there is nowhere else focus could be, but there is very much a
+        // question waiting.
+        foregroundDecoration: blocked
+            ? BoxDecoration(
+                border: Border.all(color: grid.AppPalette.warn, width: 2),
+                borderRadius: BorderRadius.circular(_paneRadius),
+              )
+            : null,
+        // Keeps a terminal's constant repainting inside its own layer instead
+        // of dirtying the whole grid. No key: nothing reads this boundary, it
+        // only has to exist.
+        child: ClipRRect(
+          // Clipped HERE rather than through Container's own clipBehavior.
+          //
+          // Both clip, but they clip to different shapes: Container's is the
+          // decoration's OUTER edge, so the child fills the full radius and
+          // paints under the rim, leaving a square-shouldered corner peeking
+          // through the 1px the rim occupies. This one takes the rim's pixel
+          // off the radius, so the fill stops exactly where the rim starts.
+          //
+          // TerminalPanel opens with a ColoredBox across its whole box, and
+          // that is what was reaching the corners.
+          borderRadius: BorderRadius.circular(_paneRadius - 1),
+          child: RepaintBoundary(
+            child: _FileDropZone(
+              notifier: notifier,
+              pane: pane,
+              child: _SwapZone(
                 notifier: notifier,
-                pane: pane,
-                child: _SwapZone(
+                paneId: pane.id,
+                child: _DropZone(
                   notifier: notifier,
                   paneId: pane.id,
-                  child: _DropZone(
-                    notifier: notifier,
-                    paneId: pane.id,
-                    dragging: dragging,
-                    child: ValueListenableBuilder<PaneDragRef?>(
-                      valueListenable: paneDragging,
-                      // The tile being carried fades where it sits, so the grid shows
-                      // where it came FROM while the ghost shows where it is going.
-                      builder: (context, inFlight, child) => Opacity(
-                        opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
-                        child: child,
-                      ),
-                      child: _PaneContent(
-                        notifier: notifier,
-                        pane: pane,
-                        single: _single,
-                        visible: visible,
-                        swarmMode: swarmMode,
-                      ),
+                  dragging: dragging,
+                  child: ValueListenableBuilder<PaneDragRef?>(
+                    valueListenable: paneDragging,
+                    // The tile being carried fades where it sits, so the grid shows
+                    // where it came FROM while the ghost shows where it is going.
+                    builder: (context, inFlight, child) => Opacity(
+                      opacity: inFlight?.paneId == pane.id ? 0.35 : 1,
+                      child: child,
+                    ),
+                    child: _PaneContent(
+                      notifier: notifier,
+                      pane: pane,
+                      single: _single,
+                      visible: visible,
+                      swarmMode: swarmMode,
                     ),
                   ),
                 ),
@@ -1343,12 +1285,7 @@ class _PaneContent extends StatelessWidget {
     TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
     void close() {
-      final minimize = PaneMinimizeScope.maybeOf(context);
-      if (minimize != null) {
-        minimize.close(pane);
-      } else {
-        notifier.closePane(pane.id);
-      }
+      notifier.closePane(pane.id);
     }
 
     if (pane.sharedHarness case final grant?) {
@@ -1430,7 +1367,7 @@ class _PaneContent extends StatelessWidget {
           terminalPaneCount >= 3;
       final TerminalNotice? notice;
       if (machine == null) {
-        notice = (
+        notice = terminalNotice(
           label: 'Unavailable',
           icon: Icons.cloud_off,
           detail: notifier.machineInventoryLoaded
@@ -1438,21 +1375,29 @@ class _PaneContent extends StatelessWidget {
               : 'Waiting for this machine. Retained output is read only.',
         );
       } else if (needsLink) {
-        notice = (
+        notice = terminalNotice(
           label: 'Link required',
           icon: Icons.link_off,
           detail:
               '${machine.machine.displayName} needs linking. Retained output is read only.',
+          // A tile still showing its last screen gets the same way out as an
+          // empty one — the band's button asks for the remote password.
+          actionLabel: 'Link…',
+          onAction: () => showLinkMachineScreenDialog(
+            context,
+            notifier,
+            pane.machineId,
+          ).ignore(),
         );
       } else if (offline) {
-        notice = (
+        notice = terminalNotice(
           label: 'Offline',
           icon: Icons.cloud_off,
           detail:
               '${machine.machine.displayName} is offline. Retained output is read only.',
         );
       } else if (agent == null || !agent.terminalAvailable) {
-        notice = (
+        notice = terminalNotice(
           label: 'Unavailable',
           icon: Icons.terminal,
           detail:
@@ -1460,12 +1405,31 @@ class _PaneContent extends StatelessWidget {
               'This agent is unavailable on ${machine.machine.displayName}. Retained output is read only.',
         );
       } else if (agent.launchState == 'failed') {
-        notice = (
-          label: 'Start failed',
-          icon: Icons.error_outline,
-          detail:
-              agent.launchDetail ??
-              'The engine failed to start. Terminal output is preserved.',
+        // A resume the daemon could not CONFIRM is not a start that failed: the
+        // engine is usually still running in this pane, which is why output
+        // keeps arriving while the keyboard is locked. Asking again is cheap —
+        // the daemon re-checks a resume it never confirmed rather than
+        // relaunching (`resumeStoppedAgent.ts`) — so that is the button, and
+        // Restart is kept for the failures where something really must be
+        // started again.
+        final unconfirmed = agent.launchError == 'RESUME_UNCONFIRMED';
+        notice = terminalNotice(
+          label: unconfirmed ? 'Not confirmed' : 'Start failed',
+          icon: unconfirmed ? Icons.help_outline : Icons.error_outline,
+          detail: unconfirmed
+              ? 'The engine is still running here; the daemon has not confirmed '
+                    'which conversation it reopened.'
+              : agent.launchDetail ??
+                    'The engine failed to start. Terminal output is preserved.',
+          // The one notice that needs saying out loud rather than hovering:
+          // the pane keeps printing while its keyboard is locked, and nothing
+          // about a chip explains that.
+          banner: true,
+          actionLabel: unconfirmed ? 'Check again' : 'Restart',
+          onAction: unconfirmed
+              ? () => unawaited(notifier.selectAgent(pane.machineId, agent.id))
+              : () =>
+                    restartHarness(context, notifier, pane.machineId, agent.id),
         );
       } else {
         notice = null;
@@ -1496,20 +1460,6 @@ class _PaneContent extends StatelessWidget {
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,
-          onRestart: agent == null || offline || needsLink
-              ? null
-              : () =>
-                    restartHarness(context, notifier, pane.machineId, agent.id),
-          onFork: agent == null || offline || needsLink || !agent.canFork
-              ? null
-              : () => forkHarness(
-                  context,
-                  notifier,
-                  pane.machineId,
-                  agent.id,
-                  agent.displayName,
-                  engine: agent.engine,
-                ),
           // The same confirmation the rail's row menu opens. Only for an
           // agent the machine still lists — a pane whose agent is already
           // gone has nothing to end.
@@ -1531,7 +1481,7 @@ class _PaneContent extends StatelessWidget {
                   notifier.toggleZoomPane();
                 }
               : null,
-          onRendererFocus: () => notifier.focusPane(pane.id),
+          onRendererFocus: () => notifier.focusPaneFromRenderer(pane.id),
           paneDrag: single
               ? null
               : PaneDragHandle(
@@ -1572,8 +1522,19 @@ class _PaneContent extends StatelessWidget {
         title: agentName ?? machine.machine.displayName,
         icon: Icons.link_off,
         message:
-            '${machine.machine.displayName} is not linked to this computer yet.',
+            '${machine.machine.displayName} is not linked to this computer yet. '
+            'Link it with the remote password set on that machine.',
         onClose: single && !swarmMode ? null : close,
+        // The way out, where the dead end was: the same card the Machines
+        // panel's Connect row opens, asking for that machine's remote
+        // password. It closes itself the moment the link lands, and this tile
+        // goes back to attaching.
+        actionLabel: 'Link…',
+        onAction: () => showLinkMachineScreenDialog(
+          context,
+          notifier,
+          pane.machineId,
+        ).ignore(),
       );
     }
     if (offline) {
@@ -1616,6 +1577,25 @@ class _PaneContent extends StatelessWidget {
             agent.terminalUnavailableReason ??
             'This agent has no available terminal.',
         onClose: close,
+      );
+    }
+    // Nothing is attaching, and nothing will: this machine's CLI cannot open a
+    // terminal without taking it from whoever has it, so an open here waits for
+    // a person rather than happening behind one (`AttachIntent`). A spinner
+    // would promise something that is never coming.
+    if (!machine.terminalNoTakeoverAvailable) {
+      return _PaneStatus(
+        title: agentName,
+        icon: Icons.terminal,
+        message:
+            'Open this harness here. Another screen may be using its terminal; '
+            'opening takes it, because ${machine.machine.displayName} runs an '
+            'older Harness CLI.',
+        onClose: single && !swarmMode ? null : close,
+        actionLabel: 'Open here',
+        onAction: () {
+          notifier.selectAgent(pane.machineId, wantedAgentId).ignore();
+        },
       );
     }
     return _PaneStatus(
@@ -1999,25 +1979,27 @@ class _PaneHeader extends StatelessWidget {
     grid.AppTheme.watch(context);
     // The pane's head is a drag handle too: with the title bar hidden it is
     // the top edge of the window.
-    return WindowDragArea(
-      child: SizedBox(
-        height: 46,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.monoLabel(
-                    color: AppColors.text,
-                    fontWeight: FontWeight.w600,
+    return PaneHeaderHoverRegion(
+      child: WindowDragArea(
+        child: SizedBox(
+          height: 46,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    overflow: TextOverflow.ellipsis,
+                    style: grid.AppType.monoLabel(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
-              if (onClose != null) PaneCloseButton(onPressed: onClose!),
-            ],
+                if (onClose != null) PaneCloseButton(onPressed: onClose!),
+              ],
+            ),
           ),
         ),
       ),

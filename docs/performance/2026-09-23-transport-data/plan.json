@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "sourceRevision": "0ee69791370f4c34402d17c70fdde5144f6af35d",
+  "samplesPerWorkload": 200,
+  "controlSamples": 30,
+  "trials": [
+    {
+      "label": "office",
+      "route": "p2p",
+      "repetition": 1,
+      "file": "office-p2p-1.json"
+    },
+    {
+      "label": "office",
+      "route": "turn",
+      "repetition": 1,
+      "file": "office-turn-1.json"
+    },
+    {
+      "label": "office",
+      "route": "relay",
+      "repetition": 1,
+      "file": "office-relay-1.json"
+    },
+    {
+      "label": "home",
+      "route": "turn",
+      "repetition": 1,
+      "file": "home-turn-1.json"
+    },
+    {
+      "label": "home",
+      "route": "relay",
+      "repetition": 1,
+      "file": "home-relay-1.json"
+    },
+    {
+      "label": "home",
+      "route": "p2p",
+      "repetition": 1,
+      "file": "home-p2p-1.json"
+    },
+    {
+      "label": "home",
+      "route": "relay",
+      "repetition": 2,
+      "file": "home-relay-2.json"
+    },
+    {
+      "label": "home",
+      "route": "p2p",
+      "repetition": 2,
+      "file": "home-p2p-2.json"
+    },
+    {
+      "label": "home",
+      "route": "turn",
+      "repetition": 2,
+      "file": "home-turn-2.json"
+    },
+    {
+      "label": "office",
+      "route": "turn",
+      "repetition": 2,
+      "file": "office-turn-2.json"
+    },
+    {
+      "label": "office",
+      "route": "relay",
+      "repetition": 2,
+      "file": "office-relay-2.json"
+    },
+    {
+      "label": "office",
+      "route": "p2p",
+      "repetition": 2,
+      "file": "office-p2p-2.json"
+    },
+    {
+      "label": "office",
+      "route": "relay",
+      "repetition": 3,
+      "file": "office-relay-3.json"
+    },
+    {
+      "label": "office",
+      "route": "p2p",
+      "repetition": 3,
+      "file": "office-p2p-3.json"
+    },
+    {
+      "label": "office",
+      "route": "turn",
+      "repetition": 3,
+      "file": "office-turn-3.json"
+    },
+    {
+      "label": "home",
+      "route": "p2p",
+      "repetition": 3,
+      "file": "home-p2p-3.json"
+    },
+    {
+      "label": "home",
+      "route": "turn",
+      "repetition": 3,
+      "file": "home-turn-3.json"
+    },
+    {
+      "label": "home",
+      "route": "relay",
+      "repetition": 3,
+      "file": "home-relay-3.json"
+    }
+  ]
+}

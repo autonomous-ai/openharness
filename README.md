@@ -47,18 +47,16 @@ Code, keys and keystrokes are sealed on your machine. The relay forwards bytes i
 
 A native app, not Electron. Close it and your agents keep working.
 
-| Action | Median | p95 |
-|---|---:|---:|
-| ⌘N new harness | 13.5 ms | 14.6 ms |
-| ⌘O open anything | 15.7 ms | 18.4 ms |
-| ⌘P every command | 14.7 ms | 15.2 ms |
-| ⌘F find in a terminal | 12.5 ms | 18.3 ms |
-| Focus a pane | 11.4 ms | 17.2 ms |
-| Zoom a pane | 14.8 ms | 17.2 ms |
-| Next tab | 17.8 ms | 24.2 ms |
+Idle measurements on an M2 Max:
 
-Key dispatch to finished frame. Release build, M2 Max, 16 live terminals. A window in the background
-runs zero timers. [How we measure](https://github.com/autonomous-ai/openharness/blob/codex/perf-integration-checkpoint/docs/performance/2026-09-22-desktop-latency.md).
+- **⌘N, ⌘O, ⌘T UI:** 11–13 ms median, 15–18 ms p95.
+- **Local terminal echo:** 1.1 ms median, 7.2 ms p95, excluding UI rendering.
+- **Desktop resources:** ~0.1% of one CPU core and 304 MiB, including terminal rendering and scrollback; agent CLIs and the daemon are excluded.
+
+Desktop results use a Release fixture with 16 terminals and 1,000 scrollback lines each.
+See the [workflow and resource benchmarks](docs/performance/2026-09-23-core-experiences.md)
+and [remote P2P, TURN and relay results](docs/performance/2026-09-23-transport-routes.md)
+for workloads, slow tails, connection failures and raw data.
 
 ### Built the way developers work
 

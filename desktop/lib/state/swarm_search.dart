@@ -1,18 +1,28 @@
 import 'package:flutter/foundation.dart';
+import 'package:collection/collection.dart' show compareNatural;
+
+import '../models/model_search_catalog.dart';
+import '../core/dsh_catalog.dart';
+import '../core/machine_resources.dart';
 
 import 'app_state.dart';
 import 'harness_placement.dart';
 import 'pane_arrangement.dart';
 import 'swarm_catalog.dart';
 import 'swarm_navigation.dart';
+import 'harness_sessions.dart';
 
-/// What the box finds, said in the box: it searches four kinds of thing, and
-/// "Find a harness" named one of them.
-const kSwarmSearchHint =
-    'Search agents    > commands    # projects    @ machines    ? help';
-const kHarnessPickerHint = 'Find a harness…';
+const kSwarmSearchHint = 'Search harnesses';
+const kHarnessPickerHint = kSwarmSearchHint;
 
 const kSwarmCreateRowId = 'create:harness';
+
+typedef SwarmGroupScope = ({
+  String id,
+  String name,
+  String query,
+  String? branch,
+});
 
 /// Search text and selection retained while the start-page picker is dismissed.
 /// Membership and availability are revalidated against a fresh catalog on return.
@@ -25,7 +35,7 @@ class SwarmSearchDraft {
   );
   final String targetId, query;
   final String? selectedId;
-  final ({String id, String name, String query})? groupScope;
+  final SwarmGroupScope? groupScope;
 }
 
 /// One search session, shared by the native/Flutter input and its results.
@@ -39,10 +49,14 @@ class SwarmSearchController extends ChangeNotifier {
     this.commands,
     this.recentCommands,
     this.modes,
+    this.models,
     this.adding = false,
     this.navigating = false,
+    this.activityFirst = false,
+    this.selectOnEmptyQuery = true,
     this.commandsOnly = false,
     this.offersCreate = false,
+    this.offersHarnessCreate = true,
     this.resultsFromBottom = false,
     this._placement,
     this._split,
@@ -57,12 +71,14 @@ class SwarmSearchController extends ChangeNotifier {
     _refresh();
     app.addListener(_refresh);
     projects?.addListener(_refresh);
+    models?.addListener(_modelsChanged);
     app.sessionPreviews.addListener(_previewChanged);
   }
 
   final AppNotifier app;
   final List<String> recent;
   final SwarmProjectStore? projects;
+  final ModelSearchCatalog? models;
   final SwarmNavigationHistory? history;
 
   /// Availability is read from workspace state and rechecked at activation.
@@ -77,11 +93,79 @@ class SwarmSearchController extends ChangeNotifier {
   final List<SwarmDestination> Function()? modes;
   final bool adding;
   final bool navigating;
-  final bool commandsOnly;
 
-  /// Whether the list ends in a row that makes a harness instead of finding
-  /// one. What was typed becomes the new harness's first task.
+  /// Open Harness filters by latest activity; commands and splits keep relevance order.
+  final bool activityFirst;
+
+  /// Cmd-P starts without a choice; typing or navigating activates a result.
+  final bool selectOnEmptyQuery;
+  bool get setupLayout => activityFirst && !isCommandMode && !isHelpMode;
+  final bool commandsOnly;
+  SessionFilter sessionFilter = SessionFilter.all;
+  SessionSort sessionSort = SessionSort.recent;
+  final machineResources = <String, MachineResources>{};
+  bool _disposed = false;
+  int _resourcesRevision = 0;
+  final _heldRows = <String, SwarmDestination>{};
+  bool get hasPendingAction => _heldRows.isNotEmpty;
+
+  /// Pausing the last harness may remove its tab. Keep the management action
+  /// visible and make subsequent creation target the workspace that remains.
+  void followRemainingWorkspace() {
+    targetId = app.activeSwarmId;
+    targetName = app.activeSwarm.name;
+    _refresh(force: true);
+  }
+
+  void holdRow(SwarmDestination row) => _heldRows[row.id] = row;
+  void releaseRow(String id) {
+    if (_disposed) return;
+    _heldRows.remove(id);
+    _filter();
+    notifyListeners();
+  }
+
+  /// Read a snapshot when Machines opens or Refresh is chosen, never while
+  /// filtering or moving through its results.
+  Future<void> refreshMachineResources() async {
+    final revision = ++_resourcesRevision;
+    final readings = await Future.wait(
+      app.machineStates.values.map(
+        (machine) async => (
+          machine,
+          await app.readMachineResources(machine.machine.machineId),
+        ),
+      ),
+    );
+    if (_disposed || revision != _resourcesRevision) return;
+    machineResources.clear();
+    for (final (machine, reading) in readings) {
+      final id = machine.machine.machineId;
+      if (reading != null && identical(machine, app.stateOf(id))) {
+        machineResources[id] = reading;
+      }
+    }
+    notifyListeners();
+  }
+
+  void setSessionFilter(SessionFilter filter) {
+    sessionFilter = filter;
+    _filter();
+    notifyListeners();
+  }
+
+  void setSessionSort(SessionSort sort) {
+    sessionSort = sort;
+    _filter();
+    notifyListeners();
+  }
+
+  /// Whether the list offers a creation row for its current resource type.
   final bool offersCreate;
+
+  /// Cmd-P finds existing harnesses; splits can also offer a new harness.
+  /// Machine, project, and model setup remain available in their own scopes.
+  final bool offersHarnessCreate;
 
   /// Docked pickers keep their best match next to the input at the bottom.
   /// Catalog ranking stays unchanged; rendering and spatial movement invert.
@@ -106,17 +190,73 @@ class SwarmSearchController extends ChangeNotifier {
   String get helpQuery => query.trimLeft().replaceFirst(_helpPrefix, '');
   bool get isProjectMode =>
       allowsCommands && !commandsOnly && query.trimLeft().startsWith('#');
-  static final _quickAccessPrefix = RegExp(r'^[>@#?]');
+  static final _quickAccessPrefix = RegExp(r'^[>@#?:*]');
   bool get isMachineMode =>
       allowsCommands && !commandsOnly && query.trimLeft().startsWith('@');
+  bool get isModelMode =>
+      allowsCommands && !commandsOnly && query.trimLeft().startsWith(':');
+  bool get isStoreMode =>
+      allowsCommands && !commandsOnly && query.trimLeft().startsWith('*');
   bool get isGroupMode => isProjectMode || isMachineMode;
-  ({String id, String name, String query})? _groupScope;
+  String get scopePrefix => isMachineMode
+      ? '@'
+      : isProjectMode
+      ? '#'
+      : isModelMode
+      ? ':'
+      : isStoreMode
+      ? '*'
+      : isCommandMode
+      ? '>'
+      : isHelpMode
+      ? '?'
+      : '';
+  String get createLabel => isMachineMode
+      ? 'New Machine'
+      : isModelMode
+      ? 'New Model'
+      : 'New Harness';
+  String get createDescription => isMachineMode
+      ? 'Set up or link another computer.'
+      : isModelMode
+      ? 'Add a local model or connect an API.'
+      : 'Choose a harness, machine, and project.';
+  SwarmGroupScope? _groupScope;
   bool get canGoBack => _groupScope != null;
+  String? get scopedBranch => _groupScope?.branch;
+
+  /// Open a known resource by identity, never by a fuzzy display-name match.
+  bool scopeToGroup(String id, {String? branch}) {
+    final group = _catalog
+        .where((row) => row.id == id && row.isGroup)
+        .firstOrNull;
+    if (group == null) return false;
+    _groupScope = (
+      id: group.id,
+      name: group.title,
+      query: group.isMachine ? '@' : '#',
+      branch: branch,
+    );
+    query = '';
+    sessionFilter = SessionFilter.all;
+    cursor = 0;
+    _selectedId = null;
+    _filter();
+    notifyListeners();
+    return true;
+  }
+
+  String? get scopedMachineId => _groupScope == null
+      ? null
+      : _catalog
+            .where((row) => row.id == _groupScope!.id)
+            .firstOrNull
+            ?.machineId;
   String get matchQuery => isCommandMode
       ? commandQuery
       : isHelpMode
       ? helpQuery
-      : isGroupMode
+      : isGroupMode || isModelMode || isStoreMode
       ? query.trimLeft().substring(1).trimLeft()
       : query;
   String get title => isCommandMode
@@ -127,8 +267,12 @@ class SwarmSearchController extends ChangeNotifier {
       ? 'Projects'
       : isMachineMode
       ? 'Machines'
+      : isModelMode
+      ? 'Models'
+      : isStoreMode
+      ? 'Store'
       : _groupScope != null
-      ? 'Agents · ${_groupScope!.name}'
+      ? 'Harnesses · ${_groupScope!.name}${scopedBranch == null ? '' : ' ($scopedBranch)'}'
       : switch (split?.axis) {
           PaneResizeAxis.x => 'New Pane to the Right',
           PaneResizeAxis.y => 'New Pane Below',
@@ -147,8 +291,16 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool get hasPreview =>
       _previewVisible &&
-      canPreview &&
-      (!resultsFromBottom || selected?.isCreate != true);
+      (canPreview ||
+          setupLayout ||
+          isModelMode ||
+          isStoreMode ||
+          sessionFilter != SessionFilter.all) &&
+      (selected?.isCreate != true ||
+          setupLayout ||
+          isModelMode ||
+          isGroupMode ||
+          sessionFilter != SessionFilter.all);
 
   void togglePreview() {
     if (!supportsPreview) return;
@@ -171,6 +323,8 @@ class SwarmSearchController extends ChangeNotifier {
   // Paging the preview must not rebuild the result list or its text editor.
   final _previewPage = ValueNotifier<int>(0);
   ValueListenable<int> get previewPage => _previewPage;
+  final _previewLine = ValueNotifier<int>(0);
+  ValueListenable<int> get previewLine => _previewLine;
   final _resultPage = ValueNotifier<int>(0);
   ValueListenable<int> get resultPage => _resultPage;
   void page(int pages) {
@@ -181,7 +335,13 @@ class SwarmSearchController extends ChangeNotifier {
     }
   }
 
-  final String targetId, targetName;
+  void pageResults(int pages) => _resultPage.value += pages;
+
+  void scrollPreview(int lines) {
+    if (hasPreview) _previewLine.value += lines;
+  }
+
+  String targetId, targetName;
   // The workspace can retain normalized metadata across picker openings. Each
   // read still validates its snapshot; query, selection and output stay local.
   final SwarmSearchCatalog _cache;
@@ -236,19 +396,31 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool get canAccept => canSubmit(selected);
 
-  SwarmDestination? get selected => rows.isEmpty ? null : rows[cursor];
+  SwarmDestination? get selected =>
+      cursor < 0 || cursor >= rows.length ? null : rows[cursor];
+  bool get _emptyFinder =>
+      !selectOnEmptyQuery &&
+      setupLayout &&
+      !canGoBack &&
+      sessionFilter == SessionFilter.all &&
+      query.trim().isEmpty;
+  bool get showsTypeHints => _emptyFinder && selected == null;
   String get hint => isCommandMode
-      ? 'Search commands…'
+      ? 'Search commands'
       : isHelpMode
-      ? 'Choose a mode or search help…'
+      ? 'Search help'
       : _groupScope != null
-      ? 'Search agents in ${_groupScope!.name}…'
+      ? 'Search harnesses in ${_groupScope!.name}'
       : isProjectMode
-      ? 'Search projects…'
+      ? 'Search projects'
       : isMachineMode
-      ? 'Search machines…'
+      ? 'Search machines'
+      : isModelMode
+      ? 'Search models'
+      : isStoreMode
+      ? 'Search store'
       : history != null
-      ? 'Search history…'
+      ? 'Search history'
       : placement != null
       ? kHarnessPickerHint
       : kSwarmSearchHint;
@@ -264,7 +436,9 @@ class SwarmSearchController extends ChangeNotifier {
         isCommandMode ||
         isHelpMode ||
         _groupScope != null ||
-        isGroupMode) {
+        isGroupMode ||
+        isModelMode ||
+        isStoreMode) {
       return null;
     }
     return typed;
@@ -277,20 +451,30 @@ class SwarmSearchController extends ChangeNotifier {
       !navigating &&
       !isCommandMode &&
       !isHelpMode &&
-      _groupScope == null &&
-      !isGroupMode &&
-      canCreate;
+      !isProjectMode &&
+      (offersHarnessCreate || isGroupMode || isModelMode) &&
+      (_groupScope == null || scopedMachineId != null) &&
+      (isGroupMode ||
+          isModelMode ||
+          sessionFilter != SessionFilter.needsInput) &&
+      !isStoreMode &&
+      (isGroupMode || isModelMode || canCreate);
 
   SwarmDestination? _createRow;
   SwarmDestination _createRowFor(String? name) {
-    const title = 'New Harness';
+    final title = createLabel;
     // The same object while the words are the same: live preview text
     // re-filters constantly and compares rows by identity.
-    if (_createRow?.task == name && _createRow != null) return _createRow!;
+    if (_createRow?.task == name && _createRow?.title == title) {
+      return _createRow!;
+    }
     return _createRow = SwarmDestination(
-      id: kSwarmCreateRowId,
+      id: isGroupMode || isModelMode
+          ? 'create:$scopePrefix'
+          : kSwarmCreateRowId,
       title: title,
-      detail: name ?? 'use current defaults',
+      detail: name ?? createDescription,
+      terminalDetail: createDescription,
       swarmId: null,
       current: false,
       isCreate: true,
@@ -321,13 +505,32 @@ class SwarmSearchController extends ChangeNotifier {
       };
 
   String actionLabel(SwarmDestination? row) => row?.isCreate == true
-      ? 'New Harness'
+      ? row!.title
+      : row?.isModel == true
+      ? models?.entries[row!.modelId]?.api != null
+            ? 'Edit connection'
+            : 'Open Model Manager'
+      : row?.isStoreEntry == true
+      ? 'Open in Store'
       : row?.pickerQuery != null
       ? 'Open'
       : isGroupMode && row?.isGroup == true
       ? 'Choose ${isProjectMode ? 'project' : 'machine'}'
+      : row?.agentId != null &&
+            app
+                    .stateOf(row!.machineId!)
+                    ?.agents
+                    .any(
+                      (agent) => agent.id == row.agentId && agent.isStopped,
+                    ) ==
+                true
+      ? 'Resume & open'
+      : sessionFilter == SessionFilter.needsInput && row?.agentId != null
+      ? 'Answer'
       : placement != null && row != null && alreadyHere(row)
       ? 'Focus pane'
+      : setupLayout && row?.agentId != null
+      ? 'Open'
       : row?.isCommand == true
       ? (isHelpMode ? 'Open' : action(row!))
       : adding
@@ -355,13 +558,18 @@ class SwarmSearchController extends ChangeNotifier {
       : 'No room for another harness.';
 
   void _refresh({bool force = false}) {
+    final storeChanged = isStoreMode && _refreshStore();
     final next = navigating
         ? _locations.read(app, projects?.projects ?? const [])
         : history == null
         ? _cache.read(app, projects?.projects ?? const [], recent: recent)
         : [...history!.menuDestinations(app), ...closedWorkDestinations(app)];
     final splitCurrent = split == null || app.isPaneSplitCurrent(split!);
-    if (!force && identical(next, _catalog) && splitCurrent == _splitCurrent) {
+    if (!force &&
+        sessionFilter == SessionFilter.all &&
+        !storeChanged &&
+        identical(next, _catalog) &&
+        splitCurrent == _splitCurrent) {
       if (!isCommandMode) return;
       // Which commands are available follows the workspace, so command mode
       // cannot skip the look — but most ticks change none of them, and those
@@ -392,18 +600,99 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _modelsChanged() {
+    if (!isModelMode) return;
+    _filter();
+    notifyListeners();
+  }
+
+  Map<String, DshEntry> _storeEntries = {};
+  Map<String, DshEntry> get storeEntries => _storeEntries;
+  List<SwarmDestination> _storeDestinations = const [];
+
+  bool _refreshStore() {
+    final entries = {
+      for (final machine in app.machineStates.values)
+        for (final entry in machine.dsh.byId.values)
+          if (!entry.isViewerPackage) entry.id: entry,
+    };
+    if (mapEquals(entries, _storeEntries)) return false;
+    _storeEntries = entries;
+    _storeDestinations = _storeRows();
+    return true;
+  }
+
+  List<SwarmDestination> _storeRows() => [
+    for (final entry in storeEntries.values)
+      SwarmDestination(
+        id: 'store-entry:${entry.id}',
+        storeId: entry.id,
+        title: entry.name,
+        detail: entry.tagline ?? entry.description ?? entry.category ?? '',
+        swarmId: null,
+        current: false,
+        searchFields: [
+          entry.id,
+          entry.description,
+          entry.tagline,
+          entry.category,
+          entry.author,
+        ],
+      ),
+  ];
+
+  final _unavailableAttentionIds = <String>{};
+  List<SwarmDestination> _attentionRows() {
+    _unavailableAttentionIds.clear();
+    final existing = {for (final row in _catalog) row.id: row};
+    return [
+      for (final session in harnessSessions(
+        app,
+      ).where((session) => session.needsInput))
+        () {
+          final original = existing[session.id];
+          if (!session.canOpen) _unavailableAttentionIds.add(session.id);
+          return SwarmDestination(
+            id: session.id,
+            title: session.agent.displayName,
+            detail: '${session.status} · ${session.question!.prompt}',
+            machineLabel: session.machine.machine.displayName,
+            terminalDetail:
+                '${session.status} · ${session.machine.machine.displayName}',
+            promptContext: original?.promptContext,
+            machineId: session.machineId,
+            agentId: session.agent.id,
+            engine: session.agent.identityEngine,
+            swarmId: original?.swarmId,
+            paneId: original?.paneId,
+            previewKey: original?.previewKey,
+            lastActivityAt: session.lastActiveAt,
+            current: original?.current ?? false,
+            searchFields: [
+              ...?original?.fields,
+              session.question!.prompt,
+              session.machine.machine.displayName,
+              session.status,
+            ],
+          );
+        }(),
+    ];
+  }
+
   void _previewChanged() {
     if (matchQuery.trim().isEmpty ||
         isCommandMode ||
         isHelpMode ||
+        isModelMode ||
+        isStoreMode ||
         history != null) {
       return;
     }
     final previous = rows;
     final previousSelection = selected?.id;
     _filter(keepOrder: true);
-    // Live text can add/remove a match, but never shuffle matching rows under
-    // the keyboard or repaint the editor when the result set is unchanged.
+    // Live text can add/remove a match. Preserve selection and avoid repainting
+    // the editor when the result set is unchanged.
     if (!listEquals(previous, rows) || previousSelection != selected?.id) {
       notifyListeners();
     }
@@ -433,6 +722,13 @@ class SwarmSearchController extends ChangeNotifier {
     final availableCommands = isCommandMode
         ? commands?.call() ?? const <SwarmDestination>[]
         : const <SwarmDestination>[];
+    final byActivity =
+        activityFirst &&
+        !navigating &&
+        !isCommandMode &&
+        !isGroupMode &&
+        !isModelMode &&
+        !isStoreMode;
     _commandIds = {for (final command in availableCommands) command.id};
     final scopedMembers = _groupScope == null
         ? null
@@ -441,8 +737,14 @@ class SwarmSearchController extends ChangeNotifier {
                   .firstOrNull
                   ?.members ??
               <String>{};
-    final candidates = isCommandMode
+    var candidates = isCommandMode
         ? availableCommands
+        : isModelMode
+        ? models?.rows ?? const <SwarmDestination>[]
+        : isStoreMode
+        ? _storeDestinations
+        : byActivity && sessionFilter == SessionFilter.needsInput
+        ? _attentionRows()
         : isProjectMode
         ? _catalog.where((row) => row.isProject).toList()
         : isMachineMode
@@ -465,9 +767,27 @@ class SwarmSearchController extends ChangeNotifier {
                         (query.isNotEmpty && row.agentId != null)),
               )
               .toList();
+    if (scopedBranch case final branch?) {
+      candidates = candidates.where((row) {
+        final machine = app.stateOf(row.machineId ?? '');
+        final agent = machine?.agents
+            .where((agent) => agent.id == row.agentId)
+            .firstOrNull;
+        return agent != null && machine?.projectOf(agent)?.branch == branch;
+      }).toList();
+    }
+    if (byActivity && _heldRows.isNotEmpty && scopedBranch == null) {
+      final present = {for (final row in candidates) row.id};
+      candidates = [
+        ...candidates,
+        ..._heldRows.values.where((row) => !present.contains(row.id)),
+      ];
+    }
     total = candidates.length;
     rows = isCommandMode
         ? _recentFirst(rankSwarmDestinations(availableCommands, commandQuery))
+        : isModelMode && matchQuery.trim().isEmpty
+        ? candidates
         : navigating
         ? rankSwarmLocations(
             _catalog,
@@ -475,13 +795,69 @@ class SwarmSearchController extends ChangeNotifier {
             recent: recent,
             previews: app.sessionPreviews,
           )
-        : rankSwarmDestinations(
+        : byActivity
+        ? rankSwarmDestinationsByActivity(
             candidates,
             matchQuery,
             recent: recent,
+            previews: app.sessionPreviews,
+          )
+        : rankSwarmDestinations(
+            candidates,
+            matchQuery,
+            recent: isProjectMode ? const [] : recent,
             previews: history == null ? app.sessionPreviews : null,
           );
-    if (keepOrder && !navigating) {
+    if (isProjectMode) {
+      final open = {
+        for (final pane in app.allPanes)
+          if ((pane.agentId ?? pane.ownerAgentId) case final id?)
+            agentDestinationId(pane.machineId, id),
+      };
+      rows.sort((a, b) {
+        final aOpen = a.members.any(open.contains);
+        final bOpen = b.members.any(open.contains);
+        if (aOpen != bOpen) return aOpen ? -1 : 1;
+        final name = compareNatural(
+          a.title.toLowerCase(),
+          b.title.toLowerCase(),
+        );
+        return name != 0 ? name : a.id.compareTo(b.id);
+      });
+    }
+    if (byActivity &&
+        sessionFilter != SessionFilter.needsInput &&
+        (sessionFilter != SessionFilter.all ||
+            sessionSort != SessionSort.recent)) {
+      final sessions = [
+        for (final destination in candidates)
+          if (destination.agentId != null)
+            for (final machine in [app.stateOf(destination.machineId!)])
+              if (machine != null)
+                for (final agent in machine.agents.where(
+                  (agent) => agent.id == destination.agentId,
+                ))
+                  HarnessSession(
+                    machine: machine,
+                    agent: agent,
+                    open: destination.hasView,
+                    working: machine.processingAgentIds.contains(agent.id),
+                    question: machine.blockedAgents[agent.id],
+                  ),
+      ];
+      final visible = visibleHarnessSessions(
+        sessions,
+        filter: sessionFilter,
+        sort: sessionSort,
+        recent: recent,
+      );
+      final ranks = {for (var i = 0; i < visible.length; i++) visible[i].id: i};
+      rows = rows.where((row) => ranks.containsKey(row.id)).toList();
+      if (sessionSort != SessionSort.recent) {
+        rows.sort((a, b) => ranks[a.id]!.compareTo(ranks[b.id]!));
+      }
+    }
+    if (keepOrder && !navigating && !byActivity) {
       final remaining = {for (final row in rows) row.id: row};
       rows = [
         for (final row in previous) ?remaining.remove(row.id),
@@ -490,8 +866,9 @@ class SwarmSearchController extends ChangeNotifier {
     }
     // Keep the match order within each group, but put rows Return can open
     // first. An already-added exact match must not bury the usable matches.
-    // Location navigation retains its parent/child structure.
-    if (!navigating && !isCommandMode) {
+    // Location navigation retains its parent/child structure; Open Harness
+    // retains its activity order, including unavailable sessions.
+    if (!navigating && !isCommandMode && !byActivity) {
       final available = <SwarmDestination>[];
       final unavailable = <SwarmDestination>[];
       for (final row in rows) {
@@ -502,12 +879,19 @@ class SwarmSearchController extends ChangeNotifier {
     // Creation has a stable place beside the prompt. Filtering changes the
     // matches above it, never the position of the action itself.
     if (offersCreate) {
-      final create = _showsCreateRow ? _createRowFor(createTask) : null;
+      final create = _showsCreateRow && scopedBranch == null
+          ? _createRowFor(createTask)
+          : null;
       final found = [
         for (final row in rows)
           if (!row.isCreate) row,
       ];
-      rows = resultsFromBottom || placement != null || query.trim().isEmpty
+      // When creation is available, keep its row outside the result order.
+      rows =
+          resultsFromBottom ||
+              navigating ||
+              placement != null ||
+              query.trim().isEmpty
           ? [?create, ...found]
           : [...found, ?create];
     }
@@ -524,7 +908,10 @@ class SwarmSearchController extends ChangeNotifier {
               ).firstOrNull?.id
             : null);
     final index = rows.indexWhere((row) => row.id == preferred);
-    cursor = rows.isEmpty
+    final waitingForSelection = _emptyFinder && _selectedId == null;
+    cursor = waitingForSelection
+        ? -1
+        : rows.isEmpty
         ? 0
         : index >= 0
         ? index
@@ -533,13 +920,18 @@ class SwarmSearchController extends ChangeNotifier {
         : preferred == null &&
               rows.length > 1 &&
               rows.first.isCreate &&
-              ((placement == null && split == null) || query.trim().isNotEmpty)
+              ((placement == null && split == null) ||
+                  !selectOnEmptyQuery ||
+                  matchQuery.trim().isNotEmpty)
         ? 1
         : cursor.clamp(0, rows.length - 1);
     // Nor on a row Return cannot take: "Already added", dimmed, with its
     // reason stranded at the bottom. Only when the position is ours to pick —
     // a row somebody arrowed to stays theirs.
-    if (preferred == null && rows.isNotEmpty && !canSubmit(rows[cursor])) {
+    if (preferred == null &&
+        cursor >= 0 &&
+        rows.isNotEmpty &&
+        !canSubmit(rows[cursor])) {
       final first = rows.indexWhere(canSubmit);
       if (first >= 0) cursor = first;
     }
@@ -568,6 +960,7 @@ class SwarmSearchController extends ChangeNotifier {
     if (query == value) return;
     if (_quickAccessPrefix.hasMatch(value.trimLeft())) _groupScope = null;
     query = value;
+    if (isStoreMode) _refreshStore();
     cursor = 0;
     _selectedId = null;
     _filter();
@@ -577,6 +970,7 @@ class SwarmSearchController extends ChangeNotifier {
   bool back() {
     final scope = _groupScope;
     if (scope == null) return false;
+    if (scope.branch != null) return scopeToGroup(scope.id);
     _groupScope = null;
     setQuery(scope.query);
     return true;
@@ -584,7 +978,7 @@ class SwarmSearchController extends ChangeNotifier {
 
   void move(int delta) {
     if (rows.isEmpty) return;
-    cursor = (cursor + delta) % rows.length;
+    cursor = ((cursor < 0 && delta < 0 ? 0 : cursor) + delta) % rows.length;
     _selectedId = selected!.id;
     notifyListeners();
   }
@@ -609,7 +1003,12 @@ class SwarmSearchController extends ChangeNotifier {
           .where((row) => row.id == destination.id && row.isGroup)
           .firstOrNull;
       if (group != null) {
-        _groupScope = (id: group.id, name: group.title, query: query);
+        _groupScope = (
+          id: group.id,
+          name: group.title,
+          query: query,
+          branch: null,
+        );
         setQuery('');
       }
       return null;
@@ -636,12 +1035,20 @@ class SwarmSearchController extends ChangeNotifier {
     );
   }
 
-  bool canSubmit(SwarmDestination? row) => row?.pickerQuery != null
+  bool canSubmit(SwarmDestination? row) =>
+      sessionFilter == SessionFilter.needsInput &&
+          _unavailableAttentionIds.contains(row?.id)
+      ? false
+      : row?.pickerQuery != null
       ? isHelpMode && _commandIds.contains(row!.id)
+      : row?.isModel == true
+      ? isModelMode && models?.entries.containsKey(row!.modelId) == true
+      : row?.isStoreEntry == true
+      ? isStoreMode && storeEntries.containsKey(row!.storeId)
       : isGroupMode && row?.isGroup == true
       ? _catalog.any((group) => group.id == row!.id && group.isGroup)
       : row != null && row.isCreate
-      ? canCreate
+      ? _showsCreateRow && (isMachineMode || isModelMode || canCreate)
       : row != null &&
             (!adding || row.isCommand || canAdd(row)) &&
             (!row.isCommand ||
@@ -668,6 +1075,8 @@ class SwarmSearchController extends ChangeNotifier {
       history == null &&
       row != null &&
       !row.isCommand &&
+      !row.isModel &&
+      !row.isStoreEntry &&
       row.closedId == null &&
       (placement == null || row.agentId != null) &&
       (placement != null && alreadyHere(row) ||
@@ -692,6 +1101,12 @@ class SwarmSearchController extends ChangeNotifier {
 
   static String action(SwarmDestination row) => row.isCommand
       ? 'Run command'
+      : row.isCreate
+      ? row.title
+      : row.isModel
+      ? 'Show model actions'
+      : row.isStoreEntry
+      ? 'Open in Store'
       : row.closedId != null
       ? 'Reopen'
       : row.isSwarm && !row.isStore && row.members.length != 1
@@ -700,10 +1115,13 @@ class SwarmSearchController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     app.removeListener(_refresh);
     projects?.removeListener(_refresh);
+    models?.removeListener(_modelsChanged);
     app.sessionPreviews.removeListener(_previewChanged);
     _previewPage.dispose();
+    _previewLine.dispose();
     _resultPage.dispose();
     super.dispose();
   }

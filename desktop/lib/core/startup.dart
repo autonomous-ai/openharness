@@ -22,6 +22,7 @@ Future<void> loadPersistedSettings({
   AppearancePrefsStore? appearance,
   HarnessStats? stats,
   AlertSoundStore? alertSounds,
+  ScreenAlertStore? screenAlerts,
 }) async {
   // Independent stores may load together, but all must finish before runApp.
   // Font and appearance share a serialized file store; each reads its related
@@ -41,5 +42,6 @@ Future<void> loadPersistedSettings({
     // Before the first agent event, not after: the setting decides whether that event makes a
     // noise, and a late read would let one through on the default while the person had it off.
     (alertSounds ?? alertSoundStore).load(),
+    (screenAlerts ?? screenAlertStore).load(),
   ]);
 }

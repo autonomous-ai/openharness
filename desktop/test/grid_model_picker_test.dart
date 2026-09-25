@@ -1,18 +1,21 @@
-// The pane header's model picker: two sections, the way back always offered, and a tick that says
-// where the agent actually is.
+import 'dart:async';
+
+// The pane header's model picker: two sections, the way back always offered, and a marked row that
+// says where the agent actually is.
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:harness/widgets/box_chrome.dart';
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/widgets/transient_menus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/theme/app_theme.dart';
 import 'package:harness/widgets/grid_model_picker.dart';
+import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/widgets/model_picker_chrome.dart';
-import 'package:harness/widgets/pane_menu.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 /// A connection that answers the picker's one RPC immediately. Without it the menu waits out the
@@ -74,6 +77,21 @@ class _Conn extends WsConn {
   }
 }
 
+class _DelayedConn extends _Conn {
+  _DelayedConn() : super([]);
+  final reply = Completer<Map<String, dynamic>>();
+  int reads = 0;
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) {
+    reads++;
+    return reply.future;
+  }
+}
+
 void main() {
   late AppNotifier notifier;
 
@@ -102,6 +120,51 @@ void main() {
 
   setUp(() => build());
   tearDown(() => notifier.dispose());
+
+  testWidgets(
+    'offline selectors do not read models and late reads cannot open a disabled picker',
+    (tester) async {
+      notifier.dispose();
+      final connection = _DelayedConn();
+      notifier = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        connectionForTest: (_) => connection,
+      );
+      Future<void> mount(bool enabled) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              paneHeader: true,
+              enabled: enabled,
+            ),
+          ),
+        ),
+      );
+      await mount(false);
+      await tester.pump();
+      expect(connection.reads, 0);
+      await mount(true);
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pump();
+      expect(connection.reads, 1);
+      await mount(false);
+      connection.reply.complete({'models': [], 'gridName': null});
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+      await mount(true);
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsOneWidget);
+      await mount(false);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   Future<void> open(
     WidgetTester tester, {
@@ -133,10 +196,135 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     // The menu waits on the grid read AND the usage read; settle covers both plus the open animation.
     await tester.pumpAndSettle();
   }
+
+  testWidgets(
+    'pane model label stays compact and disabled selectors cannot open',
+    (tester) async {
+      final controller = GridModelPickerController();
+      addTearDown(controller.dispose);
+      Future<void> mount(bool enabled) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 180,
+              child: GridModelPicker(
+                notifier: notifier,
+                machineId: 'local',
+                currentModel: 'a-very-long-local-model-name',
+                controller: controller,
+                paneHeader: true,
+                enabled: enabled,
+              ),
+            ),
+          ),
+        ),
+      );
+      await mount(false);
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+      expect(find.byType(Icon), findsNothing);
+      final label = tester.widget<Text>(
+        find.text('a-very-long-local-model-name'),
+      );
+      expect(label.style!.fontSize, 13);
+      expect(label.style!.fontFamily, workspaceBarTextStyle().fontFamily);
+      expect(label.style!.fontWeight, FontWeight.normal);
+      expect(
+        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        'a-very-long-local-model-name',
+      );
+      expect(tester.takeException(), isNull);
+      await mount(true);
+      expect(
+        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        'a-very-long-local-model-name\nSwitch model · Subscription or local models',
+      );
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(ModelPickerSearch), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'observed subscription model updates live and advertises local switching on hover',
+    (tester) async {
+      Future<void> mount(String? model, {String? local}) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: GridModelPicker(
+                notifier: notifier,
+                machineId: 'local',
+                engineLabel: 'codex',
+                subscriptionModel: model,
+                currentModel: local,
+                paneHeader: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await mount('GPT-6 Astra');
+      expect(find.text('GPT-6 Astra'), findsOneWidget);
+      final hover = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await hover.addPointer(location: Offset.zero);
+      addTearDown(hover.removePointer);
+      await hover.moveTo(tester.getCenter(find.text('GPT-6 Astra')));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.text('Switch model · Subscription or local models'),
+        findsOneWidget,
+      );
+      final control = find.byType(WorkspaceBarControl);
+      final focusable = tester.widget<FocusableActionDetector>(
+        find.descendant(
+          of: control,
+          matching: find.byType(FocusableActionDetector),
+        ),
+      );
+      expect(focusable.mouseCursor, SystemMouseCursors.click);
+      final fill = find.descendant(
+        of: control,
+        matching: find.byType(ColoredBox),
+      );
+      expect(fill, findsOneWidget);
+      expect(tester.getSize(fill).height, 28);
+      expect(
+        tester.widget<ColoredBox>(fill).color,
+        tester
+            .widget<WorkspaceBarControl>(control)
+            .selection
+            .withValues(alpha: .5),
+      );
+      await hover.moveTo(Offset.zero);
+      await tester.pumpAndSettle();
+      await mount('GPT-5.6 Sol');
+      expect(find.text('GPT-5.6 Sol'), findsOneWidget);
+      expect(find.text('GPT-6 Astra'), findsNothing);
+      await tester.tap(find.text('GPT-5.6 Sol'));
+      await tester.pumpAndSettle();
+      final subscription = tester
+          .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
+          .singleWhere((row) => row.title == 'OpenAI');
+      expect(subscription.selected, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await mount('GPT-5.6 Sol', local: 'Local-Exact-Name');
+      expect(find.text('Local-Exact-Name'), findsOneWidget);
+      expect(find.text('GPT-5.6 Sol'), findsNothing);
+      await mount(null);
+      expect(find.text('OpenAI'), findsOneWidget);
+    },
+  );
 
   testWidgets('shows both sections, and the way back is in the first one', (
     tester,
@@ -146,19 +334,58 @@ void main() {
     // The two sections this picker has, and NOT the API section the window's own Models menu
     // carries — this control cannot put an agent on an API provider, so offering one would be a
     // choice that goes nowhere.
-    expect(find.text('Subscription'), findsOneWidget);
-    expect(find.text('Local models on your machines'), findsOneWidget);
+    expect(find.text('SUBSCRIPTION'), findsOneWidget);
+    expect(find.text('ON YOUR MACHINES'), findsOneWidget);
     expect(find.text('API'), findsNothing);
 
     // A picker that can only move an agent ONTO a grid is a one-way door, so the engine's own login
     // is always the first row. It is named the way the window's own Models menu names it — by
     // PROVIDER ('Anthropic'), not by engine ('Claude') — so the two controls agree about what the
     // thing is called, and it carries that menu's status text beside it.
-    expect(find.text('Anthropic'), findsOneWidget);
+    expect(find.text('Anthropic').last, findsOneWidget);
     expect(find.textContaining('usage'), findsOneWidget);
   });
 
-  testWidgets('compact model menu stays on screen and is keyboard navigable', (
+  testWidgets(
+    'workspace context opens the shared picker without a pane label',
+    (tester) async {
+      build(
+        models: [
+          {'id': 'local-model', 'node': 'M2'},
+        ],
+      );
+      final controller = GridModelPickerController();
+      addTearDown(controller.dispose);
+      String? selected;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              engineLabel: 'codex',
+              controller: controller,
+              menuOnly: true,
+              onSelected: (model) => selected = model.id,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('OpenAI'), findsNothing);
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.text('local-model'), findsOneWidget);
+      await tester.tap(find.text('local-model'));
+      await tester.pumpAndSettle();
+      expect(selected, 'local-model');
+      await tester.pumpWidget(const SizedBox());
+      controller.open();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('compact model menu stays on screen, and Escape closes it', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(380, 300);
@@ -187,41 +414,49 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final trigger = Focus.of(tester.element(find.byIcon(Icons.tune)));
+    final trigger = Focus.of(tester.element(find.text('fixture-model')));
     trigger.requestFocus();
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(find.text('Subscription'), findsOneWidget);
+    expect(find.text('SUBSCRIPTION'), findsOneWidget);
     final bounds = tester.getRect(find.byType(TerminalBox));
     expect(bounds.left, greaterThanOrEqualTo(8));
     expect(bounds.right, lessThanOrEqualTo(372));
     expect(bounds.bottom, lessThanOrEqualTo(292));
     expect(tester.takeException(), isNull);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(ownLogin, 1);
-    expect(trigger.hasFocus, isTrue);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(manage, 1);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
+    // Escape closes it and gives the trigger its focus back — still true, and the half of the
+    // keyboard contract that survived the panel.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(find.text('Subscription'), findsNothing);
+    expect(find.text('SUBSCRIPTION'), findsNothing);
     expect(trigger.hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     dismissTransientMenus();
     await tester.pumpAndSettle();
-    expect(find.text('Subscription'), findsNothing);
+    expect(find.text('SUBSCRIPTION'), findsNothing);
+    expect(ownLogin, 0);
+    expect(manage, 0);
+  });
+
+  testWidgets('rows can be reached and activated from the keyboard', (
+    tester,
+  ) async {
+    // Start on a local model: choosing an already selected subscription intentionally does
+    // nothing. Down must leave search and Enter must switch to the subscription row.
+    var ownLogin = 0;
+    build(
+      models: const [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
+    await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => ownLogin++);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
     expect(ownLogin, 1);
-    expect(manage, 1);
   });
 
   // THREE situations, two sentences and one silence, one test each — a single test cannot cover
@@ -244,7 +479,10 @@ void main() {
     tester,
   ) async {
     await open(tester);
-    expect(find.text('No local models on this account yet.'), findsOneWidget);
+    expect(
+      find.text('Set up your first local model on this computer.'),
+      findsOneWidget,
+    );
     // The user's vocabulary is "Local models", never "grid" — the grid is how a Local model is
     // served, not a thing the picker asks anyone to know about.
     expect(find.textContaining('grid'), findsNothing);
@@ -259,10 +497,13 @@ void main() {
       build(gridName: 'someone-7f3a91c4', gridCli: 'missing');
       await open(tester);
       expect(
-        find.text("Harness Compute isn't installed on this machine."),
+        find.text('Model Manager can finish setting up this computer.'),
         findsOneWidget,
       );
-      expect(find.text('No local models on this account yet.'), findsNothing);
+      expect(
+        find.text('Set up your first local model on this computer.'),
+        findsNothing,
+      );
       expect(find.textContaining('grid'), findsNothing);
     },
   );
@@ -274,7 +515,7 @@ void main() {
       await open(tester);
       expect(find.text('Nothing is being served yet.'), findsNothing);
       expect(find.text('Could not reach this machine.'), findsNothing);
-      expect(find.text('Open Grid'), findsOneWidget);
+      expect(find.text('Local models'), findsOneWidget);
     },
   );
 
@@ -306,13 +547,40 @@ void main() {
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
     served.add({'id': 'LFM2.5-8B', 'node': 'macbook'});
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
 
     expect(find.text('Qwen3.5-4B'), findsOneWidget);
     expect(find.text('LFM2.5-8B'), findsOneWidget);
     // Still one menu, redrawn — not a second one over the first.
-    expect(find.text('Local models on your machines'), findsOneWidget);
+    expect(find.text('ON YOUR MACHINES'), findsOneWidget);
+  });
+
+  testWidgets('shared model changes refresh the open picker', (tester) async {
+    final grids = <Map<String, Object?>>[
+      {'name': 'home', 'own': true, 'models': <Object?>[]},
+      {
+        'name': 'Team',
+        'own': false,
+        'models': <Object?>[
+          {'id': 'Old model', 'node': 'Team computer'},
+        ],
+      },
+    ];
+    notifier.dispose();
+    build(gridName: 'home', grids: grids);
+    await open(tester);
+    expect(find.text('Old model'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+    grids[1]['models'] = <Object?>[
+      {'id': 'New model', 'node': 'Team computer'},
+    ];
+    await tester.tap(find.byType(GridModelPicker));
+    await tester.pumpAndSettle();
+    expect(find.text('Old model'), findsNothing);
+    expect(find.text('New model'), findsOneWidget);
+    expect(find.text('SHARED · TEAM'), findsOneWidget);
   });
 
   testWidgets(
@@ -347,24 +615,21 @@ void main() {
       );
       await open(tester, onSelected: (m) => picked = m);
 
-      expect(find.text('Local models on your machines'), findsOneWidget);
-      expect(find.text('Models shared with you'), findsOneWidget);
-      expect(find.text('autonomous.ai'), findsOneWidget);
+      expect(find.text('ON YOUR MACHINES'), findsOneWidget);
+      expect(find.text('SHARED · AUTONOMOUS.AI'), findsOneWidget);
+      // The grid's name is folded INTO its heading now, not hung on a line beneath it —
+      // where it read as an entry of the same kind as the models under it.
       expect(find.text('Qwen3.5-4B'), findsOneWidget);
       expect(find.text('DeepSeek-V4-Flash'), findsOneWidget);
       // Own first: Local sits above the shared grids.
       expect(
-        tester.getTopLeft(find.text('Local models on your machines')).dy <
-            tester.getTopLeft(find.text('Models shared with you')).dy,
+        tester.getTopLeft(find.text('ON YOUR MACHINES')).dy <
+            tester.getTopLeft(find.text('SHARED · AUTONOMOUS.AI')).dy,
         isTrue,
       );
-      // The general fact is the heading; the specific grid is the name under it, not the same
-      // line — "Models shared with you" reads once, "autonomous.ai" reads as which one.
-      expect(
-        tester.getTopLeft(find.text('Models shared with you')).dy <
-            tester.getTopLeft(find.text('autonomous.ai')).dy,
-        isTrue,
-      );
+      // The grid's name is folded INTO its heading now rather than hung on a line beneath it,
+      // where it read as an entry of the same kind as the models under it.
+      expect(find.text('autonomous.ai'), findsNothing);
       // A shared grid serving nothing is not listed: nothing on it can be picked.
       expect(find.text('BBB'), findsNothing);
       expect(find.textContaining('BBB'), findsNothing);
@@ -455,15 +720,15 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Model'));
+      await tester.tap(find.byType(GridModelPicker));
       await tester.pumpAndSettle();
-      expect(find.text('Subscription'), findsOneWidget);
+      expect(find.text('SUBSCRIPTION'), findsOneWidget);
 
       await tester.tap(find.text('underneath'));
       await tester.pumpAndSettle();
 
       expect(
-        find.text('Subscription'),
+        find.text('SUBSCRIPTION'),
         findsNothing,
         reason: 'the menu closes',
       );
@@ -570,49 +835,18 @@ void main() {
   });
 
   testWidgets(
-    'the current row is marked by a highlight, and nothing else is',
-    (tester) async {
-      // A tick was tried twice and dropped twice: it costs a column on every row to say what the
-      // fill already says. What actually lit two rows at once was FOCUS — the menu focuses its
-      // first row as it opens so Enter has a target, and an InkWell paints focus with a fill.
-      // Focus paints nothing now, so the fill means exactly one thing.
-      build(
-        models: [
-          {'id': 'Qwen3.6-35B-A3B-UD-Q5_K_XL', 'node': 'macbook-m1max'},
-        ],
-      );
-      await open(tester, currentModel: 'Qwen3.6-35B-A3B-UD-Q5_K_XL');
-
-      expect(find.byIcon(Icons.check), findsNothing);
-
-      Container rowFor(String text) => tester.widget<Container>(
-        find
-            .ancestor(of: find.text(text), matching: find.byType(Container))
-            .first,
-      );
-      // The selected row is filled; the other is not.
-      expect(
-        (rowFor('Qwen3.6-35B-A3B-UD-Q5_K_XL').decoration as BoxDecoration?)
-            ?.color,
-        isNotNull,
-      );
-      expect(rowFor('Anthropic').decoration, isNull);
-    },
-  );
-
-  testWidgets(
     'choosing the engine login only fires when the agent is NOT already on it',
     (tester) async {
       var calls = 0;
       // Already on its own login: re-selecting it would respawn the pane for nothing.
       await open(tester, currentModel: null, onOwnLogin: () => calls++);
-      await tester.tap(find.text('Anthropic'));
+      await tester.tap(find.text('Anthropic').last);
       await tester.pumpAndSettle();
       expect(calls, 0);
 
       // On a grid model: now it has somewhere to go.
       await open(tester, currentModel: 'Qwen-Test', onOwnLogin: () => calls++);
-      await tester.tap(find.text('Anthropic'));
+      await tester.tap(find.text('Anthropic').last);
       await tester.pumpAndSettle();
       expect(calls, 1);
     },
@@ -700,133 +934,52 @@ void main() {
     });
   });
 
-  group('the invitation that closes the Local section', () {
+  group('the footer that closes the panel', () {
     const served = [
       {'id': 'Qwen-Test', 'node': 'macbook-m1max'},
     ];
 
-    testWidgets('a captioned rule, then the button, under the models', (
+    testWidgets('counts what the list is showing, and offers the one action', (
+      tester,
+    ) async {
+      // It replaced a captioned rule and a bordered button inside the list. The panel pins it
+      // below a scrolling middle instead, which is where an action that is NOT one of the rows
+      // belongs: everything above is a place the agent can go, and this starts something.
+      build(models: served);
+      await open(tester);
+
+      expect(find.text('1 model available'), findsOneWidget);
+      expect(find.text('Local models'), findsOneWidget);
+    });
+
+    testWidgets('is never the marked row, whatever is selected', (
       tester,
     ) async {
       build(models: served);
-      await open(tester);
-      final caption = tester.getTopLeft(
-        find.text('Manage the models on your machines'),
-      );
-      final button = tester.getTopLeft(find.text('Open Grid'));
-      final model = tester.getBottomLeft(find.text('Qwen-Test'));
+      await open(tester, currentModel: 'Qwen-Test');
 
-      // Under the list, not among it: the models are places this agent can go and this starts
-      // something, so the rule is what says a different question begins here.
-      expect(caption.dy, greaterThan(model.dy));
-      expect(button.dy, greaterThan(caption.dy));
-      // And the rule is a rule — a line either side of the caption, not just a label.
-      expect(
-        find.descendant(of: find.byType(Row), matching: find.byType(Container)),
-        findsWidgets,
+      // It is not a ModelPickerRow at all, so it cannot wear the fill that says where the agent
+      // is.
+      final rows = tester.widgetList<ModelPickerRow>(
+        find.byType(ModelPickerRow),
       );
+      expect(rows.map((r) => r.title), isNot(contains('Local models')));
+      expect(rows.where((r) => r.selected).map((r) => r.title), ['Qwen-Test']);
     });
-
-    testWidgets('has room to breathe, above and below the caption', (
-      tester,
-    ) async {
-      // The gaps are the point as much as the parts: a rule tight against the last model reads as a
-      // separator between two rows rather than the end of a list, and a button pressed against its
-      // own caption reads as one block of chrome. Both were tried.
-      build(models: served);
-      await open(tester);
-      final model = tester.getBottomLeft(find.text('Qwen-Test'));
-      final caption = tester.getTopLeft(
-        find.text('Manage the models on your machines'),
-      );
-      final captionBottom = tester.getBottomLeft(
-        find.text('Manage the models on your machines'),
-      );
-      final button = tester.getTopLeft(find.text('Open Grid'));
-      expect(caption.dy - model.dy, greaterThan(8));
-      expect(button.dy - captionBottom.dy, greaterThan(8));
-    });
-
-    testWidgets('spans the menu, so it reads as the section action', (
-      tester,
-    ) async {
-      build(models: served);
-      await open(tester);
-      final surface = tester.getSize(find.byType(Material).last).width;
-      final box = tester.getSize(
-        find
-            .ancestor(
-              of: find.text('Open Grid'),
-              matching: find.byType(Container),
-            )
-            .first,
-      );
-      // Full width less its own inset — a button the width of its label would read as a row.
-      expect(box.width, greaterThan(surface - 40));
-    });
-
-    testWidgets(
-      'is there when nothing is served, and when there is no grid at all',
-      (tester) async {
-        // A person with no Local models is exactly who needs it, so it does not wait for a list.
-        await open(tester);
-        expect(find.text('Open Grid'), findsOneWidget);
-        // Never the plumbing's name, in this block as in the rest of the menu.
-        expect(find.textContaining('grid'), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'is a button, not a row: it can never wear the current-model fill',
-      (tester) async {
-        build(models: served);
-        await open(tester, currentModel: 'Qwen-Test');
-        expect(find.byIcon(Icons.check), findsNothing);
-        final model = tester.widget<Container>(
-          find
-              .ancestor(
-                of: find.text('Qwen-Test'),
-                matching: find.byType(Container),
-              )
-              .first,
-        );
-        expect((model.decoration as BoxDecoration?)?.color, isNotNull);
-        // Its own shape — a border, no fill — so the eye does not read it as the selected row.
-        final button = tester.widget<Container>(
-          find
-              .ancestor(
-                of: find.text('Open Grid'),
-                matching: find.byType(Container),
-              )
-              .first,
-        );
-        final decoration = button.decoration as BoxDecoration?;
-        expect(decoration?.border, isNotNull);
-        expect(decoration?.color, Colors.transparent);
-      },
-    );
 
     testWidgets('fires onRunLocalModel and nothing else', (tester) async {
-      build(models: served);
-      var runs = 0;
-      var logins = 0;
+      var ran = 0;
       GridModel? picked;
+      build(models: served);
       await open(
         tester,
-        currentModel: 'Qwen-Test',
-        onRunLocalModel: () => runs++,
-        onOwnLogin: () => logins++,
-        onSelected: (m) => picked = m,
+        onRunLocalModel: () => ran++,
+        onSelected: (model) => picked = model,
       );
-      await tester.tap(find.text('Open Grid'));
+      await tester.tap(find.text('Local models'));
       await tester.pumpAndSettle();
-      expect(runs, 1);
-      // Not a move: the agent stays where it was. `currentModel` is set so a stray own-login call
-      // would have fired — the case where it is silent for its own reason is not the one tested.
-      expect(logins, 0);
+      expect(ran, 1);
       expect(picked, isNull);
-      // The menu closed on the press, as it does on any choice.
-      expect(find.text('Open Grid'), findsNothing);
     });
   });
 
@@ -845,8 +998,17 @@ void main() {
       );
       expect(find.textContaining('Web search'), findsNothing);
       expect(
-        tester.widget<Tooltip>(find.byType(Tooltip)).message,
-        'Where this agent runs',
+        tester
+            .widget<Tooltip>(
+              find
+                  .ancestor(
+                    of: find.text('Qwen-Test'),
+                    matching: find.byType(Tooltip),
+                  )
+                  .first,
+            )
+            .message,
+        'Model: Qwen-Test\nSwitch model · Subscription or local models',
       );
     });
 
@@ -869,13 +1031,22 @@ void main() {
         // Under the CURRENT model, not every model: the status is about this agent's launch, and the
         // other rows are places it could go, about which nothing is yet known.
         final subtitle = tester.getTopLeft(find.text('Web search unavailable'));
-        final current = tester.getTopLeft(find.text('Qwen-Test'));
+        final current = tester.getTopLeft(find.text('Qwen-Test').last);
         final other = tester.getTopLeft(find.text('Other-Model'));
         expect(subtitle.dy, greaterThan(current.dy));
         expect(subtitle.dy, lessThan(other.dy));
         expect(
-          tester.widget<Tooltip>(find.byType(Tooltip)).message,
-          'Where this agent runs\nWeb search unavailable',
+          tester
+              .widget<Tooltip>(
+                find
+                    .ancestor(
+                      of: find.text('Qwen-Test'),
+                      matching: find.byType(Tooltip),
+                    )
+                    .first,
+              )
+              .message,
+          'Model: Qwen-Test\nSwitch model · Subscription or local models\nWeb search unavailable',
         );
       },
     );
@@ -894,8 +1065,17 @@ void main() {
         findsOneWidget,
       );
       expect(
-        tester.widget<Tooltip>(find.byType(Tooltip)).message,
-        'Where this agent runs\nWeb search not supported by this engine',
+        tester
+            .widget<Tooltip>(
+              find
+                  .ancestor(
+                    of: find.text('Qwen-Test'),
+                    matching: find.byType(Tooltip),
+                  )
+                  .first,
+            )
+            .message,
+        'Model: Qwen-Test\nSwitch model · Subscription or local models\nWeb search not supported by this engine',
       );
     });
 
@@ -960,105 +1140,56 @@ void main() {
     );
   });
 
-  // ── two rows highlighted at once ──────────────────────────────────────────────────────────────
+  // ── which row is the current one ─────────────────────────────────────────────────────────────
   //
-  // The subscription row and a model row appeared equally chosen. Neither was wrong about itself:
-  // one was SELECTED and the other was merely under the pointer, and both were painted the same
-  // fill, so the menu said "you are here" twice.
+  // The mark is the fill and its accent border, and nothing else: the tick it used to carry sat
+  // beside the quota figure and crowded it, and was taken out on request. Hover paints a fill too,
+  // but never the border, which is what keeps the two apart. What is asked here is which ROW gets
+  // the mark, and that a screen reader is told which one it is.
 
-  testWidgets('hover is its own colour, weaker than the selected fill', (tester) async {
-    build(models: [{'id': 'Qwen-Test', 'node': 'macbook'}]);
+  ModelPickerRow rowFor(WidgetTester tester, String title) => tester
+      .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
+      .firstWhere((r) => r.title == title);
+
+  testWidgets('exactly one row is marked, with no tick beside it', (
+    tester,
+  ) async {
+    build(
+      models: [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+        {'id': 'DeepSeek-Test', 'node': 'zeus'},
+      ],
+    );
     await open(tester, currentModel: 'Qwen-Test');
 
-    // The ROW items specifically — the menu also holds a button, which is its own shape and has no
-    // business wearing a row's hover.
-    final wells = tester
-        .widgetList<InkWell>(
-          find.ancestor(of: find.byType(PaneMenuRow), matching: find.byType(InkWell)),
-        )
-        .toList();
-    expect(wells, isNotEmpty);
-    for (final well in wells) {
-      // Stated, not inherited: the Material default sat close enough to the selected fill to be
-      // indistinguishable, which is the whole of the reported bug.
-      expect(well.hoverColor, AppColors.rowHover);
-      // An ink ripple is a THIRD fill on the same rectangle and it lingers past the tap.
-      expect(well.splashColor, Colors.transparent);
-      expect(well.highlightColor, Colors.transparent);
-      // The one that lit the top row before the pointer had moved: the menu focuses its first row
-      // on open, and an InkWell paints focus with a fill unless told otherwise.
-      expect(well.focusColor, Colors.transparent);
-    }
-    expect(AppColors.rowHover, isNot(AppColors.selected));
-    expect(AppColors.rowHover.a, lessThan(AppColors.selected.a));
-  });
-
-  testWidgets('exactly one row wears the selected fill', (tester) async {
-    build(models: [
-      {'id': 'Qwen-Test', 'node': 'macbook'},
-      {'id': 'DeepSeek-Test', 'node': 'zeus'},
-    ]);
-    await open(tester, currentModel: 'Qwen-Test');
-
-    BoxDecoration? fillOf(String text) => tester
-        .widget<Container>(find.ancestor(of: find.text(text), matching: find.byType(Container)).first)
-        .decoration as BoxDecoration?;
-    expect(fillOf('Qwen-Test')?.color, AppColors.selected);
-    expect(fillOf('DeepSeek-Test')?.color, isNull);
-    expect(fillOf('Anthropic')?.color, isNull);
+    expect(rowFor(tester, 'Qwen-Test').selected, isTrue);
+    expect(rowFor(tester, 'DeepSeek-Test').selected, isFalse);
+    expect(rowFor(tester, 'Anthropic').selected, isFalse);
     expect(find.byIcon(Icons.check), findsNothing);
+    expect(
+      // `.last`: the header control names the current model too.
+      tester.getSemantics(find.text('Qwen-Test').last),
+      isSemantics(isSelected: true),
+    );
+    expect(
+      tester.getSemantics(find.text('DeepSeek-Test')),
+      isNot(isSemantics(isSelected: true)),
+    );
   });
 
-  testWidgets('the subscription row is the selected one when no model is set', (tester) async {
-    build(models: [{'id': 'Qwen-Test', 'node': 'macbook'}]);
+  testWidgets('the subscription row is the marked one when no model is set', (
+    tester,
+  ) async {
+    build(
+      models: [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
     await open(tester);
 
-    BoxDecoration? fillOf(String text) => tester
-        .widget<Container>(find.ancestor(of: find.text(text), matching: find.byType(Container)).first)
-        .decoration as BoxDecoration?;
-    expect(fillOf('Anthropic')?.color, AppColors.selected);
-    expect(fillOf('Qwen-Test')?.color, isNull);
+    expect(rowFor(tester, 'Anthropic').selected, isTrue);
+    expect(rowFor(tester, 'Qwen-Test').selected, isFalse);
     expect(find.byIcon(Icons.check), findsNothing);
-  });
-
-  // ── the metadata columns ──────────────────────────────────────────────────────────────────────
-  //
-  // Every trailing field was a `Flexible`, whose flex is ONE — so the row's spare width was split
-  // evenly between the title and each field beside it. A subscription row with two fields put them
-  // a third and two thirds across; a model row with one put it halfway. Three columns, three
-  // offsets, one menu.
-
-  testWidgets('trailing metadata shares one right edge, whatever the row', (tester) async {
-    build(models: [
-      {'id': 'Qwen-Test', 'node': 'a'},
-      {'id': 'DeepSeek-V4-Flash-0731-Vision', 'node': 'firmware-engineer-daniel'},
-    ]);
-    await open(tester, currentModel: 'Qwen-Test');
-
-    final short = tester.getRect(find.text('a')).right;
-    final long = tester.getRect(find.text('firmware-engineer-daniel')).right;
-    // Node names of wildly different lengths, one right edge.
-    expect((short - long).abs(), lessThan(0.5));
-
-    // And the subscription row's own trailing field lands on that same edge, though its row is
-    // built from different parts.
-    final subscription = tester.getRect(find.textContaining('usage')).right;
-    expect((subscription - short).abs(), lessThan(0.5));
-  });
-
-  testWidgets('a long machine name ellipsizes rather than crowding out the model id', (tester) async {
-    build(models: [
-      {'id': 'Qwen-Test', 'node': 'a-machine-name-far-longer-than-any-column-should-ever-be-allowed-to-grow'},
-    ]);
-    await open(tester, currentModel: 'Qwen-Test');
-
-    final node = tester.getRect(
-      find.text('a-machine-name-far-longer-than-any-column-should-ever-be-allowed-to-grow'),
-    );
-    expect(node.width, lessThanOrEqualTo(kPaneMenuMetaMaxWidth + 0.5));
-    // The row is named after its model, so that is the text that keeps its width.
-    expect(tester.getRect(find.text('Qwen-Test')).width, greaterThan(0));
-    expect(tester.takeException(), isNull);
   });
 
   // ── the selection has to land before the machine confirms it ──────────────────────────────────
@@ -1067,40 +1198,45 @@ void main() {
   // changes once the daemon has done the work. The menu reopened with the tick still on the row
   // the person had just left, which reads as the click having done nothing.
 
-  testWidgets('a fresh currentModel while the menu is open does not crash the frame', (tester) async {
-    // The first attempt at this redrew the overlay from `didUpdateWidget`, which runs mid-build:
-    // "setState() or markNeedsBuild() called during build" across the whole window.
-    build(models: [
-      {'id': 'Qwen-Test', 'node': 'macbook'},
-      {'id': 'DeepSeek-Test', 'node': 'zeus'},
-    ]);
+  testWidgets(
+    'a fresh currentModel while the menu is open does not crash the frame',
+    (tester) async {
+      // The first attempt at this redrew the overlay from `didUpdateWidget`, which runs mid-build:
+      // "setState() or markNeedsBuild() called during build" across the whole window.
+      build(
+        models: [
+          {'id': 'Qwen-Test', 'node': 'macbook'},
+          {'id': 'DeepSeek-Test', 'node': 'zeus'},
+        ],
+      );
 
-    Widget app(String? current) => MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: GridModelPicker(
-            notifier: notifier,
-            machineId: 'local',
-            engineLabel: 'claude',
-            currentModel: current,
+      Widget app(String? current) => MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: GridModelPicker(
+              notifier: notifier,
+              machineId: 'local',
+              engineLabel: 'claude',
+              currentModel: current,
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    tester.view.physicalSize = const Size(1200, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(app(null));
-    await tester.tap(find.text('Model'));
-    await tester.pumpAndSettle();
-    expect(find.text('Qwen-Test'), findsOneWidget);
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(app(null));
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(find.text('Qwen-Test'), findsOneWidget);
 
-    // The daemon's frame lands while the menu is still open.
-    await tester.pumpWidget(app('Qwen-Test'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-  });
+      // The daemon's frame lands while the menu is still open.
+      await tester.pumpWidget(app('Qwen-Test'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   /// Open the picker as a rebuildable host, so a test can change `currentModel` under it the way
   /// the daemon's frames do.
@@ -1136,7 +1272,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
     return (String? next) => setHost(() => current = next);
   }
@@ -1145,25 +1281,33 @@ void main() {
       .widgetList<ModelPickerRow>(find.byType(ModelPickerRow))
       .any((r) => r.title == title && r.selected);
 
-  testWidgets('the tick stays on the picked model through the respawn', (tester) async {
+  testWidgets('the tick stays on the picked model through the respawn', (
+    tester,
+  ) async {
     // A retarget restarts the pane, and a restarting pane reports NO model for a moment. Taking
     // that null as the answer put the tick back on Subscription mid-move, and the row the person
     // clicked only claimed it once the respawn finished — the flicker between two answers.
-    build(models: [
-      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
-    ]);
+    build(
+      models: [
+        {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+      ],
+    );
     final report = await openLive(tester, currentModel: 'Qwen-Old');
 
     await tester.tap(find.text('gemma-4-31B-it'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
     expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
 
     // The pane goes down: no model at all.
     report(null);
     await tester.pumpAndSettle();
-    expect(ticked(tester, 'gemma-4-31B-it'), isTrue, reason: 'a restarting pane is not an answer');
+    expect(
+      ticked(tester, 'gemma-4-31B-it'),
+      isTrue,
+      reason: 'a restarting pane is not an answer',
+    );
     expect(ticked(tester, 'Anthropic'), isFalse);
 
     // And comes back up on what was asked for.
@@ -1172,11 +1316,15 @@ void main() {
     expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
   });
 
-  testWidgets('a model the menu did not ask for wins over the guess', (tester) async {
-    build(models: [
-      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
-      {'id': 'Qwen-Test', 'node': 'macbook'},
-    ]);
+  testWidgets('a model the menu did not ask for wins over the guess', (
+    tester,
+  ) async {
+    build(
+      models: [
+        {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
     // Starts on the engine's own login, so the report below is a real CHANGE. A daemon that
     // re-sends the value it already held is not a new answer, and the guess then waits out its
     // own timer rather than being contradicted.
@@ -1184,7 +1332,7 @@ void main() {
 
     await tester.tap(find.text('gemma-4-31B-it'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Model'));
+    await tester.tap(find.byType(GridModelPicker));
     await tester.pumpAndSettle();
     expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
 
@@ -1195,29 +1343,87 @@ void main() {
     expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
   });
 
-  testWidgets('choosing the own login is confirmed BY a null, not broken by one', (tester) async {
-    build(models: [
-      {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
-    ]);
-    final report = await openLive(tester, currentModel: 'gemma-4-31B-it');
+  testWidgets(
+    'choosing the own login is confirmed BY a null, not broken by one',
+    (tester) async {
+      build(
+        models: [
+          {'id': 'gemma-4-31B-it', 'node': '3d-artist-diego'},
+        ],
+      );
+      final report = await openLive(tester, currentModel: 'gemma-4-31B-it');
 
-    await tester.tap(find.text('Anthropic'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Model'));
-    await tester.pumpAndSettle();
-    expect(ticked(tester, 'Anthropic'), isTrue);
+      await tester.tap(find.text('Anthropic').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(GridModelPicker));
+      await tester.pumpAndSettle();
+      expect(ticked(tester, 'Anthropic'), isTrue);
 
-    report(null);
-    await tester.pumpAndSettle();
-    expect(ticked(tester, 'Anthropic'), isTrue);
-    expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
+      report(null);
+      await tester.pumpAndSettle();
+      expect(ticked(tester, 'Anthropic'), isTrue);
+      expect(ticked(tester, 'gemma-4-31B-it'), isFalse);
 
-    // And the guess is RELEASED by that confirmation, not merely agreed with: the next thing the
-    // machine says has to land. A guess that only ever expired on its clock would hold the tick on
-    // Subscription for another half minute after the agent had moved on.
-    report('gemma-4-31B-it');
-    await tester.pumpAndSettle();
-    expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
-    expect(ticked(tester, 'Anthropic'), isFalse);
+      // And the guess is RELEASED by that confirmation, not merely agreed with: the next thing the
+      // machine says has to land. A guess that only ever expired on its clock would hold the tick on
+      // Subscription for another half minute after the agent had moved on.
+      report('gemma-4-31B-it');
+      await tester.pumpAndSettle();
+      expect(ticked(tester, 'gemma-4-31B-it'), isTrue);
+      expect(ticked(tester, 'Anthropic'), isFalse);
+    },
+  );
+
+  // ── the subscription row agrees with the window's Models menu ─────────────────────────────────
+  //
+  // The picker used to own its own usage reader, read at a different moment from the menu's, and
+  // said "Not signed in" beside a menu showing the same Anthropic account with 8% left.
+
+  testWidgets('reads the app\'s shared usage controller and leaves it alive', (
+    tester,
+  ) async {
+    build(
+      models: [
+        {'id': 'Qwen-Test', 'node': 'macbook'},
+      ],
+    );
+    final shared = notifier.modelsMenu;
+    await open(tester);
+    await tester.pumpWidget(const SizedBox());
+
+    expect(notifier.modelsMenu, same(shared));
+    // A controller the picker had disposed would throw here.
+    expect(() => shared.addListener(() {}), returnsNormally);
+  });
+
+  group('which subscription row the picker shows', () {
+    Map<String, Object?> row(String account, {double? percent}) => {
+      'title': 'Anthropic',
+      'engine': 'claude',
+      'account': account,
+      'status': percent == null ? 'Not signed in' : '$percent% remaining',
+      'remainingPercent': percent,
+    };
+
+    test('prefers a live account over this Mac signed out', () {
+      final rows = [row(''), row('ed8a75', percent: 8)];
+      expect(subscriptionRowFor('claude', rows)?['account'], 'ed8a75');
+    });
+
+    test('falls back to the first row when none has a figure', () {
+      final rows = [row(''), row('ed8a75')];
+      expect(subscriptionRowFor('claude', rows)?['account'], '');
+    });
+
+    test('keeps the first live row when several have figures', () {
+      final rows = [row('aaaaaa', percent: 50), row('bbbbbb', percent: 8)];
+      expect(subscriptionRowFor('Claude ', rows)?['account'], 'aaaaaa');
+    });
+
+    test('says nothing for another engine or no engine', () {
+      final rows = [row('ed8a75', percent: 8)];
+      expect(subscriptionRowFor('codex', rows), isNull);
+      expect(subscriptionRowFor(null, rows), isNull);
+    });
   });
 }

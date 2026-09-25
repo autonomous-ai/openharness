@@ -19,12 +19,14 @@ class PromptContextView extends StatefulWidget {
     this.prefs,
     this.store,
     this.matches = const [],
+    this.textStyle,
   });
 
   final PromptContext contextData;
   final PromptPrefs? prefs;
   final AppearancePrefsStore? store;
-  double get size => grid.AppType.monoLabelSize;
+  final TextStyle? textStyle;
+  double get size => textStyle?.fontSize ?? grid.AppType.monoLabelSize;
   final Iterable<SearchFieldMatch> matches;
 
   @override
@@ -83,12 +85,14 @@ class _PromptContextViewState extends State<PromptContextView> {
     );
   }
 
-  /// Breadcrumbs name places a person copies, so they are mono, one step
-  /// under the terminal's own text.
-  static TextStyle _style(Color tone) => grid.AppType.monoLabel(
-    color: tone,
-    fontWeight: FontWeight.w400,
-    height: 1.35,
+  /// Callers can match the terminal while shared headers keep their UI scale.
+  TextStyle _style(Color tone) => DefaultTextStyle.of(context).style.merge(
+    widget.textStyle?.copyWith(color: widget.textStyle?.color ?? tone) ??
+        grid.AppType.monoLabel(
+          color: tone,
+          fontWeight: FontWeight.w400,
+          height: 1.35,
+        ),
   );
 
   Widget _line(PromptPrefs prefs, double maxWidth, TextScaler scaler) {
@@ -167,7 +171,9 @@ class _PromptContextViewState extends State<PromptContextView> {
                   child: Builder(
                     builder: (context) {
                       final part = segments[index];
-                      final tone = prefs.color ? part.color : Colors.white60;
+                      final tone =
+                          widget.textStyle?.color ??
+                          (prefs.color ? part.color : Colors.white60);
                       final width = widths?[index];
                       final style = _style(tone);
                       // A folder cut short keeps both ends, the way editors
@@ -233,9 +239,9 @@ class _PromptContextViewState extends State<PromptContextView> {
   /// Folders shorten in the middle; everything else at the end.
   static bool _middle(String label) => label == 'Project' || label.isEmpty;
 
-  /// How much of the line each segment's text gets when it does not all fit:
-  /// the project gives way first, then the machine, and the branch last, each keeping a few characters; narrower than that, all
-  /// alike. Null when everything fits.
+  /// Size each segment by its content, then shrink only when the whole line
+  /// does not fit. The project gives way first, then the machine, and the
+  /// branch last. Null only when the line has no width constraint.
   List<double>? _fit(
     List<
       ({String label, String value, String ascii, IconData? icon, Color color})
@@ -264,7 +270,9 @@ class _PromptContextViewState extends State<PromptContextView> {
       chrome += powerline ? (index == 0 ? 6 : 12) + 12 : (index > 0 ? 12 : 0);
     }
     var excess = natural.fold(chrome, (sum, width) => sum + width) - maxWidth;
-    if (excess <= 0) return null;
+    // Equal Flexible shares would truncate a long branch even when shorter
+    // machine/project labels leave enough room for the whole line.
+    if (excess <= 0) return natural;
     final widths = [...natural];
     final floor = _measure('mmmmmm…', style, scaler);
     const order = ['', 'Project', 'Machine', 'Branch', 'Harness'];
@@ -331,8 +339,7 @@ class _PromptContextViewState extends State<PromptContextView> {
 class _Clipped extends StatelessWidget {
   const _Clipped({required this.clip, required this.child});
 
-  /// Only with every segment at a fixed width; a line that fits is laid out
-  /// as it always was.
+  /// Only bounded lines with measured segment widths can be safely clipped.
   final bool clip;
   final Widget child;
   @override
@@ -349,8 +356,8 @@ class _Clipped extends StatelessWidget {
       : child;
 }
 
-/// A segment at the width [PromptContextView._fit] gave it, or sharing the
-/// line's width with the others when it did not give one.
+/// A segment at the width [PromptContextView._fit] gave it, or unconstrained
+/// when the surrounding line has no width limit.
 class _Sized extends StatelessWidget {
   const _Sized({required this.fixed, required this.child});
   final bool fixed;

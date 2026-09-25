@@ -5,15 +5,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
+import 'package:harness/widgets/pane_header_actions.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
 import 'package:harness/widgets/swarm_search_preview.dart';
+import 'package:harness/widgets/search_result_text.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:xterm/xterm.dart';
@@ -61,13 +64,16 @@ void main() {
     grid.AppType.captionSize,
   };
 
-  /// Every visible text is on the fixed scale, in the system face or the
-  /// terminal's — and never at the terminal's own size unless it is one of the
-  /// scale's steps. Returns each text's size so a caller can compare them
-  /// across a terminal zoom.
+  /// General UI and workspace bars keep their fixed scales during terminal zoom.
+  /// Return general UI sizes for comparisons across a terminal zoom.
   Map<String, double> checkText(WidgetTester tester, {int atLeast = 4}) {
     final sizes = <String, double>{};
-    void check(InlineSpan span, TextStyle inherited) {
+    var checked = 0;
+    void check(
+      InlineSpan span,
+      TextStyle inherited, {
+      bool workspaceBar = false,
+    }) {
       final style = inherited.merge(span.style);
       if (span is TextSpan) {
         final text = span.text?.trim();
@@ -77,16 +83,26 @@ void main() {
               'lucide',
               'LucideIcons',
             ].any((icon) => style.fontFamily?.contains(icon) == true)) {
-          expect(ramp, contains(style.fontSize), reason: text);
-          expect(
-            [grid.AppType.sansFamily, grid.AppType.monoFamily],
-            contains(style.fontFamily),
-            reason: text,
-          );
-          sizes[text!] = style.fontSize!;
+          checked++;
+          if (workspaceBar) {
+            expect(style.fontSize, 13, reason: text);
+            expect(
+              style.fontFamily,
+              workspaceBarTextStyle().fontFamily,
+              reason: text,
+            );
+          } else {
+            expect(ramp, contains(style.fontSize), reason: text);
+            expect(
+              [grid.AppType.sansFamily, grid.AppType.monoFamily],
+              contains(style.fontFamily),
+              reason: text,
+            );
+            sizes[text!] = style.fontSize!;
+          }
         }
         for (final child in span.children ?? <InlineSpan>[]) {
-          check(child, style);
+          check(child, style, workspaceBar: workspaceBar);
         }
       }
     }
@@ -94,14 +110,39 @@ void main() {
     // The welcome page stands where a terminal will and is set like one, so
     // it follows the terminal's size instead; see [checkWelcome].
     final welcome = find.byType(WorkspaceWelcome);
+    final setup = find.byWidgetPredicate(
+      (widget) =>
+          widget is NewHarnessForm ||
+          widget.key == const ValueKey('swarm-search-results'),
+    );
     for (final element in find.byType(RichText).evaluate()) {
       if (find
-          .descendant(of: welcome, matching: find.byWidget(element.widget))
-          .evaluate()
-          .isNotEmpty) {
+              .descendant(of: welcome, matching: find.byWidget(element.widget))
+              .evaluate()
+              .isNotEmpty ||
+          find
+              .descendant(of: setup, matching: find.byWidget(element.widget))
+              .evaluate()
+              .isNotEmpty) {
         continue;
       }
-      check((element.widget as RichText).text, const TextStyle());
+      check(
+        (element.widget as RichText).text,
+        const TextStyle(),
+        workspaceBar: find
+            .descendant(
+              of: find.byWidgetPredicate(
+                (widget) =>
+                    widget.key == const ValueKey('workspace-status-bar') ||
+                    widget.key == const ValueKey('terminal-pane-title') ||
+                    widget.key == const ValueKey('viewer-pane-title') ||
+                    widget is PaneHeaderActions,
+              ),
+              matching: find.byWidget(element.widget),
+            )
+            .evaluate()
+            .isNotEmpty,
+      );
     }
     for (final widget in tester.widgetList<EditableText>(
       find.byType(EditableText),
@@ -112,17 +153,17 @@ void main() {
         terminalFontStore.size,
       }, contains(widget.style.fontSize));
     }
-    expect(sizes.length, greaterThanOrEqualTo(atLeast));
+    expect(checked, greaterThanOrEqualTo(atLeast));
     expect(tester.takeException(), isNull);
     return sizes;
   }
 
   /// The welcome page is terminal text: the terminal's face at its size.
   void checkWelcome(WidgetTester tester) {
-    final line = tester.widget<Text>(find.text('Follow your curiosity.'));
-    final style = DefaultTextStyle.of(
-      tester.element(find.text('Follow your curiosity.')),
-    ).style.merge(line.style);
+    final tagline = find.byKey(const ValueKey('welcome-tagline'));
+    final line = tester.widget<Text>(tagline);
+    final style = DefaultTextStyle.of(tester.element(tagline)).style
+        .merge(line.style);
     expect(style.fontSize, terminalFontStore.size);
     expect(style.fontFamily, terminalFontStore.value.fontFamily);
   }
@@ -220,7 +261,7 @@ void main() {
   });
 
   testWidgets(
-    'tabs, panes, welcome, Cmd-N, Cmd-O and Cmd-P keep the scale while the terminal zooms',
+    'tabs, welcome, and setup screens follow terminal zoom while general UI keeps its scale',
     (tester) async {
       final app = createApp();
       final map = MemoryKeymap();
@@ -245,31 +286,51 @@ void main() {
       selectFont(18, TerminalFontChoice.monaco);
       await tester.pumpAndSettle();
       await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-      expect(find.byType(NewHarnessBox), findsOneWidget);
-      final box = checkText(tester);
+      expect(find.byType(NewHarnessForm), findsOneWidget);
+      final box = checkText(tester, atLeast: 1);
+      expect(
+        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
+        18,
+      );
       selectFont(22);
       await tester.pumpAndSettle();
-      expectSameSizes(box, checkText(tester));
+      expectSameSizes(box, checkText(tester, atLeast: 1));
+      expect(
+        tester.widget<Text>(find.text('[ New Harness ]')).style!.fontSize,
+        22,
+      );
       await key(tester, LogicalKeyboardKey.escape);
       for (final shortcut in [
-        LogicalKeyboardKey.keyO,
-        LogicalKeyboardKey.keyO,
+        LogicalKeyboardKey.keyP,
+        LogicalKeyboardKey.keyP,
       ]) {
         await key(tester, shortcut, cmd: true);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent');
-        await key(tester, LogicalKeyboardKey.arrowUp);
+        await key(tester, LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
         expect(find.byType(SwarmSearchPreview), findsOneWidget);
-        final search = checkText(tester);
+        final search = checkText(tester, atLeast: 1);
         selectFont(
-          shortcut == LogicalKeyboardKey.keyO ? 9 : 18,
+          shortcut == LogicalKeyboardKey.keyP ? 9 : 18,
           TerminalFontChoice.monaco,
         );
         await tester.pumpAndSettle();
         expect(tester.widget<TextField>(input).controller!.text, 'Agent');
         expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
-        expectSameSizes(search, checkText(tester));
+        expectSameSizes(search, checkText(tester, atLeast: 1));
+        expect(
+          tester.widget<TextField>(input).style!.fontSize,
+          terminalFontStore.size,
+        );
+        for (final text in tester.widgetList<SearchResultText>(
+          find.byType(SearchResultText),
+        )) {
+          expect(text.style.fontFamily, terminalFontStore.value.fontFamily);
+          expect(text.style.fontSize, terminalFontStore.size);
+          expect(text.style.height, terminalFontStore.value.height);
+          expect(text.style.letterSpacing, 0);
+        }
         await key(tester, LogicalKeyboardKey.escape);
       }
       await tester.pumpWidget(const SizedBox());
@@ -321,33 +382,45 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('native tabs take the terminal face at the chrome size', (
-    tester,
-  ) async {
-    final updates = <Map<dynamic, dynamic>>[];
-    const channel = MethodChannel('harness/swarm_tabs');
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-      call,
-    ) async {
-      if (call.method == 'update') updates.add(call.arguments as Map);
-      return true;
-    });
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        channel,
-        null,
-      ),
-    );
-    final app = createApp();
-    final map = MemoryKeymap();
-    addTearDown(app.dispose);
-    addTearDown(map.dispose);
-    app.adoptSessionForTest(terminal('a0', []));
-    await mount(tester, app, map, native: true);
-    selectFont(22, TerminalFontChoice.monaco);
-    await tester.pumpAndSettle();
-    expect(updates.last['fontFamily'], 'Monaco');
-    expect(updates.last['fontSize'], grid.AppType.chromeSize);
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'native tabs keep 13 pt platform monospace during terminal font changes',
+    (tester) async {
+      final updates = <Map<dynamic, dynamic>>[];
+      const channel = MethodChannel('harness/swarm_tabs');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final app = createApp();
+      final map = MemoryKeymap();
+      addTearDown(app.dispose);
+      addTearDown(map.dispose);
+      app.adoptSessionForTest(terminal('a0', []));
+      await mount(tester, app, map, native: true);
+      selectFont(22, TerminalFontChoice.monaco);
+      await tester.pumpAndSettle();
+      expect(
+        updates.last['barStyle'],
+        containsPair('family', workspaceBarTextStyle().fontFamily),
+      );
+      expect(updates.last['barStyle'], containsPair('size', 13.0));
+      selectFont(14, TerminalFontChoice.sfMono);
+      await tester.pumpAndSettle();
+      expect(
+        updates.last['barStyle'],
+        containsPair('family', workspaceBarTextStyle().fontFamily),
+      );
+      expect(updates.last['barStyle'], containsPair('size', 13.0));
+      expect(updates.last.containsKey('fontFallbacks'), isFalse);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

@@ -3,6 +3,8 @@ library;
 
 import 'package:flutter/foundation.dart' show immutable;
 
+import 'runtime_model_name.dart';
+
 enum MachineAuthMode { managed, remote, self, provider }
 
 enum ConnectionStatus { disconnected, connecting, connected, reconnecting }
@@ -117,6 +119,25 @@ class Machine {
       ? name!
       : 'machine-${machineId.length > 8 ? machineId.substring(0, 8) : machineId}';
 
+  /// What the machine list says about this computer being up — `null` when it
+  /// says a word neither side has agreed on, which is not the same as "down".
+  ///
+  /// This is the ONE signal that speaks for a machine we have never reached:
+  /// our own socket goes to the local daemon, so its being up says nothing
+  /// about whether the far end answered. Kept on the model rather than in
+  /// `AppNotifier` because the box reads it too, and two copies of a word list
+  /// are two chances to disagree about what "stopped" means.
+  bool? get reportedOnline => switch (status?.trim().toLowerCase()) {
+    'running' || 'online' || 'connected' || 'ready' => true,
+    'offline' ||
+    'stopped' ||
+    'disconnected' ||
+    'unreachable' ||
+    'error' ||
+    'failed' => false,
+    _ => null,
+  };
+
   factory Machine.fromJson(Map<String, dynamic> j) => Machine(
     machineId: j['machineId'] as String,
     apiKey: j['apiKey'] as String? ?? '',
@@ -211,6 +232,47 @@ final _automaticHarnessName = RegExp(
 bool isAutomaticHarnessName(String name) =>
     _automaticHarnessName.hasMatch(name);
 
+/// Only measurements confirmed by this harness's own tool receipts.
+class AgentOutputStats {
+  const AgentOutputStats({
+    this.linesAdded,
+    this.linesRemoved,
+    this.pullRequestsCreated,
+    this.updatedAt,
+  });
+  final int? linesAdded, linesRemoved, pullRequestsCreated;
+  final DateTime? updatedAt;
+  bool get hasEdits => linesAdded != null && linesRemoved != null;
+  bool get isEmpty => !hasEdits && pullRequestsCreated == null;
+  static AgentOutputStats? fromJson(Object? value) {
+    if (value is! Map) return null;
+    int? count(Object? n) =>
+        n is int && n >= 0 && n <= 9007199254740991 ? n : null;
+    final added = count(value['linesAdded']),
+        removed = count(value['linesRemoved']);
+    final stats = AgentOutputStats(
+      linesAdded: removed == null ? null : added,
+      linesRemoved: added == null ? null : removed,
+      pullRequestsCreated: count(value['pullRequestsCreated']),
+      updatedAt: value['updatedAt'] is String
+          ? DateTime.tryParse(value['updatedAt'] as String)
+          : null,
+    );
+    return stats.isEmpty ? null : stats;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is AgentOutputStats &&
+      linesAdded == other.linesAdded &&
+      linesRemoved == other.linesRemoved &&
+      pullRequestsCreated == other.pullRequestsCreated &&
+      updatedAt == other.updatedAt;
+  @override
+  int get hashCode =>
+      Object.hash(linesAdded, linesRemoved, pullRequestsCreated, updatedAt);
+}
+
 class Agent {
   final String id;
   final String? sessionId;
@@ -225,6 +287,10 @@ class Agent {
   final String? engineIconHint;
   final String? codexHome;
 
+  /// Model observed in this session by the daemon, when available. Independent
+  /// of [gridModel], which determines subscription versus local-model routing.
+  final String? modelName;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -236,11 +302,26 @@ class Agent {
   /// the daemon when it built the launch and carried on every frame, so it is right after a
   /// reconnect or a restart without anything being replayed.
   final GridWebSearch? gridWebSearch;
+
+  /// How the daemon's picture has the grid this agent's model is on (`grid.state`), or null when
+  /// it did not say — an agent on its own login, or an older daemon. Asleep or waking is what puts
+  /// the "Starting up…" chip on its pane between a message and the first answer.
+  final GridSectionState? gridState;
+
+  /// Why the agent's model will not answer right now (`grid.note`), or null when nothing is wrong.
+  final GridNote? gridNote;
   final String? parentAgentId;
   final AgentProject? project;
 
   /// The CLI's transcript/hook activity time, not its registry refresh time.
   final DateTime? lastActivityAt;
+
+  /// Cached conversation usage reported by this agent's owning machine.
+  final int? tokensUsed;
+  final DateTime? tokensUpdatedAt;
+  final AgentOutputStats? outputStats;
+  bool get hasMonitorStats =>
+      tokensUsed != null || (outputStats != null && !outputStats!.isEmpty);
   final String status;
   final String launchState;
   final String? launchError;
@@ -283,6 +364,12 @@ class Agent {
   /// decides (see [canFork]).
   final bool? forkable;
 
+  /// How much a Pause of this harness can promise to bring back, as the daemon
+  /// reports it (`lib/resumeCapability.ts`): `shell`, `conversation` or
+  /// `fresh`. Null from a daemon that predates the field — see
+  /// [canPauseAndResume] for what this build assumes then.
+  final String? resumeMode;
+
   /// The permission mode this agent was launched in (`plan`, `readOnly`, …),
   /// as the daemon recorded it; null from a daemon that predates the field, a
   /// row from before the choice existed, or an agent Harness did not launch.
@@ -306,11 +393,17 @@ class Agent {
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.modelName,
     this.gridModel,
     this.gridWebSearch,
+    this.gridState,
+    this.gridNote,
     this.parentAgentId,
     this.project,
     this.lastActivityAt,
+    this.tokensUsed,
+    this.tokensUpdatedAt,
+    this.outputStats,
     this.status = 'active',
     this.launchState = 'ready',
     this.launchError,
@@ -325,6 +418,7 @@ class Agent {
     this.verdict,
     this.forkedFrom,
     this.forkable,
+    this.resumeMode,
     this.permissionMode,
     this.bypassPermission,
     this.namedAgent,
@@ -336,6 +430,31 @@ class Agent {
   bool get canResumeConversation =>
       (engine == 'claude' || engine == 'codex') &&
       sessionId?.isNotEmpty == true;
+
+  /// Whether the Harnesses panel may pause this harness and bring it back.
+  ///
+  /// Every engine can, and the daemon says so per engine through [resumeMode]
+  /// — a client that kept its own allow-list is how the two drifted, with
+  /// engines the daemon would happily resume greyed out here for a year.
+  /// What DIFFERS per engine is how much comes back, which
+  /// [resumesFreshConversation] answers and the button's wording says.
+  ///
+  /// The fallback is for a daemon that predates the field: the old rule, so an
+  /// older machine is never offered a Pause its CLI will refuse. `'terminal'`
+  /// is `kTerminalEngine` (`widgets/engine_identity.dart`), spelled out for the
+  /// same reason `'claude'`/`'codex'` are above: this is the model layer and
+  /// does not reach into the widgets.
+  bool get canPauseAndResume =>
+      resumeMode != null || engine == 'terminal' || canResumeConversation;
+
+  /// Whether resuming this harness opens a NEW conversation rather than the one
+  /// it was paused in — either because the engine has no resume argv (`fresh`),
+  /// or because nothing recorded a conversation to reopen. The button says so
+  /// before it is pressed, and a resume that reports it is a success, not a
+  /// failure.
+  bool get resumesFreshConversation =>
+      resumeMode == 'fresh' ||
+      (resumeMode == 'conversation' && (sessionId?.isEmpty ?? true));
 
   /// Explicit names win. An automatic CLI label gives way to its session title.
   String get displayName => _automaticHarnessName.hasMatch(name)
@@ -389,6 +508,9 @@ class Agent {
       _ => 'ready',
     };
     final grid = j['grid'] as Map<String, dynamic>?;
+    final usage = j['tokenUsage'];
+    final total = usage is Map ? usage['totalTokens'] : null;
+    final validTokens = total is int && total >= 0 && total <= 9007199254740991;
     return Agent(
       id: j['id'] as String,
       sessionId: _safeLabel(j['sessionId']),
@@ -398,13 +520,26 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      modelName: runtimeModelName(
+        j['selectedModel'],
+        agentId: j['id'] as String,
+        engine: _safeEngine(j['engine']),
+      ),
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
+      gridState: GridSectionState.parse(grid?['state']),
+      gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
       lastActivityAt: j['updatedAt'] is String
           ? DateTime.tryParse(j['updatedAt'] as String)
           : null,
+      tokensUsed: validTokens ? total : null,
+      tokensUpdatedAt:
+          validTokens && usage is Map && usage['updatedAt'] is String
+          ? DateTime.tryParse(usage['updatedAt'] as String)
+          : null,
+      outputStats: AgentOutputStats.fromJson(j['outputStats']),
       status: (j['status'] as String?) ?? 'active',
       launchState: launchState,
       launchError: launchState == 'failed' ? _safeLabel(launch['error']) : null,
@@ -424,6 +559,7 @@ class Agent {
       verdict: AgentVerdict.fromJson(j['verdict']),
       forkedFrom: ForkedFrom.fromJson(j['forkedFrom']),
       forkable: j['forkable'] is bool ? j['forkable'] as bool : null,
+      resumeMode: _safeResumeMode(j['resumeMode']),
       permissionMode: _safePermissionMode(j['permissionMode']),
       bypassPermission: j['bypassPermission'] is bool
           ? j['bypassPermission'] as bool
@@ -442,11 +578,17 @@ class Agent {
         engineDisplayName: engineDisplayName,
         engineIconHint: engineIconHint,
         codexHome: codexHome,
+        modelName: modelName,
         gridModel: gridModel,
         gridWebSearch: gridWebSearch,
+        gridState: gridState,
+        gridNote: gridNote,
         parentAgentId: parentAgentId,
         project: project,
         lastActivityAt: lastActivityAt,
+        tokensUsed: tokensUsed,
+        tokensUpdatedAt: tokensUpdatedAt,
+        outputStats: outputStats,
         status: status ?? this.status,
         launchState: launchState,
         launchError: launchError,
@@ -461,6 +603,7 @@ class Agent {
         verdict: verdict,
         forkedFrom: forkedFrom,
         forkable: forkable,
+        resumeMode: resumeMode,
         permissionMode: permissionMode,
         bypassPermission: bypassPermission,
         namedAgent: namedAgent,
@@ -470,6 +613,14 @@ class Agent {
   /// one word. Not checked against this build's own list — the daemon that
   /// launched the agent is the authority, and it is the one that will read the
   /// id back on a clone.
+  /// One of the daemon's three resume modes, or null for anything else — an
+  /// older daemon that does not send it, or a newer one that grew a fourth
+  /// this build has no wording for.
+  static String? _safeResumeMode(Object? raw) =>
+      raw is String && const {'shell', 'conversation', 'fresh'}.contains(raw)
+      ? raw
+      : null;
+
   static String? _safePermissionMode(Object? raw) =>
       raw is String && RegExp(r'^[A-Za-z]{1,32}$').hasMatch(raw) ? raw : null;
 
@@ -816,14 +967,23 @@ class AgentProject {
   final bool branchPending;
 
   /// The folder as the person chose it: inside a Git checkout, a subfolder
-  /// shows as itself and the checkout's root as its repository ([name]), even
+  /// shows as itself and the checkout's root as its remote repository name
+  /// (falling back to [name]), even
   /// when the checkout is a temporary worktree. Outside Git it is [name], the
   /// folder itself. The branch beside it is the repository's.
   String get label {
     final checkout = root;
     if (checkout == null) return name;
     String trimmed(String path) => path.replaceFirst(RegExp(r'[/\\]+$'), '');
-    if (trimmed(checkout) == trimmed(cwd)) return name;
+    if (trimmed(checkout) == trimmed(cwd)) {
+      final repository = remote == null
+          ? ''
+          : trimmed(remote!)
+                .split('/')
+                .last
+                .replaceFirst(RegExp(r'\.git$', caseSensitive: false), '');
+      return repository.isEmpty ? name : repository;
+    }
     return cwd
             .split(RegExp(r'[/\\]'))
             .where((part) => part.isNotEmpty)
@@ -902,7 +1062,104 @@ class GridModel {
   /// sends only the own grid's list, which the retarget then targets as it always did.
   final String? grid;
 
-  const GridModel({required this.id, required this.node, this.grid});
+  /// Set when every computer serving this row seems offline — see [GridModelUnavailable]. Null
+  /// for every other row, and always from a daemon that predates it.
+  final GridModelUnavailable? unavailable;
+
+  const GridModel({
+    required this.id,
+    required this.node,
+    this.grid,
+    this.unavailable,
+  });
+}
+
+/// Why a listed model will not answer, as the daemon labels a row (`unavailable`, sent only to a
+/// client that asked with `rowState: true`).
+///
+/// Only `offline` is a reason this build knows: every computer serving the row read offline twice,
+/// a minute apart. The row is labelled, never removed — the daemon may be wrong about a computer
+/// that is merely asleep, and a move onto it is the person's call. A reason this build has not
+/// heard of is no claim at all, the rule [GridSectionState] follows.
+class GridModelUnavailable {
+  /// The computer's name as the Machines list shows it.
+  final String machine;
+
+  /// When it was first read offline, or null when the daemon did not say.
+  final DateTime? since;
+
+  const GridModelUnavailable({required this.machine, this.since});
+
+  static GridModelUnavailable? fromWire(Object? raw) {
+    if (raw is! Map || raw['reason'] != 'offline') return null;
+    final machine = Agent._safeLabel(raw['machine']);
+    if (machine == null) return null;
+    final since = raw['since'];
+    return GridModelUnavailable(
+      machine: machine,
+      since: since is String ? DateTime.tryParse(since) : null,
+    );
+  }
+}
+
+/// What came of the last explicit wake of a section that did not end in models (`wakeOutcome`).
+///
+/// A wake that shows models leaves nothing — the section is simply awake with them. The daemon
+/// keeps an outcome until a later read finds the section awake with a model, or ten minutes pass.
+enum GridWakeOutcome {
+  /// The section could not be started; it will start on the next message.
+  notStarted,
+
+  /// It started, and nobody is serving a model on it.
+  nobodyServing;
+
+  static GridWakeOutcome? parse(Object? raw) => switch (raw) {
+    'not_started' => GridWakeOutcome.notStarted,
+    'nobody_serving' => GridWakeOutcome.nobodyServing,
+    _ => null,
+  };
+}
+
+/// Why an agent's model will not answer right now, as the daemon notes it on the agent's frame
+/// (`grid.note`): [GridNoteOffline] or [GridNoteNotServed].
+///
+/// Absent when there is nothing to say; the daemon re-pushes the agent when it clears, and never
+/// notes an agent on Auto (no model).
+sealed class GridNote {
+  /// The model the agent is on, as the daemon named it in the note.
+  final String model;
+
+  const GridNote(this.model);
+
+  /// Read defensively: a reason this build does not know, or a note missing the names its
+  /// sentence needs, is no note at all.
+  static GridNote? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final model = Agent._safeLabel(raw['model']);
+    if (model == null) return null;
+    final machine = Agent._safeLabel(raw['machine']);
+    return switch (raw['reason']) {
+      'not_served' => GridNoteNotServed(model),
+      'offline' when machine != null => GridNoteOffline(
+        model,
+        machine: machine,
+      ),
+      _ => null,
+    };
+  }
+}
+
+/// Every computer serving the agent's model seems offline.
+final class GridNoteOffline extends GridNote {
+  /// The computer, as the Machines list names it.
+  final String machine;
+
+  const GridNoteOffline(super.model, {required this.machine});
+}
+
+/// The latest list (an awake read, or the sleep record) no longer has the agent's model.
+final class GridNoteNotServed extends GridNote {
+  const GridNoteNotServed(super.model);
 }
 
 /// Which `grid` a machine would run, as its daemon reports beside the model list (`gridCli`).
@@ -924,6 +1181,32 @@ enum GridCli {
   };
 }
 
+/// What the daemon last learned about one grid, as it reports beside the section (`state`).
+///
+/// The daemon reads grids without waking them, so a section can describe a grid that is resting:
+/// [asleep] keeps its last known models rather than blanking them, [unknown] is a read that failed
+/// some other way (or none yet), and [waking] is reserved for a person asking it to start. An older
+/// daemon sends no field, read as null: nothing is claimed either way, and the section draws as it
+/// always did.
+enum GridSectionState {
+  awake,
+  asleep,
+  waking,
+  unknown;
+
+  static GridSectionState? parse(Object? raw) => switch (raw) {
+    'awake' => GridSectionState.awake,
+    'asleep' => GridSectionState.asleep,
+    'waking' => GridSectionState.waking,
+    'unknown' => GridSectionState.unknown,
+    _ => null,
+  };
+
+  /// Asleep, or on its way up: a message sent now waits for it to start.
+  bool get resting =>
+      this == GridSectionState.asleep || this == GridSectionState.waking;
+}
+
 /// The picker's whole answer: which grid was asked, and what it offers.
 ///
 /// One grid the machine is signed into, with what it serves. [own] marks the account's private
@@ -933,10 +1216,28 @@ class GridSection {
   final bool own;
   final List<GridModel> models;
 
+  /// How the grid answered the daemon's last look — see [GridSectionState]. Null from an older
+  /// daemon, which draws the section as it always was.
+  final GridSectionState? state;
+
+  /// When the grid was last seen awake, or null.
+  final DateTime? seenAt;
+
+  /// How old [models] is, in seconds, or null when nothing is known.
+  final int? lastKnownAge;
+
+  /// What came of the last explicit wake that showed no models — see [GridWakeOutcome]. Null
+  /// otherwise, and always from a daemon that predates it.
+  final GridWakeOutcome? wakeOutcome;
+
   const GridSection({
     required this.name,
     required this.own,
     required this.models,
+    this.state,
+    this.seenAt,
+    this.lastKnownAge,
+    this.wakeOutcome,
   });
 }
 
@@ -956,6 +1257,9 @@ class GridModels {
   /// daemon is older and sends no such list — read as "offer everything", the behaviour before.
   final Set<String>? localModelEngines;
 
+  /// New-session model selections are understood by this daemon.
+  final bool supportsModelLaunch;
+
   /// Which `grid` the machine would run — see [GridCli]. Null when the daemon is older and does
   /// not say, which claims nothing.
   final GridCli? gridCli;
@@ -973,9 +1277,64 @@ class GridModels {
     required this.models,
     this.grids = const [],
     this.localModelEngines,
+    this.supportsModelLaunch = false,
     this.gridCli,
     this.reachable = true,
   });
+
+  /// The daemon's `grid_models_list` reply — and the `grid_models_changed` push, which carries the
+  /// same document — read defensively: the fields of an older or newer daemon are simply absent or
+  /// ignored, never a failure. `reachable` is false only when the daemon answered with an `error`.
+  factory GridModels.fromReply(Map<String, dynamic> reply) {
+    List<GridModel> parseModels(Object? raw, {String? grid}) =>
+        (raw is List ? raw : const <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(
+              (m) => GridModel(
+                id: m['id'] is String ? m['id'] as String : '',
+                node: m['node'] is String ? m['node'] as String : '',
+                grid: grid,
+                unavailable: GridModelUnavailable.fromWire(m['unavailable']),
+              ),
+            )
+            .where((m) => m.id.isNotEmpty)
+            .toList();
+    final rawGrids = reply['grids'];
+    final grids = (rawGrids is List ? rawGrids : const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .where((g) => g['name'] is String && (g['name'] as String).isNotEmpty)
+        .map((g) {
+          final name = g['name'] as String;
+          final seen = g['seenAt'];
+          final known = g['lastKnownAge'];
+          return GridSection(
+            name: name,
+            own: g['own'] == true,
+            models: parseModels(g['models'], grid: name),
+            state: GridSectionState.parse(g['state']),
+            seenAt: seen is String ? DateTime.tryParse(seen) : null,
+            lastKnownAge: known is num && known.isFinite && known >= 0
+                ? known.round()
+                : null,
+            wakeOutcome: GridWakeOutcome.parse(g['wakeOutcome']),
+          );
+        })
+        .toList();
+    final capable = reply['localModelEngines'];
+    return GridModels(
+      gridName: reply['gridName'] is String
+          ? reply['gridName'] as String
+          : null,
+      models: parseModels(reply['models']),
+      grids: grids,
+      localModelEngines: capable is List
+          ? capable.whereType<String>().map((e) => e.toLowerCase()).toSet()
+          : null,
+      gridCli: GridCli.parse(reply['gridCli']),
+      supportsModelLaunch: reply['supportsModelLaunch'] == true,
+      reachable: reply['error'] == null,
+    );
+  }
 
   /// The sections to draw: [grids] when the daemon sent them, else the own grid alone.
   List<GridSection> get sections => grids.isNotEmpty
@@ -992,6 +1351,7 @@ class GridModels {
       models = const [],
       grids = const [],
       localModelEngines = null,
+      supportsModelLaunch = false,
       gridCli = null,
       reachable = false;
 

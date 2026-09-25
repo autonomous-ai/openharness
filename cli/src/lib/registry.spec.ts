@@ -1047,6 +1047,37 @@ describe('agent identity: the process owns the agent, the session is bound to it
     expect(reloaded.unbound()).toHaveLength(1)
   })
 
+  // A row that does not leave `starting` reads as "Starting" on the desk while its engine is working,
+  // and the state is written from six places that cannot see each other. Each one says so, and a
+  // settled row says nothing — so a log from a machine where it sticks names the pair doing it.
+  it('names every launch change by the door it came through, and is silent when nothing changed', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((message: unknown) => {
+      if (typeof message === 'string' && message.startsWith('[launch]')) lines.push(message)
+    })
+    try {
+      const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }], cwd: '/tmp/demo' })!
+      registry.openProcessAgent({ engine: 'claude', tmuxPane: '%7', cwd: '/tmp/demo', processIdentity: processIdentity(707) })
+      registry.setLaunch(pending.agentId, { state: 'ready' })            // already ready — silent
+      registry.setLaunch(pending.agentId, { state: 'failed', error: 'START_TIMEOUT' })
+      const id = pending.agentId.slice(0, 8)
+      expect(lines).toEqual([
+        `[launch] ${id} starting → ready · openProcessAgent re-observed`,
+        `[launch] ${id} ready → failed · setLaunch (START_TIMEOUT)`,
+      ])
+
+      // A bind ends the launch without naming it: the rebuilt row carries none.
+      lines.length = 0
+      registry.setLaunch(pending.agentId, { state: 'starting' })
+      registerProcess(registry, { launcherId: pending.agentId, sessionId: 's1', transcriptPath: transcript('s1'), tmuxPane: '%7', cwd: '/tmp/demo' })
+      expect(lines.filter(line => line.includes('→ none'))).toHaveLength(1)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   it('opens a route-only pending agent and adopts the engine process without changing agentId', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
@@ -1164,6 +1195,19 @@ describe('agent identity: the process owns the agent, the session is bound to it
     reloaded.load()
     expect(reloaded.byAgent(named.agentId)!.agent).toBe('harness-compute')
     expect(reloaded.byAgent(plain.agentId)!.agent).toBeNull()
+  })
+
+  it('keeps the selected harness runtime through process binding and disk reload', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'opencode', runtimes: [{ backend: 'tmux', paneId: '%70' }],
+      cwd: '/tmp/drawing', dsh: 'acme/drawing', dshRuntime: 'harness-opencode-original' })!
+    expect(pending.dshRuntime).toBe('harness-opencode-original')
+    const bound = registry.register({ engine: 'opencode', sessionId: 'drawing-session', tmuxPane: '%70' })!.entry
+    expect(bound).toMatchObject({ engine: 'opencode', dsh: 'acme/drawing', dshRuntime: 'harness-opencode-original' })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)).toMatchObject({ engine: 'opencode', dsh: 'acme/drawing', dshRuntime: 'harness-opencode-original' })
   })
 
   it('persists a failed launch for reconnect while keeping its terminal route', async () => {
@@ -1550,7 +1594,7 @@ describe('registry across a reboot and pane loss', () => {
     })
   })
 
-  it('requires the exact resumed session hook; process discovery alone stays starting', async () => {
+  it('lets process discovery start a resumed row, and still refuses the wrong conversation', async () => {
     const transcriptPath = join(dataDir, 'resume-target.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const { registry } = await loadRegistryModule()
@@ -1558,12 +1602,32 @@ describe('registry across a reboot and pane loss', () => {
     registry.removeAgent(original.agentId)
     registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%22' }])
     registry.openProcessAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%22' }], processIdentity: processIdentity(122) })
-    expect(registry.byAgent(original.agentId)?.launch?.state).toBe('starting')
+    // The engine is running in the row's pane, so the row has started — it no longer waits for a
+    // hook a resume may never send. What it has NOT yet been told is which conversation reopened.
+    expect(registry.byAgent(original.agentId)?.launch?.state).toBe('ready')
     expect(registry.byAgent(original.agentId)?.lastHookAt).toBe(0)
     expect(registry.register({ engine: 'claude', sessionId: 'unexpected-new-session', transcriptPath, tmuxPane: '%22', processIdentity: processIdentity(122) })).toBeNull()
     expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'resume-target', launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
     const confirmed = registry.register({ engine: 'claude', sessionId: 'resume-target', transcriptPath, tmuxPane: '%22', processIdentity: processIdentity(122) })
     expect(confirmed?.entry).toMatchObject({ agentId: original.agentId, sessionId: 'resume-target', launch: { state: 'ready' } })
+  })
+
+  // The guard reads `lastHookAt`, not `launch`. A resume is now confirmed by its own live engine
+  // process (`resumeStoppedAgent.ts`), which marks the row ready BEFORE any hook arrives — and a
+  // guard keyed on `launch` would have been disarmed for exactly the resumes it protects.
+  it('still refuses another conversation on the first hook after the row was marked ready', async () => {
+    const transcriptPath = join(dataDir, 'ready-first.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    const original = registerProcess(registry, { engine: 'claude', sessionId: 'ready-first', transcriptPath, tmuxPane: '%31' })!.entry
+    registry.removeAgent(original.agentId)
+    registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%32' }])
+    // What the resume service does the moment it sees the engine process in the pane.
+    registry.setLaunch(original.agentId, { state: 'ready' })
+    expect(registry.byAgent(original.agentId)?.lastHookAt).toBe(0)
+
+    expect(registry.register({ engine: 'claude', sessionId: 'somebody-elses-session', transcriptPath, tmuxPane: '%32', processIdentity: processIdentity(132) })).toBeNull()
+    expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'ready-first', launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
   })
 
   it('drops any launch state on the hook that proves the engine is up', async () => {

@@ -61,8 +61,33 @@ async function mainCheckout(root: string, trees: Worktree[]): Promise<string | n
   return null
 }
 
-/** Read only: listing a branch never checks it out or fetches from a remote. */
-export async function readGitProject(path: string) {
+const branchRefreshes = new Map<string, Promise<Map<string, string[] | null>>>()
+
+/** Share a refresh across pickers/worktrees. Ask for names only: downloading
+ *  objects is deferred until Start, and no repository files or refs change. */
+async function refreshBranches(path: string): Promise<Map<string, string[] | null>> {
+  const common = await git(path, ['rev-parse', '--git-common-dir'])
+  const key = await real(isAbsolute(common) ? common : join(path, common))
+  const pending = branchRefreshes.get(key)
+  if (pending) return pending
+  const refresh = (async () => {
+    const remotes = (await git(path, ['remote'])).split('\n').filter(Boolean)
+    return new Map(await Promise.all(remotes.map(async remote => {
+      const names = await git(path, ['ls-remote', '--heads', '--', remote], 8_000)
+        .then(output => output.split('\n').flatMap(line => {
+          const ref = line.split('\t')[1]
+          return ref?.startsWith('refs/heads/') ? [ref.slice('refs/heads/'.length)] : []
+        }), () => null)
+      return [remote, names] as const
+    })))
+  })()
+  branchRefreshes.set(key, refresh)
+  try { return await refresh } finally { branchRefreshes.delete(key) }
+}
+
+/** Cached choices are immediate. A picker can separately request a bounded
+ *  remote refresh, including branches excluded by a single-branch clone. */
+export async function readGitProject(path: string, options: { refresh?: boolean } = {}) {
   if (!validGitPath(path)) return { error: 'INVALID_PATH' }
   let root: string
   try { root = await git(path, ['rev-parse', '--show-toplevel']) }
@@ -71,6 +96,7 @@ export async function readGitProject(path: string) {
     return !failure.killed && failure.code === 128 ? { isGit: false, branches: [] } : { error: 'GIT_UNAVAILABLE' }
   }
   try {
+    const discovered = options.refresh ? await refreshBranches(path).catch(() => null) : undefined
     const [branch, refs, trees, originHead, marked] = await Promise.all([
       git(path, ['symbolic-ref', '--quiet', 'HEAD']).then(ref => ref.replace(/^refs\/heads\//, '')).catch(() => null),
       git(path, ['for-each-ref', '--format=%(refname)%09%(refname:short)%09%(symref)', 'refs/heads', 'refs/remotes']),
@@ -86,11 +112,20 @@ export async function readGitProject(path: string) {
       const harness = !ref.startsWith('refs/remotes/') && (marked.has(name) || name.startsWith('harness/'))
       return [{ ref, name, remote: ref.startsWith('refs/remotes/'), ...(worktree ? { worktree } : {}), ...(harness ? { harness } : {}) }]
     })
+    for (const [remote, names] of discovered ?? []) {
+      if (names === null) continue // Offline: retain this remote's saved choices.
+      const prefix = `refs/remotes/${remote}/`
+      for (let i = branches.length - 1; i >= 0; i--) {
+        if (branches[i]!.ref.startsWith(prefix)) branches.splice(i, 1)
+      }
+      branches.push(...names.map(name => ({ ref: `${prefix}${name}`, name: `${remote}/${name}`, remote: true })))
+    }
     // Where new work starts by default: the remote's default branch, as a clone names it, else its
     // main or master.
     const known = new Set(branches.map(row => row.ref))
     const defaultRef = [originHead, 'refs/remotes/origin/main', 'refs/remotes/origin/master'].find(ref => ref && known.has(ref))
-    const found = { isGit: true, root, branch, branches, ...(defaultRef ? { defaultRef } : {}) }
+    const found = { isGit: true, root, branch, branches, ...(defaultRef ? { defaultRef } : {}),
+      ...(discovered === undefined ? {} : { refreshed: discovered !== null && [...discovered.values()].every(names => names !== null) }) }
     // A worktree is a temporary folder. The launcher shows its repository.
     const main = await mainCheckout(root, trees)
     if (!main) return found
@@ -141,7 +176,10 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     root = await git(source, ['rev-parse', '--show-toplevel'])
     if (options.ref && !creating) {
       if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(options.ref)) throw new Error('Invalid branch')
-      await git(source, ['show-ref', '--verify', '--hash', '--', options.ref])
+      // A freshly discovered remote branch may not have been fetched yet.
+      if (!(options.worktree && !existing && remoteBranch(options.ref))) {
+        await git(source, ['show-ref', '--verify', '--hash', '--', options.ref])
+      }
     }
     // New work starts from where its branch is now, not from the last fetch: a remote branch is
     // fetched; a local one is fetched against its upstream and the newer of the two taken, so nothing
@@ -229,6 +267,17 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   if (!destination) throw new GitProjectError('WORKTREE_FAILED', 'Could not create a worktree folder. Check folder permissions, then retry.')
   const remote = remoteBranch(options.ref)
   try {
+    if (!existing && remote?.branch === branch) {
+      // A single-branch clone has no tracking rule for this newly discovered
+      // branch. Add only the chosen branch when the person starts it.
+      const key = `remote.${remote.remote}.fetch`
+      const mappings = (await git(source, ['config', '--get-all', key]).catch(() => ''))
+        .split('\n').map(ref => ref.replace(/^\+/, ''))
+      if (!mappings.includes(remote.refspec.slice(1)) &&
+          !mappings.includes(`refs/heads/*:refs/remotes/${remote.remote}/*`)) {
+        await git(source, ['config', '--add', key, remote.refspec])
+      }
+    }
     await git(source, existing
       ? ['worktree', 'add', '--', destination, branch]
       // A remote branch checked out under its own name tracks it; a new branch from one must not,

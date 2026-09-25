@@ -131,6 +131,16 @@ const envSchema = z.object({
   // (`harness auth device`). That path is free and its computer id is self-declared, so this caps the
   // rows one account can mint; 0 disables the check. Hygiene, not a security control.
   HARNESS_DEVICE_AUTH_MACHINE_LIMIT: z.coerce.number().int().min(0).default(20),
+  // Same idea for device rows (`/api/device-ws` resolves-or-creates one per self-declared computer id).
+  // A revoked device is hard-deleted, so the ceiling alone is not enough — see the rates below.
+  HARNESS_DEVICE_LIMIT: z.coerce.number().int().min(0).default(20),
+  // How fast one account may mint NEW machine / device ids (Redis fixed windows, shared by every
+  // replica). A reconnect of an existing id never counts. Ceilings above stop a pile-up; these stop a
+  // create → delete → create loop, which the ceilings cannot see. 0 disables that window.
+  HARNESS_NEW_MACHINE_PER_HOUR: z.coerce.number().int().min(0).default(5),
+  HARNESS_NEW_MACHINE_PER_DAY: z.coerce.number().int().min(0).default(20),
+  HARNESS_NEW_DEVICE_PER_HOUR: z.coerce.number().int().min(0).default(5),
+  HARNESS_NEW_DEVICE_PER_DAY: z.coerce.number().int().min(0).default(20),
   AUTONOMOUS_BFF_URL: z.string().url().default('https://apiv2.autonomous.ai'),
   STAGING_AUTONOMOUS_BFF_URL: z.string().url().default('https://apiv2.staging.autonomousdev.xyz'),
   // Server-to-server subscription snapshots used by the singleton billing worker. These use

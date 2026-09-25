@@ -1,0 +1,33 @@
+{
+  "acceptedSeries": {
+    "terminal": "All nine schema-3 runs, three per target, with every observation retained.",
+    "desktop": "Every successful full core sweep is retained; calibration uses different sample counts or failed validation.",
+    "nativeHistory": "All three alternating before/after pairs on e566f0af and the measured patch are retained."
+  },
+  "excluded": [
+    {
+      "series": "Terminal schema 1",
+      "reason": "Probe response markers could wrap inside a screen snapshot; reattach matching was invalid. Fixed marker framing before the reported baseline."
+    },
+    {
+      "series": "Terminal schema 2",
+      "reason": "Experimental stream-hinted capability control requests perturbed routing; a Home control request timed out. Removed those experiments from the baseline. Disposable session cleanup succeeded."
+    },
+    {
+      "series": "Core calibration",
+      "reason": "Initial driver expected an editable field on an empty tab; another version allowed picker selection to create a fifth visible pane. Neither describes the declared fixture. Driver assertions were corrected before full measurements."
+    },
+    {
+      "series": "core-foreground-guard-failure.json",
+      "reason": "Window never became active/key within the setup deadline. No measured observations accepted."
+    },
+    {
+      "series": "resource-window-state-unverified.json",
+      "reason": "Read-only accounting worked during UI-tool approval timeouts, but active/hidden state was unverified. Excluded from foreground/background tables."
+    },
+    {
+      "series": "native-history-cc5-calibration.json",
+      "reason": "Preliminary component probe used the older source revision and broad checker warmup. The published comparison uses identical focused tooling on e566f0af and its patch."
+    }
+  ]
+}

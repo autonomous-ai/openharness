@@ -1,7 +1,6 @@
 # Shared OS contract: Autonomous device Store v1
 
-Start with [English](../../autonomous-device-store.md) or
-[Tiếng Việt](../../vi/autonomous-device-store_vi.md).
+Start with [the Store contract](../../autonomous-device-store.md).
 
 - `request.schema.json`: decrypted request payloads, including optional input defaults.
 - `response.schema.json`: successful responses and errors for the four new operations.

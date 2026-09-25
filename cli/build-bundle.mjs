@@ -12,6 +12,9 @@
 import * as esbuild from 'esbuild'
 import { readFileSync, copyFileSync, rmSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
+import { readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { fileURLToPath } from 'node:url'
+const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 
 const version =
   process.env.ADAPTER_VERSION ||
@@ -34,6 +37,7 @@ await esbuild.build({
   define: {
     __ADAPTER_VERSION__: JSON.stringify(version),
     __DSH_REGISTRY__: JSON.stringify(dshRegistry),
+    __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
   // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,

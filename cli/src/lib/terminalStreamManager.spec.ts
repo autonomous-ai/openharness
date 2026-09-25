@@ -153,6 +153,34 @@ describe('TerminalStreamManager', () => {
     expect(sent.at(-1)?.payload.code).toBe('TERMINAL_AGENT_NOT_FOUND')
   })
 
+  it('tells the daemon an agent took input from its controller — never from a watcher, never for input it refused', async () => {
+    // The keystroke prewarm (grid-reads-without-waking issue 03) hangs off this: typing into a pane whose
+    // agent runs on a sleeping grid starts that grid. A read-only watcher's input reaches no pty, so it
+    // must start nothing either.
+    const typed: string[] = []
+    await manager.stop()
+    manager = newManager({ onInput: (agentId) => { typed.push(agentId) } })
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40 })
+    const controller = sent.find((frame) => frame.type === 'terminal_ready' && frame.connId === 'web-1')!.payload.streamId as string
+    await manager.handleFrame('web-2', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40, takeover: false,
+    })
+    const watcher = sent.find((frame) => frame.type === 'terminal_ready' && frame.connId === 'web-2')!
+    expect(watcher.payload.readOnly).toBe(true)
+
+    await manager.handleBinary('web-2', {
+      kind: TerminalBinaryKind.input, streamId: watcher.payload.streamId as string, seq: 0, compressed: false, bytes: Buffer.from('x'),
+    })
+    await manager.handleBinary('web-1', {
+      kind: TerminalBinaryKind.input, streamId: controller, seq: 5, compressed: false, bytes: Buffer.from('out of order'),
+    })
+    expect(typed).toEqual([])
+
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId: controller, seq: 0, compressed: false, bytes: Buffer.from('x') })
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.paste, streamId: controller, seq: 0, compressed: false, bytes: Buffer.from('hello') })
+    expect(typed).toEqual(['agent-1', 'agent-1'])
+  })
+
   it('opens with a keyframe, streams coalesced output, and writes ordered raw input', async () => {
     await manager.handleFrame('web-1', 'terminal_open', {
       requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40, compression: ['zlib'],
@@ -844,5 +872,100 @@ describe('TerminalStreamManager', () => {
     await vi.advanceTimersByTimeAsync(8)
     expect(binarySent.length).toBe(afterLeadingEdge + 1)
     expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
+  })
+
+  it('coalesces a loopback burst on a 2ms window while the relay keeps 8ms', async () => {
+    await manager.stop()
+    manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+
+    const burst = async (connId: string, requestId: string): Promise<number> => {
+      await manager.handleFrame(connId, 'terminal_open', {
+        requestId, protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+      })
+      await vi.advanceTimersByTimeAsync(20)   // a quiet gap, so 'lead' takes the leading edge
+      sink!.onData(Buffer.from('lead'))
+      const afterLeadingEdge = binarySent.length
+      sink!.onData(Buffer.from('one'))
+      sink!.onData(Buffer.from('two'))
+      sink!.onData(Buffer.from('three'))
+      expect(binarySent.length).toBe(afterLeadingEdge)
+      return afterLeadingEdge
+    }
+
+    // The desktop on this computer: the burst goes out after 2ms, as one frame.
+    let afterLeadingEdge = await burst('local:desktop', 'open-local-burst')
+    await vi.advanceTimersByTimeAsync(2)
+    expect(binarySent.length).toBe(afterLeadingEdge + 1)
+    expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
+
+    // Anything else still waits the full 8ms window.
+    afterLeadingEdge = await burst('web-1', 'open-web-burst')
+    await vi.advanceTimersByTimeAsync(2)
+    expect(binarySent.length).toBe(afterLeadingEdge)
+    await vi.advanceTimersByTimeAsync(6)
+    expect(binarySent.length).toBe(afterLeadingEdge + 1)
+    expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwothree')
+  })
+
+  it('gives the short window only to the terminal the loopback window has focused', async () => {
+    await manager.stop()
+    manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+
+    // A burst after a quiet gap; returns how long its trailing frame took to go out.
+    const trailingWindow = async (): Promise<number> => {
+      await vi.advanceTimersByTimeAsync(20)
+      sink!.onData(Buffer.from('lead'))
+      const afterLeadingEdge = binarySent.length
+      sink!.onData(Buffer.from('one'))
+      sink!.onData(Buffer.from('two'))
+      for (let ms = 1; ms <= 8; ms++) {
+        await vi.advanceTimersByTimeAsync(1)
+        if (binarySent.length > afterLeadingEdge) {
+          expect(Buffer.from(binarySent.at(-1)!.frame.bytes).toString()).toBe('onetwo')
+          return ms
+        }
+      }
+      throw new Error('burst never flushed')
+    }
+
+    // Focus elsewhere before the open: this terminal is a background tile.
+    manager.setFocusedAgent('local:desktop', 'agent-other')
+    await manager.handleFrame('local:desktop', 'terminal_open', {
+      requestId: 'open-focus', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    expect(await trailingWindow()).toBe(8)
+
+    // Focus moves onto it: the open stream follows, no reopen needed.
+    manager.setFocusedAgent('local:desktop', 'agent-1')
+    expect(await trailingWindow()).toBe(2)
+
+    // No terminal focused at all.
+    manager.setFocusedAgent('local:desktop', null)
+    expect(await trailingWindow()).toBe(8)
+
+    // Focus is a loopback matter: anything else keeps 8ms whatever it is told.
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-web-focus', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    manager.setFocusedAgent('web-1', 'agent-1')
+    expect(await trailingWindow()).toBe(8)
+  })
+
+  it('forgets a loopback window\'s focus when it disconnects', async () => {
+    await manager.stop()
+    manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+    manager.setFocusedAgent('local:desktop', 'agent-other')
+    await manager.closeConnection('local:desktop')
+
+    // Reconnected under the same id and silent about focus: back to the short window.
+    await manager.handleFrame('local:desktop', 'terminal_open', {
+      requestId: 'open-after-close', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    await vi.advanceTimersByTimeAsync(20)
+    sink!.onData(Buffer.from('lead'))
+    const afterLeadingEdge = binarySent.length
+    sink!.onData(Buffer.from('tail'))
+    await vi.advanceTimersByTimeAsync(2)
+    expect(binarySent.length).toBe(afterLeadingEdge + 1)
   })
 })

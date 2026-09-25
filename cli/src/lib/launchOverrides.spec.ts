@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
+import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
 
 const GRID: GridLaunchOverride = {
@@ -68,7 +69,7 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
-  it('a Codex profile gets its CODEX_HOME, its hooks and its own provider, and clears nothing', async () => {
+  it('a Codex profile gets its CODEX_HOME, its hooks and its own provider, and clears inherited harness context', async () => {
     const { d, calls } = deps()
     const result = await buildLaunchOverrides(d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'agent-2')
     // `model_provider` rides every own-login Codex launch, not only one that follows a grid: the
@@ -79,15 +80,15 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
       overrides: {
         env: { CODEX_HOME: '/home/u/.codex-work' },
         extraArgs: ['-c', 'model_provider="openai"'],
-        clearEnv: [],
+        clearEnv: [...DSH_SESSION_ENV],
       },
     })
     expect(calls).toEqual(['hooks:/home/u/.codex-work'])
   })
 
-  it('an agent on its own login gets nothing — its own variables are the point', async () => {
+  it('an agent on its own login keeps provider variables and clears inherited harness context', async () => {
     const { d, calls } = deps()
-    expect(await buildLaunchOverrides(d, 'claude', {}, 'a')).toEqual({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } })
+    expect(await buildLaunchOverrides(d, 'claude', {}, 'a')).toEqual({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [...DSH_SESSION_ENV] } })
     expect(await buildLaunchOverrides(d, 'claude', { gridLaunch: null, codexHome: null }, 'a')).toMatchObject({ ok: true })
     expect(calls).toEqual([])
   })
@@ -203,7 +204,7 @@ describe('buildLaunchOverrides — coming back off a grid', () => {
 describe('buildLaunchOverrides — a pane opened as a named agent comes back as it', () => {
   it('appends opencode\'s --agent after everything else, on its own login and on a grid', async () => {
     const own = await buildLaunchOverrides(deps().d, 'opencode', { agent: 'harness-compute' }, 'a')
-    expect(own).toEqual({ ok: true, overrides: { env: {}, extraArgs: ['--agent', 'harness-compute'], clearEnv: [] } })
+    expect(own).toEqual({ ok: true, overrides: { env: {}, extraArgs: ['--agent', 'harness-compute'], clearEnv: [...DSH_SESSION_ENV] } })
     const home = await buildLaunchOverrides(deps().d, 'opencode', { agent: 'harness-compute', subscriptionModel: 'anthropic/claude' }, 'a')
     expect(home).toMatchObject({ ok: true, overrides: { extraArgs: ['-m', 'anthropic/claude', '--agent', 'harness-compute'] } })
     const grid = await buildLaunchOverrides(deps().d, 'opencode', { gridLaunch: GRID, agent: 'harness-compute' }, 'a')

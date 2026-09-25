@@ -2,7 +2,7 @@ import type { Machine } from '@prisma/client'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { selectManagerId } from '../lib/managers.js'
 import { provisionViaManager } from '../lib/provision.js'
-import { getAgentPresence, clearAgentPresence, publishDown, publishDeviceMachineListChanged, pub } from '../lib/bus.js'
+import { getAgentPresence, readAgentPresence, clearAgentPresence, publishDown, publishDeviceMachineListChanged, pub, consumeNewIdQuota } from '../lib/bus.js'
 import { randomUUID } from 'node:crypto'
 import { generateApiKey, machineIdFromKey } from '../utils/crypto.js'
 import { assertMachineId, isMachineId } from '../utils/slug.js'
@@ -98,8 +98,11 @@ const COMPUTER_CREATE_LOCK_WAIT_MS = 10_000
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-function computerCreateLockKey(userId: string, computerId: string): string {
-  return `machine:create:${userId}:${computerId}`
+// Per ACCOUNT, not per (account, computer): the ceiling check below is a count-then-create, and a lock
+// scoped to one computer id let N parallel upgrades with N fresh ids all pass the same count. This is the
+// rare first-login path, so serializing one person's creates costs nothing a real user can notice.
+function computerCreateLockKey(userId: string): string {
+  return `machine:create:${userId}`
 }
 
 /**
@@ -108,7 +111,7 @@ function computerCreateLockKey(userId: string, computerId: string): string {
  * under a short Redis lock prevents concurrent adapter upgrades from minting duplicate rows.
  */
 async function withComputerCreateLock<T>(userId: string, computerId: string, action: () => Promise<T>): Promise<T> {
-  const key = computerCreateLockKey(userId, computerId)
+  const key = computerCreateLockKey(userId)
   const owner = randomUUID()
   const deadline = Date.now() + COMPUTER_CREATE_LOCK_WAIT_MS
   let acquired = false
@@ -233,7 +236,9 @@ async function nodeInfoByAgent(bindings: Machine[]): Promise<Map<string, { statu
 }
 
 /** Remote agents have no agent_nodes row — their liveness is the adapter's presence key
- *  (`agent:{id}:mgr`, set by /api/adapter-ws while the machine is connected). Patch `info` in place. */
+ *  (`agent:{id}:mgr`, set by /api/adapter-ws while the machine is connected). Patch `info` in place.
+ *  A presence read that FAILED is `unknown`, never `offline`: a daemon takes `offline` as evidence and
+ *  labels that computer's models "seems offline" (grid-reads-without-waking issue 03). */
 async function applyRemoteStatus(
   bindings: Machine[],
   plans: Map<string, PlanInfo>,
@@ -242,8 +247,9 @@ async function applyRemoteStatus(
   const remote = bindings.filter((b) => plans.get(b.machineId)?.authMode === 'remote')
   await Promise.all(
     remote.map(async (b) => {
-      const online = !!(await getAgentPresence(b.machineId))
-      info.set(b.machineId, { status: online ? 'running' : 'offline', engine: 'claude' })
+      const present = await readAgentPresence(b.machineId)
+      const status = present === null ? 'unknown' : present ? 'running' : 'offline'
+      info.set(b.machineId, { status, engine: 'claude' })
     }),
   )
 }
@@ -454,6 +460,12 @@ export const machineService = {
         if (owned >= env.HARNESS_DEVICE_AUTH_MACHINE_LIMIT) {
           throw new AppError('Too many connected computers on this account', 409, 'TOO_MANY_MACHINES')
         }
+      }
+      // The ceiling above counts LIVE rows, and deletion is soft — so create → delete → create never
+      // reaches it. The rate is what bounds that loop. 429 keeps the CLI retrying with its token intact.
+      if (!(await consumeNewIdQuota('machine', userId))) {
+        logger.warn('new id rate limited', { kind: 'machine', userId, computerId })
+        throw new AppError('Too many new computers on this account, try again later', 429, 'NEW_MACHINE_RATE_LIMITED')
       }
 
       const apiKey = generateApiKey()

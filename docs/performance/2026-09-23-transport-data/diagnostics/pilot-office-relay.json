@@ -1,0 +1,1352 @@
+{
+  "schema": 4,
+  "success": true,
+  "startedAt": "2026-09-23T11:51:08.553Z",
+  "label": "office",
+  "sourceRevision": "pilot-uncommitted",
+  "boundary": "client binary input send to matching PTY probe response received; excludes UI rendering and OS keyboard input",
+  "client": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "transportImplementation": "isolated production RemoteRelayPool from source; loopback client and relay share one Node process",
+    "installedDaemonVersionNotOnMeasuredPath": "0.2.99"
+  },
+  "samplesPerWorkload": 5,
+  "warmupsPerWorkload": 10,
+  "controlSamples": 3,
+  "controlObservations": [
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 413.6552499999998,
+      "terminalModeBefore": "relay",
+      "terminalModeAfter": "relay"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 409.9932920000001,
+      "terminalModeBefore": "relay",
+      "terminalModeAfter": "relay"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "warmup",
+      "elapsedMs": 414.09533400000055,
+      "terminalModeBefore": "relay",
+      "terminalModeAfter": "relay"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 451.54462500000045,
+      "terminalModeBefore": "relay",
+      "terminalModeAfter": "relay"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 415.79654199999914,
+      "terminalModeBefore": "relay",
+      "terminalModeAfter": "relay"
+    },
+    {
+      "route": "machine",
+      "success": true,
+      "phase": "measured",
+      "elapsedMs": 408.5600000000013,
+      "terminalModeBefore": "relay",
+      "terminalModeAfter": "relay"
+    }
+  ],
+  "observations": [
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 0,
+      "elapsedMs": 412.08420900000056,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 2
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 17
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 3
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 18
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 1,
+      "elapsedMs": 408.4806660000013,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 3
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 18
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 4
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 19
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 2,
+      "elapsedMs": 414.10058299999946,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 4
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 19
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 5
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 20
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 3,
+      "elapsedMs": 407.61941599999955,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 5
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 20
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 6
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 21
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 4,
+      "elapsedMs": 411.4058750000004,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 6
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 21
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 7
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 23
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 5,
+      "elapsedMs": 407.8677920000009,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 7
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 23
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 8
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 24
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 6,
+      "elapsedMs": 430.06075000000055,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 8
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 24
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 9
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 25
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 7,
+      "elapsedMs": 413.3752920000006,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 9
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 25
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 10
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 26
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 8,
+      "elapsedMs": 463.1438340000004,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 10
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 26
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 11
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 27
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "warmup",
+      "sequence": 9,
+      "elapsedMs": 438.7094589999997,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 11
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 27
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 12
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 28
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 10,
+      "elapsedMs": 408.5230840000004,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 12
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 28
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 13
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 29
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 11,
+      "elapsedMs": 408.30633299999863,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 13
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 29
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 14
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 30
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 12,
+      "elapsedMs": 410.98612499999945,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 14
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 30
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 15
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 31
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 13,
+      "elapsedMs": 411.6994999999988,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 15
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 31
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 16
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 32
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "idle",
+      "phase": "measured",
+      "sequence": 14,
+      "elapsedMs": 413.9735830000009,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 16
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 32
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 17
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 33
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 15,
+      "elapsedMs": 413.06879200000003,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 18
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 40
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 19
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 56
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 16,
+      "elapsedMs": 404.59233400000085,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 19
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 57
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 20
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 73
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 17,
+      "elapsedMs": 409.62612499999886,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 20
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 75
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 21
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 90
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 18,
+      "elapsedMs": 405.04212499999994,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 21
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 92
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 22
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 107
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 19,
+      "elapsedMs": 407.9224170000016,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 22
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 108
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 23
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 121
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 20,
+      "elapsedMs": 413.6264590000028,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 23
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 122
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 24
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 138
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 21,
+      "elapsedMs": 415.3155000000006,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 24
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 138
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 25
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 155
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 22,
+      "elapsedMs": 410.2972919999993,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 25
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 155
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 26
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 172
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 23,
+      "elapsedMs": 409.2081249999974,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 26
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 173
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 27
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 189
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "warmup",
+      "sequence": 24,
+      "elapsedMs": 408.3453329999975,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 27
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 191
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 28
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 206
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 25,
+      "elapsedMs": 491.53512500000215,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 28
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 206
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 29
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 227
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 26,
+      "elapsedMs": 412.7467089999991,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 29
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 227
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 30
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 244
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 27,
+      "elapsedMs": 637.0190419999999,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 30
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 244
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 31
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 268
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 28,
+      "elapsedMs": 518.171666000002,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 31
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 268
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 32
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 289
+        }
+      },
+      "routeVerified": true
+    },
+    {
+      "load": "redraw_20hz",
+      "phase": "measured",
+      "sequence": 29,
+      "elapsedMs": 598.3368329999976,
+      "success": true,
+      "modeBefore": "relay",
+      "modeAfter": "relay",
+      "keyframesDuring": 0,
+      "routeBefore": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 32
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 291
+        }
+      },
+      "routeAfter": {
+        "route": "relay",
+        "ready": false,
+        "migrating": false,
+        "pair": null,
+        "sent": {
+          "p2p": 0,
+          "relay": 33
+        },
+        "received": {
+          "p2p": 0,
+          "relay": 307
+        }
+      },
+      "routeVerified": true
+    }
+  ],
+  "stagesMs": {
+    "select": 1320.535958,
+    "readyForRequests": 1778.684041,
+    "createTerminal": 604.423667,
+    "attach": 520.8525829999999,
+    "startProbe": 1189.7819999999997,
+    "waitForRequestedRoute": 0.36520800000016607
+  },
+  "cleanup": {
+    "created": true,
+    "deleted": true
+  },
+  "linkModes": [
+    {
+      "atMs": 3242.519625,
+      "mode": "relay"
+    },
+    {
+      "atMs": 24297.737875,
+      "mode": "relay"
+    }
+  ],
+  "requestedRoute": "relay",
+  "routeVerification": "nominated ICE pair, stream membership, and both binary wire directions for each echo",
+  "targetProtocolVersion": 3,
+  "target": "Darwin:x86_64",
+  "routeAtStart": {
+    "route": "relay",
+    "ready": false,
+    "migrating": false,
+    "pair": null,
+    "sent": {
+      "p2p": 0,
+      "relay": 2
+    },
+    "received": {
+      "p2p": 0,
+      "relay": 17
+    }
+  },
+  "negotiation": "no data channel",
+  "turnHosts": [
+    "turn.cloudflare.com"
+  ],
+  "idleAchieved": {
+    "bytes": 737,
+    "durationMs": 6657.509333
+  },
+  "redraw_20hzAchieved": {
+    "bytes": 567977,
+    "durationMs": 7143.5715
+  },
+  "reattach": {
+    "totalMs": 870.2501249999987,
+    "firstEchoMs": 419.4579159999994,
+    "sameProbeSequence": 30,
+    "mode": "relay",
+    "boundary": "new local client socket, existing daemon route and same running PTY; not a network outage"
+  },
+  "failedControlRequests": 0,
+  "finishedAt": "2026-09-23T11:51:33.689Z",
+  "summaries": [
+    {
+      "load": "idle",
+      "samples": 5,
+      "failures": 0,
+      "p50Ms": 410.98612499999945,
+      "p95Ms": 413.9735830000009,
+      "p99Ms": 413.9735830000009,
+      "maxMs": 413.9735830000009
+    },
+    {
+      "load": "redraw_20hz",
+      "samples": 5,
+      "failures": 0,
+      "p50Ms": 518.171666000002,
+      "p95Ms": 637.0190419999999,
+      "p99Ms": 637.0190419999999,
+      "maxMs": 637.0190419999999
+    }
+  ],
+  "controlSummaries": [
+    {
+      "route": "machine",
+      "samples": 3,
+      "failures": 0,
+      "p50Ms": 415.79654199999914,
+      "p95Ms": 451.54462500000045,
+      "p99Ms": 451.54462500000045,
+      "maxMs": 451.54462500000045
+    }
+  ],
+  "summariesByTerminalMode": [
+    {
+      "load": "idle",
+      "mode": "relay",
+      "samples": 5,
+      "p50Ms": 410.98612499999945,
+      "p95Ms": 413.9735830000009,
+      "p99Ms": 413.9735830000009,
+      "maxMs": 413.9735830000009
+    },
+    {
+      "load": "redraw_20hz",
+      "mode": "relay",
+      "samples": 5,
+      "p50Ms": 518.171666000002,
+      "p95Ms": 637.0190419999999,
+      "p99Ms": 637.0190419999999,
+      "maxMs": 637.0190419999999
+    }
+  ]
+}

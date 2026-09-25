@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
+import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { registry, validTranscriptPath, type RegisteredSession } from './registry.js'
 import { env } from '../config/env.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
@@ -17,7 +18,15 @@ import { installedDsh } from '../dsh/installed.js'
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
 vi.mock('./tmuxAgentDiscovery.js', () => ({ listTmuxPanes: vi.fn() }))
 vi.mock('./tmux.js', () => ({ checkSessionRuntime: vi.fn(), clearPaneRemainOnExit: vi.fn(), resolvePaneEngineProcess: vi.fn(), tmuxPaneState: vi.fn() }))
-vi.mock('./engineLaunch.js', () => ({ buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']) }))
+// `resumeCapability` reads the real flag table through this module; only the argv builder and the
+// capability gate are faked. The gate would otherwise spawn the tester's own login shell to ask
+// `<engine> --help` about a flag, which is neither this file's subject nor the same answer on two
+// machines. Its own behaviour is covered in `engineLaunch.spec.ts`.
+vi.mock('./engineLaunch.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('./engineLaunch.js')>()),
+  buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']),
+  dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
+}))
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('./engineInstall.js', () => ({ engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
@@ -90,6 +99,21 @@ describe('production resume handler', () => {
     expect(JSON.stringify(disk)).toContain(saved.sessionId)
     expect(JSON.stringify(disk)).toContain('resumeOnly')
   })
+  it('resumes a database-backed engine on its id alone, with no transcript to demand', async () => {
+    // opencode/kilo/hermes/devin keep the conversation in SQLite; requiring a transcript file here
+    // refused a resume that works, and refused it AFTER the harness had been paused.
+    rewrite({ engine: 'opencode', transcriptPath: '' })
+    expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ resumeSessionId: saved.sessionId }))
+  })
+
+  it('marks an engine with no startup hook ready off its own process', async () => {
+    // muse never hooks, so nothing else would ever leave this row `starting` — it would read as
+    // "Starting" for ever and keep discovery out of the pane.
+    rewrite({ engine: 'muse' })
+    expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+  })
+
   it('opens a retained terminal as a new shell without a vendor resume argument', async () => {
     rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { engine: 'terminal', launch: { state: 'ready' } } })
@@ -131,6 +155,18 @@ describe('production resume handler', () => {
     expect(await start()).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
     expect(deps.relaunchOverrides).not.toHaveBeenCalled(); expect(deps.prepareSessionResume).not.toHaveBeenCalled()
   })
+  // The other half of the rule: a reservation older than the readiness budget cannot still belong to
+  // a running resume, and leaving it in place made the harness permanently unresumable — every Enter
+  // refused before it looked at anything.
+  it('takes over a reservation older than the readiness budget', async () => {
+    deps.stoppedAgents.beginResume(saved.agentId)
+    const held = join(dir, 'saved', `${saved.agentId}.resume`)
+    const stale = Date.now() - RESUME_READINESS_BUDGET_MS - 60_000
+    utimesSync(held, new Date(stale), new Date(stale))
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create).toHaveBeenCalled()
+  })
+
   it.each(['provider', 'prepare', 'cancel', 'conversation'] as const)('releases the reservation before allocation after %s failure', async reason => {
     if (reason === 'provider') vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'PROVIDER_FAILED', detail: 'fixture' })
     if (reason === 'prepare') vi.mocked(deps.prepareSessionResume).mockImplementation(() => { throw new Error('fixture') })
@@ -217,10 +253,27 @@ describe('existing runtime and readiness verification', () => {
     expect(create).not.toHaveBeenCalled()
     expect(announced).toEqual(['starting', 'ready'])
   })
+  // The regression openharness#189 left behind. The fixture above fakes a SessionStart on every
+  // process probe; here it deliberately does not, which is the real shape of a re-check: the engine
+  // has been running for hours and will never send another hook. The re-check re-arms `starting` to
+  // withdraw the old verdict, and the readiness probe used to refuse to confirm while it read
+  // `starting` — so every Enter bought ten minutes of "Starting" and the same banner again.
+  it('confirms a live unconfirmed resume that has no further hook coming', async () => {
+    live({ processIdentity: identity, lastHookAt: 0, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'fixture' } })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    // Ready, not `starting`: a row left starting is made dormant without being retained by
+    // discovery, and the desk reads its own resume receipt as unknown.
+    expect(registry.byAgent(saved.agentId)?.launch).toEqual({ state: 'ready' })
+    // The reservation is released, so the next Enter is not refused by `beginResume`.
+    expect(existsSync(join(dir, 'saved', `${saved.agentId}.resume`))).toBe(false)
+    expect(create).not.toHaveBeenCalled()
+  })
   it('does not re-verify a live process that reported another conversation', async () => {
     live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } })
     vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
-    expect(await start()).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+    expect(await start()).toMatchObject({ error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' })
     expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_SESSION_MISMATCH' })
     expect(deps.announceSession).not.toHaveBeenCalled()
   })

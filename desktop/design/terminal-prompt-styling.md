@@ -1,5 +1,11 @@
 # Prompt themes and workspace styling
 
+For the current top bar and Customize Harness → Status, follow
+[Workspace status bar](workspace-status-bar.md). It replaces the pane-header
+choices described below with Standard, Robbyrussell, Pure, and Starship text
+formats. The notes below describe the older `PromptContextView` surfaces;
+terminal dialogs follow [the terminal dialog design system](terminal-dialogs.md).
+
 The user's reference is an Agnoster-style shell prompt. The goal is familiar,
 compact context and fast keyboard interaction, with appearance choices that
 can be previewed before returning to work.

@@ -12,6 +12,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'support/real_fonts.dart';
 import 'swarm_state_test.dart' show createApp;
 import 'swarm_screen_test.dart' show terminal;
+import 'swarm_interactions_test.dart' show chord;
 
 import 'package:harness/core/models.dart';
 
@@ -88,7 +89,7 @@ void main() {
             // Only the device image: the ground behind the page is drawn
             // (swarm_wallpaper.dart), not loaded.
             await precacheImage(
-              const AssetImage('assets/harness_device_studio.png'),
+              const AssetImage('assets/harness_device_studio.jpg'),
               context,
             );
           });
@@ -172,6 +173,8 @@ void main() {
         await tester.tap(create);
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        expect(find.byType(AlertDialog), findsNothing);
+        await chord(tester, LogicalKeyboardKey.keyN);
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(results, findsNothing);

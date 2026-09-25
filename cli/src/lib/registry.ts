@@ -15,6 +15,7 @@
 
 import { DSH_ID_RE } from '../dsh/manifest.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
+import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
 import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript } from './claudeProject.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
@@ -165,6 +166,8 @@ export interface RegisteredSession {
    * again after a restart) is still labelled. Fill-only, like `codexHome`. See `src/dsh/`.
    */
   dsh?: string | null
+  /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
+  dshRuntime?: string | null
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -614,33 +617,49 @@ function isWithin(root: string, file: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !rel.startsWith(`/`) && !rel.startsWith(`\\`))
 }
 
+/**
+ * Where each engine's conversation file lives, or **null for an engine that keeps no file at all**.
+ *
+ * The null entries are not gaps: opencode, kilo, hermes and devin keep their conversations in a
+ * SQLite database (`sessionRepair.ts`'s `dbEngineSession` reads an id out and has no path to
+ * return), and a terminal has no conversation. Written as a table rather than the nested ternary it
+ * replaces so "this engine has no transcript" is a fact a caller can ASK for — Pause and Resume both
+ * need it, and both used to demand a file every engine was assumed to have.
+ */
+const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, ((codexHome?: string) => string) | null>> = {
+  // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
+  // keeps no conversation on disk (see installAmpPlugin).
+  amp: () => env.AMP_SESSIONS_DIR,
+  muse: () => join(env.MUSE_HOME, 'sessions'),
+  // The specific agent's own CODEX_HOME profile, when it has one — see RegisteredSession.codexHome.
+  codex: codexHome => join(codexHome || env.CODEX_HOME, 'sessions'),
+  grok: () => join(env.GROK_HOME, 'sessions'),
+  agy: () => join(env.AGY_HOME, 'brain'),
+  copilot: () => join(env.COPILOT_HOME, 'session-state'),
+  cursor: () => join(env.CURSOR_HOME, 'projects'),
+  pi: () => join(env.PI_HOME, 'agent', 'sessions'),
+  commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
+  claude: () => env.CLAUDE_PROJECTS_DIR,
+  opencode: null,
+  kilo: null,
+  hermes: null,
+  devin: null,
+  terminal: null,
+}
+
+/** Whether this engine's conversation is a FILE the daemon can point a resume at. False for the
+ *  database-backed engines and the shell — for them a recorded session id is the whole record, and
+ *  demanding a transcript would refuse a resume that works. */
+export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
+  return TRANSCRIPT_ROOT[engine] !== null
+}
+
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string): boolean {
+  const rootFor = TRANSCRIPT_ROOT[engine]
+  if (!rootFor) return false
   try {
     const actual = realpathSync(filePath)
-    const root = realpathSync(
-      // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
-      // keeps no conversation on disk (see installAmpPlugin).
-      engine === 'amp'
-        ? env.AMP_SESSIONS_DIR
-        : engine === 'muse'
-        ? join(env.MUSE_HOME, 'sessions')
-        : engine === 'codex'
-        // The specific agent's own CODEX_HOME profile, when it has one — see RegisteredSession.codexHome.
-        ? join(codexHome || env.CODEX_HOME, 'sessions')
-        : engine === 'grok'
-        ? join(env.GROK_HOME, 'sessions')
-        : engine === 'agy'
-        ? join(env.AGY_HOME, 'brain')
-        : engine === 'copilot'
-        ? join(env.COPILOT_HOME, 'session-state')
-        : engine === 'cursor'
-          ? join(env.CURSOR_HOME, 'projects')
-          : engine === 'pi'
-            ? join(env.PI_HOME, 'agent', 'sessions')
-            : engine === 'commandcode'
-              ? join(env.COMMANDCODE_HOME, 'projects')
-              : env.CLAUDE_PROJECTS_DIR,
-    )
+    const root = realpathSync(rootFor(codexHome))
     const st = statSync(actual)
     if (!st.isFile() || !isWithin(root, actual)) return false
     if (engine === 'cursor') {
@@ -890,6 +909,7 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
+          dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
@@ -1046,7 +1066,16 @@ class Registry {
       if (!existing.sessionId || !existing.cwd) existing.cwd = input.cwd ?? existing.cwd
       existing.processIdentity = processIdentity
       existing.active = true
-      if (existing.launch && !existing.resumeOnly) existing.launch = { state: 'ready' }
+      // The same rule the discovery callback applies on its own door (`cli.ts`): a verified engine
+      // process in this row's pane is what "started" means. Resume-only rows used to be excluded
+      // here, waiting for a startup hook that a resume does not reliably send — which left one
+      // reading "Starting" for 19 hours over a pane its owner could type in. The wrong-conversation
+      // guard in `register` keys on `lastHookAt`, untouched by this method, so it stays armed.
+      if (existing.launch) {
+        const before = existing.launch
+        existing.launch = { state: 'ready' }
+        this.traceLaunch(existing.agentId, before, existing.launch, 'openProcessAgent re-observed')
+      }
       // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
       // the last good one said rather than silently downgrading a gateway agent to a vendor one.
       if (input.gateway !== undefined) existing.gateway = input.gateway
@@ -1134,6 +1163,7 @@ class Registry {
     gridLaunchRecord?: GridLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
+    dshRuntime?: string | null
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1169,6 +1199,7 @@ class Registry {
       // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
       hermesHome: null,
       dsh: input.dsh ?? null,
+      dshRuntime: input.dshRuntime ?? null,
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
@@ -1310,9 +1341,20 @@ class Registry {
 
     const now = Date.now()
     const existing = this.agents.get(agentId)
-    if (existing?.resumeOnly && existing.launch && existing.launch.state !== 'ready') {
-      // A native startup hook, carrying the verified process, must confirm this exact history.
-      if (sessionId !== existing.sessionId) {
+    // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
+    // Two ways to be in that state, and both have to count:
+    //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
+    //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
+    //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook. Reading
+    //    only `launch` here disarmed this guard for exactly the resumes it exists to protect.
+    //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
+    //    `--resume` against a row that kept `lastHookAt` from its previous life.
+    if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))) {
+      // A native startup hook, carrying the verified process, must confirm this exact history —
+      // but only where an exact history was asked for. A resume that opened a NEW conversation (an
+      // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
+      // it did what it was told; failing it there would refuse the resume the caller requested.
+      if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
         this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
         return null
       }
@@ -1426,6 +1468,7 @@ class Registry {
       // would send the mirror back to the default store (openharness#191).
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
+      dshRuntime: existing?.dshRuntime ?? null,
       agent: existing?.agent ?? null,
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
@@ -1439,6 +1482,10 @@ class Registry {
     }
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
+    // A bind REBUILDS the row, and the rebuild carries no `launch` unless the row is resume-only:
+    // an engine reporting for duty is the end of any launch. Traced like the setters, because this
+    // is the one that changes the state without naming it.
+    this.traceLaunch(agentId, existing?.launch, entry.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
     if (rebound) this.sessionIndex.delete(rebound)
     this.index(entry)
     this.save()
@@ -1522,6 +1569,7 @@ class Registry {
     this.drop(entry)
     entry.engine = engine
     entry.terminalHost = true
+    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, `adoptEngine ${engine}`)
     entry.launch = { state: 'ready' }
     entry.active = true
     if (validProcessIdentity(processIdentity)) entry.processIdentity = processIdentity
@@ -1557,12 +1605,13 @@ class Registry {
     this.terminalAvailableAgents.delete(agentId)
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     this.releaseBinding(entry)
     delete entry.resumeOnly
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null
+    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, 'releaseEngine')
     entry.launch = { state: 'ready' }
     entry.active = true
     entry.gateway = null
@@ -1602,12 +1651,30 @@ class Registry {
     return true
   }
 
+  /**
+   * Every change of a row's launch state, named by the door it came through.
+   *
+   * `launch` is what a desk reads as "Starting", and a row that does not leave that state looks stuck
+   * on a harness that is working — measured once at 9 minutes on a restored opencode agent whose
+   * engine the log had already confirmed up. The state is written from six places and no two of them
+   * see each other, so the only way to say which one is fighting which is to have each say so. Rare
+   * in a settled daemon (create, restore, an engine exiting); a row that oscillates prints the pair
+   * that is doing it, once per pass.
+   */
+  private traceLaunch(agentId: string, before: AgentLaunch | undefined, after: AgentLaunch | undefined, where: string): void {
+    const name = (launch: AgentLaunch | undefined): string => launch ? launch.state : 'none'
+    if (name(before) === name(after)) return
+    console.log(`[launch] ${agentId.slice(0, 8)} ${name(before)} → ${name(after)} · ${where}`)
+  }
+
   setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null {
     const entry = this.agents.get(agentId)
     if (!entry) return null
+    const before = entry.launch
     entry.launch = normalizedLaunch(launch)
     entry.active = launch.state !== 'failed'
     entry.updatedAt = Date.now()
+    this.traceLaunch(agentId, before, entry.launch, `setLaunch${launch.state === 'failed' ? ` (${launch.error})` : ''}`)
     this.save()
     return entry
   }

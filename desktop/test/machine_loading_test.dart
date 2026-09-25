@@ -37,6 +37,9 @@ const _capabilities = {
   'protocolVersion': 3,
   'backend': 'tmux',
   'available': true,
+  // A current daemon: it honours `takeover: false`, which is what lets these
+  // panes attach with nobody asking (see `AttachIntent`).
+  'features': {'noTakeover': true},
 };
 
 class DiscoveryConnection extends WsConn {

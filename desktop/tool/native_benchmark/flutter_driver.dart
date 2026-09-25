@@ -10,8 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/new_harness.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_search_input.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
 import 'package:harness/widgets/workspace_welcome.dart';
@@ -92,6 +91,18 @@ Map<String, num> _distribution(List<int> values) {
   };
 }
 
+// Shared by the core-experience fixture; the original benchmark cadence and
+// operations remain unchanged for comparisons with its published results.
+void benchmarkKey(
+  (LogicalKeyboardKey, PhysicalKeyboardKey) key, {
+  bool command = true,
+  bool shift = false,
+}) => _key(key, command: command, shift: shift);
+Future<int> benchmarkFrame() => _frame();
+Element? benchmarkFind(bool Function(Widget) matches) => _find(matches);
+Map<String, num> benchmarkDistribution(List<int> values) =>
+    _distribution(values);
+
 Future<void> runFlutterDispatchBenchmark(
   AppNotifier app,
   String output,
@@ -116,15 +127,15 @@ Future<void> runFlutterDispatchBenchmark(
     (
       'cmd_n',
       (LogicalKeyboardKey.keyN, PhysicalKeyboardKey.keyN),
-      (w) => w is NewHarnessBox,
-    ),
-    (
-      'cmd_o',
-      (LogicalKeyboardKey.keyO, PhysicalKeyboardKey.keyO),
-      (w) => w is SwarmSearchInput && w.search != null,
+      (w) => w is NewHarnessForm,
     ),
     (
       'cmd_p',
+      (LogicalKeyboardKey.keyP, PhysicalKeyboardKey.keyP),
+      (w) => w is SwarmSearchInput && w.search != null,
+    ),
+    (
+      'cmd_shift_p',
       (LogicalKeyboardKey.keyP, PhysicalKeyboardKey.keyP),
       (w) => w is SwarmSearchInput && w.search?.isCommandMode == true,
     ),
@@ -145,11 +156,11 @@ Future<void> runFlutterDispatchBenchmark(
     ),
   ];
   for (final (operation, key, matches) in operations) {
-    if (primaryOnly && operation != 'cmd_n' && operation != 'cmd_o') continue;
+    if (primaryOnly && operation != 'cmd_n' && operation != 'cmd_p') continue;
     for (var sample = -5; sample < sampleCount; sample++) {
       final previousFrame = await prepareInput(sample);
       final began = DateTime.now().microsecondsSinceEpoch;
-      _key(key);
+      _key(key, shift: operation == 'cmd_shift_p');
       final dispatched = DateTime.now().microsecondsSinceEpoch;
       final firstFrame = await _frame();
       final element = _find(matches);
@@ -176,26 +187,23 @@ Future<void> runFlutterDispatchBenchmark(
         'firstFrame': firstFrame,
         'readyFrame': readyFrame,
       });
-      // With no inherited project, Cmd-N starts on the project question.
-      // Escape first returns to its launch summary, then closes the box.
-      if (element.widget case NewHarnessBox(:final controller)) {
-        for (
-          var step = 0;
-          step < 8 && controller.field != NewHarnessField.launch;
-          step++
-        ) {
+      // Escape clears a filter or prompt before closing. Stop dispatching
+      // as soon as the form disappears so no key reaches the terminal.
+      if (element.widget is NewHarnessForm) {
+        for (var step = 0; step < 4 && _find(matches) != null; step++) {
           _key(_escape, command: false);
           await _frame();
         }
+      } else {
+        _key(_escape, command: false);
       }
-      _key(_escape, command: false);
       for (var frame = 0; frame < 120 && _find(matches) != null; frame++) {
         await _frame();
       }
       if (_find(matches) != null) {
         throw StateError(
           '$operation did not dismiss; focus ${FocusManager.instance.primaryFocus}; '
-          'creation field ${(_find((w) => w is NewHarnessBox)?.widget as NewHarnessBox?)?.controller.field}',
+          'creation field ${(_find((w) => w is NewHarnessForm)?.widget as NewHarnessForm?)?.controller.field}',
         );
       }
     }

@@ -32,6 +32,8 @@ export interface LocalWsBackend {
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
+  /** The agent this window has focused, or null — which of its terminals gets the short output window. */
+  setLocalTerminalFocus?: (connId: string, agentId: string | null) => void
 }
 
 export interface LocalWsServerOptions {
@@ -56,7 +58,11 @@ export interface LocalWsServerOptions {
   onDevicePrepareOpened?: (operationId: string, agentId: string) => void
   onAppFocus?: (machineId: string, agentId: string) => void
   /** Every agent the window currently has a tile for, across all its machines. */
-  onAppPanes?: (agentIds: string[]) => void
+  onAppPanes?: (agentIds: string[], foreground: boolean) => void
+  /** The window has looked at this harness — see the `agent_seen` case below. */
+  onAgentSeen?: (agentId: string) => void
+  /** Everything the window still has unread, newest first — see the `app_unread` case below. */
+  onAppUnread?: (items: Array<{ agentId: string; machineId: string; question: boolean; text: string }>) => void
   /**
    * The window's swarms — its named groups of agents, one of them on screen. The whole list each time,
    * and `null` when the window goes away, so the daemon never keeps describing tabs nobody can see.
@@ -375,10 +381,56 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // whether a finished turn is already in front of the person.
         if (!isBinary && options.onAppPanes) {
           if (parsed?.type === 'app_panes') {
-            const raw = (parsed.payload as Record<string, unknown> | undefined)?.agentIds
+            const payload = parsed.payload as Record<string, unknown> | undefined
+            const raw = payload?.agentIds
             const ids = Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string' && id !== '') : []
+            // Absent from a window that predates the field. TRUE then, which is
+            // what every such window meant: it only ever sent this list while it
+            // was up, and reading absence as "behind something" would start
+            // announcing work that is in plain sight.
+            const foreground = payload?.foreground !== false
             sentPanes = true
-            options.onAppPanes(ids)
+            options.onAppPanes(ids, foreground)
+            return
+          }
+        }
+        // THE WINDOW LOOKED AT A HARNESS. Consumed here like `app_focus` and the
+        // roster above — it describes a pair of eyes at this desk, not anything
+        // the machine could act on, so it never goes on the wire.
+        //
+        // The dial takes a notification away when a row is TAPPED; the window
+        // takes it away when the tab holding that harness comes to the front.
+        // Two gestures, and each has to reach the other screen or the badge and
+        // the pill part company the first time either is used. This is the half
+        // the window owns; the dial's half already travels as `agent.open`.
+        if (!isBinary && options.onAgentSeen) {
+          if (parsed?.type === 'agent_seen') {
+            const agentId = (parsed.payload as Record<string, unknown> | undefined)?.agentId
+            if (typeof agentId === 'string' && agentId) options.onAgentSeen(agentId)
+            return
+          }
+        }
+        // EVERYTHING THE WINDOW STILL HAS UNREAD. Consumed here like the roster and the focus — it
+        // describes a screen at this desk, never anything a machine could act on.
+        //
+        // The dial keeps its drawer in RAM and loses it to any reboot, while this window does not.
+        // Held here so a cable attaching later can be handed the list without a round trip to a window
+        // that may be busy.
+        if (!isBinary && options.onAppUnread) {
+          if (parsed?.type === 'app_unread') {
+            const raw = (parsed.payload as Record<string, unknown> | undefined)?.items
+            const items = Array.isArray(raw)
+              ? raw.flatMap((row) => {
+                  const item = row as Record<string, unknown> | null
+                  const agentId = item?.agentId
+                  const machineId = item?.machineId
+                  const text = typeof item?.text === 'string' ? item.text : ''
+                  return typeof agentId === 'string' && agentId && typeof machineId === 'string'
+                    ? [{ agentId, machineId, question: item?.question === true, text }]
+                    : []
+                })
+              : []
+            options.onAppUnread(items)
             return
           }
         }
@@ -457,6 +509,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           const agentId = (parsed?.payload as Record<string, unknown> | undefined)?.agentId
           if (parsed?.type === 'app_focus') {
             if (agentId === null || (typeof agentId === 'string' && agentId)) {
+              // Ahead of the dial's revision check below: that gate is about which agent the voice
+              // follows, and a stale one says nothing about which terminal is in front of the person.
+              // Only this daemon's own streams — a relayed machine's live on that machine's daemon.
+              if (!relay && boundMachineId === options.machineId) options.backend.setLocalTerminalFocus?.(connId, agentId)
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
               if (options.onAppFocusState?.(boundMachineId, agentId, connId,
                 typeof revision === 'string' ? revision : undefined) === false) return
@@ -511,7 +567,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       // A window that went away has no tiles open. Left standing, the roster
       // would keep silencing the dial for agents nobody can see any more —
       // exactly backwards, and permanently.
-      if (sentPanes) options.onAppPanes?.([])
+      if (sentPanes) options.onAppPanes?.([], false)
       if (sentSwarms) options.onAppSwarms?.(null)
       if (relay) { relay.detach(); relay = null }
       else if (selected) void options.backend.unregisterLocalClient(connId)

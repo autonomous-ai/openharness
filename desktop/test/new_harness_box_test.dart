@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/engine_availability.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/project_folder.dart';
@@ -13,8 +14,7 @@ import 'package:harness/core/repository_clone.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
-import 'package:harness/widgets/box_chrome.dart' show kWorkspaceInset;
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:path/path.dart' as p;
 
@@ -120,7 +120,7 @@ void main() {
     },
   );
 
-  test('agent choices consolidate prototypes while preserving the actual launch id', () {
+  test('harness choices consolidate prototypes while preserving the actual launch id', () {
     final app = createApp();
     addTearDown(app.dispose);
     final box = NewHarnessController(app, machineId: 'm', engine: 'codex');
@@ -145,7 +145,7 @@ void main() {
         engine: 'claude',
       ),
     ]);
-    box.focusField(NewHarnessField.agent);
+    box.focusField(NewHarnessField.harness);
     final ollama = box.options.where((o) => o.title == 'Ollama').single;
     expect(ollama.id, 'local/ollama');
     expect(
@@ -157,8 +157,9 @@ void main() {
       isFalse,
     );
     box.accept(ollama);
-    expect(box.engine, 'local/ollama');
-    expect(box.agentLabel, 'Ollama');
+    expect(box.harnessId, 'local/ollama');
+    expect(box.engine, 'codex');
+    expect(box.harnessLabel, 'Ollama');
   });
 
   test('a named new project gets that folder, and never a changed name', () async {
@@ -223,16 +224,18 @@ void main() {
     expect(box.isCurrent(box.selected!), isTrue);
     expect(box.returnCreates, isFalse);
     box.nextField(-1);
-    expect(box.field, NewHarnessField.projectMenu);
+    expect(box.field, NewHarnessField.harness);
     expect(box.task, 'fix the flaky login test');
   });
 
-  test('the main loop follows Agent, Machine, Project and modes remain available to advanced drafts', () {
+  test('the main loop follows Harness, Agent, Machine, Project and modes remain available to advanced drafts', () {
     final app = createApp();
     final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
     addTearDown(box.dispose);
     expect(box.fields, [
+      NewHarnessField.harness,
       NewHarnessField.agent,
+      NewHarnessField.model,
       NewHarnessField.machine,
       NewHarnessField.projectMenu,
     ]);
@@ -249,6 +252,7 @@ void main() {
     box.accept();
     expect(box.isTerminal, isTrue);
     expect(box.fields, [
+      NewHarnessField.harness,
       NewHarnessField.agent,
       NewHarnessField.machine,
       NewHarnessField.projectMenu,
@@ -532,20 +536,17 @@ void main() {
     await chord(tester, LogicalKeyboardKey.keyN);
     await tester.pump();
     expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byKey(const ValueKey('new-harness-box')), findsOneWidget);
-    // Attached to the workspace's bottom edge, without dimming or resizing it.
-    final dock = tester.getRect(find.byKey(const ValueKey('new-harness-box')));
-    expect(dock.left, kWorkspaceInset);
-    expect(dock.right, tester.view.physicalSize.width - kWorkspaceInset);
-    expect(dock.bottom, tester.view.physicalSize.height - kWorkspaceInset);
-    expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
-    expect(
-      FocusManager.instance.primaryFocus!.debugLabel,
-      'New harness launch',
+    expect(find.byKey(const ValueKey('new-harness-form')), findsOneWidget);
+    final frame = tester.getRect(
+      find.byKey(const ValueKey('new-harness-form')),
     );
+    expect(frame.center.dx, tester.view.physicalSize.width / 2);
+    expect(frame.bottom, lessThan(tester.view.physicalSize.height));
+    expect(find.byKey(const ValueKey('new-harness-input')), findsNothing);
+    expect(FocusManager.instance.primaryFocus!.debugLabel, 'new-harness-form');
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
-    expect(find.byKey(const ValueKey('new-harness-box')), findsNothing);
+    expect(find.byKey(const ValueKey('new-harness-form')), findsNothing);
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
@@ -583,6 +584,90 @@ void main() {
     );
     addTearDown(shell.dispose);
     expect(shell.error, contains('will not be sent'));
+  });
+
+  // The machine LIST is the only witness for a computer nothing has been heard
+  // from: our socket reaches the local daemon, and its being up says nothing
+  // about the far end of the relay. A machine the list calls offline used to be
+  // offered like any other, and the failure arrived a minute later.
+  test('a machine the list calls offline cannot be chosen', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['studio']!
+      ..nodeOnline = null
+      ..machine = const Machine(
+        machineId: 'studio',
+        name: 'iMac · Office',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+    final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.machine);
+    final row = box.options.firstWhere((option) => option.id == 'studio');
+    expect(row.enabled, isFalse);
+    expect(row.detail, contains('offline'));
+    box.accept(row);
+    expect(box.error, contains('offline'));
+    expect(box.machineId, 'm', reason: 'and the machine did not change');
+  });
+
+  // `nodeOnline` is set hopefully the instant OUR socket connects, and that
+  // socket reaches the local daemon — not the computer across the relay. So a
+  // true from it does not outrank the backend's own view.
+  test('the list is believed over a hopeful socket', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['studio']!
+      ..nodeOnline = true
+      ..machine = const Machine(
+        machineId: 'studio',
+        name: 'iMac · Office',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+    final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.machine);
+    final row = box.options.firstWhere((option) => option.id == 'studio');
+    expect(row.enabled, isFalse);
+  });
+
+  // ...and the computer the app is running on is never called offline, however
+  // stale its row in the list is.
+  test('this computer is never disabled by the list', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['m']!
+      ..localOnly = true
+      ..nodeOnline = null
+      ..machine = const Machine(
+        machineId: 'm',
+        name: 'MacBook',
+        authMode: MachineAuthMode.remote,
+        status: 'offline',
+      );
+    expect(app.machineStates['m']!.isOffline, isFalse);
+  });
+
+  test('a machine the list calls running stays choosable', () async {
+    final app = createApp();
+    seedMixedAgents(app);
+    app.machineStates['studio']!
+      ..nodeOnline = null
+      ..machine = const Machine(
+        machineId: 'studio',
+        name: 'iMac · Office',
+        authMode: MachineAuthMode.remote,
+        status: 'running',
+      );
+    final box = NewHarnessController(app, machineId: 'm', engine: 'claude');
+    addTearDown(box.dispose);
+    box.focusField(NewHarnessField.machine);
+    expect(
+      box.options.firstWhere((option) => option.id == 'studio').enabled,
+      isTrue,
+    );
   });
 
   test('Return and ⌘↵ are never silent, and a dropped task is said', () async {
@@ -793,7 +878,7 @@ void main() {
             child: SizedBox(
               width: 720,
               height: 420,
-              child: NewHarnessBox(
+              child: NewHarnessForm(
                 controller: box,
                 onClose: () => closed++,
                 onCreated: () {},
@@ -805,31 +890,17 @@ void main() {
       ),
     );
     await tester.pump();
-    final input = find.byKey(const ValueKey('new-harness-input'));
-    expect(box.field, NewHarnessField.launch);
-    expect(input, findsNothing);
+    expect(box.field, NewHarnessField.harness);
     await openLaunchRow(tester, 'agent');
-    await tester.pump();
-    expect(box.field, NewHarnessField.agent);
-    expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
-    await tester.enterText(input, 'clau');
-    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-    await tester.pump();
-    expect(box.query, 'Claude Code');
+    await typeHarnessQuery(tester, 'clau');
     expect(box.engine, 'codex');
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     expect(box.engine, 'claude');
-    expect(box.field, NewHarnessField.launch);
-    await openLegacyTaskEditor(tester);
-    await tester.pump();
-    await tester.enterText(input, 'a project to test');
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    expect(box.field, NewHarnessField.launch);
-    expect(box.task, 'a project to test');
+    expect(box.field, NewHarnessField.agent);
     expect(closed, 0);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
     expect(closed, 1);
     await tester.pumpWidget(const SizedBox());
     box.dispose();

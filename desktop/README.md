@@ -7,6 +7,10 @@ planned and its runner is unexercised. Embedded harness viewers currently requir
 
 ## Development
 
+For workspace dialog work, follow the
+[terminal dialog design system](design/terminal-dialogs.md): fixed cells, plain
+text, and one-line selection, using Cmd-N and Cmd-O as references.
+
 Install a compatible Flutter SDK, then run the project from this directory
 (`desktop/` in the monorepo):
 

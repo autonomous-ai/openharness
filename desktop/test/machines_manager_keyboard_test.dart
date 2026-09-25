@@ -246,7 +246,7 @@ void main() {
       app.edits.deleteReply!.complete();
       await tester.pumpAndSettle();
       expect(app.stateOf('work'), isNull);
-      expect(find.text('Machines Manager'), findsOneWidget);
+      expect(find.text('Machines'), findsOneWidget);
       expect(find.text('Workstation deleted.'), findsOneWidget);
     },
   );
@@ -343,7 +343,7 @@ void main() {
       await _mount(tester, app, keymap: map);
       await key(tester, LogicalKeyboardKey.enter);
       await key(tester, LogicalKeyboardKey.escape);
-      expect(find.text('Machines Manager'), findsOneWidget);
+      expect(find.text('Machines'), findsOneWidget);
       await key(tester, LogicalKeyboardKey.f8);
       await tester.pumpAndSettle();
       await key(tester, LogicalKeyboardKey.f8);
@@ -377,7 +377,7 @@ void main() {
       expect(app.edits.renames, [('work', 'Office')]);
       await key(tester, LogicalKeyboardKey.f4);
       await tester.pumpAndSettle();
-      expect(find.text('Machines Manager'), findsOneWidget);
+      expect(find.text('Machines'), findsOneWidget);
     },
   );
 

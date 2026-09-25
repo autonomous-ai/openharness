@@ -10,7 +10,10 @@ import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../state/harness_sessions.dart';
 import '../state/swarm_navigation.dart';
+import '../core/models.dart';
+import '../usage/ledger/usage_overview.dart' show formatTokens;
 import 'engine_identity.dart';
+import '../notify/alert_sounds.dart';
 
 /// A compact, live inventory. Action receipts belong to AppNotifier, so
 /// dismissing this surface never cancels a pause or launches a second resume.
@@ -22,12 +25,14 @@ class HarnessSessionManager extends StatefulWidget {
     required this.onClose,
     required this.onOpen,
     this.initialFilter = SessionFilter.all,
+    this.introduction,
   });
   final AppNotifier app;
   final List<String> recent;
   final VoidCallback onClose;
   final Future<bool> Function(HarnessSession) onOpen;
   final SessionFilter initialFilter;
+  final Widget? introduction;
 
   @override
   State<HarnessSessionManager> createState() => _HarnessSessionManagerState();
@@ -54,6 +59,9 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
     _filter = widget.initialFilter;
     _clock = Timer.periodic(const Duration(minutes: 1), (_) => _changed());
     widget.app.addListener(_changed);
+    // Its own notifier — marking one agent must not rebuild the workspace — so
+    // this list asks for its own redraw while it is open.
+    widget.app.agentUnread.addListener(_changed);
   }
 
   void _changed() {
@@ -63,6 +71,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   @override
   void dispose() {
     widget.app.removeListener(_changed);
+    widget.app.agentUnread.removeListener(_changed);
     _clock?.cancel();
     _search.dispose();
     _searchFocus.dispose();
@@ -120,6 +129,10 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
   }
 
   Future<void> _open(HarnessSession row, {bool answering = false}) async {
+    // Going to the harness is what makes its news read. Done here rather than
+    // after the open succeeds: the person has decided to look, and a mark that
+    // outlived the click would read as the click not having worked.
+    widget.app.markAgentSeen(row.machine.machine.machineId, row.agent.id);
     if (answering) {
       final current = widget.app.questionFor(row.machineId, row.agent.id);
       if (current == null || row.question?.sameAs(current) != true) return;
@@ -187,6 +200,11 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
               26,
         ) +
         (showingQuestions ? scale.scale(AppType.monoMetaSize) * 1.4 + 6 : 0);
+    double heightFor(HarnessSession row) =>
+        rowHeight +
+        (row.agent.hasMonitorStats
+            ? scale.scale(AppType.monoMetaSize) * 1.4 + 6
+            : 0);
     return FocusScope(
       child: CallbackShortcuts(
         bindings: {
@@ -236,10 +254,14 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
               // Materialize a distant row, then use its real bounds. Question
               // text, errors, row padding and enlarged type all affect height.
               _scroll.jumpTo(
-                (6 + next * (rowHeight + 2)).clamp(
-                  0,
-                  _scroll.position.maxScrollExtent,
-                ),
+                (6 +
+                        rows
+                            .take(next)
+                            .fold<double>(
+                              0,
+                              (height, row) => height + heightFor(row) + 2,
+                            ))
+                    .clamp(0, _scroll.position.maxScrollExtent),
               );
               WidgetsBinding.instance.addPostFrameCallback((_) => reveal());
             }
@@ -258,16 +280,17 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text('Harness Monitor', style: AppType.heading()),
+                        child: Text('Harnesses', style: AppType.heading()),
                       ),
                       IconButton(
-                        tooltip: 'Close Harness Monitor',
+                        tooltip: 'Close Harnesses',
                         onPressed: widget.onClose,
                         icon: const Icon(LucideIcons.x, size: 16),
                       ),
                     ],
                   ),
                 ),
+                if (widget.introduction != null) widget.introduction!,
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: TextField(
@@ -282,7 +305,7 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                     },
                     decoration: InputDecoration(
                       hintText:
-                          'Search harnesses, machines, projects, branches…',
+                          'Search harnesses, machines, projects, branches',
                       hintStyle: AppType.monoLabel(color: AppPalette.textFaint),
                       prefixIcon: Icon(
                         LucideIcons.search,
@@ -446,17 +469,15 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                all.isEmpty
-                                    ? 'Your harnesses live here'
-                                    : showingQuestions &&
-                                          _search.text.trim().isEmpty
+                                showingQuestions && _search.text.trim().isEmpty
                                     ? 'No harnesses need your input'
+                                    : all.isEmpty
+                                    ? 'Your harnesses live here'
                                     : 'No matching harnesses',
                                 style: AppType.label(height: 1.3),
                               ),
                               if (!showingQuestions ||
-                                  _search.text.trim().isNotEmpty ||
-                                  all.isEmpty) ...[
+                                  _search.text.trim().isNotEmpty) ...[
                                 const SizedBox(height: 6),
                                 Text(
                                   all.isEmpty
@@ -506,9 +527,13 @@ class _HarnessSessionManagerState extends State<HarnessSessionManager> {
                                   () => GlobalKey(),
                                 ),
                                 row: row,
-                                height: rowHeight,
+                                height: heightFor(row),
                                 now: now,
                                 showQuestion: showingQuestions,
+                                unread: widget.app.agentUnread.kindFor(
+                                  row.machine.machine.machineId,
+                                  row.agent.id,
+                                ),
                                 selected:
                                     _selected != null && selected?.id == row.id,
                                 busy: busy,
@@ -545,6 +570,7 @@ class _SessionRow extends StatelessWidget {
     required this.height,
     required this.now,
     required this.showQuestion,
+    required this.unread,
     required this.selected,
     required this.busy,
     required this.pendingLabel,
@@ -558,6 +584,11 @@ class _SessionRow extends StatelessWidget {
   final DateTime now;
   final bool selected, busy, showQuestion;
   final String pendingLabel;
+
+  /// News nobody has looked at yet, or null. Drawn beside the name, so the mark
+  /// sits with the thing it is about rather than in a column of its own.
+  final AlertKind? unread;
+
   final VoidCallback onOpen, onToggle, onAnswer;
   final String? error;
 
@@ -578,26 +609,41 @@ class _SessionRow extends StatelessWidget {
         ? 'Last activity unavailable'
         : 'Last active ${harnessActivityAge(row.lastActiveAt, now)} ago';
     Widget detail(IconData icon, String text, Color color, {String? tooltip}) =>
-        Flexible(
-          child: Tooltip(
-            message: tooltip ?? text,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 11, color: color),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    text,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppType.monoMeta(color: color, height: 1.3),
-                  ),
+        Tooltip(
+          message: tooltip ?? text,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 11, color: color),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.monoMeta(color: color, height: 1.3),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
+    final details = [
+      detail(
+        LucideIcons.monitor,
+        row.machine.machine.displayName,
+        AppPalette.textSecondary,
+      ),
+      if (row.project case final project?) ...[
+        detail(
+          LucideIcons.folder,
+          project.label,
+          const Color(0xff79bbaf),
+          tooltip: project.cwd,
+        ),
+        if (project.shownBranch case final branch?)
+          detail(LucideIcons.gitBranch, branch, const Color(0xff8dbb79)),
+      ],
+    ];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: DecoratedBox(
@@ -628,6 +674,14 @@ class _SessionRow extends StatelessWidget {
                         row.project?.shownBranch,
                         row.question?.prompt,
                         activity,
+                        if (row.agent.tokensUsed case final count?)
+                          '$count tokens used',
+                        if (row.agent.outputStats case final stats?) ...[
+                          if (stats.hasEdits)
+                            '${stats.linesAdded} lines added, ${stats.linesRemoved} lines removed in recorded edits',
+                          if (stats.pullRequestsCreated case final count?)
+                            '$count pull requests created',
+                        ],
                         busy ? pendingLabel : row.status,
                       ].whereType<String>().join(', '),
                       onTap: canOpen ? onOpen : null,
@@ -662,6 +716,26 @@ class _SessionRow extends StatelessWidget {
                                             ),
                                           ),
                                         ),
+                                        if (row.lastActiveAt != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              left: 8,
+                                            ),
+                                            child: Tooltip(
+                                              message:
+                                                  'Last active ${row.lastActiveAt!.toLocal()}',
+                                              child: Text(
+                                                '· ${harnessActivityAge(row.lastActiveAt, now)}',
+                                                key: ValueKey(
+                                                  'session-age:${row.id}',
+                                                ),
+                                                style: AppType.monoMeta(
+                                                  color:
+                                                      AppPalette.textSecondary,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
                                         if (attention != null && !busy)
                                           Padding(
                                             padding: const EdgeInsets.only(
@@ -677,46 +751,47 @@ class _SessionRow extends StatelessWidget {
                                       ],
                                     ),
                                     const SizedBox(height: 6),
-                                    Row(
-                                      children: [
-                                        detail(
-                                          LucideIcons.monitor,
-                                          row.machine.machine.displayName,
-                                          AppPalette.textSecondary,
-                                        ),
-                                        if (row.project
-                                            case final project?) ...[
-                                          const SizedBox(width: 12),
-                                          detail(
-                                            LucideIcons.folder,
-                                            project.label,
-                                            const Color(0xff79bbaf),
-                                            tooltip: project.cwd,
-                                          ),
-                                          if (project.shownBranch
-                                              case final branch?) ...[
-                                            const SizedBox(width: 12),
-                                            detail(
-                                              LucideIcons.gitBranch,
-                                              branch,
-                                              const Color(0xff8dbb79),
-                                            ),
+                                    LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        // Cap leading labels without reserving
+                                        // columns: the branch gets all space
+                                        // left over by short machine/project names.
+                                        final leadingWidth = math.max(
+                                          0.0,
+                                          (constraints.maxWidth -
+                                                  12 * (details.length - 1)) /
+                                              details.length,
+                                        );
+                                        return Row(
+                                          children: [
+                                            for (
+                                              var i = 0;
+                                              i < details.length;
+                                              i++
+                                            ) ...[
+                                              if (i > 0)
+                                                const SizedBox(width: 12),
+                                              if (i == details.length - 1)
+                                                Expanded(child: details[i])
+                                              else
+                                                ConstrainedBox(
+                                                  constraints: BoxConstraints(
+                                                    maxWidth: leadingWidth,
+                                                  ),
+                                                  child: details[i],
+                                                ),
+                                            ],
                                           ],
-                                        ],
-                                        const SizedBox(width: 12),
-                                        detail(
-                                          LucideIcons.clock3,
-                                          harnessActivityAge(
-                                            row.lastActiveAt,
-                                            now,
-                                          ),
-                                          AppPalette.textSecondary,
-                                          tooltip: row.lastActiveAt == null
-                                              ? activity
-                                              : 'Last active ${row.lastActiveAt!.toLocal()}',
-                                        ),
-                                      ],
+                                        );
+                                      },
                                     ),
+                                    if (row.agent.hasMonitorStats) ...[
+                                      const SizedBox(height: 6),
+                                      _MonitorStats(
+                                        agent: row.agent,
+                                        id: row.id,
+                                      ),
+                                    ],
                                     if (showQuestion)
                                       if (row.question
                                           case final question?) ...[
@@ -731,7 +806,7 @@ class _SessionRow extends StatelessWidget {
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: AppType.monoMeta(
-                                              color: const Color(0xffd9ad70),
+                                              color: _UnreadMark.waitingTint,
                                               height: 1.3,
                                             ),
                                           ),
@@ -759,14 +834,33 @@ class _SessionRow extends StatelessWidget {
                         semanticLabel:
                             'Needs input for ${row.agent.displayName}',
                       ),
+                    )
+                  // The SAME SLOT, never both: a row is either waiting on a
+                  // person or it is not, and the amber question already says
+                  // the first case. This says the other one — work that is done
+                  // and has not been looked at — in the one place the eye is
+                  // already checking for a row's state.
+                  else if (unread == AlertKind.done)
+                    IconButton(
+                      key: ValueKey('session-unread-done:${row.id}'),
+                      tooltip: 'Finished',
+                      onPressed: canOpen ? onOpen : null,
+                      color: _UnreadMark.doneTint,
+                      icon: Icon(
+                        LucideIcons.circleCheckBig,
+                        size: 17,
+                        semanticLabel:
+                            'Finished, not yet seen: ${row.agent.displayName}',
+                      ),
                     ),
                   Tooltip(
+                    // Every harness pauses; what differs is how much comes
+                    // back, and the button says which before it is pressed —
+                    // a shell loses what was running in it, and an engine with
+                    // no way to reopen its conversation returns to a new one.
                     message: busy
                         ? pendingLabel
-                        : row.controlUnavailable ??
-                              (row.agent.isStopped
-                                  ? 'Resume harness'
-                                  : 'Pause harness'),
+                        : row.controlUnavailable ?? _toggleLabel(row),
                     child: SizedBox(
                       width: 40,
                       height: 40,
@@ -824,4 +918,122 @@ class _SessionRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The two tints an unread harness is drawn in.
+///
+/// Named here rather than written at each use, so this and the "needs input"
+/// button beside it cannot drift into two different yellows.
+///
+/// There is no widget any more. A left-hand pip was tried and removed: the row
+/// already had a place for its state — the amber question button on the right —
+/// so a second marker beside the name said the same thing twice for a question,
+/// while putting "finished" somewhere the eye was not looking. Both live in
+/// that one slot now, and never both at once.
+abstract final class _UnreadMark {
+  /// Waiting on a person. The amber the question button has always used.
+  static const waitingTint = Color(0xffd9ad70);
+
+  /// Finished. Green because it is the one colour nobody reads as "act now",
+  /// which is exactly the difference being drawn.
+  static const doneTint = Color(0xff6fbf8b);
+}
+
+class _MonitorStats extends StatelessWidget {
+  const _MonitorStats({required this.agent, required this.id});
+  final Agent agent;
+  final String id;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = AppType.monoMeta(
+      color: AppPalette.textSecondary,
+      height: 1.3,
+    );
+    String measured(DateTime? time) =>
+        time == null ? '' : '\nUpdated ${time.toLocal()}';
+    final stats = agent.outputStats;
+    final items = <Widget>[
+      if (agent.tokensUsed case final count?)
+        Tooltip(
+          message:
+              '$count tokens · input, output and cached input${measured(agent.tokensUpdatedAt)}',
+          child: Text(
+            '${formatTokens(count)} tokens',
+            key: ValueKey('session-tokens:$id'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      if (stats != null && stats.hasEdits)
+        Tooltip(
+          message:
+              '${stats.linesAdded} lines added · ${stats.linesRemoved} removed\n'
+              'Recorded edits by this harness, including repeated edits. Not the current branch diff.'
+              '${measured(stats.updatedAt)}',
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: '+${formatTokens(stats.linesAdded!)}',
+                  style: const TextStyle(color: Color(0xff8dbb79)),
+                ),
+                const TextSpan(text: ' '),
+                TextSpan(
+                  text: '−${formatTokens(stats.linesRemoved!)}',
+                  style: const TextStyle(color: Color(0xffd28f87)),
+                ),
+              ],
+            ),
+            key: ValueKey('session-edits:$id'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      if (stats?.pullRequestsCreated case final count?)
+        Tooltip(
+          message:
+              '$count ${count == 1 ? 'pull request' : 'pull requests'} created by this harness\n'
+              'Confirmed creation receipts. Cached; not a live GitHub status.${measured(stats?.updatedAt)}',
+          child: Text(
+            '$count ${count == 1 ? 'PR' : 'PRs'}',
+            key: ValueKey('session-prs:$id'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+    ];
+    return Row(
+      children: [
+        for (var i = 0; i < items.length; i++) ...[
+          if (i > 0)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text('·', style: style),
+            ),
+          Flexible(child: items[i]),
+        ],
+      ],
+    );
+  }
+}
+
+/// What the Pause/Resume button promises for this row. Three answers, because
+/// three things can come back: the same shell, the same conversation, or the
+/// harness with a new one (`resumeMode` on the agent frame).
+String _toggleLabel(HarnessSession row) {
+  if (isTerminalEngine(row.agent.engine)) {
+    return row.agent.isStopped
+        ? 'Open a fresh shell here'
+        : 'Pause terminal — ends this shell and anything running in it';
+  }
+  if (row.agent.resumesFreshConversation) {
+    return row.agent.isStopped
+        ? 'Resume as a new conversation'
+        : 'Pause harness — it comes back as a new conversation';
+  }
+  return row.agent.isStopped ? 'Resume harness' : 'Pause harness';
 }

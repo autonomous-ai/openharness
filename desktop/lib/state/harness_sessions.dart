@@ -48,12 +48,12 @@ class HarnessSession {
       (online &&
           (agent.terminalAvailable ||
               (agent.isStopped &&
-                  agent.canResumeConversation &&
+                  agent.canPauseAndResume &&
                   !machine.machine.isShared)));
   bool get canControl =>
       online &&
       !machine.machine.isShared &&
-      agent.canResumeConversation &&
+      agent.canPauseAndResume &&
       (agent.isStopped || agent.terminalAvailable) &&
       agent.launchState != 'starting';
   String get status => !online
@@ -61,7 +61,7 @@ class HarnessSession {
       : machine.machine.isShared
       ? 'View only'
       : agent.isStopped
-      ? (agent.canResumeConversation ? 'Paused' : 'Resume unavailable')
+      ? (agent.canPauseAndResume ? 'Paused' : 'Resume unavailable')
       : agent.launchState == 'failed'
       ? 'Start failed'
       : agent.launchState == 'starting'
@@ -77,10 +77,12 @@ class HarnessSession {
       ? 'Reconnect ${machine.machine.displayName} to control this harness.'
       : machine.machine.isShared
       ? 'Shared harnesses are view-only.'
-      : !agent.canResumeConversation
+      // Only reachable against a daemon too old to report what its engines can
+      // resume; a current one offers Pause for every harness it runs.
+      : !agent.canPauseAndResume
       ? (agent.engine == 'claude' || agent.engine == 'codex'
             ? 'Waiting for a saved conversation before enabling pause and resume.'
-            : 'Pause and resume are not available for this engine yet.')
+            : 'Update the harness CLI on this machine to pause and resume this engine.')
       : !canControl
       ? agent.launchDetail ??
             agent.terminalUnavailableReason ??
@@ -93,21 +95,25 @@ List<HarnessSession> harnessSessions(AppNotifier app) {
     for (final pane in app.allPanes)
       if (pane.agentId != null) (pane.machineId, pane.agentId),
   };
+  bool known(String machine, String agent) =>
+      open.contains((machine, agent)) || app.hasOpenedHarness(machine, agent);
   return [
     for (final machine in app.machineStates.values)
       for (final agent in machine.agents)
-        HarnessSession(
-          machine: machine,
-          agent: agent,
-          open: open.contains((machine.machine.machineId, agent.id)),
-          working: machine.processingAgentIds.contains(agent.id),
-          question: machine.blockedAgents[agent.id],
-        ),
+        if (known(machine.machine.machineId, agent.id))
+          HarnessSession(
+            machine: machine,
+            agent: agent,
+            open: open.contains((machine.machine.machineId, agent.id)),
+            working: machine.processingAgentIds.contains(agent.id),
+            question: machine.blockedAgents[agent.id],
+          ),
     // Keep a real pending question visible while its roster entry is missing.
     // It must never become an invented terminal or a target for Pause.
     for (final machine in app.machineStates.values)
       for (final question in machine.blockedAgents.values)
-        if (!machine.agents.any((agent) => agent.id == question.agentId))
+        if (known(machine.machine.machineId, question.agentId) &&
+            !machine.agents.any((agent) => agent.id == question.agentId))
           HarnessSession(
             machine: machine,
             agent: Agent(id: question.agentId, name: 'Unavailable harness'),

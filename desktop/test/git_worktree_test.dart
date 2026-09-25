@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
@@ -72,6 +73,126 @@ void main() {
       expect((await readLocalGitProject('relative'))['error'], 'INVALID_PATH');
     },
   );
+
+  test(
+    'discovers newly pushed branches without fetching until Start',
+    () async {
+      final remote = p.join(root.path, 'remote.git');
+      final clone = p.join(root.path, 'other computer');
+      await git(['clone', '--bare', repo, remote]);
+      await git([
+        'clone',
+        '--no-local',
+        '--single-branch',
+        '--branch',
+        'main',
+        remote,
+        clone,
+      ]);
+      await git(['remote', 'add', 'origin', remote]);
+      await git(['switch', '-c', 'feat/toolbar-onboarding']);
+      await File(p.join(repo, 'src/value')).writeAsString('new remote work');
+      await git(['commit', '-am', 'new work']);
+      await git(['push', 'origin', 'feat/toolbar-onboarding']);
+      await File(p.join(clone, 'src/value'))
+          .writeAsString('unsaved local work');
+      final refs = await git(['show-ref'], clone);
+      final saved = GitProjectInfo.fromJson(await readLocalGitProject(clone));
+      expect(
+        saved.branches.map((b) => b.name),
+        isNot(contains('origin/feat/toolbar-onboarding')),
+      );
+      final data = await readLocalGitProject(clone, refresh: true);
+      final fresh = GitProjectInfo.fromJson(data);
+      expect(data['refreshed'], true);
+      expect(
+        fresh.branches.map((b) => b.name),
+        contains('origin/feat/toolbar-onboarding'),
+      );
+      expect(
+        await git(['show-ref'], clone),
+        refs,
+        reason: 'Looking up names must not download objects or write refs.',
+      );
+      expect(
+        await File(p.join(clone, 'src/value')).readAsString(),
+        'unsaved local work',
+      );
+      final path = await worktree(
+        folder: clone,
+        ref: 'refs/remotes/origin/feat/toolbar-onboarding',
+        name: 'feat/toolbar-onboarding',
+      );
+      expect(
+        await File(p.join(path, 'src/value')).readAsString(),
+        'new remote work',
+      );
+      expect(await git(['branch', '--show-current'], clone), 'main');
+    },
+  );
+
+  test('refresh coalesces requests for one repository and preserves offline choices', () async {
+    final remote = p.join(root.path, 'remote.git');
+    await git(['clone', '--bare', repo, remote]);
+    await git(['remote', 'add', 'origin', remote]);
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    var lookups = 0;
+    Future<Process> start(List<String> args, Map<String, String> env) async {
+      if (args.contains('ls-remote')) {
+        lookups++;
+        if (!entered.isCompleted) entered.complete();
+        await release.future;
+      }
+      return Process.start(
+        'git',
+        args,
+        environment: env,
+        includeParentEnvironment: false,
+      );
+    }
+
+    final first = readLocalGitProject(repo, refresh: true, startProcess: start);
+    await entered.future;
+    final second = readLocalGitProject(
+      repo,
+      refresh: true,
+      startProcess: start,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(lookups, 1);
+    release.complete();
+    final answers = await Future.wait([first, second]);
+    expect(answers.every((answer) => answer['refreshed'] == true), true);
+    await git([
+      'remote',
+      'set-url',
+      'origin',
+      p.join(root.path, 'missing.git'),
+    ]);
+    final offline = await readLocalGitProject(repo, refresh: true);
+    expect(offline['refreshed'], false);
+    expect(
+      GitProjectInfo.fromJson(offline).branches.map((b) => b.name),
+      contains('origin/feature'),
+    );
+  });
+
+  test('successful refresh removes deleted remote choices and keeps local branches', () async {
+    final remote = p.join(root.path, 'remote.git');
+    await git(['clone', '--bare', repo, remote]);
+    await git(['remote', 'add', 'origin', remote]);
+    await git(['branch', '-D', 'feature'], remote);
+    final info = GitProjectInfo.fromJson(
+      await readLocalGitProject(repo, refresh: true),
+    );
+    expect(info.branches.map((b) => b.name), contains('feature'));
+    expect(info.branches.map((b) => b.name), isNot(contains('origin/feature')));
+    expect(
+      await git(['show-ref', '--verify', 'refs/remotes/origin/feature']),
+      isNotEmpty,
+    );
+  });
 
   test('concurrent worktrees use the selected ref, new branches, and preserve dirty source files', () async {
     await File(p.join(repo, 'src', 'value')).writeAsString('keep my work');

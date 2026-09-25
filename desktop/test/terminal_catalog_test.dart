@@ -1,9 +1,9 @@
+import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/swarm_navigation.dart';
-import 'package:harness/widgets/search_result_text.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 
@@ -21,15 +21,15 @@ void main() {
       seedMixedAgents(app);
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(input, 'login');
       await tester.pump();
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
           .search;
-      // Existing matches grow upward from the pinned New Harness action.
-      await key(tester, LogicalKeyboardKey.arrowUp);
+      // Existing matches follow the New Harness action from top to bottom.
+      await key(tester, LogicalKeyboardKey.arrowDown);
       expect(search.selected!.isCreate, isFalse);
       final selected = search.selected!.id;
       tester.view.physicalSize = const Size(600, 800);
@@ -50,21 +50,11 @@ void main() {
           findsOneWidget,
           reason: 'Selected row must remain visible with preview=$preview',
         );
-        final texts = find.descendant(
-          of: row,
-          matching: find.byType(SearchResultText),
-        );
-        final title = tester.getRect(texts.first);
-        final detail = tester.getRect(texts.last);
         final bounds = tester.getRect(row);
-        expect(detail.top, greaterThanOrEqualTo(title.bottom - .01));
-        final titleParagraph = tester.renderObject<RenderParagraph>(
-          find.descendant(of: texts.first, matching: find.byType(RichText)),
+        expect(
+          find.descendant(of: row, matching: find.text(search.selected!.title)),
+          findsOneWidget,
         );
-        expect(titleParagraph.didExceedMaxLines, isFalse);
-        expect(title.left, greaterThanOrEqualTo(bounds.left));
-        expect(title.right, lessThanOrEqualTo(bounds.right));
-        expect(detail.bottom, lessThanOrEqualTo(bounds.bottom));
         final viewport = tester.getRect(
           find.byKey(const ValueKey('swarm-search-result-list')),
         );
@@ -101,7 +91,7 @@ void main() {
       final input = find.byKey(const ValueKey('swarm-search-input'));
 
       Future<void> command(String query) async {
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
         await tester.enterText(input, '> $query');
         await tester.pump();
         await key(tester, LogicalKeyboardKey.enter);
@@ -109,13 +99,14 @@ void main() {
       }
 
       await key(tester, LogicalKeyboardKey.keyT, cmd: true);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+      await openHarnessPicker(tester);
       await tester.enterText(input, 'login claude M2');
       await tester.pump();
       await key(tester, LogicalKeyboardKey.enter);
       final sharedTab = app.activeSwarm;
       expect(sharedTab, isNot(same(source)));
-      expect(sharedTab.name, 'Fix login redirect');
+      // Named after the harness's project, not the harness itself.
+      expect(sharedTab.name, 'openharness');
       expect(sharedTab.panes.single.session, same(claude));
       expect(source.panes, [firstPane, secondPane]);
       await key(tester, LogicalKeyboardKey.keyW, cmd: true);
@@ -164,30 +155,33 @@ void main() {
   );
 
   testWidgets(
-    'same-task results identify their agent without opening a preview',
+    'same-task results show identity in preview and remain searchable by metadata',
     (tester) async {
       final app = createApp();
       addTearDown(app.dispose);
       seedMixedAgents(app);
       app.adoptSessionForTest(terminal('a0', []));
       await mount(tester, app);
-      await key(tester, LogicalKeyboardKey.keyO, cmd: true);
-      await key(tester, LogicalKeyboardKey.slash, ctrl: true);
+      await openHarnessPicker(tester);
       final input = find.byKey(const ValueKey('swarm-search-input'));
-      await tester.enterText(input, 'login');
-      await tester.pump();
+      final search = tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search;
       for (final (id, engine) in [('a0', 'Codex'), ('a1', 'Claude')]) {
-        final row = find.byKey(ValueKey(agentDestinationId('m', id)));
-        final visibleText = tester
-            .widgetList<SearchResultText>(
-              find.descendant(of: row, matching: find.byType(SearchResultText)),
-            )
-            .map((widget) => widget.text)
-            .join(' ');
-        expect(visibleText, contains(engine));
-        expect(visibleText, contains('M2'));
+        await tester.enterText(input, 'login $engine M2');
+        await tester.pump();
+        expect(search.selected!.id, agentDestinationId('m', id));
+        final preview = find.byKey(const ValueKey('swarm-search-preview'));
+        expect(preview, findsOneWidget);
+        expect(
+          find.descendant(of: preview, matching: find.textContaining(engine)),
+          findsWidgets,
+        );
+        expect(
+          find.descendant(of: preview, matching: find.textContaining('M2')),
+          findsWidgets,
+        );
       }
-      expect(find.byKey(const ValueKey('swarm-search-preview')), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
   );

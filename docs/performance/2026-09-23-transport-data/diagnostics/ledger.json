@@ -1,0 +1,114 @@
+{
+  "purpose": "Calibration only. Not pooled with the committed-source 200-sample repeated series. Early pilot source revisions are explicitly unspecified/uncommitted.",
+  "artifacts": [
+    {
+      "file": "pilot-home-direct-only.json",
+      "success": false,
+      "error": "Requested p2p unavailable; actual route relay",
+      "cleanupDeleted": true,
+      "sourceRevision": "15a2c874",
+      "sha256": "8182f3aba4c4c136e931b08660535e5907b61ef1b5af34ddb4fce5edfabc9daa",
+      "sourceSha256": "bc37d5a43aff1f0cf3b735ba25afa2cb6c7bf16ba3e485c84dfa9d4ad55bb87b",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ],
+      "sanitizedNegotiationTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +87ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +519ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +522ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25001ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    },
+    {
+      "file": "pilot-office-direct-only.json",
+      "success": false,
+      "error": "Requested p2p unavailable; actual route relay",
+      "cleanupDeleted": true,
+      "sourceRevision": "pilot-direct-only-uncommitted",
+      "sha256": "deb20c2a5a6b1ec45f909943d462a39157837e3b1e484d5bb2639ca213c0d995",
+      "sourceSha256": "0ff9bde47694fcb44efc5aadd278fe205eda5cbc2aca26f4efff8bf05a5a3a59",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ],
+      "sanitizedNegotiationTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +75ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +557ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +562ms",
+        "[p2p] gave up \u00b7 machine=[machine] reason=negotiation_timeout after=25003ms \u00b7 answer=yes ours=host/srflx peer=host/srflx ice=connecting \u2014 terminals stay on the ws relay",
+        "[p2p] retry scheduled \u00b7 machine=[machine] in 60s (1/10 this hour)"
+      ]
+    },
+    {
+      "file": "pilot-office-p2p.json",
+      "success": false,
+      "error": "Requested p2p unavailable; actual route turn",
+      "cleanupDeleted": true,
+      "sourceRevision": "pilot-uncommitted",
+      "sha256": "968fc3092db462566ab5717e845eaa70ca66c496d9a339ccbae116c47a2fe7dc",
+      "sourceSha256": "9383d99fbfbed86a3428d6729359a830040797c624090170cd55fe8d0d253766",
+      "redactions": [
+        "failureDiagnostics.outputTail"
+      ],
+      "sanitizedNegotiationTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +0ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +129ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +673ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +678ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connected +1631ms",
+        "[p2p] connected \u00b7 machine=[machine] via=turn setup=1722ms"
+      ]
+    },
+    {
+      "file": "pilot-office-relay.json",
+      "success": true,
+      "error": null,
+      "cleanupDeleted": true,
+      "sourceRevision": "pilot-uncommitted",
+      "sha256": "177dda0723d6f71c1189dc8be3b658418f36fd31338290224cbb888fd545a81a",
+      "sourceSha256": "177dda0723d6f71c1189dc8be3b658418f36fd31338290224cbb888fd545a81a",
+      "redactions": [],
+      "sanitizedNegotiationTrace": [
+        "[p2p] off \u00b7 machine=[machine] background session, no terminals \u2014 ws relay only"
+      ]
+    },
+    {
+      "file": "pilot-office-turn.json",
+      "success": true,
+      "error": null,
+      "cleanupDeleted": true,
+      "sourceRevision": "15a2c874",
+      "sha256": "6d266f83e798c69a3437397ee9dab9fcf68e9216ec97d53939c33568dc23ca89",
+      "sourceSha256": "6d266f83e798c69a3437397ee9dab9fcf68e9216ec97d53939c33568dc23ca89",
+      "redactions": [],
+      "sanitizedNegotiationTrace": [
+        "[p2p] policy \u00b7 machine=[machine] stun=8 turn=6 urls openWait=2500ms",
+        "[p2p] step \u00b7 machine=[machine] stun-raced +1ms",
+        "[p2p] step \u00b7 machine=[machine] offer-sent +162ms",
+        "[p2p] step \u00b7 machine=[machine] answer-in +662ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connecting +670ms",
+        "[p2p] step \u00b7 machine=[machine] ice-connected +2584ms",
+        "[p2p] connected \u00b7 machine=[machine] via=turn setup=2764ms"
+      ]
+    }
+  ],
+  "supplementalArtifacts": [
+    {
+      "file": "environment.json",
+      "sha256": "5daa248beeb9bf59b430aaa4b0ff797b875448e0ef7d57cd4fa85a84572aab2b"
+    },
+    {
+      "file": "cleanup-audit.json",
+      "sha256": "302f0caf2de3653d70c730f6000743ece002130e8d723858dc8180fc34107511"
+    },
+    {
+      "file": "failed-negotiations.json",
+      "sha256": "4f570e094c649d3c4199f2438648436aef2e775d4584240e5834d4e054046881"
+    }
+  ]
+}

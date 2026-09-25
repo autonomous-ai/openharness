@@ -654,6 +654,7 @@ HARNESSJS
 if [ "$INSTALL_MODE" != "host" ]; then
   echo "▸ Installing the managed grid into $RUNTIME_DIR"
   install_managed_grid || echo "  · the grid runtime will be fetched by the daemon on its next start"
+  "$NODE_BIN" "$HOME/.harness/cli/cli.js" dsh builtins || echo "  · Model Manager will be prepared on the next start"
 fi
 
 # 4. Ensure ~/.local/bin is on PATH (per shell), idempotently — defined up with the other helpers.

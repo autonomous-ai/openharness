@@ -209,7 +209,7 @@ const storeProjectAssets = <String, String>{
   'autonomous/circuitjs': 'assets/store/projects/circuitjs.jpg',
   'autonomous/yosys': 'assets/store/projects/yosys.jpg',
   'autonomous/orca-slicer': 'assets/store/projects/orca-slicer.jpg',
-  'autonomous/autonomous-grid': 'assets/store/grid-fleet.png',
+  'autonomous/autonomous-grid': 'assets/store/grid-fleet.jpg',
 };
 
 String? storeProjectAsset(DshEntry entry) =>

@@ -26,7 +26,7 @@ import {
   type GridLaunchRecord,
 } from './gridLaunch.js'
 import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
-import type { DshLaunch } from '../dsh/launch.js'
+import { harnessEnvToClear, type DshLaunch } from '../dsh/launch.js'
 
 export interface LaunchOverrides {
   /** Layered over the pane's inherited environment. The grid key lives here, and only here. */
@@ -69,9 +69,9 @@ export interface LaunchOverridesDeps {
    * file. See `engines/codex/ownLoginProvider.ts`.
    */
   readCodexConfig?: (path: string) => string | null
-  /** What a DSH adds to the launch (its env and argv), or null when it is not installed here any
-   *  more — in which case the agent relaunches as its plain base engine and says so in the log. */
-  dshLaunch?: (dsh: string, workspace: string) => DshLaunch | null
+  /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
+   * relaunch: starting a plain agent would silently change the user's chosen harness. */
+  dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => DshLaunch | null
 }
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
@@ -87,6 +87,8 @@ export interface LaunchSource {
   subscriptionModel?: string | null
   /** The DSH the agent was created as; its env rides on every relaunch (`HARNESS_DSH` included). */
   dsh?: string | null
+  /** The session-scoped runtime bundle. Older rows use their stable agent id. */
+  dshRuntime?: string | null
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
   /**
@@ -144,16 +146,21 @@ export async function buildLaunchOverrides(
   const base = await buildBaseLaunchOverrides(deps, engine, source, configKey)
   if (!base.ok) return base
   let overrides = base.overrides
+  if (source.dsh && !source.cwd) return { ok: false, error: 'DSH_WORKSPACE_MISSING', detail: `${source.dsh} has no saved workspace` }
   if (source.dsh && source.cwd) {
-    const dsh = deps.dshLaunch?.(source.dsh, source.cwd) ?? null
+    let dsh: DshLaunch | null
+    try {
+      dsh = deps.dshLaunch?.(source.dsh, source.cwd, engine, source.dshRuntime ?? configKey) ?? null
+    } catch (error) {
+      return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
+    }
+    if (!dsh) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
     // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own
     // and a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.
-    if (dsh) {
-      overrides = {
-        ...overrides,
-        env: { ...overrides.env, ...dsh.env },
-        extraArgs: [...overrides.extraArgs, ...dsh.args],
-      }
+    overrides = {
+      ...overrides,
+      env: { ...overrides.env, ...dsh.env },
+      extraArgs: [...overrides.extraArgs, ...dsh.args],
     }
   }
   // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
@@ -163,7 +170,7 @@ export async function buildLaunchOverrides(
   if (source.agent && supportsNamedAgent(engine)) {
     overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent)] }
   }
-  return { ok: true, overrides }
+  return { ok: true, overrides: { ...overrides, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
 }
 
 async function buildBaseLaunchOverrides(

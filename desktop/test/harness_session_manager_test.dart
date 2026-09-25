@@ -11,10 +11,10 @@ import 'package:harness/state/harness_sessions.dart';
 import 'package:harness/state/pending_question.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/widgets/harness_session_manager.dart';
-import 'package:harness/widgets/pane_minimize.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
+import 'keymap_host_test.dart' show key;
 import 'support/restart_connection.dart';
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
@@ -51,6 +51,8 @@ void main() {
   setUp(() {
     connection = RestartConnection();
     app = createApp(connectionForTest: (_) => connection);
+    app.rememberOpenedHarness('m', 'a0');
+    app.rememberOpenedHarness('m', 'saved');
     app.machineStates['m']!
       ..machine = const Machine(
         machineId: 'm',
@@ -67,8 +69,24 @@ void main() {
       find.byKey(ValueKey('session-toggle:${agentDestinationId('m', id)}'));
   Future<void> open(WidgetTester tester) async {
     await mount(tester, app);
-    await tester.tap(find.byTooltip('Harness Monitor'));
+    await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
     await tester.pumpAndSettle();
+  }
+
+  /// A row past the fold is not built, and a fixture with a few harnesses in it
+  /// reaches that fold — the rows carry their token and edit figures now.
+  Future<Finder> reveal(WidgetTester tester, Finder target) async {
+    if (target.evaluate().isEmpty) {
+      await tester.scrollUntilVisible(
+        target,
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(target);
+    await tester.pumpAndSettle();
+    return target;
   }
 
   PendingQuestion question(String id, {String request = 'question'}) =>
@@ -119,6 +137,9 @@ void main() {
   );
 
   test('recent follows real activity before navigation recency', () {
+    for (final id in ['older', 'newer', 'unknown']) {
+      app.rememberOpenedHarness('m', id);
+    }
     app.machineStates['m']!.agents = [
       Agent.fromJson({'id': 'older', 'updatedAt': '2026-09-21T10:00:00Z'}),
       Agent.fromJson({'id': 'newer', 'updatedAt': '2026-09-22T10:00:00Z'}),
@@ -133,7 +154,51 @@ void main() {
     );
   });
 
+  testWidgets(
+    'displays remote cached tokens beneath context and leaves missing usage empty',
+    (tester) async {
+      app.machineStates['m']!.agents = [
+        Agent.fromJson({
+          'id': 'a0',
+          'name': 'Measured harness',
+          'engine': 'claude',
+          'sessionId': 'conversation',
+          'terminal': {'available': true},
+          'tokenUsage': {
+            'totalTokens': 1234567,
+            'updatedAt': '2026-09-22T16:00:00Z',
+          },
+          'outputStats': {
+            'linesAdded': 124,
+            'linesRemoved': 38,
+            'pullRequestsCreated': 2,
+            'updatedAt': '2026-09-22T16:00:00Z',
+          },
+        }),
+        _paused,
+      ];
+      await open(tester);
+      expect(find.text('1.2M tokens'), findsOneWidget);
+      expect(find.text('+124 −38'), findsOneWidget);
+      expect(find.text('2 PRs'), findsOneWidget);
+      expect(find.text('0 tokens'), findsNothing);
+      expect(
+        find.byKey(
+          ValueKey('session-tokens:${agentDestinationId('m', 'saved')}'),
+        ),
+        findsNothing,
+      );
+      expect(
+        tester.getTopLeft(find.text('1.2M tokens')).dy,
+        greaterThan(tester.getTopLeft(find.text('iMac — Office').first).dy),
+      );
+      expect(connection.requests, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test('attention filters live questions, retains missing agents, excludes paused history', () {
+    app.rememberOpenedHarness('m', 'missing');
     app.machineStates['m']!.blockedAgents.addAll({
       'a0': question('a0'),
       'saved': question('saved'),
@@ -165,18 +230,11 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.machineStates['m']!.blockedAgents['a0'] = question('a0');
       await mount(tester, app);
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-notifications-button')),
         findsNothing,
-      );
-      final managerIcon = tester.getRect(find.byTooltip('Harness Monitor'));
-      expect(
-        managerIcon.right,
-        lessThan(
-          tester.getRect(find.byKey(const ValueKey('swarm-store-button'))).left,
-        ),
       );
       await tester.tap(find.byKey(const ValueKey('session-filter:needsInput')));
       await tester.pump(const Duration(milliseconds: 300));
@@ -222,38 +280,6 @@ void main() {
       expect(find.text('Try another search or filter.'), findsNothing);
     },
   );
-
-  test('Genie geometry preserves endpoints and curves a narrowing neck without folding', () {
-    const size = Size(800, 600), target = Offset(740, -20);
-    expect(
-      paneMinimizeSlice(size, target, 0, 0),
-      const Rect.fromLTWH(0, 0, 800, 0),
-    );
-    expect(
-      paneMinimizeSlice(size, target, 0, 1),
-      const Rect.fromLTWH(0, 600, 800, 0),
-    );
-    expect(
-      paneMinimizeSlice(size, target, 1, 0).topLeft,
-      target - const Offset(11, 11),
-    );
-    expect(
-      paneMinimizeSlice(size, target, 1, 1).bottomRight,
-      target + const Offset(11, 11),
-    );
-    final neck = paneMinimizeSlice(size, target, .45, 0);
-    final base = paneMinimizeSlice(size, target, .45, 1);
-    expect(neck.width, lessThan(base.width * .7));
-    for (var frame = 0; frame <= 60; frame++) {
-      double previous = -double.infinity;
-      for (var band = 0; band <= 48; band++) {
-        final slice = paneMinimizeSlice(size, target, frame / 60, band / 48);
-        expect(slice.top, greaterThanOrEqualTo(previous));
-        expect(slice.width, inInclusiveRange(22, 800));
-        previous = slice.top;
-      }
-    }
-  });
 
   test('inventory deduplicates views, searches context, and sorts deterministically', () async {
     await app.addAgentToSwarm('m', 'a0');
@@ -308,7 +334,7 @@ void main() {
     (tester) async {
       await open(tester);
       expect(find.byType(HarnessSessionManager), findsOneWidget);
-      expect(find.text('Harness Monitor'), findsOneWidget);
+      expect(find.text('Harnesses'), findsOneWidget);
       expect(find.text('Running 1'), findsOneWidget);
       expect(find.text('Paused 1'), findsOneWidget);
       expect(find.text('Ready'), findsNothing);
@@ -319,7 +345,7 @@ void main() {
             .widget<TextField>(find.byKey(const ValueKey('session-search')))
             .decoration
             ?.hintText,
-        'Search harnesses, machines, projects, branches…',
+        'Search harnesses, machines, projects, branches',
       );
       await tester.enterText(
         find.byKey(const ValueKey('session-search')),
@@ -448,7 +474,7 @@ void main() {
       await tester.pump();
       connection.stopReplies.single.complete({'deleted': true});
       await tester.pump();
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pump();
       expect(toggle('a0'), findsNothing);
       expect(find.byTooltip('Pausing…'), findsOneWidget);
@@ -463,8 +489,128 @@ void main() {
   );
 
   testWidgets(
-    'unsupported engines stay openable without a misleading pause control',
+    'a terminal pauses and comes back as a fresh shell in the same tile',
     (tester) async {
+      // A shell holds no conversation, so the saved-conversation rule the
+      // engines live under has nothing to protect here — the daemon has always
+      // relaunched one (`resumeStoppedAgent.ts` exempts it).
+      app
+          .stateOf('m')!
+          .agents
+          .add(
+            const Agent(
+              id: 'shell',
+              name: 'Untitled Pane',
+              engine: 'terminal',
+              terminalAvailable: true,
+              project: _project,
+            ),
+          );
+      app.rememberOpenedHarness('m', 'shell');
+      await open(tester);
+      await reveal(tester, toggle('shell'));
+      expect(tester.widget<IconButton>(toggle('shell')).onPressed, isNotNull);
+      expect(
+        find.byTooltip(
+          'Pause terminal — ends this shell and anything running in it',
+        ),
+        findsOneWidget,
+      );
+
+      connection.inventory = Completer<Map<String, dynamic>>();
+      await tester.tap(toggle('shell'));
+      await tester.pump();
+      expect(connection.stops, ['shell']);
+      connection.stopReplies.single.complete({'deleted': true});
+      await tester.pump();
+      connection.inventory!.complete({
+        'agents': [
+          {
+            'id': 'shell',
+            'name': 'Untitled Pane',
+            'engine': 'terminal',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          },
+        ],
+      });
+      await tester.pumpAndSettle();
+      expect(app.stateOf('m')!.agents.single.isStopped, isTrue);
+      // Paused, not "Resume unavailable": it can come back.
+      expect(harnessSessions(app).single.status, 'Paused');
+      expect(find.text('Paused 1'), findsOneWidget);
+      expect(
+        tester.widget<IconButton>(toggle('shell')).onPressed,
+        isNotNull,
+        reason: 'the paused shell offers resume',
+      );
+      expect(find.byTooltip('Open a fresh shell here'), findsOneWidget);
+
+      await tester.tap(toggle('shell'));
+      await tester.pump();
+      expect(connection.types, ['agent_resume']);
+      connection.restartReplies.single.complete(
+        restartReceipt(
+          connection.requests.single['creationId'] as String,
+          agentId: 'shell',
+          name: 'Untitled Pane',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(app.stateOf('m')!.agents.single.isStopped, isFalse);
+    },
+  );
+
+  testWidgets('every engine the daemon reports is pausable, in its own words', (
+    tester,
+  ) async {
+    // The daemon says per engine how much a resume brings back (`resumeMode`).
+    // An engine that reopens its conversation and one that cannot both pause;
+    // only the sentence differs.
+    app.stateOf('m')!.agents.addAll(const [
+      Agent(
+        id: 'keeps',
+        name: 'Keeps its conversation',
+        engine: 'opencode',
+        sessionId: 'history',
+        resumeMode: 'conversation',
+        terminalAvailable: true,
+      ),
+      Agent(
+        id: 'fresh',
+        name: 'No resume flag',
+        engine: 'devin',
+        sessionId: 'history',
+        resumeMode: 'fresh',
+        terminalAvailable: true,
+      ),
+    ]);
+    // The Monitor lists the harnesses this app has opened.
+    app.rememberOpenedHarness('m', 'keeps');
+    app.rememberOpenedHarness('m', 'fresh');
+    await open(tester);
+    await reveal(tester, toggle('keeps'));
+    expect(tester.widget<IconButton>(toggle('keeps')).onPressed, isNotNull);
+    expect(
+      find.ancestor(
+        of: toggle('keeps'),
+        matching: find.byTooltip('Pause harness'),
+      ),
+      findsOneWidget,
+    );
+    await reveal(tester, toggle('fresh'));
+    expect(tester.widget<IconButton>(toggle('fresh')).onPressed, isNotNull);
+    expect(
+      find.byTooltip('Pause harness — it comes back as a new conversation'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'an engine a pre-resumeMode daemon cannot pause keeps its explanation',
+    (tester) async {
+      // No `resumeMode` on the frame: an older CLI, whose resume would refuse
+      // anything but claude/codex. Offering the button would only fail.
       app
           .stateOf('m')!
           .agents
@@ -477,14 +623,16 @@ void main() {
               terminalAvailable: true,
             ),
           );
+      app.rememberOpenedHarness('m', 'unsupported');
       await open(tester);
+      await reveal(tester, toggle('unsupported'));
       expect(
         tester.widget<IconButton>(toggle('unsupported')).onPressed,
         isNull,
       );
       expect(
         find.byTooltip(
-          'Pause and resume are not available for this engine yet.',
+          'Update the harness CLI on this machine to pause and resume this engine.',
         ),
         findsOneWidget,
       );
@@ -611,13 +759,9 @@ void main() {
         tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
       );
       await tester.pump();
-      final scope = tester.widget<PaneMinimizeScope>(
-        find.byType(PaneMinimizeScope),
-      );
-      await scope.close(app.focusedPane!);
-      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await tester.pump();
       expect(app.panes, isEmpty);
-      expect(scope.controller.paneId, isNull);
       expect(connection.stops, isEmpty);
     },
   );
@@ -665,10 +809,8 @@ void main() {
   );
 
   testWidgets(
-    'closing a pane animates into the manager without stopping its process',
+    'closing a pane removes it immediately without stopping its process',
     (tester) async {
-      final renderDir = Platform.environment['SESSION_MANAGER_RENDER_DIR'];
-      if (renderDir != null) await tester.runAsync(loadPreviewFonts);
       final live = terminal('a0', [])..agentName = 'Font styling review';
       live.terminal.write('Reviewing typography and spacing.\r\n\r\n');
       for (var i = 0; i < 20; i++) {
@@ -681,43 +823,15 @@ void main() {
       final pane = app.focusedPane!;
       final sibling = app.adoptSessionForTest(terminal('sibling', []));
       await mount(tester, app);
-      final scope = tester.widget<PaneMinimizeScope>(
-        find.byType(PaneMinimizeScope),
-      );
-      Future<void> frame(String name) async {
-        if (renderDir != null) {
-          await expectLater(
-            find.byType(MaterialApp),
-            matchesGoldenFile(Uri.file('$renderDir/minimize-$name.png')),
-          );
-        }
-      }
-
-      await frame('start');
-      final closing = scope.close(pane);
+      app.focusPane(pane.id);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 160));
+      await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
+      await tester.pump();
       expect(app.panes, [sibling]);
       expect(find.byKey(pane.cellKey), findsNothing);
-      expect(scope.controller.animation.value, greaterThan(0));
-      expect(
-        scope.controller.snapshot,
-        isNotNull,
-        reason: "The native snapshot drives the curved motion",
-      );
-      expect(find.byType(PaneMinimizeSnapshot), findsOneWidget);
-      await frame('neck');
-      await tester.pump(const Duration(milliseconds: 140));
-      await frame('travel');
-      await tester.pump(const Duration(milliseconds: 100));
-      await frame('arrival');
-      await tester.pump(const Duration(milliseconds: 160));
-      await closing;
-      await tester.pumpAndSettle();
-      expect(app.panes, [sibling]);
       expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
       expect(connection.stops, isEmpty);
-      await tester.tap(find.byTooltip('Harness Monitor'));
+      await tester.tap(find.byKey(const ValueKey('swarm-harnesses-button')));
       await tester.pumpAndSettle();
       expect(find.text(_running.name), findsOneWidget);
     },
@@ -745,7 +859,7 @@ void main() {
         tester.binding.defaultBinaryMessenger.handlePlatformMessage(
           channel.name,
           const StandardMethodCodec().encodeMethodCall(
-            const MethodCall('sessions'),
+            const MethodCall('harnessControls'),
           ),
           (_) {},
         );
@@ -762,6 +876,12 @@ void main() {
     app.notifyListeners();
     await tester.pumpAndSettle();
     expect(updates.last['attention'], 1);
+    app.machineStates['m']!.blockedAgents['hidden-worker'] = question(
+      'hidden-worker',
+    );
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(updates.last['attention'], 1);
     app.machineStates['m']!.blockedAgents.clear();
     app.notifyListeners();
     await tester.pumpAndSettle();
@@ -771,6 +891,31 @@ void main() {
   testWidgets('session manager fits the minimum Mac window and scaled text', (
     tester,
   ) async {
+    app.machineStates['m']!.agents = [
+      Agent.fromJson({
+        'id': 'a0',
+        'name': 'A long harness name that must leave room for the activity timestamp',
+        'engine': 'claude',
+        'sessionId': 'conversation',
+        'terminal': {'available': true},
+        'project': {
+          'name': 'autonomous-harness-desktop-with-a-long-project-name',
+          'cwd': '/work/autonomous-harness-desktop-with-a-long-project-name',
+          'branch':
+              'feat/centered-new-harness-session-picker-with-long-details',
+        },
+        'updatedAt': DateTime.now()
+            .subtract(const Duration(minutes: 8))
+            .toIso8601String(),
+        'tokenUsage': {'totalTokens': 1234567},
+        'outputStats': {
+          'linesAdded': 124,
+          'linesRemoved': 38,
+          'pullRequestsCreated': 2,
+        },
+      }),
+      _paused,
+    ];
     await open(tester);
     tester.view.physicalSize = const Size(880, 560);
     await tester.pumpAndSettle();
@@ -792,6 +937,23 @@ void main() {
       await tester.runAsync(loadPreviewFonts);
       debugDisableShadows = false;
       addTearDown(() => debugDisableShadows = true);
+      app.machineStates['m']!.machine = const Machine(
+        machineId: 'm',
+        name: 'M2',
+        authMode: MachineAuthMode.remote,
+      );
+      app.machineStates['m']!.agents[0] = const Agent(
+        id: 'a0',
+        name: 'Improve multiple-machine experience',
+        engine: 'codex',
+        sessionId: 'conversation',
+        terminalAvailable: true,
+        project: AgentProject(
+          name: 'autonomous-harness',
+          cwd: '/work/autonomous-harness',
+          branch: 'improve-multiple-machine-experience',
+        ),
+      );
       app.machineStates['m']!.agents.addAll([
         const Agent(
           id: 'review',
@@ -799,7 +961,11 @@ void main() {
           engine: 'codex',
           sessionId: 'review-history',
           terminalAvailable: true,
-          project: _project,
+          project: AgentProject(
+            name: 'autonomous-harness',
+            cwd: '/work/autonomous-harness',
+            branch: 'feat/centered-new-harness-session-picker',
+          ),
         ),
         const Agent(
           id: 'api',
@@ -825,6 +991,9 @@ void main() {
           ),
         ),
       ]);
+      for (final agent in app.machineStates['m']!.agents) {
+        app.rememberOpenedHarness('m', agent.id);
+      }
       final now = DateTime.now();
       final ages = {
         'a0': 5,
@@ -850,6 +1019,23 @@ void main() {
             'updatedAt': now
                 .subtract(Duration(minutes: ages[agent.id]!))
                 .toIso8601String(),
+            if (agent.id == 'a0' || agent.id == 'review')
+              'outputStats': {
+                'linesAdded': agent.id == 'a0' ? 124 : 832,
+                'linesRemoved': agent.id == 'a0' ? 38 : 156,
+                'pullRequestsCreated': agent.id == 'a0' ? 1 : 2,
+                'updatedAt': now.toIso8601String(),
+              },
+            if (agent.id != 'docs')
+              'tokenUsage': {
+                'totalTokens': switch (agent.id) {
+                  'a0' => 48750,
+                  'review' => 1234567,
+                  'api' => 32410,
+                  _ => 215400,
+                },
+                'updatedAt': now.toIso8601String(),
+              },
           }),
       ];
       app.machineStates['m']!.blockedAgents['api'] = question('api');
@@ -883,6 +1069,22 @@ void main() {
         find.byType(MaterialApp),
         matchesGoldenFile(Uri.file('$renderDir/sessions.png')),
       );
+      tester.view.physicalSize = const Size(880, 560);
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(Uri.file('$renderDir/minimum-window.png')),
+      );
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile(Uri.file('$renderDir/scaled-text.png')),
+      );
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+      tester.view.physicalSize = const Size(1280, 800);
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('session-filter:needsInput')));
       await tester.pumpAndSettle();
       await expectLater(

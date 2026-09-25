@@ -60,6 +60,10 @@ export class AutonomousDeviceRelay {
   }
   private sendEvent(connId: string, identity: string, event: AutonomousDeviceFrame): void {
     const p = event.payload as Frame | undefined
+    if (event.kind === 'turn.summary' && p?.resultId !== undefined) {
+      if (this.service.canSendResult(identity, event)) this.sendTo(connId, identity, 'autonomous_device_event', event)
+      return
+    }
     if (typeof p?.idempotencyKey === 'string') {
       const own = this.service.receipt(identity, p.idempotencyKey)
       const receipt = p.receipt as Frame | undefined

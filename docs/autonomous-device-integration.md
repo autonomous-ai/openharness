@@ -65,7 +65,7 @@ All routes remain on the credential-checked loopback hook server. There is no ne
 
 | Route | Input/result |
 |---|---|
-| GET `/api/autonomous-device/discover` | `{devices:[{id,name,host,port}]}` discovered candidates |
+| GET `/api/autonomous-device/discover` | `{devices:[{id,name,host,port}]}` discovered candidates; 503 `LOCAL_NETWORK_BLOCKED` when the OS refused the multicast query and nothing answered (macOS Local Network privacy) |
 | POST `/api/autonomous-device/pair/start` | `{code,device:<discovery-id>}` → `{state:"paired",label,fingerprint}` |
 | GET `/api/autonomous-device/pair/status` | existing pending device status idle/waiting/running |
 | GET `/api/autonomous-device/status` | `{transport:"direct",connected,paired,sessions,proto:1}`; connected/sessions count authenticated application-ready direct sessions only |
@@ -195,9 +195,12 @@ completed/rejected receipt is evicted, even if younger than 30 minutes; retentio
 both capacity and TTL. Outstanding/unknown entries are never silently evicted: if all 512 are
 unresolved, new mutations receive `BACKPRESSURE`. Evicting these entries would permit a duplicate
 live prompt; this explicit exception takes precedence over unconditional oldest-entry eviction.
-A retired key may be treated as new, so never auto-resend after `receipt:null`. All receipts/events are
-RAM-only. Every daemon start has a new UUID `serverInstanceId`; no mutation auto-replay is safe
-across restart. Revoke clears the old device's receipts and event replay history.
+A retired key may be treated as new, so never auto-resend after `receipt:null`. The CLI now persists
+reservations, receipts and proven native Device results atomically in `device-results.json`.
+Each daemon start has a new transport `serverInstanceId`; restored in-flight receipts are unknown,
+not redispatched. Immutable results retain their originating payload instance. Revoke clears the
+old device's receipts, retained results and event replay history. See
+[summary correlation and recovery](autonomous-device-result-correlation.md).
 
 Events are encrypted full objects:
 
@@ -208,8 +211,12 @@ Events are encrypted full objects:
 Kinds include `receipt.updated`, `turn.started`, `turn.done`, `turn.error`, `turn.summary`,
 `turn.tool`, `agent.error`, `question.open`, `question.close`.
 
-`turn.summary` payload and `recap` turn entries carry three views of one answer, and a consumer should
-prefer `turns[].fullText`, then `turn.summary.fullText`, then `text`:
+For an enriched `turn.summary` with resultId/correlation, use that event's fullText exclusively;
+never fetch latest recap to identify its result. The [summary contract](autonomous-device-result-correlation.md)
+defines membership, dedupe, stable replay and a 32 KiB serialized payload bound without truncation.
+The following recap/preview rules describe the unchanged **legacy** summary path:
+
+`turn.summary` payload and `recap` turn entries carry three views of one answer:
 
 | Field | Limit | What it is |
 |---|---|---|
@@ -231,11 +238,13 @@ is UTF-8 safe and marked with a trailing `…`. `text` and `recap` are unchanged
 shared `commander_event` card is not widened — the USB dial's encoder throws above an 8 KiB frame, so the
 field is added only to the events this service emits. Question-open payload is
 `{questionRequestId,questions}`. Status uses `openQuestion.requestId` for that same identifier.
-Only device-origin turns with known correlation include `idempotencyKey`/`turnId`.
+Only single-input device-origin turns with known correlation include singular `idempotencyKey`/`turnId`.
+A group uses `payload.correlation.inputs` and never selects one arbitrary member key.
 Ring capacity 500; cursor is `(serverInstanceId,eventId)`. Matching retained cursor replays newer
 events. Changed instance or stale cursor returns encrypted `{type:"resync",reason:
 "instance_changed"|"cursor_too_old",serverInstanceId,cursor}`. First connect also requests resync.
-OS re-reads agents/status and reconciles outstanding keys using receipt.get. Queued means wait;
+After resync, retained enriched summaries are replayed with fresh transport event IDs; dedupe by
+originating payload instance/resultId. OS re-reads agents/status and reconciles outstanding keys using receipt.get. Queued means wait;
 delivered/started/completed means adopt; rejected means report; unknown/null means inspect and ask
 before resending. Never automatically replay mutations on reconnect.
 
@@ -338,3 +347,12 @@ nothing to retry — a lost `move` is a shorter scroll. Success is an empty `scr
 terminal Desktop has focused scrolls; a viewer pane does not. Errors: `FOCUS_UNAVAILABLE` when no
 Desktop window is connected; `INVALID_REQUEST` for a bad phase, a non-integer or out-of-range value,
 or any other field. Older CLIs do not list `scroll` in hello capabilities.
+
+## Input during a running task
+
+Claude/Codex `turn.send` now uses native input while the agent is working, with a serialized
+terminal writer and independent delivery tracking. `input.status.v1` advertises optional
+`receipt.input` scheduling/acceptance details. Existing receipt states retain their meanings;
+acceptance is not completion. Overlapping starts without engine correlation remain unknown.
+See [engine behavior, tests, and required OS coordination](in-flight-agent-input.md), especially
+the prohibition on assigning an uncorrelated session summary/latest recap to a pending message.

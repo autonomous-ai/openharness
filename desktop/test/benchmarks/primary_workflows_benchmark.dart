@@ -12,7 +12,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
-import 'package:harness/widgets/new_harness_box.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -123,7 +123,7 @@ void main() {
       final only = Platform.environment['HARNESS_PRIMARY_OPERATION'];
       for (final (name, shortcut) in [
         ('cmd_n', LogicalKeyboardKey.keyN),
-        ('cmd_o', LogicalKeyboardKey.keyO),
+        ('cmd_p', LogicalKeyboardKey.keyP),
         ('cmd_t', LogicalKeyboardKey.keyT),
         ('switch_tab', LogicalKeyboardKey.bracketRight),
       ]) {
@@ -158,8 +158,8 @@ void main() {
           // The rebuild instrumentation is reported separately from timings.
           if (sample > 0) times.add(watch.elapsedMicroseconds);
           if (name == 'cmd_n') {
-            expect(find.byType(NewHarnessBox), findsOneWidget);
-          } else if (name == 'cmd_o') {
+            expect(find.byType(NewHarnessForm), findsOneWidget);
+          } else if (name == 'cmd_p') {
             expect(
               find.byKey(const ValueKey('swarm-search-input')),
               findsOneWidget,
@@ -177,10 +177,10 @@ void main() {
             expect(find.byType(TerminalPanel), findsNWidgets(4));
           }
           expect(tester.takeException(), isNull);
-          if (name == 'cmd_n' || name == 'cmd_o') {
+          if (name == 'cmd_n' || name == 'cmd_p') {
             await key(tester, LogicalKeyboardKey.escape);
           } else if (name == 'cmd_t') {
-            await key(tester, LogicalKeyboardKey.keyW, cmd: true);
+            await key(tester, LogicalKeyboardKey.keyW, cmd: true, shift: true);
             expect(app.swarms.length, tabCount);
             app.selectSwarm(before);
           }

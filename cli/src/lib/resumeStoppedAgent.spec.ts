@@ -33,11 +33,24 @@ describe('Enter resumes stopped work', () => {
     expect(deps.launch).toHaveBeenCalledExactlyOnceWith(saved, 'original-conversation')
   })
 
-  it.each([{ ...saved, sessionId: '' }, { ...saved, engine: 'devin' as const }])('refuses unavailable resume without opening a fresh conversation', async entry => {
+  it.each([
+    // No id recorded to reopen, and an engine with no resume argv at all: both still come back —
+    // same pane, same folder — as a new conversation, launched without a resume id.
+    { ...saved, sessionId: '' },
+    { ...saved, engine: 'devin' as const },
+  ])('resumes without a conversation rather than refusing the harness', async entry => {
     const deps = fixture()
     deps.saved.mockReturnValue(entry)
-    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_UNAVAILABLE' })
-    expect(deps.launch).not.toHaveBeenCalled()
+    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: true })
+    expect(deps.launch).toHaveBeenCalledExactlyOnceWith(entry, undefined)
+  })
+
+  it('reopens the conversation of an engine that keeps one, whatever its vendor', async () => {
+    const deps = fixture()
+    const entry = { ...saved, engine: 'opencode' as const }
+    deps.saved.mockReturnValue(entry)
+    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: true })
+    expect(deps.launch).toHaveBeenCalledExactlyOnceWith(entry, 'original-conversation')
   })
 
   it('does not launch while the old process is still alive or unverified', async () => {
@@ -129,13 +142,13 @@ describe('resume runtime verification', () => {
 
 describe('exact conversation readiness', () => {
   const process = { pid: 42, startMarker: 'new-process', executable: 'codex' }
-  function readiness() {
+  function readiness(engine: RegisteredSession['engine'] = saved.engine) {
     let now = 0
-    let row: RegisteredSession = { ...saved, processIdentity: process, lastHookAt: 0, launch: { state: 'starting' } }
+    let row: RegisteredSession = { ...saved, engine, processIdentity: process, lastHookAt: 0, launch: { state: 'starting' } }
     return {
       current: vi.fn(() => true),
       session: () => row,
-      process: vi.fn(async () => process),
+      process: vi.fn(async (): Promise<typeof process | null> => process),
       pane: vi.fn(async (): Promise<{ dead: boolean; engineExit?: number } | null> => ({ dead: false })),
       sleep: vi.fn(async (ms: number) => { now += ms }),
       now: () => now,
@@ -143,27 +156,66 @@ describe('exact conversation readiness', () => {
       set: (next: Partial<RegisteredSession>) => { row = { ...row, ...next } },
     }
   }
-  it('does not treat a visible process or saved session binding as readiness', async () => {
+  // The fixture row is a resume mid-flight: no hook has arrived (`lastHookAt: 0`) and the launch
+  // still reads `starting`. codex used to be held to its SessionStart here and would spin to the
+  // budget; a hook that is dropped, or an engine already running that will never send another, then
+  // cost the person the whole harness (openharness#189).
+  it('confirms a resume off its own live engine process, hook or no hook', async () => {
     const deps = readiness()
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({
+      ok: true,
+      resumed: true,
+      session: { sessionId: saved.sessionId },
+    })
+    expect(deps.sleep).not.toHaveBeenCalled()
+  })
+  // The one state the budget still exists for: the pane is up and nothing this row would recognise
+  // is running in it.
+  it('waits out the budget only when nothing recognisable is running in the pane', async () => {
+    const deps = readiness()
+    deps.process.mockResolvedValue(null)
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
     expect(deps.sleep).toHaveBeenCalled()
   })
-  it('waits for the matching startup hook from the newly observed process', async () => {
-    const deps = readiness()
-    deps.sleep.mockImplementation(async () => { deps.set({ lastHookAt: 100, launch: { state: 'ready' } }) })
-    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: true, session: { sessionId: saved.sessionId } })
-    expect(deps.process).toHaveBeenCalledTimes(2)
+  it('accepts a live process for an engine that has no startup hook to send', async () => {
+    // muse never hooks; copilot/pi/amp hook on the first turn. Waiting for one only converts a
+    // working resume into the whole budget of "Starting", then RESUME_UNCONFIRMED.
+    const deps = readiness('muse')
+    const hookless = { ...saved, engine: 'muse' as const }
+    await expect(waitForResumedAgent(hookless, deps)).resolves.toMatchObject({
+      ok: true,
+      resumed: true,
+      session: { sessionId: saved.sessionId },
+    })
+    expect(deps.sleep).not.toHaveBeenCalled()
   })
+
+  it('still reports a hookless engine whose pane died', async () => {
+    const deps = readiness('muse')
+    deps.pane.mockResolvedValue({ dead: true })
+    await expect(waitForResumedAgent({ ...saved, engine: 'muse' as const }, deps))
+      .resolves.toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+  })
+
+  it('says a resume with no conversation to reopen is a fresh one', async () => {
+    // devin hooks at launch like the rest, so it is confirmed the strict way — but it has no resume
+    // argv, so what came back is a new conversation and `resumed` says so rather than lying.
+    const deps = readiness('devin')
+    deps.set({ lastHookAt: 100, launch: { state: 'ready' } })
+    await expect(waitForResumedAgent({ ...saved, engine: 'devin' as const }, deps))
+      .resolves.toMatchObject({ ok: true, resumed: false })
+  })
+
   it.each([null, { dead: true }, { dead: false, engineExit: 1 }])('reports early exit without a fresh fallback: %s', async pane => {
     const deps = readiness()
     deps.pane.mockResolvedValue(pane)
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_FAILED' })
   })
-  it('does not accept a startup hook for another process or conversation', async () => {
+  // A row whose bound conversation is no longer the one being resumed is still refused — that check
+  // is on the row, ahead of any proof, and is what `registry.register`'s mismatch guard feeds.
+  it('still refuses a row that reports another conversation', async () => {
     const deps = readiness()
-    deps.set({ lastHookAt: 100, launch: { state: 'ready' }, processIdentity: { ...process, pid: 99 } })
-    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
-    deps.set({ sessionId: 'fresh-conversation', processIdentity: process })
+    deps.set({ sessionId: 'fresh-conversation' })
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
   })
   it('does not report success if the process exits between readiness probes', async () => {
@@ -211,9 +263,11 @@ describe('resume refusal and readiness edge cases', () => {
     expect(deps.waitForReady).toHaveBeenCalledWith(existing)
     expect(deps.launch).not.toHaveBeenCalled(); expect(deps.retain).not.toHaveBeenCalled()
   })
-  it('does not call a live process that reported another conversation ready', async () => {
-    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
-    expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+  // Reported as itself, not as "not confirmed yet": the verdict is the only thing that explains the
+  // pane the person is looking at, and relabelling it sent them to check a terminal that is fine.
+  it('repeats the real verdict of a live process that reported another conversation', async () => {
+    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture detail' } })
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: false, error: 'RESUME_SESSION_MISMATCH', detail: 'fixture detail' })
     expect(deps.waitForReady).not.toHaveBeenCalled(); expect(deps.launch).not.toHaveBeenCalled()
   })
   it.each(['cancelled', 'removed', 'failed', 'different engine', 'no process', 'different start', 'missing launch'] as const)('handles readiness: %s', async mode => {
@@ -230,7 +284,9 @@ describe('resume refusal and readiness edge cases', () => {
       process: async () => mode === 'no process' ? null : process, pane: async () => ({ dead: false }),
       sleep: async ms => { time += ms }, now: () => time, budgetMs: 250,
     })
-    expect(result.ok).toBe(mode === 'missing launch')
+    // `different start` is a row whose recorded identity is stale, not a pane with nothing in it:
+    // the engine process is there, which is the proof, and discovery re-reads the identity anyway.
+    expect(result.ok).toBe(mode === 'missing launch' || mode === 'different start')
   })
   it('uses the production clock and timeout defaults', async () => {
     expect(await waitForResumedAgent(saved, { current: () => false, session: () => undefined, process: async () => null, pane: async () => null, sleep: async () => {} })).toMatchObject({ error: 'AGENT_CHANGED' })

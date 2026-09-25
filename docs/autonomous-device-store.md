@@ -2,8 +2,7 @@
 
 This is the shared implementation contract for Autonomous OS (`harness-use` → OS loopback API →
 existing direct encrypted device connection → Harness CLI). It adds Store discovery and **agent
-preparation**, not task delivery. English and [Vietnamese](vi/autonomous-device-store_vi.md) describe
-the same contract. The machine-readable authority is
+preparation**, not task delivery. The machine-readable authority is
 [`contracts/autonomous-device-store-v1/`](contracts/autonomous-device-store-v1/).
 
 **Status:** implemented in this checkout; not installed, released, or deployed by this change.

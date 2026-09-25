@@ -27,9 +27,11 @@ for (key, command) in [
   ("cmd+up", "pane.focus_above"), ("cmd+right", "pane.focus_right"),
   ("cmd+s", "app.store"), ("cmd+shift+l", "pane.layout"),
   ("cmd+b", "task.route"), ("cmd+t", "swarm.new"),
-  ("cmd+o", "agent.open"), ("cmd+p", "navigation.commands"),
+  ("cmd+p", "agent.open"), ("cmd+shift+p", "navigation.commands"),
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
   ("cmd+n", "agent.new"),
+  ("cmd+m", "machines.list"),
+  ("cmd+i", "models.list"),
   ("cmd+h", "pane.focus_left"), ("cmd+j", "pane.focus_below"),
   ("cmd+k", "pane.focus_above"), ("cmd+l", "pane.focus_right"),
 ] {
@@ -40,11 +42,18 @@ try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
   "The pane picker chord is not mistaken for an orchestrator command")
 try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+b")) == nil,
   "The viewer bridge does not change single-agent routing")
-try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+p")) == nil,
+try checkKeymap(defaults.viewerOrchestratorCommand(stroke("cmd+shift+p")) == nil,
   "The viewer bridge does not take the command palette chord")
 for context in HarnessNativeKeymap.contexts {
-  try checkKeymap(defaults.match([stroke("cmd+shift+p")], context: context).binding == nil,
-    "The former commands shortcut is unbound")
+  try checkKeymap(defaults.match([stroke("cmd+m")], context: context).binding?.command == "machines.list",
+    "Command-M opens Machines from \(context)")
+  let models = defaults.match([stroke("cmd+i")], context: context).binding
+  try checkKeymap(models?.command == "models.list" && models?.menuAction == "models" && models?.hint == "⌘I",
+    "Command-I opens Models with the matching native action and hint from \(context)")
+  try checkKeymap(defaults.match([stroke("cmd+u")], context: context).binding == nil,
+    "The former Machines shortcut is unbound")
+  try checkKeymap(defaults.match([stroke("cmd+o")], context: context).binding == nil,
+    "The former picker shortcut is unbound")
   try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding?.command == "agent.clone",
     "Shift-Command-N clones the harness in \(context)")
   for number in 1...9 {
@@ -69,8 +78,8 @@ try checkKeymap(changed.match([stroke("down")], context: "picker").binding == ni
   "Picker unbinding removes the original arrow action")
 try checkKeymap(changed.match([stroke("ctrl+j")], context: "picker").binding?.command == "picker.previous",
   "Picker remapping wins")
-try checkKeymap(defaults.match([stroke("cmd+i")], context: "picker").binding == nil,
-  "Always-on preview does not consume a hide-preview shortcut")
+try checkKeymap(defaults.match([stroke("ctrl+slash")], context: "picker").binding?.command == "picker.toggle_preview",
+  "Preview visibility stays on Control-/ while Command-I opens Models")
 for (key, command) in [("pageup", "picker.preview_page_up"), ("pagedown", "picker.preview_page_down")] {
   try checkKeymap(defaults.match([stroke(key)], context: "picker").binding?.command == command,
     "Preview paging follows the exported Search binding")
@@ -108,9 +117,9 @@ try checkKeymap(!send("x", 4, owner: otherField).handled && dispatcher.pending.i
 _ = send("cmd+k")
 try checkKeymap(!send("enter", 6, composing: true).handled && dispatcher.pending.isEmpty,
   "IME composition keeps input and cancels the prefix")
-try checkKeymap(send("cmd+o", executable: false).handled && send("cmd+o", executable: false).command == nil,
+try checkKeymap(send("cmd+p", executable: false).handled && send("cmd+p", executable: false).command == nil,
   "An unavailable mapped action cannot fall through as input")
-try checkKeymap(send("cmd+o", repeated: true).command == nil, "Search does not repeat")
+try checkKeymap(send("cmd+p", repeated: true).command == nil, "Search does not repeat")
 try checkKeymap(send("ctrl+j", repeated: true).command == "picker.previous", "Result movement repeats")
 try checkKeymap(send("pagedown", repeated: true).command == "picker.preview_page_down",
   "Holding a preview paging key continues scrolling")

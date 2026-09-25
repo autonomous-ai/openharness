@@ -1,7 +1,8 @@
+import { PROCESS_ENGINES } from '../engines/types.js'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { DshManifestSchema, dshSkillsDirFor, dshTier, dshVerdictPath, dshViewerName, expandDshValue, parseDshManifest, readDshManifest , isViewerPackage, dshEngine, viewerUse} from './manifest.js'
+import { DshManifestSchema, dshSupportedEngines, dshTier, dshVerdictPath, dshViewerName, expandDshValue, parseDshManifest, readDshManifest , isViewerPackage, dshEngine, viewerUse} from './manifest.js'
 
 const STARTER = fileURLToPath(new URL('../../../store/starter', import.meta.url))
 
@@ -22,6 +23,15 @@ describe('parseDshManifest', () => {
   })
 
   const base = { spec: 1, id: 'acme/thing', name: 'Thing', engine: 'codex' }
+
+  it('treats the engine as a default and keeps spec-1 manifests compatible', () => {
+    const engines = dshSupportedEngines(DshManifestSchema.parse(base))
+    expect(engines[0]).toBe('codex')
+    expect(new Set(engines)).toEqual(new Set(PROCESS_ENGINES))
+    const legacy = { ...base, agent: { env: { DSH_SUPPORTED_ENGINES: 'claude,codex' }, args: ['--add-dir', '/tmp'] } }
+    expect(parseDshManifest(JSON.stringify(legacy)).ok).toBe(true)
+    expect(dshSupportedEngines(DshManifestSchema.parse(legacy))).toEqual(engines)
+  })
 
   it('refuses paths that leave the harness', () => {
     for (const bad of ['../outside', '/abs/path', 'a/../../b']) {
@@ -83,12 +93,7 @@ describe('expandDshValue', () => {
   })
 })
 
-describe('dshSkillsDirFor', () => {
-  it('puts Claude skills where Claude Code reads project skills, everyone else under .agents', () => {
-    expect(dshSkillsDirFor('claude')).toBe('.claude/skills')
-    expect(dshSkillsDirFor('codex')).toBe('.agents/skills')
-    expect(dshSkillsDirFor('cursor')).toBe('.agents/skills')
-  })
+describe('legacy package identities', () => {
   it('accepts the ids a harness went by before, and only well-formed ones', () => {
     const base = { spec: 1, id: 'acme/solid', name: 'Solid', engine: 'codex' }
     expect(DshManifestSchema.safeParse({ ...base, formerly: ['acme/workshop'] }).success).toBe(true)

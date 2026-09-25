@@ -74,6 +74,7 @@ DshEntry _currentEntry(String id, List<DshEntry> entries) {
     category: identity?.category ?? metadata.category,
     description: metadata.description,
     engine: installation.installed ? installation.engine : metadata.engine,
+    engines: installation.installed ? installation.engines : metadata.engines,
     kind: metadata.kind,
     author: metadata.author,
     repo: metadata.repo,

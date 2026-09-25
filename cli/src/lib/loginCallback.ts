@@ -47,8 +47,10 @@ export function awaitLoginCallback(opts: {
   redirectUri: string
   manual: Promise<LoginCallbackParams> | null
   timeoutMs: number
+  /** Who asked for this sign-in — it changes one sentence on the page. See renderLoginSuccessHtml. */
+  entryPoint?: string
 }): Promise<LoginCallbackParams> {
-  const { server, redirectUri, manual, timeoutMs } = opts
+  const { server, redirectUri, manual, timeoutMs, entryPoint } = opts
   let timeout: NodeJS.Timeout | undefined
   const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const url = new URL(req.url ?? '/', redirectUri)
@@ -58,7 +60,7 @@ export function awaitLoginCallback(opts: {
     res.writeHead(error || !code || !state ? 400 : 200, { 'content-type': 'text/html; charset=utf-8' })
     res.end(error || !code || !state
       ? '<h1>Harness login failed</h1><p>You can close this window.</p>'
-      : renderLoginSuccessHtml())
+      : renderLoginSuccessHtml(entryPoint))
     if (error) reject(new Error(`SSO login failed: ${error}`))
     else if (code && state) resolve({ code, state })
   }

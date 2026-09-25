@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -7,12 +9,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/swarm_search.dart';
+import 'package:harness/terminal/terminal_text.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' as configured;
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 import 'support/real_fonts.dart';
@@ -33,6 +36,7 @@ Future<void> seedPreviews(AppNotifier app) async {
         name: name,
         engine: engine,
         terminalAvailable: true,
+        lastActivityAt: DateTime.now().subtract(const Duration(minutes: 33)),
         project: AgentProject(
           name: id == 'a0' ? 'storefront' : 'workbench',
           cwd: '/work/${id == 'a0' ? 'storefront' : 'workbench'}',
@@ -92,6 +96,107 @@ void main() {
         .load();
   });
 
+  testWidgets(
+    'standalone keys and replacement searches own their preview scroll',
+    (tester) async {
+      final app = createApp();
+      await seedPreviews(app);
+      await app.handleEventForTest('m', {
+        'type': 'turn_started',
+        'payload': {'agentId': 'a0', 'sessionId': 'session-a0'},
+      });
+      await app.handleEventForTest('m', {
+        'type': 'text_delta',
+        'payload': {
+          'agentId': 'a0',
+          'sessionId': 'session-a0',
+          'content': List.generate(80, (i) => 'Preview line $i').join('\n'),
+        },
+      });
+      await app.handleEventForTest('m', {
+        'type': 'turn_ended',
+        'payload': {'agentId': 'a0', 'sessionId': 'session-a0'},
+      });
+      final first = SwarmSearchController(app, const [], adding: true)
+        ..setQuery('Checkout retries');
+      final second = SwarmSearchController(app, const [], adding: true)
+        ..setQuery('Checkout retries');
+      final editor = TextEditingController(text: first.query);
+      final focus = FocusNode();
+      addTearDown(() {
+        focus.dispose();
+        editor.dispose();
+      });
+      Future<void> show(SwarmSearchController search) => tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SwarmSearchKeys(
+              search: search,
+              editing: editor,
+              onChoose: (_) {},
+              onClose: () {},
+              child: Column(
+                children: [
+                  TextField(
+                    controller: editor,
+                    focusNode: focus,
+                    autofocus: true,
+                  ),
+                  Expanded(
+                    child: SwarmSearchResults(
+                      search: search,
+                      terminal: true,
+                      bios: true,
+                      onChoose: (_) {},
+                      onRefocus: focus.requestFocus,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      ScrollPosition preview() => tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byKey(const ValueKey('swarm-search-preview')),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      await show(first);
+      await tester.pumpAndSettle();
+      final cell = terminalCellSizeOf(tester.element(find.byType(TextField)));
+      await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+      expect(preview().pixels, closeTo(cell.height, .01));
+      await key(tester, LogicalKeyboardKey.arrowUp, shift: true);
+      expect(preview().pixels, 0);
+      await key(tester, LogicalKeyboardKey.pageDown);
+      expect(first.resultPage.value, 1);
+      expect(preview().pixels, 0);
+      await key(tester, LogicalKeyboardKey.pageUp);
+      expect(first.resultPage.value, 0);
+      await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+      expect(preview().pixels, greaterThan(0));
+      await show(second);
+      await tester.pumpAndSettle();
+      expect(preview().pixels, 0);
+      first.scrollPreview(1);
+      expect(preview().pixels, 0);
+      second.scrollPreview(1);
+      expect(preview().pixels, closeTo(cell.height, .01));
+      expect(editor.text, 'Checkout retries');
+      expect(focus.hasFocus, isTrue);
+      await tester.pumpWidget(const SizedBox());
+      first.dispose();
+      second.dispose();
+      app.dispose();
+    },
+  );
+
   testWidgets('offline previews retain text without claiming to work or wait', (
     tester,
   ) async {
@@ -99,7 +204,7 @@ void main() {
     await seedPreviews(app);
     app.adoptSessionForTest(terminal('a69', []));
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyO);
+    await openHarnessPicker(tester);
     final field = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(field, 'Workspace sync');
     await tester.pump();
@@ -117,10 +222,125 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
+  for (final mapping in ['fallback', 'default', 'remapped']) {
+    testWidgets('fzf paging moves the result list ($mapping)', (tester) async {
+      final app = createApp();
+      await seedPreviews(app);
+      app.machineStates['m']!.agents.addAll([
+        for (var i = 0; i < 60; i++)
+          Agent(
+            id: 'test-$i',
+            name: 'Checkout test $i',
+            terminalAvailable: true,
+          ),
+      ]);
+      await app.handleEventForTest('m', {
+        'type': 'text_delta',
+        'payload': {
+          'agentId': 'a0',
+          'sessionId': 'session-a0',
+          'content': List.generate(
+            80,
+            (i) => 'Saved checkout response line $i.',
+          ).join('\n'),
+        },
+      });
+      await app.handleEventForTest('m', {
+        'type': 'turn_ended',
+        'payload': {'agentId': 'a0', 'sessionId': 'session-a0'},
+      });
+      app.adoptSessionForTest(terminal('a69', []));
+      final map = MemoryKeymap();
+      final remapped = mapping == 'remapped';
+      if (remapped) {
+        map.apply('''{"bindings":[
+          {"keys":"pagedown","command":null,"when":"picker"},
+          {"keys":"pageup","command":null,"when":"picker"},
+          {"keys":"alt+j","command":"picker.page_down","when":"picker"},
+          {"keys":"alt+k","command":"picker.page_up","when":"picker"}
+        ]}''');
+      }
+      if (mapping == 'fallback') {
+        await mount(tester, app);
+      } else {
+        await configured.mount(tester, app, map);
+      }
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      final field = find.byKey(const ValueKey('swarm-search-input'));
+      await tester.enterText(field, 'Checkout');
+      await tester.pump();
+      final search = tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search;
+      final editor = tester.widget<TextField>(field);
+      final editing = editor.controller!.value;
+      final first = search.cursor;
+      ScrollPosition preview() => tester
+          .widget<Scrollbar>(
+            find.descendant(
+              of: find.byKey(const ValueKey('swarm-search-preview')),
+              matching: find.byType(Scrollbar),
+            ),
+          )
+          .controller!
+          .position;
+      expect(preview().maxScrollExtent, greaterThan(0));
+      await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+      expect(preview().pixels, greaterThan(0));
+      expect(search.cursor, first);
+      if (remapped) {
+        await key(tester, LogicalKeyboardKey.pageDown);
+        expect(search.cursor, first);
+      }
+      Future<void> page({bool up = false}) => key(
+        tester,
+        remapped
+            ? (up ? LogicalKeyboardKey.keyK : LogicalKeyboardKey.keyJ)
+            : (up ? LogicalKeyboardKey.pageUp : LogicalKeyboardKey.pageDown),
+        alt: remapped,
+      );
+      await page();
+      expect(search.cursor, greaterThan(first + 1));
+      expect(preview().pixels, 0);
+      expect(editor.controller!.value, editing);
+      expect(editor.focusNode!.hasFocus, isTrue);
+      await page(up: true);
+      expect(search.cursor, first);
+      expect(preview().pixels, 0);
+      // Existing custom preview-page commands still page their own pane.
+      search.page(1);
+      expect(
+        preview().pixels,
+        greaterThan(terminalCellSizeOf(tester.element(field)).height),
+      );
+      search.page(-1);
+      expect(preview().pixels, 0);
+      final selected = search.selected!.id;
+      await key(tester, LogicalKeyboardKey.slash, ctrl: true);
+      expect(search.hasPreview, isFalse);
+      await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
+      expect(search.selected!.id, selected);
+      await page();
+      expect(search.cursor, greaterThan(first + 1));
+      for (var i = 0; i < 20; i++) {
+        await page();
+      }
+      expect(search.cursor, search.rows.length - 1);
+      for (var i = 0; i < 20; i++) {
+        await page(up: true);
+      }
+      expect(search.cursor, 0);
+      expect(editor.controller!.value, editing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+      map.dispose();
+    });
+  }
   for (final inline in [false, true]) {
     for (final mapping in ['fallback', 'default', 'remapped']) {
       testWidgets(
-        'preview paging retains search input and selection (inline=$inline, $mapping)',
+        'preview line scrolling retains search input and selection (inline=$inline, $mapping)',
         (tester) async {
           final app = createApp();
           await seedPreviews(app);
@@ -156,10 +376,10 @@ void main() {
           final remapped = mapping == 'remapped';
           if (remapped) {
             map.apply('''{"bindings":[
-              {"keys":"pageup","command":null,"when":"picker"},
-              {"keys":"pagedown","command":null,"when":"picker"},
-              {"keys":"alt+j","command":"picker.preview_page_down","when":"picker"},
-              {"keys":"alt+k","command":"picker.preview_page_up","when":"picker"}
+              {"keys":"shift+up","command":null,"when":"picker"},
+              {"keys":"shift+down","command":null,"when":"picker"},
+              {"keys":"alt+j","command":"picker.preview_down","when":"picker"},
+              {"keys":"alt+k","command":"picker.preview_up","when":"picker"}
             ]}''');
           }
           if (mapping == 'fallback') {
@@ -173,7 +393,7 @@ void main() {
           if (inline) {
             await tester.tap(field);
           } else {
-            await chord(tester, LogicalKeyboardKey.keyO);
+            await openHarnessPicker(tester);
           }
           await tester.enterText(field, 'Checkout retries');
           await tester.pump();
@@ -205,7 +425,7 @@ void main() {
           search.addListener(() => notifications++);
           expect(previewPosition().maxScrollExtent, greaterThan(0));
           if (remapped) {
-            await key(tester, LogicalKeyboardKey.pageDown);
+            await key(tester, LogicalKeyboardKey.arrowDown, shift: true);
             expect(previewPosition().pixels, 0);
           }
           Future<void> page({bool up = false, bool pump = true}) async {
@@ -214,20 +434,22 @@ void main() {
                       ? LogicalKeyboardKey.keyK
                       : LogicalKeyboardKey.keyJ
                 : up
-                ? LogicalKeyboardKey.pageUp
-                : LogicalKeyboardKey.pageDown;
-            if (remapped) {
-              await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
-            }
+                ? LogicalKeyboardKey.arrowUp
+                : LogicalKeyboardKey.arrowDown;
+            final modifier = remapped
+                ? LogicalKeyboardKey.altLeft
+                : LogicalKeyboardKey.shiftLeft;
+            await tester.sendKeyDownEvent(modifier);
             await tester.sendKeyEvent(trigger);
-            if (remapped) {
-              await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-            }
+            await tester.sendKeyUpEvent(modifier);
             if (pump) await tester.pump();
           }
 
           await page(pump: false);
-          expect(previewPosition().pixels, greaterThan(0));
+          expect(
+            previewPosition().pixels,
+            closeTo(terminalCellSizeOf(tester.element(field)).height, .01),
+          );
           expect(search.selected!.id, selected);
           expect(editor.controller.value, value);
           expect(editor.focusNode.hasPrimaryFocus, isTrue);
@@ -285,7 +507,7 @@ void main() {
         if (inline) {
           await tester.tap(field);
         } else {
-          await chord(tester, LogicalKeyboardKey.keyO);
+          await openHarnessPicker(tester);
         }
         await tester.enterText(field, 'Checkout retries');
         await tester.pump();
@@ -382,7 +604,7 @@ void main() {
       );
       app.adoptSessionForTest(terminal('a69', []));
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
@@ -421,21 +643,33 @@ void main() {
       await mount(tester, app);
       tester.view.physicalSize = size;
       await tester.pump();
-      await chord(tester, LogicalKeyboardKey.keyO);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Checkout',
       );
       await tester.pump(const Duration(milliseconds: 200));
       expect(tester.takeException(), isNull);
-      final preview = tester.getRect(
-        find.byKey(const ValueKey('swarm-search-preview')),
-      );
-      final list = tester.getRect(
-        find.byKey(const ValueKey('swarm-search-result-list')),
-      );
-      if (size.width < 864) {
-        expect(preview.bottom, lessThanOrEqualTo(list.top));
+      final preview = find.byKey(const ValueKey('swarm-search-preview'));
+      expect(preview, findsOneWidget);
+      if (size.width < 848) {
+        expect(
+          tester.getRect(preview).top,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+                .bottom,
+          ),
+        );
+      } else {
+        expect(
+          tester.getRect(preview).left,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('swarm-search-result-list')))
+                .left,
+          ),
+        );
       }
       final directory = Platform.environment['HARNESS_PREVIEW_CAPTURE_DIR'];
       if (directory != null) {

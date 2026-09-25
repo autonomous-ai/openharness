@@ -1,9 +1,11 @@
-import type { DeviceBinding } from '@prisma/client'
+import { Prisma, type DeviceBinding } from '@prisma/client'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { sha256hex } from '../utils/crypto.js'
 import { logger } from '../utils/logger.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { getDevicePresence } from '../lib/bus.js'
+import { getDevicePresence, consumeNewIdQuota } from '../lib/bus.js'
+import { env } from '../config/env.js'
+import { AppError } from '../errors/index.js'
 
 export interface DeviceView {
   deviceId: string
@@ -77,8 +79,8 @@ export const deviceService = {
    * `@unique` while `computerId` is self-declared by the client — using the computer id verbatim would let
    * one account squat another's row. Hashing the userId in namespaces it per account, and the environment
    * keeps the "same person, separate rows per Autonomous plane" rule true regardless of how User rows are
-   * scoped. Determinism is what makes this a single idempotent upsert with no key to mint and therefore no
-   * create-lock: two daemons racing on the same computer converge on the same row.
+   * scoped. Determinism is what makes this idempotent with no key to mint and therefore no create-lock: two
+   * daemons racing on the same computer converge on the same row.
    *
    * Identity is the SSO subject resolved upstream (`user.sub`), never email.
    */
@@ -90,14 +92,42 @@ export const deviceService = {
   ): Promise<DeviceBinding> {
     const deviceId = `cmp-${sha256hex(`${userId}:${autonomousEnv}:${computerId}`).slice(0, 24)}`
     const name = label.trim().slice(0, 120) || 'computer'
-    return prisma.deviceBinding.upsert({
+    // `userId` is re-applied so a computer that changed hands follows its owner. `name` is deliberately
+    // NOT overwritten: it is the user-editable display name, and a reconnect must not undo a rename —
+    // the same rule Machine.name follows.
+    const touch = (): Promise<DeviceBinding> => prisma.deviceBinding.update({
       where: { deviceId },
-      create: { userId, deviceId, computerId, name, lastSeenAt: new Date() },
-      // `userId` is re-applied so a computer that changed hands follows its owner. `name` is deliberately
-      // NOT overwritten: it is the user-editable display name, and a reconnect must not undo a rename —
-      // the same rule Machine.name follows.
-      update: { userId, computerId, lastSeenAt: new Date() },
+      data: { userId, computerId, lastSeenAt: new Date() },
     })
+    // Touch first, create only when there was nothing to touch — rather than one upsert, because only a
+    // NEW row may be charged against the account's ceiling and new-id rate, and the reconnect of a known
+    // device must stay a single free write. The computer id is self-declared, so without those a valid
+    // token plus a loop of fresh ids mints rows without bound — and a revoke is a hard delete, which is
+    // why the ceiling alone cannot stop a create/revoke loop. P2025 also covers a revoke landing between
+    // the device's last connect and this one: it simply pairs again, as the upsert used to.
+    try {
+      return await touch()
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025')) throw err
+    }
+    // No lock around count → create: parallel fresh ids can overshoot the ceiling, but only by what the
+    // (atomic) new-id rate below lets through in one window.
+    if (env.HARNESS_DEVICE_LIMIT > 0 && await prisma.deviceBinding.count({ where: { userId } }) >= env.HARNESS_DEVICE_LIMIT) {
+      logger.warn('device limit reached', { userId, computerId })
+      throw new AppError('Too many devices on this account', 409, 'TOO_MANY_DEVICES')
+    }
+    if (!(await consumeNewIdQuota('device', userId))) {
+      logger.warn('new id rate limited', { kind: 'device', userId, computerId })
+      throw new AppError('Too many new devices on this account, try again later', 429, 'NEW_DEVICE_RATE_LIMITED')
+    }
+    try {
+      return await prisma.deviceBinding.create({ data: { userId, deviceId, computerId, name, lastSeenAt: new Date() } })
+    } catch (err) {
+      // Two dials of the same computer raced past the lookup; the id is derived, so the loser's row IS
+      // the winner's — converge on it exactly as the upsert used to.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return touch()
+      throw err
+    }
   },
 
   /** The user's machines for the device machine-picker. Ordered oldest-first for a stable list.

@@ -1,10 +1,10 @@
 {
   "spec": 1,
   "id": "autonomous/autonomous-grid",
-  "name": "Grid",
+  "name": "Model Manager",
   "category": "Local AI",
   "author": "Autonomous",
-  "description": "Talk to your fleet. Deploy open-weight models, find the right machine for each workload, and watch your Grid come alive with a live map of engines, models, memory, temperature and performance.",
+  "description": "Run your first local model. Find a model that fits your computer, start it, and use it in Harness. Manage models across your machines in one conversation.",
   "engine": "codex",
   "workspace": {
     "template": "template",
@@ -13,11 +13,14 @@
   },
   "agent": {
     "instructions": "AGENTS.md",
-    "skills": ["skills"],
+    "skills": [
+      "skills"
+    ],
     "env": {
       "GRID_CLI": "${dsh}/toolchain/grid.sh",
       "GRID_FLEET": "${dsh}/toolchain/fleet",
-      "GRID_NO_UPDATE_CHECK": "1"
+      "GRID_NO_UPDATE_CHECK": "1",
+      "DSH_PERMISSION_MODE": "full"
     }
   },
   "toolchain": {

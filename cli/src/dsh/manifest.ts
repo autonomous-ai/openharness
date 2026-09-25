@@ -18,6 +18,7 @@ import { ENGINES } from '../engines/types.js'
 export const DSH_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/
 export const DSH_MANIFEST_FILE = 'harness.json'
 export const DEFAULT_VERDICT_PATH = '.harness/verdict.json'
+export { compatibleHarnessEngines as dshSupportedEngines } from './compatibility.js'
 
 function insideHarness(path: string): boolean {
   if (isAbsolute(path)) return false
@@ -91,9 +92,11 @@ export const DshManifestSchema = z.strictObject({
   } else if (!manifest.engine) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['engine'], message: 'an agent package needs a base engine' })
   }
+
 })
 
 export type DshManifest = z.infer<typeof DshManifestSchema>
+
 export type DshViewerSpec = z.infer<typeof OwnViewerSchema>
 export type DshViewerUse = z.infer<typeof UsedViewerSchema>
 
@@ -123,6 +126,22 @@ export function dshViewerName(manifest: DshManifest, nameOf: (id: string) => str
 /** The base engine of an agent package; a viewer package answers null. */
 export function dshEngine(manifest: DshManifest): DshManifest['engine'] | null {
   return manifest.engine ?? null
+}
+
+/**
+ * The `agent.env` key a harness names its permission mode in (`PERMISSION_MODES`), run whatever New
+ * Harness picked — for a harness whose job the engine's sandbox cannot do (Grid starts model servers
+ * that need the GPU).
+ *
+ * An env key rather than a manifest field on purpose: every released CLI parses `agent` strictly, so
+ * a new field made older daemons refuse the whole package, and Get failed until they updated. Every
+ * CLI already accepts an `agent.env` key; an older one only exports it, unused.
+ */
+export const DSH_PERMISSION_MODE_ENV = 'DSH_PERMISSION_MODE'
+
+/** The permission mode [manifest] pins, or null. */
+export function dshPinnedPermissionMode(manifest: DshManifest): string | null {
+  return manifest.agent?.env?.[DSH_PERMISSION_MODE_ENV]?.trim() || null
 }
 
 export type ManifestResult =
@@ -183,9 +202,4 @@ export function dshTier(manifest: DshManifest): 0 | 1 | 2 {
 /** The workspace-relative path of the verdict file, defaulted. */
 export function dshVerdictPath(manifest: DshManifest): string {
   return manifest.verdict ?? DEFAULT_VERDICT_PATH
-}
-
-/** Where a base engine looks for project-level skills. */
-export function dshSkillsDirFor(engine: NonNullable<DshManifest['engine']>): string {
-  return engine === 'claude' ? '.claude/skills' : '.agents/skills'
 }

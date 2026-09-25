@@ -2,6 +2,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/desktop_window.dart';
 import '../core/repository_clone.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -49,13 +50,15 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
     if (_busy || _picking || _closing) return;
     setState(() => _picking = true);
     try {
-      final folder = await getDirectoryPath(
-        initialDirectory:
-            _parent ??
-            (widget.initialFolder == null
-                ? null
-                : p.dirname(widget.initialFolder!)),
-        confirmButtonText: 'Choose destination',
+      final folder = await whileNativePicker(
+        () => getDirectoryPath(
+          initialDirectory:
+              _parent ??
+              (widget.initialFolder == null
+                  ? null
+                  : p.dirname(widget.initialFolder!)),
+          confirmButtonText: 'Choose destination',
+        ),
       );
       if (mounted && folder != null) {
         setState(() {

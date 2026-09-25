@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { InstalledDsh } from './installed.js'
 import { parseDshManifest, readDshManifest } from './manifest.js'
-import { dshMarkerLine, materializeWorkspace, resolveDshCommand, skillDirsIn } from './materialize.js'
+import { materializeWorkspace, resolveDshCommand, skillDirsIn } from './materialize.js'
 
 const STARTER = realpathSync(fileURLToPath(new URL('../../../store/starter', import.meta.url)))
 
@@ -30,23 +30,20 @@ describe('materializeWorkspace', () => {
   beforeEach(() => { workspace = mkdtempSync(join(tmpdir(), 'dsh-ws-')) })
   afterEach(() => rmSync(workspace, { recursive: true, force: true }))
 
-  it('fills an empty workspace: template, AGENTS.md, CLAUDE.md import, skill link, .harness', async () => {
-    const result = await materializeWorkspace(starter(), workspace)
+  it('prepares the workspace independently of the engine without publishing instructions or native skills', async () => {
+    const result = await materializeWorkspace(starter(), workspace, {}, 'codex')
     expect(result.warnings).toEqual([])
     expect(readFileSync(join(workspace, 'NOTES.md'), 'utf8')).toContain('# Notes')
-    const agents = readFileSync(join(workspace, 'AGENTS.md'), 'utf8')
-    expect(agents.startsWith(dshMarkerLine('autonomous/starter'))).toBe(true)
-    expect(agents).toContain('Starter harness')
-    expect(readFileSync(join(workspace, 'CLAUDE.md'), 'utf8').trim()).toBe('@AGENTS.md')
-    const link = join(workspace, '.claude', 'skills', 'hello')
-    expect(lstatSync(link).isSymbolicLink()).toBe(true)
-    expect(readlinkSync(link)).toBe(join(STARTER, 'skills', 'hello'))
-    expect(existsSync(join(link, 'SKILL.md'))).toBe(true)
-    expect(existsSync(join(workspace, '.harness'))).toBe(true)
-    expect(result.created).toContain('AGENTS.md')
-    // The init ran in the workspace, found by its path inside the harness, with the contract's env.
     expect(readFileSync(join(workspace, '.harness-initialized'), 'utf8')).toBe('initialized by autonomous/starter\n')
-    expect(result.warnings).toEqual([])
+    expect(existsSync(join(workspace, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(join(workspace, '.claude'))).toBe(false)
+    expect(existsSync(join(workspace, '.agents'))).toBe(false)
+    expect(existsSync(join(workspace, '.harness'))).toBe(true)
+  })
+
+  it('refuses a terminal before copying the template or running init', async () => {
+    await expect(materializeWorkspace(starter(), workspace, {}, 'terminal')).rejects.toThrow('does not support terminal')
+    expect(readdirSync(workspace)).toEqual([])
   })
 
   it('runs the init only once: a marked workspace is not re-initialized', async () => {
@@ -56,43 +53,17 @@ describe('materializeWorkspace', () => {
     expect(existsSync(join(workspace, '.harness-initialized'))).toBe(false)
   })
 
-  it('is idempotent: a second run keeps everything and appends nothing', async () => {
+  it('is idempotent and preserves all project instructions and native skills', async () => {
+    writeFileSync(join(workspace, 'AGENTS.md'), '# Repo rules\n')
+    writeFileSync(join(workspace, 'CLAUDE.md'), '# Claude rules\n')
+    mkdirSync(join(workspace, '.claude/skills/hello'), { recursive: true })
     await materializeWorkspace(starter(), workspace)
-    const before = readFileSync(join(workspace, 'AGENTS.md'), 'utf8')
     const again = await materializeWorkspace(starter(), workspace)
-    expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8')).toBe(before)
     expect(again.created).toEqual([])
-    expect(again.kept).toEqual(expect.arrayContaining(['NOTES.md', 'AGENTS.md', 'CLAUDE.md', '.claude/skills/hello']))
-  })
-
-  it("appends under a marker to the user's own AGENTS.md and CLAUDE.md, once", async () => {
-    writeFileSync(join(workspace, 'NOTES.md'), 'mine\n') // marker present → no template copy
-    writeFileSync(join(workspace, 'AGENTS.md'), '# Repo rules\n\nBe kind.\n')
-    writeFileSync(join(workspace, 'CLAUDE.md'), '# Claude\n')
-    await materializeWorkspace(starter(), workspace)
-    await materializeWorkspace(starter(), workspace)
-    const agents = readFileSync(join(workspace, 'AGENTS.md'), 'utf8')
-    expect(agents.startsWith('# Repo rules')).toBe(true)
-    expect(agents.split(dshMarkerLine('autonomous/starter')).length).toBe(2)
-    const claude = readFileSync(join(workspace, 'CLAUDE.md'), 'utf8')
-    expect(claude.startsWith('# Claude')).toBe(true)
-    expect(claude.split('@AGENTS.md').length).toBe(2)
-    expect(readFileSync(join(workspace, 'NOTES.md'), 'utf8')).toBe('mine\n')
-  })
-
-  it('links Codex skills under .agents and writes no CLAUDE.md', async () => {
-    await materializeWorkspace(starter('codex'), workspace)
-    expect(lstatSync(join(workspace, '.agents', 'skills', 'hello')).isSymbolicLink()).toBe(true)
-    expect(existsSync(join(workspace, 'CLAUDE.md'))).toBe(false)
-    expect(existsSync(join(workspace, '.claude'))).toBe(false)
-  })
-
-  it('leaves a real directory in the skills folder alone and says so', async () => {
-    const { mkdirSync } = await import('node:fs')
-    mkdirSync(join(workspace, '.claude', 'skills', 'hello'), { recursive: true })
-    const result = await materializeWorkspace(starter(), workspace)
-    expect(lstatSync(join(workspace, '.claude', 'skills', 'hello')).isSymbolicLink()).toBe(false)
-    expect(result.warnings.some((w) => w.includes('hello'))).toBe(true)
+    expect(again.kept).toEqual(['NOTES.md'])
+    expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8')).toBe('# Repo rules\n')
+    expect(readFileSync(join(workspace, 'CLAUDE.md'), 'utf8')).toBe('# Claude rules\n')
+    expect(lstatSync(join(workspace, '.claude/skills/hello')).isDirectory()).toBe(true)
   })
 })
 
@@ -179,13 +150,11 @@ describe('materializeWorkspace, on harnesses other than the starter', () => {
     expect(readFileSync(join(workspace, 'init.log'), 'utf8')).toBe('init in workspace for acme/thing\ninit in workspace for acme/thing\n')
   })
 
-  it('says what it could not do: a missing template, unreadable instructions, a skills root with no skills', async () => {
+  it('reports a missing template; runtime binding validates instructions and skills separately', async () => {
     const dsh = install({ engine: 'claude', workspace: { template: 'gone', marker: 'deck.md' }, agent: { instructions: 'MISSING.md', skills: ['empty'] } }, { 'empty/README.md': '' })
     const result = await materializeWorkspace(dsh, workspace)
     expect(result.warnings).toEqual([
       `template ${join(harness, 'gone')} is missing`,
-      `instructions ${join(harness, 'MISSING.md')} could not be read`,
-      'no SKILL.md under empty',
     ])
     expect(existsSync(join(workspace, 'AGENTS.md'))).toBe(false)
     expect(existsSync(join(workspace, 'CLAUDE.md'))).toBe(false)
@@ -209,22 +178,16 @@ describe('materializeWorkspace, on harnesses other than the starter', () => {
     expect(result.warnings).toEqual(['init exited by timeout'])
   })
 
-  it('repoints a skill link an earlier install path left, and skips a skill entry it cannot stat', async () => {
-    const dsh = install({ engine: 'codex', agent: { skills: ['skills'] } }, { 'skills/draw/SKILL.md': '---\nname: draw\n---\n' })
+  it('skips skill entries that cannot be statted', () => {
+    const dsh = install({ engine: 'codex', agent: { skills: ['skills'] } }, { 'skills/draw/SKILL.md': '# Draw' })
     symlinkSync(join(root, 'nowhere'), join(harness, 'skills', 'dangling'))
-    mkdirSync(join(workspace, '.agents', 'skills'), { recursive: true })
-    symlinkSync(join(root, 'old-install', 'draw'), join(workspace, '.agents', 'skills', 'draw'))
-    const result = await materializeWorkspace(dsh, workspace)
-    expect(result.created).toEqual(['.agents/skills/draw'])
-    expect(readlinkSync(join(workspace, '.agents', 'skills', 'draw'))).toBe(join(harness, 'skills', 'draw'))
-    expect(existsSync(join(workspace, '.agents', 'skills', 'dangling'))).toBe(false)
+    expect(skillDirsIn(join(dsh.realDir, 'skills'))).toEqual([join(harness, 'skills/draw')])
   })
 
-  it('an agent manifest with no engine (the type allows it) is laid out for Claude Code', async () => {
+  it('refuses an agent manifest with no engine before writing workspace files', async () => {
     const dsh = install({ engine: 'claude', agent: { instructions: 'AGENTS.md', skills: ['skills'] } }, { 'AGENTS.md': '# Thing\n', 'skills/draw/SKILL.md': '' })
     const { engine: _engine, ...manifest } = dsh.manifest
-    await materializeWorkspace({ ...dsh, manifest }, workspace)
-    expect(readFileSync(join(workspace, 'CLAUDE.md'), 'utf8')).toBe('@AGENTS.md\n')
-    expect(lstatSync(join(workspace, '.claude', 'skills', 'draw')).isSymbolicLink()).toBe(true)
+    await expect(materializeWorkspace({ ...dsh, manifest }, workspace)).rejects.toThrow('does not support')
+    expect(readdirSync(workspace)).toEqual([])
   })
 })
