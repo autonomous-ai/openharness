@@ -27,6 +27,7 @@ import '../core/config.dart';
 import '../core/agent_names.dart';
 import '../core/agent_preference.dart';
 import '../core/dsh_catalog.dart';
+import '../core/harness_catalog.dart';
 import '../core/engine_availability.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
@@ -325,6 +326,12 @@ class MachineState {
   // opening a terminal stream against an unavailable node.
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
+
+  /// Successful turn events from work opened in this workspace. Capture the
+  /// harness and model at completion so later switches cannot earn milestones.
+  /// Account changes discard MachineState; durable progress lives in onboarding.
+  final completedHarnessUses = <({String harness, String? model})>{};
+  int completedHarnessTurns = 0;
 
   /// Agents on this machine that have stopped to ask something, by agentId.
   /// At most one per agent: a pane shows one dialog at a time, and the daemon
@@ -1206,7 +1213,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> closeSwarm(String id) async {
+  Future<void> closeSwarm(String id, {bool persist = true}) async {
     if (cancelSwarmDraft(id)) return;
     final index = swarms.indexWhere((s) => s.id == id);
     if (index < 0) return;
@@ -1244,7 +1251,7 @@ class AppNotifier extends ChangeNotifier {
     if (_activeSwarmId == id) {
       _activeSwarmId = swarms[index.clamp(0, swarms.length - 1)].id;
     }
-    _persistLayout();
+    if (persist) _persistLayout();
     notifyListeners();
     selectedMachineId = focusedPane?.machineId;
     _announceAppFocus();
@@ -9995,6 +10002,25 @@ class AppNotifier extends ChangeNotifier {
         _dismissedViewers[_viewerKey(pane.machineId, owner)] = viewerState;
       }
     }
+    final tab = activeSwarm;
+    bool closesWithPane(TerminalPane candidate) =>
+        candidate == pane ||
+        (!pane.isWeb &&
+            pane.agentId != null &&
+            candidate.isWeb &&
+            candidate.machineId == pane.machineId &&
+            candidate.ownerAgentId == pane.agentId);
+    if (tab.kind == 'harness' &&
+        tab.panes.every(closesWithPane) &&
+        !_activeAgentCreations.any((attempt) => attempt._targetId == tab.id)) {
+      // The final pane closes its tab, including any viewer it owns. Use the
+      // normal tab close so focus, history and the last-tab welcome agree.
+      for (final viewer in tab.panes.where((p) => p != pane).toList()) {
+        tab.remove(viewer);
+      }
+      await closeSwarm(tab.id, persist: persist);
+      return;
+    }
     if (pane.agentId != null) {
       final machine = stateOf(pane.machineId);
       final agent = machine?.agents
@@ -11402,6 +11428,28 @@ class AppNotifier extends ChangeNotifier {
           // here. Same predicate now, asked on the daemon: `isSubagentSession`.
           if (event['subagent'] != true) {
             _raiseAlert(machine, agentId, AlertKind.done);
+            final agent = machine.agents
+                .where((a) => a.id == agentId)
+                .firstOrNull;
+            if (agent != null &&
+                !machine.machine.isShared &&
+                !isTerminalEngine(agent.engine) &&
+                event['error'] == null &&
+                payload['error'] == null &&
+                allPanes.any(
+                  (pane) =>
+                      pane.machineId == machine.machine.machineId &&
+                      pane.agentId == agentId &&
+                      pane.session != null,
+                )) {
+              machine.completedHarnessUses.add((
+                harness: agent.dsh == null
+                    ? 'coding'
+                    : canonicalHarnessId(agent.dsh!),
+                model: agent.gridModel,
+              ));
+              machine.completedHarnessTurns++;
+            }
           }
           _cancelTurnActivity(machine.machine.machineId, agentId);
         } else {

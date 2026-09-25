@@ -95,6 +95,8 @@ import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
+import '../state/workspace_companion.dart';
+import '../widgets/companion_panel.dart';
 import '../widgets/workspace_quick_start.dart';
 import '../widgets/workspace_start_guide.dart';
 import '../widgets/workspace_welcome.dart';
@@ -172,6 +174,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final _onboarding =
       widget.onboarding ??
       WorkspaceOnboarding(storage: kUnderTest ? null : HarnessFileStore.shared);
+  late final _companion = CompanionController(_onboarding);
+  OverlayEntry? _companionOverlay;
+  OverlayEntry? _companionHintOverlay;
+  Timer? _companionHintTimer;
+  bool _companionHintPending = false;
+  VoidCallback? _unregisterCompanion;
   final _startSearchFocus = FocusNode(debugLabel: 'Start page search');
   final _commandFocus = FocusNode(debugLabel: 'Ask Harness');
   bool _commandBarOpen = false;
@@ -318,9 +326,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         // The window came forward, which is most of what a click asked for.
       }
     };
+    app.foreground.addListener(_companionEnvironmentChanged);
     app.addListener(_syncToolbarNotices);
     _toolbarNotices.addListener(_toolbarNoticesChanged);
     _onboarding.addListener(_onboardingChanged);
+    _companion.addListener(_companionChanged);
     _syncToolbarNotices();
     unawaited(
       _learning.load().then((_) {
@@ -362,6 +372,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _companionEnvironmentChanged();
     final keymap = KeymapTheme.of(context);
     if (keymap != _providedKeymap) {
       _keymap.removeListener(_keymapChanged);
@@ -375,6 +386,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!current &&
         (_search != null ||
             _commandBarOpen ||
+            _companionOverlay != null ||
             _harnessesVisible ||
             _modelsVisible)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -383,6 +395,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           _closeCommandBar(restoreFocus: false);
           _closeModelsControls(restoreFocus: false);
           _closeHarnessControls(restoreFocus: false);
+          _closeCompanion(restoreFocus: false);
         }
       });
     }
@@ -391,9 +404,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   @override
   void dispose() {
+    _closeCompanionHint();
+    app.foreground.removeListener(_companionEnvironmentChanged);
     app.removeListener(_syncToolbarNotices);
     _toolbarNotices.removeListener(_toolbarNoticesChanged);
     _toolbarNotices.dispose();
+    _companion.removeListener(_companionChanged);
+    _companion.dispose();
+    _unregisterCompanion?.call();
+    _companionOverlay?.remove();
+    _companionOverlay?.dispose();
     _machinesPanel?.close(restoreFocus: false);
     _unregisterModels?.call();
     _modelsOverlay?.remove();
@@ -505,6 +525,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
+    _closeCompanionHint();
+    _closeCompanion(restoreFocus: false);
     _machinesPanel?.close(restoreFocus: false);
     _closeModelsControls(restoreFocus: false);
     _closeHarnessControls(restoreFocus: false);
@@ -657,12 +679,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _syncOnboarding() {
     final profile = app.currentUser;
     final local = app.localMachineState?.machine.machineId;
-    final used = app.allPanes
+    final used = app.machineStates.values
         .where(
-          (pane) =>
-              pane.session?.acceptsInput == true &&
-              pane.session?.engineId != kTerminalEngine &&
-              app.stateOf(pane.machineId)?.machine.isShared == false,
+          (machine) =>
+              !machine.machine.isShared &&
+              machine.completedHarnessUses.isNotEmpty,
         )
         .toList();
     final localModels = app.modelManager.sections
@@ -676,24 +697,26 @@ class _SwarmScreenState extends State<SwarmScreen> {
           : 'account:${profile?.id ?? profile?.email ?? local}',
       observed: {
         if (used.isNotEmpty) OnboardingStep.harnesses,
-        if (used.any(
-          (pane) => app.stateOf(pane.machineId)?.isLocalMachine == false,
-        ))
+        if (used.any((machine) => !machine.isLocalMachine) ||
+            app.machineStates.values.any(
+              (machine) =>
+                  !machine.isLocalMachine &&
+                  !machine.machine.isShared &&
+                  !machine.needsLink &&
+                  machine.nodeOnline != false &&
+                  machine.connectionStatus == ConnectionStatus.connected,
+            ))
           OnboardingStep.machines,
         if (used.any(
-          (pane) =>
-              app
-                  .stateOf(pane.machineId)
-                  ?.agents
-                  .any(
-                    (agent) =>
-                        agent.id == pane.agentId &&
-                        agent.gridModel != null &&
-                        localModels.contains(agent.gridModel),
-                  ) ==
-              true,
+          (machine) => machine.completedHarnessUses.any(
+            (use) => use.model != null && localModels.contains(use.model),
+          ),
         ))
           OnboardingStep.models,
+      },
+      usedHarnesses: {
+        for (final machine in used)
+          for (final use in machine.completedHarnessUses) use.harness,
       },
       otherComputer:
           !app.isGuest &&
@@ -708,15 +731,70 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _onboardingChanged() {
     if (!mounted) return;
+    if (!_onboarding.loaded || _lastOnboardingScope != _onboarding.scope) {
+      _closeCompanionHint();
+      _closeCompanion(restoreFocus: false);
+      _lastOnboardingCount = null;
+      _lastOnboardingScope = _onboarding.scope;
+    }
+    if (_onboarding.loaded) {
+      if (_lastOnboardingCount != null &&
+          _onboarding.companion == null &&
+          _onboarding.completedCount > _lastOnboardingCount!) {
+        final ready = _onboarding.complete;
+        final remaining = _onboarding.total - _onboarding.completedCount;
+        final scope = _onboarding.scope;
+        final count = _onboarding.completedCount;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              _onboarding.scope != scope ||
+              _onboarding.completedCount != count) {
+            return;
+          }
+          _showCompanionNotice(
+            ready
+                ? 'Your companion is ready.'
+                : remaining == 1
+                ? 'One discovery left. Nearly there.'
+                : 'One step closer. $remaining to go.',
+            action: ready ? 'hatch' : 'view',
+            onAction: _activateCompanion,
+            key: const ValueKey('companion-discovery-notice'),
+          );
+        });
+      }
+      _lastOnboardingCount = _onboarding.completedCount;
+    }
     _machinesPanel?.rebuild();
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
     if (_native) _syncNative();
     setState(() {});
+    _maybeShowCompanionHint();
   }
+
+  String? _lastOnboardingScope;
+  int? _lastOnboardingCount;
 
   void _syncToolbarNotices() {
     _syncOnboarding();
+    final sessions = harnessSessions(app);
+    _companion.sync(
+      working: sessions.any((s) => s.online && s.working),
+      needsInput: sessions.any((s) => s.online && s.needsInput),
+      browsing: app.activeSwarm.isStore,
+      blocked: sessions.any(
+        (s) => s.open && (!s.online || s.agent.launchState == 'failed'),
+      ),
+      completedTurns: app.machineStates.values.fold(
+        0,
+        (count, machine) => count + machine.completedHarnessTurns,
+      ),
+      turnsByMachine: {
+        for (final machine in app.machineStates.values)
+          machine.machine.machineId: machine.completedHarnessTurns,
+      },
+    );
     final local = app.localMachineState?.machine.machineId;
     final models = app.modelManager;
     final profile = app.currentUser;
@@ -939,6 +1017,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final payload = {
       'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
       'activeId': app.activeSwarmId,
+      'companion': _companionPayload,
       'palette': grid.AppTheme.palette.value.nativeColors,
       'barStyle': {
         'family': barStyle.fontFamily,
@@ -1261,6 +1340,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (call.method == 'modelControls') {
       _toggleModelsControls();
+      await WidgetsBinding.instance.endOfFrame;
+      return;
+    }
+    if (call.method == 'companion') {
+      _activateCompanion();
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -2530,12 +2614,229 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch(restoreFocus: false);
     _closeCommandBar(restoreFocus: false);
     dismissTransientMenus();
+    _onboarding.acknowledge(OnboardingStep.store);
     app.openStore();
   }
 
   void _modelManagerChanged() {
     _syncToolbarNotices();
     if (_native && mounted) _syncNative();
+  }
+
+  Map<String, Object?> get _companionPayload => {
+    'visible': _onboarding.loaded,
+    'open': _companionOverlay != null,
+    'glyph': _companion.statusGlyph,
+    'columns': _companion.statusColumns,
+    'opacity': _companion.statusOpacity,
+    'foreground': companionInk(
+      _companion,
+      terminalThemeFor(grid.AppTheme.palette.value, terminalThemeStore.value),
+    ).withValues(alpha: 1).toARGB32(),
+    'tooltip': _companion.statusTooltip,
+    'hatching': _companion.hatching,
+    'label': _companion.statusLabel,
+    'detail': _companion.statusDetail,
+  };
+
+  void _companionChanged() {
+    if (!mounted || !_native) return;
+    // Expressions repaint only this control, leaving tab and terminal state alone.
+    unawaited(_channel.invokeMethod<void>('companionState', _companionPayload));
+  }
+
+  void _companionEnvironmentChanged() {
+    _companion.setEnvironment(
+      foreground: app.inForeground,
+      reduceMotion: MediaQuery.maybeOf(context)?.disableAnimations ?? false,
+    );
+    if (app.inForeground) {
+      _maybeShowCompanionHint();
+    } else {
+      _closeCompanionHint();
+    }
+  }
+
+  void _closeCompanionHint() {
+    _companionHintTimer?.cancel();
+    _companionHintTimer = null;
+    _companionHintOverlay?.remove();
+    _companionHintOverlay?.dispose();
+    _companionHintOverlay = null;
+  }
+
+  void _maybeShowCompanionHint() {
+    if (!mounted || _companionHintPending || !_onboarding.needsCompanionHint) {
+      return;
+    }
+    _companionHintPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _companionHintPending = false;
+      if (!mounted ||
+          !_shortcutsEnabled ||
+          !app.inForeground ||
+          _companionOverlay != null ||
+          _search != null ||
+          _newHarness != null ||
+          _commandBarOpen ||
+          _machinesVisible ||
+          _modelsVisible ||
+          _harnessesVisible ||
+          !_onboarding.needsCompanionHint) {
+        return;
+      }
+      final overlay = Overlay.maybeOf(context);
+      if (overlay == null || !_onboarding.acknowledgeCompanionHint()) return;
+      _showCompanionNotice(
+        'A companion is inside.',
+        key: const ValueKey('companion-arrival-hint'),
+      );
+    });
+  }
+
+  void _showCompanionNotice(
+    String message, {
+    required Key key,
+    String? action,
+    VoidCallback? onAction,
+  }) {
+    if (!mounted ||
+        !_shortcutsEnabled ||
+        !app.inForeground ||
+        _companionOverlay != null ||
+        _search != null ||
+        _newHarness != null ||
+        _commandBarOpen ||
+        _machinesVisible ||
+        _modelsVisible ||
+        _harnessesVisible) {
+      return;
+    }
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+    _closeCompanionHint();
+    _companionHintOverlay = OverlayEntry(
+      builder: (context) {
+        final cell = workspaceBarCellSizeOf(context);
+        return Positioned(
+          top: (_native ? 0.0 : _tabBarHeight) + cell.width,
+          right: cell.width,
+          child: IgnorePointer(
+            ignoring: onAction == null,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: math.max(
+                  0,
+                  MediaQuery.sizeOf(context).width - cell.width * 2,
+                ),
+              ),
+              child: CompanionNotice(
+                key: key,
+                message: message,
+                action: action,
+                onAction: onAction,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(_companionHintOverlay!);
+    _companionHintTimer = Timer(
+      const Duration(seconds: 6),
+      _closeCompanionHint,
+    );
+  }
+
+  void _activateCompanion() {
+    _closeCompanionHint();
+    if (!_shortcutsEnabled || _companion.hatching) return;
+    if (_onboarding.complete && _companion.identity == null) {
+      _companion.hatch();
+    } else {
+      _toggleCompanion();
+    }
+  }
+
+  void _toggleCompanion() {
+    _closeCompanionHint();
+    if (_companionOverlay != null) {
+      _closeCompanion();
+      return;
+    }
+    if (!_onboarding.loaded || _newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    _closeCommandBar(restoreFocus: false);
+    dismissTransientMenus();
+    _preparePaneFocus();
+    _companionOverlay = OverlayEntry(
+      builder: (context) => LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          children: [
+            Positioned.fill(
+              top: _native ? 0 : _tabBarHeight,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _closeCompanion,
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              top: (_native ? 0.0 : _tabBarHeight) + 8,
+              right: 10,
+              width: (constraints.maxWidth - 20).clamp(
+                0,
+                terminalCellSizeOf(context).width * 46,
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight:
+                      (constraints.maxHeight -
+                              (_native ? 0 : _tabBarHeight) -
+                              20)
+                          .clamp(0, 660),
+                ),
+                child: CompanionPanel(
+                  key: ValueKey(_onboarding.scope),
+                  controller: _companion,
+                  onClose: _closeCompanion,
+                  shortcut: (step) => _keymap.hint(step.command),
+                  onStep: (step) {
+                    _closeCompanion(restoreFocus: false);
+                    _runShortcut(step.command);
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    Overlay.of(context).insert(_companionOverlay!);
+    _unregisterCompanion = registerTransientMenu(
+      () => _closeCompanion(restoreFocus: false),
+    );
+    if (_native) _syncNative();
+    setState(() {});
+  }
+
+  void _closeCompanion({bool restoreFocus = true}) {
+    if (_companionOverlay == null) return;
+    _unregisterCompanion?.call();
+    _unregisterCompanion = null;
+    _companionOverlay?.remove();
+    _companionOverlay?.dispose();
+    _companionOverlay = null;
+    if (!mounted) return;
+    if (_native) _syncNative();
+    setState(() {});
+    if (restoreFocus) {
+      _shellFocus.requestFocus();
+      if (app.focusedPane case final pane?) {
+        app.focusPane(pane.id, reveal: true);
+      }
+    }
   }
 
   Future<void> _openModelManager() async {
@@ -3692,6 +3993,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'navigation.commands': _showSearchCommands,
     'app.customize': () => unawaited(_customize()),
     'app.store': _openStore,
+    'app.companion': _toggleCompanion,
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
     'agent.rename': () => _editAgent(),
@@ -3870,6 +4172,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
       ?mode('agent.new', 'New Harness', 'agent · machine · project'),
       ?mode('app.store', 'Harness Store', 'Browse and install harnesses'),
+      ?mode(
+        'app.companion',
+        'Terminal companion',
+        'Hatch · little chats · play',
+      ),
       ?mode(
         'harnesses.list',
         'Harnesses',
@@ -4054,10 +4361,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
   );
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => _buildWorkspace(context);
+
+  Widget _buildWorkspace(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([app, _projects, _learning]),
     builder: (context, _) {
       grid.AppTheme.watch(context);
+      _maybeShowCompanionHint();
       _maybeLink();
       if (app.panes.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback(
@@ -4503,8 +4813,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
         for (var index = 0; index < app.swarms.length; index++)
           '${index + 1}:${names[app.swarms[index].id]}',
       ];
+      final companionSpace = _onboarding.loaded
+          ? cell.width * (_companion.statusColumns + 2)
+          : 0.0;
       final toolHeight = workspaceBarControlHeight(context);
-      final contentWidth = math.max(0.0, constraints.maxWidth - cell.width * 7);
+      final pr = _pullRequest.value;
+      final contentWidth = math.max(
+        0.0,
+        constraints.maxWidth - cell.width * 7 - companionSpace,
+      );
       final tabBudget = contentWidth * .45;
       _tabWidths = [
         for (final label in labels)
@@ -4518,7 +4835,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final focused = WorkspacePaneContext.focused(app);
       final prefs = appearancePrefsStore.value.prompt;
       final parts = focused?.format(prefs);
-      final pr = _pullRequest.value;
       final prParts = pr == null
           ? null
           : pullRequestStatusLineParts(
@@ -4656,7 +4972,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                       ),
                                       child: _focusedModelPicker(focused),
                                     ),
-                                    SizedBox(width: cell.width),
+                                    SizedBox(
+                                      width: math.min(
+                                        cell.width,
+                                        constraints.maxWidth * .65,
+                                      ),
+                                    ),
                                   ],
                                   Flexible(
                                     child: WorkspaceStatusLine(
@@ -4700,6 +5021,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ),
                 ),
               ],
+              if (_onboarding.loaded)
+                CompanionTabButton(
+                  controller: _companion,
+                  selected: _companionOverlay != null,
+                  onPressed: _activateCompanion,
+                ),
               SizedBox(width: cell.width),
             ],
           ),

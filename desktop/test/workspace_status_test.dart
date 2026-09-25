@@ -928,7 +928,14 @@ void main() {
           tester.view.physicalSize = Size(width, 800);
           await tester.pump(const Duration(milliseconds: 100));
           expect(tester.takeException(), isNull);
-          expect(tester.getRect(context).right, lessThan(width));
+          final companion = tester.getRect(
+            find.byKey(const ValueKey('companion-tab-button')),
+          );
+          expect(
+            tester.getRect(context).right,
+            lessThanOrEqualTo(companion.left),
+          );
+          expect(companion.right, lessThan(width));
         }
       }
       await captureControls(tester, 'unified-search-toolbar', height: 100);

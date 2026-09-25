@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,6 +31,8 @@ class _Daemon extends WsConn {
       );
 
   final requests = <String>[];
+  Completer<Map<String, dynamic>>? creationReply;
+  String? creationId;
 
   @override
   Future<Map<String, dynamic>> request(
@@ -37,6 +41,10 @@ class _Daemon extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     requests.add(type);
+    if (type == 'agent_create' || type == 'agent_create_status') {
+      creationId = payload['creationId'] as String?;
+      if (creationReply case final reply?) return reply.future;
+    }
     if (type == 'engines_probe') return {'engines': []};
     if (type == 'dsh_list') return {'dsh': []};
     if (type == 'git_project_info') {
@@ -60,6 +68,8 @@ void main() {
     double height = 450,
     double scale = 1,
     MemoryKeymap? keymap,
+    bool reduceMotion = false,
+    VoidCallback? onCreated,
   }) async {
     final daemon = _Daemon();
     final app = createApp(connectionForTest: (_) => daemon);
@@ -76,8 +86,10 @@ void main() {
       MaterialApp(
         theme: ThemeData.dark(),
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(scale)),
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(scale),
+            disableAnimations: reduceMotion,
+          ),
           child: child!,
         ),
         home: KeymapProvider(
@@ -94,7 +106,7 @@ void main() {
                   child: NewHarnessForm(
                     controller: box,
                     onClose: () {},
-                    onCreated: () {},
+                    onCreated: onCreated ?? () {},
                   ),
                 ),
               ),
@@ -123,6 +135,126 @@ void main() {
     expect(daemon.requests, isNot(contains('agent_create')));
     await key(tester, LogicalKeyboardKey.enter);
     expect(daemon.requests, contains('agent_create'));
+  });
+
+  group('launch feedback', () {
+    for (final width in [600.0, 1000.0]) {
+      testWidgets('Enter shows progress and prevents duplicates at $width', (
+        tester,
+      ) async {
+        tester.view.physicalSize = const Size(1100, 700);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final (box, daemon) = await mount(tester, width: width, focus: 'start');
+        daemon.creationReply = Completer();
+
+        await key(tester, LogicalKeyboardKey.enter, shift: false);
+        expect(box.busy, isTrue);
+        final action = find.byKey(const ValueKey('new-harness-field-start'));
+        final progress = find.byKey(const ValueKey('new-harness-progress'));
+        expect(find.text('| Starting...'), findsOneWidget);
+        expect(tester.widget<Semantics>(action).properties.enabled, isFalse);
+        final status = find.byKey(const ValueKey('new-harness-status'));
+        expect(find.text('Starting harness…'), findsOneWidget);
+        expect(
+          tester.getTopLeft(status).dy,
+          greaterThan(tester.getBottomLeft(progress).dy),
+        );
+        expect(
+          tester.getTopLeft(status).dx,
+          closeTo(tester.getTopLeft(progress).dx, .01),
+        );
+
+        await tester.pump(const Duration(milliseconds: 160));
+        expect(find.text('/ Starting...'), findsOneWidget);
+        await key(tester, LogicalKeyboardKey.enter, shift: false);
+        await tester.tap(action);
+        await tester.pump();
+        expect(
+          daemon.requests.where((type) => type == 'agent_create'),
+          hasLength(1),
+        );
+
+        daemon.creationReply!.completeError(
+          const WsRequestFailure(
+            responseType: 'agent_create_result',
+            code: 'INVALID_ENGINE',
+            detail: 'This agent is unavailable.',
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(box.busy, isFalse);
+        expect(progress, findsNothing);
+        expect(find.text('New Harness'), findsOneWidget);
+        expect(tester.widget<Semantics>(action).properties.enabled, isTrue);
+        expect(box.error, isNotNull);
+        expect(find.text(box.error!), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('a lost reply changes to Check status and Enter checks it', (
+      tester,
+    ) async {
+      var created = false;
+      final (box, daemon) = await mount(
+        tester,
+        focus: 'start',
+        onCreated: () => created = true,
+      );
+      daemon.creationReply = Completer();
+      await key(tester, LogicalKeyboardKey.enter, shift: false);
+      final creationId = daemon.creationId;
+      daemon.creationReply!.completeError(
+        const WsRequestTimeout('agent_create'),
+      );
+      await tester.pumpAndSettle();
+      expect(box.checking, isTrue);
+      expect(find.text('Check status'), findsOneWidget);
+      expect(find.byKey(const ValueKey('new-harness-progress')), findsNothing);
+
+      daemon.creationReply = Completer();
+      await key(tester, LogicalKeyboardKey.enter, shift: false);
+      expect(find.text('| Checking...'), findsOneWidget);
+      expect(find.text('Checking on the harness…'), findsOneWidget);
+      expect(
+        daemon.requests.where((type) => type == 'agent_create'),
+        hasLength(1),
+      );
+      expect(
+        daemon.requests.where((type) => type == 'agent_create_status'),
+        hasLength(1),
+      );
+      expect(daemon.creationId, creationId);
+      daemon.creationReply!.complete({
+        'creationId': creationId,
+        'state': 'created',
+        'agent': {'id': 'made', 'name': 'Made', 'engine': box.engine},
+      });
+      await tester.pump();
+      expect(created, isTrue);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Reduce Motion keeps the busy label still', (tester) async {
+      final (_, daemon) = await mount(
+        tester,
+        reduceMotion: true,
+        focus: 'start',
+      );
+      daemon.creationReply = Completer();
+      await key(tester, LogicalKeyboardKey.enter, shift: false);
+      expect(find.text('| Starting...'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('| Starting...'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      daemon.creationReply!.completeError(
+        const WsRequestTimeout('agent_create'),
+      );
+      await tester.pump();
+    });
   });
 
   group('one grid', () {
