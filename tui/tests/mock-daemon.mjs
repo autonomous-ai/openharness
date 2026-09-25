@@ -26,9 +26,30 @@ const agent = (id, name, engine, status = 'active') => ({
   engine, selectedModel: `runtime-v1:${id}:${engine}:default@auto`, terminal: { available: status === 'active' },
   project: { name: 'demo', cwd: '/home/demo/demo', root: '/home/demo/demo', branch: 'main' },
 })
-const agents = {
+const DEMO = process.env.MOCK_DEMO === '1'
+const project = (a, name, branch) => ({ ...a, project: { name, cwd: `/home/dev/${name}`, root: `/home/dev/${name}`, branch } })
+const agents = DEMO ? {
+  [LOCAL]: [
+    project(agent(randomUUID(), 'Fix flaky login test', 'claude'), 'webapp', 'fix/login-flake'),
+    project(agent(randomUUID(), 'Add rate limiting to the API', 'codex'), 'api', 'feat/rate-limit'),
+    project(agent(randomUUID(), 'Refactor billing service', 'claude'), 'billing', 'refactor/invoices'),
+    project(agent(randomUUID(), 'Release notes 2.4', 'claude', 'stopped'), 'webapp', 'main'),
+  ],
+  [REMOTE]: [
+    project(agent(randomUUID(), 'Train tokenizer on the new corpus', 'codex'), 'ml-lab', 'exp/tokenizer-v3'),
+    project(agent(randomUUID(), 'gpu-box shell', 'terminal'), 'ml-lab', 'main'),
+  ],
+} : {
   [LOCAL]: [agent(randomUUID(), 'Mock Claude', 'claude'), agent(randomUUID(), 'Mock Codex', 'codex'), agent(randomUUID(), 'Mock paused', 'claude', 'stopped')],
   [REMOTE]: [agent(randomUUID(), 'Remote shell', 'terminal')],
+}
+// What a demo pane shows: an agent mid-task, in colour.
+const demoScreen = (a) => a.engine === 'terminal'
+  ? `\x1bc\x1b[32mdev@gpu-box\x1b[0m:\x1b[34m~/ml-lab\x1b[0m$ nvidia-smi --query-gpu=name,utilization.gpu --format=csv\r\nname, utilization.gpu [%]\r\nNVIDIA RTX 4090, 97 %\r\nNVIDIA RTX 4090, 95 %\r\n\x1b[32mdev@gpu-box\x1b[0m:\x1b[34m~/ml-lab\x1b[0m$ `
+  : `\x1bc\x1b[1m\x1b[38;5;208m✳ ${a.name}\x1b[0m\r\n\r\n\x1b[2m> ${a.name.toLowerCase()}\x1b[0m\r\n\r\n\x1b[38;5;208m⏺\x1b[0m Reading \x1b[1msrc/${a.project.name}/handler.ts\x1b[0m\r\n\x1b[38;5;208m⏺\x1b[0m Running \x1b[1mnpm test -- ${a.project.name}\x1b[0m\r\n  \x1b[32m✓\x1b[0m 41 passed  \x1b[31m✗\x1b[0m 1 failed\r\n\x1b[38;5;208m⏺\x1b[0m The failure is a race in the session refresh — the token is read\r\n  before the refresh promise settles. Fixing it and re-running.\r\n\r\n\x1b[2m────────────────────────────────────────\x1b[0m\r\n\x1b[1m❯\x1b[0m `
+const question = (machine) => {
+  const a = agents[machine]?.find((x) => x.name.startsWith('Add rate limiting'))
+  return a && { type: 'commander_question', agentId: a.id, dbSessionId: a.sessionId, payload: { requestId: 'q-demo', questions: [{ q: 'Rate limit per API key or per IP?', options: ['Per API key', 'Per IP', 'Both'] }] } }
 }
 const desk = { revision: 1, tabs: [] }
 
@@ -36,8 +57,8 @@ const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/
 const server = http.createServer((req, res) => {
   if (req.url === '/api/status') return json(res, { machineId: LOCAL, signedIn: true, version: 'mock' })
   if (req.url === '/api/machines') return json(res, { machines: [
-    { machineId: LOCAL, name: 'mock-local', status: 'running' },
-    { machineId: REMOTE, name: 'mock-remote', status: 'running' },
+    { machineId: LOCAL, name: DEMO ? 'studio' : 'mock-local', status: 'running' },
+    { machineId: REMOTE, name: DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },
   ] })
   if (req.url === '/api/desk' && req.method === 'GET') return json(res, desk)
   if (req.url === '/api/desk/ops') { desk.revision++; return json(res, desk) }
@@ -78,7 +99,16 @@ wss.on('connection', (ws) => {
     if (type === 'machine_select') {
       machine = payload.machineId
       if (!agents[machine]) return ws.close(4403, 'machine mismatch')
-      return send('connected', { machineId: machine, transport: 'local', localProtocolVersion: 1 })
+      send('connected', { machineId: machine, transport: 'local', localProtocolVersion: 1 })
+      if (DEMO) {
+        const asked = question(machine)
+        if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
+        const busy = agents[machine].filter((x) => x.status === 'active' && x.engine !== 'terminal' && !x.name.startsWith('Add rate'))
+        const beat = setInterval(() => busy.forEach((x) => send('turn_heartbeat', { agentId: x.id, sessionId: x.sessionId })), 2000)
+        ws.on('close', () => clearInterval(beat))
+        setTimeout(() => busy.forEach((x) => send('turn_heartbeat', { agentId: x.id, sessionId: x.sessionId })), 200)
+      }
+      return
     }
     const reply = (body) => send(`${type}_result`, { requestId: payload.requestId, ...body })
     switch (type) {
@@ -99,7 +129,7 @@ wss.on('connection', (ws) => {
         const streamId = randomUUID()
         streams.set(streamId, { seq: 1, agent: target })
         send('terminal_ready', { requestId: payload.requestId, streamId, agentId: target.id, readOnly: false })
-        ws.send(frame(3, streamId, 0, Buffer.from(`\x1bc${target.name} (mock)\r\n$ `), [payload.cols, payload.rows]))
+        ws.send(frame(3, streamId, 0, Buffer.from(DEMO ? demoScreen(target) : `\x1bc${target.name} (mock)\r\n$ `), [payload.cols, payload.rows]))
         return
       }
       case 'terminal_close': streams.delete(payload.streamId); return

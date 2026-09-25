@@ -7,6 +7,12 @@ terminal you can type into: a laptop, a server over SSH, a tablet's SSH app.
 harness tui
 ```
 
+![Three harnesses on two machines, side by side](docs/panes.png)
+
+![⌥P: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)
+
+<sub>Screens from the demo fleet in `tests/mock-daemon.mjs` (`MOCK_DEMO=1`).</sub>
+
 It is a **client of the same daemon the desktop app uses**. Nothing runs inside it: the agents
 live in the daemon's tmux on their own machines, and each pane is a live stream of one of them.
 Close it, lose the connection, reopen it anywhere — everything is where you left it, because
