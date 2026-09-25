@@ -216,24 +216,23 @@ void main() {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          for (final symbol in ['>', '@', ':', '*'])
-                            WorkspaceBarControl(
-                              label: symbol,
-                              selection: theme.selection,
-                              onPressed: () {},
-                              child: SizedBox(
-                                width: barCell.width * 3,
-                                height: workspaceBarControlHeight(context),
-                                child: Center(
-                                  child: Text(
-                                    symbol,
-                                    style: workspaceBarTextStyle(
-                                      color: theme.foreground,
-                                    ),
+                          WorkspaceBarControl(
+                            label: 'New Tab',
+                            onPressed: () {},
+                            builder: (context, emphasized) => SizedBox(
+                              width: barCell.width * 3,
+                              height: workspaceBarControlHeight(context),
+                              child: Center(
+                                child: Text(
+                                  '+',
+                                  style: workspaceBarTextStyle(
+                                    color: theme.foreground,
+                                    emphasized: emphasized,
                                   ),
                                 ),
                               ),
                             ),
+                          ),
                           CompanionTabButton(
                             controller: pet,
                             selected: true,

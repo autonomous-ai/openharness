@@ -886,7 +886,7 @@ void main() {
         final rect = tester.getRect(find.byWidget(control));
         expect(
           rect.height,
-          control.selected == null ? 28 : tester.getSize(bar).height,
+          control.selectedBackground == null ? 28 : tester.getSize(bar).height,
         );
         if (control.selected == true) {
           final fill = find.descendant(

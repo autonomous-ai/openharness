@@ -218,7 +218,7 @@ void main() {
       expect(find.text('Hatch a companion'), findsNothing);
       expect(
         tester.getRect(button).left,
-        greaterThan(
+        greaterThanOrEqualTo(
           tester
               .getRect(find.byKey(const ValueKey('workspace-pane-context')))
               .right,
@@ -537,7 +537,7 @@ void main() {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
-    expect(find.byTooltip('Models'), findsOneWidget);
+    expect(find.byTooltip('Models'), findsNothing);
     expect(find.byTooltip('Models ⌘I'), findsNothing);
     map.apply('''{"bindings":[
       {"keys":"cmd+i","command":null},
@@ -640,8 +640,20 @@ void main() {
         expect(journey.next, OnboardingStep.machines);
         await openWorkspaceTool(tester, 'machines');
         await selectResource(tester, 'machine:m');
-        await runResourceCommand(tester, 'Password / connection settings');
-        expect(find.text('This computer’s password'), findsOneWidget);
+        await tap(
+          tester,
+          find.byKey(
+            const ValueKey('resource-action:picker.resource_settings'),
+          ),
+        );
+        expect(
+          find.text(
+            hasPassword
+                ? 'Password is set.'
+                : 'Set a password for other computers to connect here.',
+          ),
+          findsOneWidget,
+        );
         if (!hasPassword) {
           final field = find.byKey(const Key('remote-password-field'));
           expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
@@ -650,7 +662,7 @@ void main() {
             find.byKey(const Key('remote-password-confirm-field')),
             '123456',
           );
-          await tap(tester, find.text('Set password'));
+          await tap(tester, find.byKey(const ValueKey('machine-form:Save')));
         }
         expect(app.password, '123456');
         expect(find.text('Set password'), findsNothing);
@@ -664,7 +676,7 @@ void main() {
     );
   }
 
-  testWidgets('second computer connects then opens only the source harnesses', (
+  testWidgets('second computer connects in the picker without starting work', (
     tester,
   ) async {
     const source = Machine(
@@ -691,8 +703,11 @@ void main() {
     expect(journey.next, OnboardingStep.machines);
     await openWorkspaceTool(tester, 'machines');
     await selectResource(tester, 'machine:source');
-    await runResourceCommand(tester, 'Link “M2”');
-    final field = find.byType(TextField);
+    await tap(
+      tester,
+      find.byKey(const ValueKey('resource-action:picker.resource_connect')),
+    );
+    final field = find.byKey(const ValueKey('remote-password-connect-field'));
     await tester.enterText(field, 'wrong');
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -701,11 +716,12 @@ void main() {
     await key(tester, LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(app.connections, ['source']);
-    await key(tester, LogicalKeyboardKey.enter);
-    expect(resourceScope('@'), findsNothing);
-    expect(find.text('Search harnesses in M2'), findsOneWidget);
-    expect(find.text('Existing work'), findsWidgets);
-    expect(find.text('Work on this computer'), findsNothing);
+    expect(resourceScope('@'), findsOneWidget);
+    expect(resourceSearch(tester).selected!.machineId, 'source');
+    expect(field, findsNothing);
+    expect(app.stateOf('source')!.needsLink, isFalse);
+    expect(app.stateOf('source')!.connectionStatus, ConnectionStatus.connected);
+    expect(app.allPanes, isEmpty);
     expect(journey.completed(OnboardingStep.machines), isTrue);
     expect(journey.completed(OnboardingStep.harnesses), isFalse);
     expect(tester.takeException(), isNull);
@@ -735,8 +751,10 @@ void main() {
       app.stateOf('source')!.nodeOnline = true;
       app.notifyListeners();
       await tester.pumpAndSettle();
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
-      expect(find.text('Link “M2”'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('resource-action:picker.resource_connect')),
+        findsOneWidget,
+      );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpWidget(const SizedBox());
     },

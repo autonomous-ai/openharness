@@ -138,7 +138,10 @@ class CompanionNotice extends StatelessWidget {
                     label: action!,
                     onPressed: onAction,
                     builder: (context, emphasized) => SizedBox(
-                      width: workspaceBarTextSizeOf(context, '[ $action ]').width,
+                      width: workspaceBarTextSizeOf(
+                        context,
+                        '[ $action ]',
+                      ).width,
                       height: workspaceBarControlHeight(context),
                       child: Center(
                         child: Text(
