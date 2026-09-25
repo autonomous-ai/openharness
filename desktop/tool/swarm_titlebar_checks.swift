@@ -64,20 +64,24 @@ private extension SwarmTabButton {
 
     let symbol = SwarmStatusSymbolButton(frame: NSRect(x: 0, y: 0, width: 32, height: 28))
     symbol.title = "+"
-    symbol.selection = selection
     let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    let symbolResting = symbol.renderedPixels()
     symbol.mouseEntered(with: hover)
-    let expectedColor = symbol.renderedBitmap().colorAt(x: 1, y: 1)!
+    try checkTitlebar(symbol.renderedPixels() != symbolResting &&
+      symbol.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
+      "Symbols become bold on hover without adding a background")
+    let width = preferredWidth
+    let resting = renderedPixels()
     mouseEntered(with: hover)
     let hovered = renderedBitmap()
     let filledRows = (0..<hovered.pixelsHigh).filter { hovered.colorAt(x: 1, y: $0)!.alphaComponent > 0 }
-    try checkTitlebar(filledRows.count == Int(symbol.bounds.height),
-      "Tab and symbol hover rectangles have the same height")
-    try checkTitlebar(hovered.colorAt(x: 1, y: 20) == expectedColor,
-      "Tab and symbol hover rectangles use the same selection tint")
+    try checkTitlebar(filledRows.isEmpty && renderedPixels() != resting,
+      "Tabs become bold on hover without adding a background")
+    try checkTitlebar(preferredWidth == width &&
+      NSFontManager.shared.traits(of: emphasizedLabel.attribute(.font, at: 0, effectiveRange: nil) as! NSFont).contains(.boldFontMask),
+      "Hover uses a bold font while preserving the tab width")
     mouseExited(with: hover)
-    let resting = renderedPixels()
     selectButton.highlight(true)
     try checkTitlebar(renderedPixels() != resting, "Pressing a tab uses the same visible highlight")
     selectButton.highlight(false)
@@ -88,8 +92,18 @@ private extension SwarmTabButton {
     selected = true
     let active = renderedBitmap()
     let selectedRows = (0..<active.pixelsHigh).filter { active.colorAt(x: 1, y: $0)!.alphaComponent > 0 }
-    try checkTitlebar(selectedRows == filledRows && active.colorAt(x: 1, y: 20)!.alphaComponent == 1,
-      "Tab selection shares hover geometry with full selection opacity")
+    try checkTitlebar(selectedRows.count == Int(bounds.height) && active.colorAt(x: 1, y: 20)!.alphaComponent == 1,
+      "Selected tabs fill the full bar height")
+    mouseExited(with: hover)
+    for argb in [Int64(0xff282828), Int64(0xfff0f2f5)] {
+      palette = SwarmNativePalette(["workspace": argb])
+      let background = palette.workspace
+      let pixel = renderedBitmap().colorAt(x: 1, y: 1)!.usingColorSpace(.sRGB)!
+      try checkTitlebar(abs(pixel.redComponent - background.redComponent) < 0.01 &&
+        abs(pixel.greenComponent - background.greenComponent) < 0.01 &&
+        abs(pixel.blueComponent - background.blueComponent) < 0.01,
+        "Active tabs join the workspace color in light and dark palettes")
+    }
   }
 
   func checkDoubleClickIsolation() throws {
@@ -259,6 +273,9 @@ private extension SwarmTabStrip {
     setFrameSize(originalSize)
     update(prState)
     let mergedPixels = pullRequestButton.renderedPixels()
+    let mergedBitmap = pullRequestButton.renderedBitmap()
+    let prFrame = pullRequestButton.frame
+    let prWidth = pullRequestButton.preferredWidth
     try checkTitlebar(!mergedPixels.isEmpty && pullRequestButton.accessibilityValue() as? String == "#298 Merged",
       "Segmented PR renders and exposes its full state")
     pullRequestButton.performClick(nil)
@@ -266,7 +283,14 @@ private extension SwarmTabStrip {
     let pointer = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
     pullRequestButton.mouseEntered(with: pointer)
-    try checkTitlebar(pullRequestButton.renderedPixels() != mergedPixels, "A PR has the same visible rectangular hover cue")
+    try checkTitlebar(pullRequestButton.renderedPixels() != mergedPixels, "A PR uses the same bold hover cue")
+    let mergedHover = pullRequestButton.renderedBitmap()
+    try checkTitlebar((0..<mergedBitmap.pixelsWide).allSatisfy {
+      mergedBitmap.colorAt(x: $0, y: 1) == mergedHover.colorAt(x: $0, y: 1)
+    }, "PR hover leaves the space around the ribbon untouched")
+    try checkTitlebar(mergedBitmap.colorAt(x: 1, y: 14) == mergedHover.colorAt(x: 1, y: 14) &&
+      pullRequestButton.frame == prFrame && pullRequestButton.preferredWidth == prWidth,
+      "PR hover preserves the segment background and geometry")
     pullRequestButton.mouseExited(with: pointer)
     let join = SwarmContextButton(frame: NSRect(x: 0, y: 0, width: 100, height: 28))
     join.font = contextButton.font
@@ -303,7 +327,7 @@ private extension SwarmTabStrip {
     for control in contextButton.fieldButtons {
       let before = control.renderedPixels()
       control.mouseEntered(with: pointer)
-      try checkTitlebar(control.renderedPixels() != before, "Each context field advertises its own clickable rectangle")
+      try checkTitlebar(control.renderedPixels() != before, "Each context field emphasizes its own text")
       control.mouseExited(with: pointer)
       control.performClick(nil)
       try checkTitlebar(control.toolTip?.hasPrefix("Find harnesses") == true, "Context tooltip explains navigation")
@@ -331,7 +355,9 @@ private extension SwarmTabStrip {
       "Model hint explains switching without repeating the visible name")
     let modelResting = focusedModelButton.renderedPixels()
     focusedModelButton.mouseEntered(with: pointer)
-    try checkTitlebar(focusedModelButton.renderedPixels() != modelResting, "Model uses the same flat hover feedback")
+    try checkTitlebar(focusedModelButton.renderedPixels() != modelResting &&
+      focusedModelButton.renderedBitmap().colorAt(x: 1, y: 1)!.alphaComponent == 0,
+      "Model uses bold hover feedback without a background well")
     focusedModelButton.mouseExited(with: pointer)
     focusedModelButton.performClick(nil)
     try checkTitlebar(modelClicks.count == 1 && modelClicks[0].0 == 7 && modelClicks[0].1 == "a0",
@@ -506,7 +532,7 @@ private extension SwarmTabStrip {
     let unfocusedNew = newButton.renderedPixels()
     try checkTitlebar(window.makeFirstResponder(newButton), "New swarm accepts keyboard focus")
     try checkTitlebar(newButton.hasKeyboardFocus && newButton.renderedPixels() != unfocusedNew,
-      "Keyboard focus gives the new-tab icon the same visible background as hover")
+      "Keyboard focus gives the new-tab symbol the same bold emphasis as hover")
     newButton.performClick(nil)
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "new",

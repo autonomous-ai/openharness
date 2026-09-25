@@ -4368,7 +4368,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
         grid.AppTheme.palette.value,
         terminalThemeStore.value,
       );
-      final style = workspaceBarTextStyle(color: theme.foreground);
       final names = workspaceTabNames(app);
       final labels = [
         for (var index = 0; index < app.swarms.length; index++)
@@ -4475,13 +4474,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     ).width >
                                     _tabWidths[index] - cell.width * 2,
                               ),
-                              selection: theme.selection,
+                              selectedBackground: grid.AppPalette.swarmWelcome,
                               selected: selected,
                               onPressed: _shortcutsEnabled
                                   ? () => app.selectSwarm(swarm.id)
                                   : null,
-                              child: SizedBox(
-                                height: toolHeight,
+                              builder: (context, emphasized) => SizedBox(
+                                height: double.infinity,
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(
                                     horizontal: cell.width,
@@ -4492,7 +4491,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       textAlign: TextAlign.center,
-                                      style: style,
+                                      style: workspaceBarTextStyle(
+                                        color: theme.foreground,
+                                        emphasized: emphasized,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -4541,7 +4543,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                     child: WorkspaceStatusLine(
                                       parts: parts!,
                                       links: _contextLinks(focused),
-                                      selection: theme.selection,
                                       color: prefs.color,
                                       nextBackground: prBackground,
                                     ),
@@ -4561,16 +4562,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     key: const ValueKey('workspace-pull-request'),
                     label: '${pr.label} — Open on GitHub',
                     tooltip: 'Open pull request #${pr.number} on GitHub',
-                    selection: theme.selection,
                     onPressed: _shortcutsEnabled
                         ? () => _openFocusedPullRequest(pr.url.toString())
                         : null,
-                    child: SizedBox(
+                    builder: (context, emphasized) => SizedBox(
                       height: toolHeight,
                       child: Center(
+                        widthFactor: 1,
                         child: StatusLine(
                           parts: prParts!,
                           workspaceBar: true,
+                          emphasized: emphasized,
                           color: prefs.color,
                           segmentOffset: parts?.segments.length ?? 0,
                         ),
@@ -4632,12 +4634,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
     key: ValueKey('swarm-$id-button'),
     label: label,
     tooltip: tooltip ?? label,
-    selection: theme.selection,
     foreground: theme.foreground,
     onPressed: _shortcutsEnabled ? onPressed : null,
-    child: SizedBox.fromSize(
+    builder: (context, emphasized) => SizedBox.fromSize(
       size: size,
-      child: Center(child: Text(symbol, style: workspaceBarTextStyle())),
+      child: Center(
+        child: Text(
+          symbol,
+          style: workspaceBarTextStyle(emphasized: emphasized),
+        ),
+      ),
     ),
   );
 }

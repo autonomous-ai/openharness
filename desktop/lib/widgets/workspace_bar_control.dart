@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
-/// The same flat target for tabs, status links, symbols, model labels, and pane close actions.
-/// Callers size the child to `workspaceBarControlHeight` and supply only hints
-/// that add information to the visible label.
+/// Shared text emphasis for tabs, status links, symbols, models, and pane close.
+/// Builders keep their layout fixed while drawing emphasized text. Only the
+/// selected tab has a fill; hovering preserves the surface underneath.
 class WorkspaceBarControl extends StatefulWidget {
   const WorkspaceBarControl({
     super.key,
     required this.label,
-    required this.selection,
-    required this.child,
+    required this.builder,
+    this.selectedBackground,
     this.tooltip,
     this.foreground,
     this.selected,
@@ -17,10 +17,10 @@ class WorkspaceBarControl extends StatefulWidget {
 
   final String label;
   final String? tooltip;
-  final Color selection;
+  final Color? selectedBackground;
   final Color? foreground;
   final bool? selected;
-  final Widget child;
+  final Widget Function(BuildContext context, bool emphasized) builder;
   final VoidCallback? onPressed;
 
   @override
@@ -34,23 +34,17 @@ class _WorkspaceBarControlState extends State<WorkspaceBarControl> {
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
     final active = enabled && (_hovered || _focused || _pressed);
-    Widget content = widget.child;
+    Widget content = widget.builder(context, active);
     if (widget.foreground case final foreground?) {
       content = DefaultTextStyle.merge(
         style: TextStyle(
-          color: foreground.withValues(
-            alpha: !enabled
-                ? .28
-                : active
-                ? 1
-                : .75,
-          ),
+          color: foreground.withValues(alpha: enabled ? .75 : .28),
         ),
         child: content,
       );
     }
-    if (widget.selected == true) {
-      content = ColoredBox(color: widget.selection, child: content);
+    if (widget.selected == true && widget.selectedBackground != null) {
+      content = ColoredBox(color: widget.selectedBackground!, child: content);
     }
     final control = Semantics(
       button: true,
@@ -81,22 +75,7 @@ class _WorkspaceBarControlState extends State<WorkspaceBarControl> {
             onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
             onTapUp: (_) => setState(() => _pressed = false),
             onTapCancel: () => setState(() => _pressed = false),
-            child: ExcludeSemantics(
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  content,
-                  if (active && widget.selected != true)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: ColoredBox(
-                          color: widget.selection.withValues(alpha: .5),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            child: ExcludeSemantics(child: content),
           ),
         ),
       ),

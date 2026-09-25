@@ -829,7 +829,7 @@ private struct SwarmNativePalette: Equatable {
   }
 }
 
-/// Match the quiet rounded hover well used by the app's pane controls.
+/// Generic native icon controls retain their rounded hover wells.
 private class SwarmIconButton: NSButton {
   private(set) var hovered = false
   private(set) var hasKeyboardFocus = false
@@ -885,22 +885,25 @@ private func workspaceBarControlHeight(_ font: NSFont) -> CGFloat {
   max(28, ceil(font.pointSize * 1.2))
 }
 
-private func drawWorkspaceBarHover(_ rect: NSRect, selection: NSColor) {
-  selection.withAlphaComponent(0.5).setFill()
-  rect.fill()
+private func workspaceBarEmphasisFont(_ font: NSFont) -> NSFont {
+  NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+}
+
+private func workspaceBarTextWidth(_ text: String, font: NSFont) -> CGFloat {
+  max((text as NSString).size(withAttributes: [.font: font]).width,
+    (text as NSString).size(withAttributes: [.font: workspaceBarEmphasisFont(font)]).width)
 }
 
 /// Terminal symbols with a shared text baseline and a visible hover/focus cue.
 private final class SwarmStatusSymbolButton: SwarmIconButton {
   var foreground = NSColor(white: 0.85, alpha: 1) { didSet { needsDisplay = true } }
-  var selection = NSColor(white: 0.35, alpha: 1) { didSet { needsDisplay = true } }
 
   override func draw(_ dirtyRect: NSRect) {
     let active = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
-    defer { if active { drawWorkspaceBarHover(bounds, selection: selection) } }
+    let regularFont = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     let line = NSAttributedString(string: title, attributes: [
-      .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-      .foregroundColor: foreground.withAlphaComponent(!isEnabled ? 0.28 : active ? 1 : 0.75),
+      .font: active ? workspaceBarEmphasisFont(regularFont) : regularFont,
+      .foregroundColor: foreground.withAlphaComponent(isEnabled ? 0.75 : 0.28),
     ])
     let size = line.size()
     line.draw(in: NSRect(x: (bounds.width - size.width) / 2,
@@ -941,7 +944,6 @@ private struct SwarmStatusSegment {
 /// Dart sends the same resolved segments that Flutter uses for its previews.
 /// Shapes are drawn in cells; no Powerline/Nerd Font installation is needed.
 private final class SwarmContextButton: SwarmIconButton {
-  var selection = NSColor(white: 0.35, alpha: 1)
   var onField: ((String, Int) -> Void)?
   fileprivate private(set) var fieldButtons: [SwarmContextButton] = []
   private var field: String?
@@ -962,7 +964,7 @@ private final class SwarmContextButton: SwarmIconButton {
   private var textFont: NSFont { font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
   private var cellWidth: CGFloat { ("m" as NSString).size(withAttributes: [.font: textFont]).width }
   private var naturalWidths: [CGFloat] {
-    segments.map { ($0.text as NSString).size(withAttributes: [.font: textFont]).width }
+    segments.map { workspaceBarTextWidth($0.text, font: textFont) }
   }
   var preferredWidth: CGFloat {
     if !fieldButtons.isEmpty { return fieldButtons.reduce(0) { $0 + $1.preferredWidth } }
@@ -992,7 +994,6 @@ private final class SwarmContextButton: SwarmIconButton {
       button.font = font
       button.textAlignment = .left
       button.foreground = foreground
-      button.selection = selection
       button.update(values, enabled: enabled)
       button.setAccessibilityLabel(values["detail"] as? String ?? values["text"] as? String)
     }
@@ -1056,18 +1057,15 @@ private final class SwarmContextButton: SwarmIconButton {
     paragraph.lineBreakMode = .byTruncatingTail
     paragraph.alignment = alignment
     return NSAttributedString(string: value, attributes: [
-      .font: textFont, .foregroundColor: color, .paragraphStyle: paragraph,
+      .font: isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+        ? workspaceBarEmphasisFont(textFont) : textFont,
+      .foregroundColor: color, .paragraphStyle: paragraph,
     ])
   }
   override func draw(_ dirtyRect: NSRect) {
     guard fieldButtons.isEmpty, bounds.width > 0, !segments.isEmpty else { return }
     NSGraphicsContext.saveGraphicsState()
-    defer {
-      if isEnabled && (hovered || hasKeyboardFocus || isHighlighted) {
-        drawWorkspaceBarHover(bounds, selection: selection)
-      }
-      NSGraphicsContext.restoreGraphicsState()
-    }
+    defer { NSGraphicsContext.restoreGraphicsState() }
     bounds.clip()
     if !drawsSegments {
       let line = NSMutableAttributedString(string: "")
@@ -1145,7 +1143,6 @@ private final class SwarmTabStrip: NSView {
   fileprivate let storeButton = SwarmStatusSymbolButton()
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   private var terminalForeground = NSColor(white: 0.85, alpha: 1)
-  private var terminalSelection = NSColor(white: 0.35, alpha: 1)
   private var tabs: [SwarmTabButton] = []
   private var activeId = ""
   private var revealActiveAfterLayout = false
@@ -1247,28 +1244,23 @@ private final class SwarmTabStrip: NSView {
       barFont = families.lazy.compactMap { NSFont(name: $0, size: size) }.first
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
-      terminalSelection = statusColor(style["selection"], fallback: terminalSelection)
     }
     for control in [newButton, harnessesButton, machinesButton, modelsButton, storeButton] {
       control.font = barFont
       control.foreground = terminalForeground
-      control.selection = terminalSelection
       control.isEnabled = actionsEnabled
     }
     focusedModelButton.font = barFont
     focusedModelButton.foreground = terminalForeground
-    focusedModelButton.selection = terminalSelection
     focusedModelButton.contentPadding = ("m" as NSString).size(withAttributes: [.font: barFont]).width
     focusedModelTarget = state["focusedModel"] as? [String: Any]
     focusedModelButton.update(focusedModelTarget, enabled: actionsEnabled)
     focusedModelButton.isHidden = focusedModelTarget == nil
     contextButton.font = barFont
     contextButton.foreground = terminalForeground
-    contextButton.selection = terminalSelection
     contextButton.update(state["focusedContext"] as? [String: Any], enabled: actionsEnabled)
     pullRequestButton.font = barFont
     pullRequestButton.foreground = terminalForeground
-    pullRequestButton.selection = terminalSelection
     pullRequestButton.update(state["pullRequest"] as? [String: Any], enabled: actionsEnabled)
     pullRequestButton.isHidden = state["pullRequest"] == nil
     let rows = state["tabs"] as? [[String: Any]] ?? []
@@ -1288,7 +1280,6 @@ private final class SwarmTabStrip: NSView {
       tab.displayLabel = row["label"] as? String ?? tab.name
       tab.labelFont = barFont
       tab.foreground = terminalForeground
-      tab.selection = terminalSelection
       tab.selected = id == activeId
       tab.actionsEnabled = actionsEnabled
       tab.attention = (row["attention"] as? Int ?? 0) > 0
@@ -1458,9 +1449,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var name = "New Tab" { didSet { if name != oldValue { invalidateLabel(); updateAccessibility() } } }
   var displayLabel = "New Tab" { didSet { if displayLabel != oldValue { invalidateLabel() } } }
   var foreground = NSColor(white: 0.85, alpha: 1) { didSet { if foreground != oldValue { invalidateLabel() } } }
-  var selection = NSColor(white: 0.35, alpha: 1) { didSet { if selection != oldValue { needsDisplay = true } } }
   private var cellWidth: CGFloat { ceil(("m" as NSString).size(withAttributes: [.font: labelFont]).width) }
-  var preferredWidth: CGFloat { min(cellWidth * 24, ceil(label.size().width / cellWidth) * cellWidth + cellWidth * 2) }
+  var preferredWidth: CGFloat { min(cellWidth * 24, ceil(max(label.size().width, emphasizedLabel.size().width) / cellWidth) * cellWidth + cellWidth * 2) }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { needsDisplay = true; updateAccessibility() } } }
   var showsDivider = false { didSet { if showsDivider != oldValue { needsDisplay = true } } }
@@ -1476,6 +1466,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     didSet { if oldValue != labelFont { invalidateLabel() } }
   }
   private var cachedLabel: NSAttributedString?
+  private var cachedEmphasizedLabel: NSAttributedString?
   var actionsEnabled = true {
     didSet {
       selectButton.isEnabled = actionsEnabled
@@ -1516,7 +1507,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       .trimmingCharacters(in: .whitespacesAndNewlines)
     let fullName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     var hints: [String] = []
-    if label.size().width > max(0, bounds.width - cellWidth * 2) { hints.append(displayLabel) }
+    if max(label.size().width, emphasizedLabel.size().width) > max(0, bounds.width - cellWidth * 2) { hints.append(displayLabel) }
     if !fullName.isEmpty && fullName != visibleName && fullName != displayLabel { hints.append(name) }
     toolTip = hints.isEmpty ? nil : hints.joined(separator: "\n")
   }
@@ -1538,6 +1529,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   private func invalidateLabel() {
     cachedLabel = nil
+    cachedEmphasizedLabel = nil
     needsDisplay = true
     needsLayout = true
   }
@@ -1546,27 +1538,26 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineBreakMode = .byTruncatingTail
     paragraph.alignment = .center
-    // One weight for every tab: the selected one is already told apart by its
-    // fill and its brighter ink, and a bold name also changes width, so the
-    // strip re-truncated whenever the selection moved (owner, 2026-09-24).
     let label = NSAttributedString(string: displayLabel,
       attributes: [.font: labelFont,
         .foregroundColor: foreground, .paragraphStyle: paragraph])
     cachedLabel = label
     return label
   }
+  private var emphasizedLabel: NSAttributedString {
+    if let cachedEmphasizedLabel { return cachedEmphasizedLabel }
+    let emphasized = NSMutableAttributedString(attributedString: label)
+    emphasized.addAttribute(.font, value: workspaceBarEmphasisFont(labelFont),
+      range: NSRange(location: 0, length: emphasized.length))
+    cachedEmphasizedLabel = emphasized
+    return emphasized
+  }
   override func draw(_ dirtyRect: NSRect) {
-    let text = label
-    let height = workspaceBarControlHeight(labelFont)
-    let row = NSRect(x: 0, y: contentCenterY - height / 2, width: bounds.width, height: height)
+    let active = actionsEnabled && (hovered || selectButton.hasKeyboardFocus || selectButton.isHighlighted)
+    let text = active ? emphasizedLabel : label
     if selected {
-      selection.setFill()
-      row.fill()
-    }
-    defer {
-      if !selected && (hovered || selectButton.hasKeyboardFocus || selectButton.isHighlighted) && actionsEnabled {
-        drawWorkspaceBarHover(row, selection: selection)
-      }
+      palette.workspace.setFill()
+      bounds.fill()
     }
     text.draw(in: NSRect(x: cellWidth, y: contentCenterY - text.size().height / 2,
       width: max(0, bounds.width - cellWidth * 2), height: text.size().height))
