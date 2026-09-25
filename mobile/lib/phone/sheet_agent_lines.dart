@@ -3,8 +3,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/agent_output_stats.dart';
 import 'package:harness_mobile/core/models.dart';
-import 'package:harness_mobile/notify/agent_notice.dart';
-import 'package:harness_mobile/notify/unread_marks.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'agent_index.dart';
@@ -62,14 +60,9 @@ class SheetAgentTitle extends StatelessWidget {
     required this.entry,
     required this.name,
     required this.now,
-    this.unread,
   });
 
   final AgentEntry entry;
-
-  /// The news this agent carries that nobody has gone to yet — a finished
-  /// turn or a question — or null. Marked with an [UnreadDot] before the name.
-  final NoticeKind? unread;
 
   /// The name as the caller draws it — plain in the tabs, with the query's hits in bold in search.
   final Widget name;
@@ -83,7 +76,9 @@ class SheetAgentTitle extends StatelessWidget {
     final attention = agentAttention(entry);
     return Row(
       children: [
-        if (unread case final kind?) UnreadDot(kind: kind),
+        // ⚠️ The unread mark used to lead this row and no longer does: it is at
+        // the row's other end now, in the slot that spins while the agent works
+        // — see [SheetAgentStatus].
         Flexible(child: name),
         if (activity != null)
           Padding(
