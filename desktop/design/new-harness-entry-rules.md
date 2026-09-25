@@ -5,7 +5,7 @@ Use that guide for current visuals; this document owns entry and launch behavior
 
 Startup and Cmd-T show the same quiet welcome page. Cmd-T creates a blank tab;
 Escape leaves that tab open. The command dock opens only after an explicit
-Cmd-N, Cmd-P, or Cmd-Shift-P action. Start Harness submits the reviewed draft;
+Cmd-N, Cmd-O, or Cmd-P action. Start Harness submits the reviewed draft;
 opening or cancelling the dock never starts a harness.
 
 The launch form starts on Harness, followed by Agent and Model, then Machine,
@@ -17,7 +17,7 @@ key bound to `picker.start` (⇧⏎ by default), and submits the draft; that key
 starts from any field, taking a value highlighted in an open list first. Plain
 Return on a value row never starts. The machine list puts this computer first,
 then usable machines, then unlinked or offline ones in dark grey. There is no heading,
-Task row, or Open In row. Cmd-P and Cmd-Shift-P also omit headings and counts.
+Task row, or Open In row. Cmd-O and Cmd-P also omit headings and counts.
 Tasks carried from search or Store examples remain part of the draft.
 
 Values and search use the terminal's selected font, size, and line height, on a
@@ -42,7 +42,7 @@ Narrow windows show the active list full-width with a back action.
 | Store New Harness, or a product's Open action in the pane or native Models menu | Explicit product and machine; suggested project named for that product | New tab |
 | Store Resume Harness | Existing harness and its machine; choose from a menu when several match | Focus its existing tab or reopen a view of the same harness |
 | Store Try this prompt | Same as Open, with the example as the editable task | New tab |
-| First empty workspace | No automatic action; show the welcome page | User chooses with Cmd-N, Cmd-P, or Cmd-S |
+| First empty workspace | No automatic action; show the welcome page | User chooses with Cmd-N, Cmd-O, or Cmd-S |
 
 The Store and orchestration tabs cannot host a terminal pane. Generic creation
 from either uses a new tab. Command-bar requests keep the workspace context and

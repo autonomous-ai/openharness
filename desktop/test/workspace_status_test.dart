@@ -1,3 +1,8 @@
+import 'dart:io';
+import 'dart:async';
+import 'dart:ui' as ui;
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
@@ -14,13 +19,16 @@ import 'package:harness/state/workspace_status.dart';
 import 'package:harness/terminal/terminal_text.dart';
 import 'package:xterm/xterm.dart' show TerminalStyle;
 import 'package:harness/widgets/grid_model_picker.dart';
+import 'package:harness/widgets/workspace_bar_control.dart';
 import 'package:harness/widgets/terminal_panel.dart';
+import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/status_line.dart';
 import 'package:harness/widgets/pull_request_badge.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show createApp, MemoryStore;
 import 'swarm_screen_test.dart' show mount, terminal;
+import 'support/real_fonts.dart';
 
 class _PRConnection extends WsConn {
   _PRConnection()
@@ -75,55 +83,197 @@ class _PaneModelConnection extends _PRConnection {
   }
 }
 
+Future<void> captureControls(WidgetTester tester, String name) async {
+  final directory =
+      Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'];
+  if (directory == null) return;
+  final view = tester.binding.renderViews.first;
+  final layer = view.debugLayer! as OffsetLayer;
+  await tester.runAsync(() async {
+    final image = await layer.toImage(Offset.zero & view.size);
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    final file = File('$directory/$name.png');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
 void main() {
-  testWidgets(
-    'each pane model selector targets its own harness and stays off the tab bar',
-    (tester) async {
-      final connection = _PaneModelConnection();
-      final app = createApp(connectionForTest: (_) => connection);
-      addTearDown(app.dispose);
-      app.machineStates['m']!.nodeOnline = true;
-      app.machineStates['m']!.agents = [
-        Agent.fromJson({
-          'id': 'a0',
-          'engine': 'claude',
-          'selectedModel': 'runtime-v1:a0:claude:fable@high',
-          'terminal': {'available': true},
-        }),
-        Agent.fromJson({
-          'id': 'a1',
-          'engine': 'codex',
-          'selectedModel': 'runtime-v1:a1:codex:gpt-6-astra@high',
-          'terminal': {'available': true},
-        }),
-      ];
-      final first = app.adoptSessionForTest(terminal('a0', []));
-      final second = app.adoptSessionForTest(terminal('a1', []));
-      await mount(tester, app);
-      expect(app.focusedPane, same(second));
-      final selectors = find.byType(GridModelPicker);
-      expect(selectors, findsNWidgets(2));
-      expect(find.text('Fable'), findsOneWidget);
-      expect(find.text('GPT-6 Astra'), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('workspace-status-bar')),
-          matching: selectors,
-        ),
-        findsNothing,
-      );
-      final own = find.byKey(const ValueKey(('pane-model', 'm', 'a0')));
-      await tester.tap(own);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Local-Test-Model'));
-      await tester.pumpAndSettle();
-      expect(connection.retargets.single['agentId'], 'a0');
-      expect(connection.retargets.single['gridModel'], 'Local-Test-Model');
-      expect(app.panes, containsAll([first, second]));
-      expect(second.session!.agentId, 'a1');
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  setUpAll(() async {
+    if (Platform.environment['HARNESS_WORKSPACE_CONTROLS_CAPTURE_DIR'] !=
+        null) {
+      await loadRealFonts();
+      if (Platform.isMacOS) {
+        final bytes = ByteData.sublistView(
+          await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+        );
+        for (final family in ['SF Mono', '.AppleSystemUIFontMonospaced']) {
+          await (FontLoader(family)..addFont(Future.value(bytes))).load();
+        }
+      }
+    }
+  });
+  for (final native in [false, true]) {
+    testWidgets(
+      'shared model selector follows focus and rejects stale actions (native=$native)',
+      (tester) async {
+        final updates = <Map>[];
+        const channel = MethodChannel('harness/swarm_tabs');
+        const codec = StandardMethodCodec();
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'update') updates.add(call.arguments as Map);
+          return true;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        Future<void> activate(int paneId, String agentId) async {
+          final done = Completer<void>();
+          messenger.handlePlatformMessage(
+            channel.name,
+            codec.encodeMethodCall(
+              MethodCall('focusedModel', {
+                'paneId': paneId,
+                'agentId': agentId,
+              }),
+            ),
+            (bytes) {
+              codec.decodeEnvelope(bytes!);
+              done.complete();
+            },
+          );
+          for (var i = 0; i < 8 && !done.isCompleted; i++) {
+            await tester.pump();
+          }
+          expect(done.isCompleted, isTrue);
+          await done.future;
+        }
+
+        final connection = _PaneModelConnection();
+        final app = createApp(connectionForTest: (_) => connection);
+        addTearDown(app.dispose);
+        app.machineStates['m']!.nodeOnline = true;
+        app.machineStates['m']!.agents = [
+          Agent.fromJson({
+            'id': 'a0',
+            'engine': 'claude',
+            'selectedModel': 'runtime-v1:a0:claude:fable@high',
+            'terminal': {'available': true},
+          }),
+          Agent.fromJson({
+            'id': 'a1',
+            'engine': 'codex',
+            'selectedModel': 'runtime-v1:a1:codex:gpt-6-astra@high',
+            'terminal': {'available': true},
+          }),
+        ];
+        final first = app.adoptSessionForTest(terminal('a0', []));
+        final second = app.adoptSessionForTest(terminal('a1', []));
+        await mount(tester, app, nativeTabs: native);
+        final selectors = find.byType(GridModelPicker);
+        expect(selectors, findsOneWidget);
+        expect(
+          find.descendant(of: find.byType(TerminalPanel), matching: selectors),
+          findsNothing,
+        );
+        if (native) {
+          expect(updates.last['focusedModel']['text'], 'GPT-6 Astra');
+        } else {
+          expect(find.text('GPT-6 Astra'), findsOneWidget);
+          expect(find.text('Fable'), findsNothing);
+          await captureControls(tester, 'focused-model');
+          expect(
+            find.descendant(
+              of: find.byKey(const ValueKey('workspace-status-bar')),
+              matching: selectors,
+            ),
+            findsOneWidget,
+          );
+        }
+        app.focusPane(first.id);
+        await tester.pump();
+        if (native) {
+          expect(updates.last['focusedModel']['text'], 'Fable');
+          await activate(second.id, 'a1');
+          expect(find.text('Local-Test-Model'), findsNothing);
+          await activate(first.id, 'a0');
+        } else {
+          expect(find.text('GPT-6 Astra'), findsNothing);
+          await tester.tap(selectors);
+        }
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Local-Test-Model'));
+        await tester.pumpAndSettle();
+        expect(connection.retargets.single['agentId'], 'a0');
+        expect(connection.retargets.single['gridModel'], 'Local-Test-Model');
+        expect(app.panes, containsAll([first, second]));
+        final stale = tester.widget<GridModelPicker>(selectors).onUseOwnLogin!;
+        if (native) {
+          await activate(first.id, 'a0');
+        } else {
+          await tester.tap(selectors);
+        }
+        await tester.pumpAndSettle();
+        expect(find.text('Local-Test-Model'), findsOneWidget);
+        app.focusPane(second.id);
+        await tester.pumpAndSettle();
+        expect(find.text('Local-Test-Model'), findsNothing);
+        stale();
+        await tester.pump();
+        expect(connection.retargets, hasLength(1));
+        app.machineStates['m']!.nodeOnline = false;
+        app.focusPane(first.id);
+        await tester.pump();
+        app.focusPane(second.id);
+        await tester.pump();
+        expect(tester.widget<GridModelPicker>(selectors).enabled, isFalse);
+        if (native) {
+          expect(updates.last['focusedModel']['interactive'], isFalse);
+          await activate(second.id, 'a1');
+        }
+        expect(find.text('Local-Test-Model'), findsNothing);
+        app.newSwarm();
+        await tester.pump();
+        expect(selectors, findsNothing);
+        if (native) expect(updates.last['focusedModel'], isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets('hover close belongs to its pane and reserves title space', (
+    tester,
+  ) async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    final first = app.adoptSessionForTest(terminal('a0', []));
+    final second = app.adoptSessionForTest(terminal('a1', []));
+    await mount(tester, app);
+    final titles = find.byKey(const ValueKey('terminal-pane-title'));
+    final titleRects = [
+      for (var i = 0; i < 2; i++) tester.getRect(titles.at(i)),
+    ];
+    final close = find.byType(PaneCloseButton);
+    expect(close, findsNWidgets(2));
+    expect(close.hitTestable(), findsNothing);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(titles.first));
+    await tester.pump();
+    expect(close.hitTestable(), findsOneWidget);
+    for (var i = 0; i < 2; i++) {
+      expect(tester.getRect(titles.at(i)), titleRects[i]);
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+    await captureControls(tester, 'pane-hover-close');
+    await tester.tap(close.hitTestable());
+    await tester.pumpAndSettle();
+    expect(app.panes, [second]);
+    expect(app.allPanes, isNot(contains(first)));
+    expect(second.session!.agentId, 'a1');
+    await mouse.removePointer();
+    await tester.pumpWidget(const SizedBox());
+  });
 
   for (final native in [false, true]) {
     testWidgets(
@@ -149,11 +299,14 @@ void main() {
         final connection = _PRConnection();
         final app = createApp(connectionForTest: (_) => connection);
         addTearDown(app.dispose);
+        app.stateOf('m')!.nodeOnline = true;
         app.stateOf('m')!.agents = const [
           Agent(
             id: 'a0',
             name: 'Feature',
             engine: 'codex',
+            modelName: 'GPT-6 Astra',
+            terminalAvailable: true,
             project: AgentProject(
               name: 'repo',
               cwd: '/repo',
@@ -176,6 +329,16 @@ void main() {
             expect(pr['text'], '#298 Merged');
             expect(pr['url'], 'https://github.com/acme/repo/pull/298');
             expect(pr['segmented'], style.segmented);
+            final capture =
+                Platform.environment['HARNESS_NATIVE_STATUS_CAPTURE_DIR'];
+            if (capture != null) {
+              await tester.runAsync(() async {
+                await Directory(capture).create(recursive: true);
+                await File('$capture/${style.name}.json')
+                    .writeAsString(jsonEncode(updates.last));
+              });
+            }
+
             expect(
               (pr['segments'] as List).any(
                 (s) => (s as Map)['background'] != null,
@@ -423,7 +586,8 @@ void main() {
       StatusLineStyle.robbyrussell: 'OpenAI  M2  ➜ app git:(main)',
       StatusLineStyle.pure: 'OpenAI  M2  app main ❯',
       StatusLineStyle.agnoster: 'OpenAI M2  app  main',
-      StatusLineStyle.powerlevel10k: 'OpenAI  M2  app  main',
+      StatusLineStyle.powerlevel10k: 'OpenAI  M2  app  main >',
+      StatusLineStyle.spaceship: 'OpenAI  M2 in app on main',
     };
     for (final format in StatusLineStyle.values) {
       expect(
@@ -566,6 +730,10 @@ void main() {
         greaterThan(tester.getRect(find.text('2:code')).right),
       );
       final secondTab = find.byKey(ValueKey(app.activeSwarmId));
+      final barControls = find.byType(WorkspaceBarControl);
+      for (final element in barControls.evaluate()) {
+        expect(tester.getSize(find.byWidget(element.widget)).height, 28);
+      }
       expect(tester.getSize(secondTab).width, lessThan(150));
       final harnesses = find.byKey(const ValueKey('swarm-harnesses-button'));
       final machines = find.byKey(const ValueKey('swarm-machines-button'));
@@ -589,7 +757,7 @@ void main() {
           of: find.byType(TerminalPanel),
           matching: find.byType(GridModelPicker),
         ),
-        findsOneWidget,
+        findsNothing,
       );
       await tester.tap(find.text('1:code'));
       await tester.pump(const Duration(milliseconds: 350));

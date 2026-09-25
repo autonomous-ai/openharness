@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
 import 'package:harness/widgets/new_harness_form.dart';

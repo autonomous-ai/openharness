@@ -32,6 +32,10 @@ class HarnessCommand {
         defaultTargetPlatform == TargetPlatform.linux) {
       return const ['ctrl+shift+p'];
     }
+    if (id == 'harnesses.list' &&
+        defaultTargetPlatform == TargetPlatform.linux) {
+      return const ['ctrl+p'];
+    }
     return action == null ? extraKeys : _workspaceKeys[action] ?? const [];
   }
 
@@ -397,6 +401,7 @@ final harnessCommands = <HarnessCommand>[
     'Harnesses',
     ShortcutGroup.actions,
     nativeAction: 'sessions',
+    extraKeys: ['cmd+p'],
     keywords: ['manage', 'running', 'paused', 'sessions'],
   ),
   const HarnessCommand(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:harness/widgets/terminal_text_action.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
@@ -127,37 +128,38 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('the store card is the door to the Harness Store, and only when there is one', (
-    tester,
-  ) async {
-    final app = createApp();
-    addTearDown(app.dispose);
-    final focus = FocusNode();
-    addTearDown(focus.dispose);
-    var opened = 0;
-    Widget page({VoidCallback? onStore}) => MaterialApp(
-      home: Scaffold(
-        body: HarnessStartPage(
-          focusNode: focus,
-          createSearch: () => SwarmSearchController(app, [], adding: true),
-          onNew: () {},
-          onChoose: (_) {},
-          onStore: onStore,
+  testWidgets(
+    'the store card is the door to the Harness Store, and only when there is one',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      final focus = FocusNode();
+      addTearDown(focus.dispose);
+      var opened = 0;
+      Widget page({VoidCallback? onStore}) => MaterialApp(
+        home: Scaffold(
+          body: HarnessStartPage(
+            focusNode: focus,
+            createSearch: () => SwarmSearchController(app, [], adding: true),
+            onNew: () {},
+            onChoose: (_) {},
+            onStore: onStore,
+          ),
         ),
-      ),
-    );
-    await tester.pumpWidget(page());
-    await tester.pump();
-    expect(find.byKey(const ValueKey('harness-store-link')), findsNothing);
-    expect(find.byKey(const ValueKey('harness-device-link')), findsOneWidget);
+      );
+      await tester.pumpWidget(page());
+      await tester.pump();
+      expect(find.byKey(const ValueKey('harness-store-link')), findsNothing);
+      expect(find.byKey(const ValueKey('harness-device-link')), findsOneWidget);
 
-    await tester.pumpWidget(page(onStore: () => opened++));
-    await tester.pump();
-    expect(find.byKey(const ValueKey('harness-store-link')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('harness-store-link')));
-    await tester.pump();
-    expect(opened, 1);
-  });
+      await tester.pumpWidget(page(onStore: () => opened++));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('harness-store-link')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('harness-store-link')));
+      await tester.pump();
+      expect(opened, 1);
+    },
+  );
 
   testWidgets('the device card opens the device page outside the app', (
     tester,
@@ -201,7 +203,7 @@ void main() {
   });
 
   testWidgets(
-    'over a picture, Customize is a round button that opens the pane and closes it again',
+    'over a picture, Customize keeps its terminal text action and restores focus',
     (tester) async {
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = const Size(1280, 800);
@@ -229,19 +231,26 @@ void main() {
       );
       await tester.pump();
       final button = find.byKey(const ValueKey('harness-customize-button'));
-      expect(tester.widget(button), isA<IconButton>());
-      expect(find.byTooltip('Customize Harness'), findsOneWidget);
-      expect(find.text('Customize Harness'), findsNothing, reason: 'no label over the picture');
+      expect(tester.widget(button), isA<TerminalTextAction>());
+      expect(find.text('[ Customize Harness ]'), findsOneWidget);
+      expect(
+        find.descendant(of: button, matching: find.byType(Icon)),
+        findsNothing,
+      );
       await tester.tap(button);
       await tester.pumpAndSettle();
       final pane = find.byKey(const ValueKey('harness-customize-pane'));
       expect(pane, findsOneWidget);
-      expect(tester.getRect(pane).right, 1280, reason: 'beside the page at this width');
+      expect(
+        tester.getRect(pane).right,
+        1280,
+        reason: 'beside the page at this width',
+      );
       await tester.tap(button);
       await tester.pumpAndSettle();
       expect(pane, findsNothing);
       expect(
-        tester.widget<IconButton>(button).focusNode!.hasFocus,
+        tester.widget<TerminalTextAction>(button).focusNode!.hasFocus,
         isTrue,
         reason: 'focus returns to the button that opened it',
       );

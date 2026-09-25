@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/workspace_tools.dart';
 
 import 'dart:async';
@@ -135,7 +136,7 @@ void main() {
         } else {
           await mount(tester, app);
         }
-        await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+        await openHarnessPicker(tester);
         await tester.enterText(resourceField, 'Font styling');
         await tester.pump();
         expect(find.text('ctrl-S'), findsNothing);
@@ -253,7 +254,7 @@ void main() {
     ]}''');
     app.adoptSessionForTest(terminal('a0', []));
     await configured.mount(tester, app, keymap);
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     await tester.enterText(resourceField, 'Font styling');
     await tester.pump();
     expect(find.text('ctrl-shift-X'), findsNothing);

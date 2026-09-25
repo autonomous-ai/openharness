@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -103,7 +104,7 @@ void main() {
       );
       expect(search.selected!.machineId, 'studio');
       search.setQuery('# openharness');
-      expect(search.rows.first.title, 'New Project');
+      expect(search.rows.any((row) => row.isCreate), isFalse);
       expect(
         search.rows.where((row) => !row.isCreate).single.isProject,
         isTrue,
@@ -177,7 +178,7 @@ void main() {
     expect(search.rows.any((row) => row.agentId == 'a0'), isTrue);
   });
 
-  for (final entry in [LogicalKeyboardKey.keyP, LogicalKeyboardKey.keyT]) {
+  for (final entry in [LogicalKeyboardKey.keyO, LogicalKeyboardKey.keyT]) {
     testWidgets(
       'Quick Access stays in the same picker from ${entry.keyLabel}',
       (tester) async {
@@ -191,7 +192,7 @@ void main() {
         await configured.mount(tester, app, map);
         await key(tester, entry, cmd: true);
         if (entry == LogicalKeyboardKey.keyT) {
-          await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          await openHarnessPicker(tester);
         }
         final tabs = app.swarms.length;
         final input = find.byKey(const ValueKey('swarm-search-input'));

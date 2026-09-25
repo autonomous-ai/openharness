@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -257,7 +258,7 @@ void main() {
       view.widget.scrollController!.jumpTo(100);
       await tester.pump();
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Agent 0',

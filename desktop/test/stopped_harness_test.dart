@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -382,7 +383,7 @@ void main() {
         await mount(tester, app);
         await chord(tester, key);
         if (key == LogicalKeyboardKey.keyT) {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await openHarnessPicker(tester);
         }
         await tester.pump();
         await tester.enterText(
@@ -423,7 +424,7 @@ void main() {
   ) async {
     await mount(tester, app);
     await chord(tester, LogicalKeyboardKey.keyT);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     await tester.pump();
     await tester.enterText(
       find.byKey(const ValueKey('swarm-search-input')),

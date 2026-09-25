@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -25,7 +27,6 @@ import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' as configured;
 import 'support/model_manager.dart';
 import 'support/real_fonts.dart';
-import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_search_preview_test.dart' show seedPreviews;
 
@@ -109,8 +110,13 @@ void main() {
       try {
         await configured.mount(tester, app, keymap);
         final mac = defaultTargetPlatform == TargetPlatform.macOS;
-        await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
+        await key(tester, LogicalKeyboardKey.keyO, cmd: mac, ctrl: !mac);
         expect(field, findsOneWidget);
+        expect(search(tester).scopePrefix, '#');
+        expect(search(tester).rows.any((row) => row.isCreate), isFalse);
+        await key(tester, LogicalKeyboardKey.escape);
+        await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
+        expect(search(tester).scopePrefix, '');
         final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
         expect(hints, findsOneWidget);
         expect(search(tester).selected, isNull);
@@ -118,12 +124,12 @@ void main() {
         expect(field, findsOneWidget);
         expect(search(tester).selected, isNull);
         expect(search(tester).isCommandMode, isFalse);
+        expect(search(tester).rows.any((row) => row.agentId != null), isTrue);
         await tester.enterText(field, ':qwen');
         await tester.pump();
         expect(hints, findsNothing);
         expect(search(tester).isModelMode, isTrue);
         await key(tester, LogicalKeyboardKey.escape);
-        expect(field, findsNothing);
         await key(
           tester,
           LogicalKeyboardKey.keyP,
@@ -134,8 +140,6 @@ void main() {
         expect(search(tester).isCommandMode, isTrue);
         expect(hints, findsNothing);
         await key(tester, LogicalKeyboardKey.escape);
-        await key(tester, LogicalKeyboardKey.keyO, cmd: mac, ctrl: !mac);
-        expect(field, findsNothing);
       } finally {
         await tester.pumpWidget(const SizedBox());
         app.dispose();
@@ -269,6 +273,78 @@ void main() {
     },
   );
 
+  for (final native in [false, true]) {
+    testWidgets(
+      'harness search keeps Cmd-P and leaves commands on Shift-P (native=$native)',
+      (tester) async {
+        final app = await fixture();
+        final keymap = MemoryKeymap();
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(
+          configured.nativeChannel,
+          (_) async => null,
+        );
+        addTearDown(
+          () => messenger.setMockMethodCallHandler(
+            configured.nativeChannel,
+            null,
+          ),
+        );
+        Future<void> harnesses() async {
+          if (native) {
+            final done = configured.native(tester, 'sessions');
+            await tester.pump();
+            await tester.pump();
+            await done;
+          } else {
+            await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+          }
+        }
+
+        try {
+          await configured.mount(tester, app, keymap, native: native);
+          await key(tester, LogicalKeyboardKey.keyO, cmd: true);
+          expect(search(tester).scopePrefix, '#');
+          await harnesses();
+          expect(search(tester).scopePrefix, '');
+          expect(search(tester).setupLayout, isTrue);
+          expect(search(tester).rows.any((row) => row.agentId != null), isTrue);
+          final original = search(tester);
+          await tester.enterText(field, 'a69');
+          await tester.pump();
+          final selected = original.selected?.id;
+          await harnesses();
+          expect(search(tester), same(original));
+          expect(search(tester).query, 'a69');
+          expect(search(tester).selected?.id, selected);
+          expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+          await key(tester, LogicalKeyboardKey.escape);
+          await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+          expect(search(tester).isCommandMode, isTrue);
+          await harnesses();
+          expect(search(tester).isCommandMode, isFalse);
+          expect(search(tester).setupLayout, isTrue);
+          expect(search(tester).query, isEmpty);
+          await tester.enterText(field, '#');
+          await tester.pump();
+          final project = search(tester).rows
+              .firstWhere((row) => row.isProject);
+          search(tester).submit(project);
+          await tester.pump();
+          expect(search(tester).canGoBack, isTrue);
+          await harnesses();
+          expect(search(tester).canGoBack, isFalse);
+          expect(search(tester).scopePrefix, '');
+        } finally {
+          await tester.pumpWidget(const SizedBox());
+          app.dispose();
+          keymap.dispose();
+        }
+      },
+      variant: const TargetPlatformVariant({TargetPlatform.macOS}),
+    );
+  }
+
   for (final withKeymap in [false, true]) {
     testWidgets(
       'prefix changes prompt and creation without leaking into query ($withKeymap)',
@@ -279,11 +355,10 @@ void main() {
         } else {
           await mount(tester, app);
         }
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await openHarnessPicker(tester);
         final reads = app.localReads;
         for (final (prefix, label) in [
           ('@', 'New Machine'),
-          ('#', 'New Project'),
           (':', 'New Model'),
         ]) {
           await tester.enterText(field, prefix);
@@ -303,6 +378,13 @@ void main() {
           await key(tester, LogicalKeyboardKey.backspace);
           expect(search(tester).scopePrefix, '');
         }
+        await tester.enterText(field, '#');
+        await tester.pump();
+        expect(search(tester).rows.any((row) => row.isCreate), isFalse);
+        await tester.enterText(field, 'missing-project');
+        await tester.pump();
+        expect(search(tester).rows, isEmpty);
+        expect(search(tester).canAccept, isFalse);
         await tester.enterText(field, '*blender');
         await tester.pump();
         expect(search(tester).selected!.storeId, 'blender');
@@ -329,7 +411,7 @@ void main() {
       } else {
         await mount(tester, app);
       }
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.enterText(field, ':qwen');
       await tester.pump();
       final controller = search(tester);
@@ -476,7 +558,7 @@ void main() {
     (tester) async {
       final app = await fixture();
       await configured.mount(tester, app, MemoryKeymap());
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       for (final online in [false, true]) {
         app.stateOf('m')!
           ..nodeOnline = online
@@ -515,7 +597,7 @@ void main() {
       final keymap = MemoryKeymap();
       await configured.mount(tester, app, keymap);
       final mac = defaultTargetPlatform == TargetPlatform.macOS;
-      await key(tester, LogicalKeyboardKey.keyP, cmd: mac, ctrl: !mac);
+      await openHarnessPicker(tester);
       await tester.enterText(field, ':qwen');
       await tester.pump();
       final origin = search(tester);
@@ -574,7 +656,7 @@ void main() {
   ) async {
     final app = await fixture();
     await configured.mount(tester, app, MemoryKeymap());
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     await tester.enterText(field, '@');
     await tester.pump();
     await key(tester, LogicalKeyboardKey.arrowUp);
@@ -616,7 +698,7 @@ void main() {
       });
       final app = await fixture();
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.enterText(field, ':qwen');
       await tester.pump();
       final controller = search(tester);
@@ -719,7 +801,7 @@ void main() {
   ) async {
     final app = await fixture();
     await mount(tester, app);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     for (final (query, kind) in [
       ('Checkout', 'harnesses'),
       ('@', 'machines'),

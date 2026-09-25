@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:collection/collection.dart' show compareNatural;
 
 import '../models/model_search_catalog.dart';
 import '../core/dsh_catalog.dart';
@@ -16,6 +17,13 @@ const kHarnessPickerHint = kSwarmSearchHint;
 
 const kSwarmCreateRowId = 'create:harness';
 
+typedef SwarmGroupScope = ({
+  String id,
+  String name,
+  String query,
+  String? branch,
+});
+
 /// Search text and selection retained while the start-page picker is dismissed.
 /// Membership and availability are revalidated against a fresh catalog on return.
 class SwarmSearchDraft {
@@ -27,7 +35,7 @@ class SwarmSearchDraft {
   );
   final String targetId, query;
   final String? selectedId;
-  final ({String id, String name, String query})? groupScope;
+  final SwarmGroupScope? groupScope;
 }
 
 /// One search session, shared by the native/Flutter input and its results.
@@ -223,20 +231,39 @@ class SwarmSearchController extends ChangeNotifier {
 
   String get createLabel => isMachineMode
       ? 'New Machine'
-      : isProjectMode
-      ? 'New Project'
       : isModelMode
       ? 'New Model'
       : 'New Harness';
   String get createDescription => isMachineMode
       ? 'Set up or link another computer.'
-      : isProjectMode
-      ? 'Choose a working folder for a project.'
       : isModelMode
       ? 'Add a local model or connect an API.'
       : 'Choose a harness, machine, and project.';
-  ({String id, String name, String query})? _groupScope;
+  SwarmGroupScope? _groupScope;
   bool get canGoBack => _groupScope != null;
+  String? get scopedBranch => _groupScope?.branch;
+
+  /// Open a known resource by identity, never by a fuzzy display-name match.
+  bool scopeToGroup(String id, {String? branch}) {
+    final group = _catalog
+        .where((row) => row.id == id && row.isGroup)
+        .firstOrNull;
+    if (group == null) return false;
+    _groupScope = (
+      id: group.id,
+      name: group.title,
+      query: group.isMachine ? '@' : '#',
+      branch: branch,
+    );
+    query = '';
+    sessionFilter = SessionFilter.all;
+    cursor = 0;
+    _selectedId = null;
+    _filter();
+    notifyListeners();
+    return true;
+  }
+
   String? get scopedMachineId => _groupScope == null
       ? null
       : _catalog
@@ -263,7 +290,7 @@ class SwarmSearchController extends ChangeNotifier {
       : isStoreMode
       ? 'Store'
       : _groupScope != null
-      ? 'Harnesses · ${_groupScope!.name}'
+      ? 'Harnesses · ${_groupScope!.name}${scopedBranch == null ? '' : ' ($scopedBranch)'}'
       : switch (split?.axis) {
           PaneResizeAxis.x => 'New Pane to the Right',
           PaneResizeAxis.y => 'New Pane Below',
@@ -442,6 +469,7 @@ class SwarmSearchController extends ChangeNotifier {
       !navigating &&
       !isCommandMode &&
       !isHelpMode &&
+      !isProjectMode &&
       (offersHarnessCreate || isGroupMode || isModelMode) &&
       (_groupScope == null || scopedMachineId != null) &&
       (isGroupMode ||
@@ -757,7 +785,16 @@ class SwarmSearchController extends ChangeNotifier {
                         (query.isNotEmpty && row.agentId != null)),
               )
               .toList();
-    if (byActivity && _heldRows.isNotEmpty) {
+    if (scopedBranch case final branch?) {
+      candidates = candidates.where((row) {
+        final machine = app.stateOf(row.machineId ?? '');
+        final agent = machine?.agents
+            .where((agent) => agent.id == row.agentId)
+            .firstOrNull;
+        return agent != null && machine?.projectOf(agent)?.branch == branch;
+      }).toList();
+    }
+    if (byActivity && _heldRows.isNotEmpty && scopedBranch == null) {
       final present = {for (final row in candidates) row.id};
       candidates = [
         ...candidates,
@@ -786,9 +823,26 @@ class SwarmSearchController extends ChangeNotifier {
         : rankSwarmDestinations(
             candidates,
             matchQuery,
-            recent: recent,
+            recent: isProjectMode ? const [] : recent,
             previews: history == null ? app.sessionPreviews : null,
           );
+    if (isProjectMode) {
+      final open = {
+        for (final pane in app.allPanes)
+          if ((pane.agentId ?? pane.ownerAgentId) case final id?)
+            agentDestinationId(pane.machineId, id),
+      };
+      rows.sort((a, b) {
+        final aOpen = a.members.any(open.contains);
+        final bOpen = b.members.any(open.contains);
+        if (aOpen != bOpen) return aOpen ? -1 : 1;
+        final name = compareNatural(
+          a.title.toLowerCase(),
+          b.title.toLowerCase(),
+        );
+        return name != 0 ? name : a.id.compareTo(b.id);
+      });
+    }
     if (byActivity &&
         sessionFilter != SessionFilter.needsInput &&
         (sessionFilter != SessionFilter.all ||
@@ -843,7 +897,9 @@ class SwarmSearchController extends ChangeNotifier {
     // Creation has a stable place beside the prompt. Filtering changes the
     // matches above it, never the position of the action itself.
     if (offersCreate) {
-      final create = _showsCreateRow ? _createRowFor(createTask) : null;
+      final create = _showsCreateRow && scopedBranch == null
+          ? _createRowFor(createTask)
+          : null;
       final found = [
         for (final row in rows)
           if (!row.isCreate) row,
@@ -932,6 +988,7 @@ class SwarmSearchController extends ChangeNotifier {
   bool back() {
     final scope = _groupScope;
     if (scope == null) return false;
+    if (scope.branch != null) return scopeToGroup(scope.id);
     _groupScope = null;
     setQuery(scope.query);
     return true;
@@ -964,7 +1021,12 @@ class SwarmSearchController extends ChangeNotifier {
           .where((row) => row.id == destination.id && row.isGroup)
           .firstOrNull;
       if (group != null) {
-        _groupScope = (id: group.id, name: group.title, query: query);
+        _groupScope = (
+          id: group.id,
+          name: group.title,
+          query: query,
+          branch: null,
+        );
         setQuery('');
       }
       return null;
@@ -1004,7 +1066,7 @@ class SwarmSearchController extends ChangeNotifier {
       : isGroupMode && row?.isGroup == true
       ? _catalog.any((group) => group.id == row!.id && group.isGroup)
       : row != null && row.isCreate
-      ? (isGroupMode || isModelMode || canCreate)
+      ? _showsCreateRow && (isMachineMode || isModelMode || canCreate)
       : row != null &&
             (!adding || row.isCommand || canAdd(row)) &&
             (!row.isCommand ||

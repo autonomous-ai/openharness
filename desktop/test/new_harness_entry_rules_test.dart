@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
 import 'dart:async';
@@ -285,7 +286,7 @@ void main() {
     'product entry from a pane does not inherit workspace projects or search tasks',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
         'Review the API',
@@ -422,12 +423,12 @@ void main() {
     },
   );
 
-  testWidgets('repeating Cmd-P keeps the highlighted existing harness', (
+  testWidgets('repeating Cmd-O keeps the highlighted existing harness', (
     tester,
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(search, 'login');
     final picker = tester
@@ -441,7 +442,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.arrowUp);
     }
     expect(picker.selected?.agentId, 'a1');
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     final updated = tester
         .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
         .search!;
@@ -455,14 +456,13 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('an unmatched Cmd-P query waits for explicit Cmd-N creation', (
+  testWidgets('an unmatched search query waits for explicit Cmd-N creation', (
     tester,
   ) async {
     await mount(tester, store: false);
     final origin = app.activeSwarm;
-    final shortcut = LogicalKeyboardKey.keyP;
 
-    await key(tester, shortcut, cmd: true);
+    await openHarnessPicker(tester);
     final search = find.byKey(const ValueKey('swarm-search-input'));
     await tester.enterText(search, 'Check the keyboard workflow');
     final editor = tester.widget<SwarmSearchInput>(
@@ -472,7 +472,7 @@ void main() {
       baseOffset: 6,
       extentOffset: 18,
     );
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     final updated = tester.widget<SwarmSearchInput>(
       find.byType(SwarmSearchInput),
     );
@@ -556,7 +556,7 @@ void main() {
     await dismiss(tester);
     expect(app.swarms, [origin]);
     expect(app.activeSwarm, same(origin));
-    await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+    await openHarnessPicker(tester);
     await acceptSetupOrSearch(tester);
     expect(find.byType(NewHarnessForm), findsNothing);
     expect(connections.values.expand((c) => c.starts), isEmpty);
@@ -586,7 +586,7 @@ void main() {
     'switching the picker keeps its project scope and Escape goes back',
     (tester) async {
       await mount(tester, store: false);
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, '# openharness');
       await acceptSetupOrSearch(tester);
@@ -597,7 +597,7 @@ void main() {
       expect(before.canGoBack, isTrue);
       final selected = before.selected?.id;
       final results = before.rows.map((row) => row.id).toList();
-      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
+      await openHarnessPicker(tester);
       final picker = tester
           .widget<SwarmSearchInput>(find.byType(SwarmSearchInput))
           .search!;

@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
 import 'dart:async';
@@ -473,12 +474,9 @@ void main() {
       expect(search.isCommandMode, query.startsWith('>'));
       expect(search.isHelpMode, isFalse);
       expect(search.createTask, isNull);
-      expect(search.rows.any((row) => row.isCreate), !query.startsWith('>'));
-      if (!query.startsWith('>')) {
-        expect(
-          search.rows.first.title,
-          query.startsWith('#') ? 'New Project' : 'New Machine',
-        );
+      expect(search.rows.any((row) => row.isCreate), query.startsWith('@'));
+      if (query.startsWith('@')) {
+        expect(search.rows.first.title, 'New Machine');
       }
     }
     search.setQuery('');
@@ -715,7 +713,7 @@ void main() {
       final original = app.activeSwarm;
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyT);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       final search = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(search, 'fix the login regression');
       await tester.pump();
@@ -891,13 +889,10 @@ void main() {
         await app.addAgentToSwarm('m', 'a0');
         final original = app.activeSwarm;
         await mount(tester, app);
-        final key = placement == HarnessPlacement.newTab
-            ? LogicalKeyboardKey.keyT
-            : LogicalKeyboardKey.keyP;
-        await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await chord(tester, LogicalKeyboardKey.keyT);
         }
+        await openHarnessPicker(tester);
         await tester.pump();
         expect(app.swarms, contains(original));
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
@@ -923,13 +918,13 @@ void main() {
         await tester.pump();
         expect(app.swarms.length, placement == HarnessPlacement.newTab ? 2 : 1);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+          await chord(tester, LogicalKeyboardKey.keyW);
         }
         expect(app.swarms, [original]);
-        await chord(tester, key);
         if (placement == HarnessPlacement.newTab) {
-          await chord(tester, LogicalKeyboardKey.keyP);
+          await chord(tester, LogicalKeyboardKey.keyT);
         }
+        await openHarnessPicker(tester);
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pump();

@@ -1,3 +1,4 @@
+import 'support/open_harness.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,7 +42,7 @@ void main() {
           harnessCommandById.containsKey('navigation.quick_open'),
           isFalse,
         );
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await openHarnessPicker(tester);
         expect(jumpField, findsOneWidget);
         expect(app.swarms, [original]);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -65,7 +66,7 @@ void main() {
         expect(find.byType(AlertDialog), findsNothing);
         final field = find.byKey(const ValueKey('swarm-search-input'));
         expect(field, findsNothing);
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await openHarnessPicker(tester);
         expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
         await tester.enterText(field, 'Agent 0');
         await tester.pump();
@@ -133,7 +134,7 @@ void main() {
     expect(app.swarms, hasLength(2));
     expect(app.allPanes, contains(pane));
     expect(jumpField, findsNothing);
-    await chord(tester, LogicalKeyboardKey.keyP);
+    await openHarnessPicker(tester);
     expect(jumpField, findsOneWidget);
     final search = tester
         .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))

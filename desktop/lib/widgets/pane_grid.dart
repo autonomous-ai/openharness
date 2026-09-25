@@ -1986,25 +1986,27 @@ class _PaneHeader extends StatelessWidget {
     grid.AppTheme.watch(context);
     // The pane's head is a drag handle too: with the title bar hidden it is
     // the top edge of the window.
-    return WindowDragArea(
-      child: SizedBox(
-        height: 46,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  overflow: TextOverflow.ellipsis,
-                  style: grid.AppType.monoLabel(
-                    color: AppColors.text,
-                    fontWeight: FontWeight.w600,
+    return PaneHeaderHoverRegion(
+      child: WindowDragArea(
+        child: SizedBox(
+          height: 46,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    overflow: TextOverflow.ellipsis,
+                    style: grid.AppType.monoLabel(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
-              if (onClose != null) PaneCloseButton(onPressed: onClose!),
-            ],
+                if (onClose != null) PaneCloseButton(onPressed: onClose!),
+              ],
+            ),
           ),
         ),
       ),

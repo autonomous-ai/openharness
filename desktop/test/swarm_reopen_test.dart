@@ -190,7 +190,7 @@ void main() {
       await app.addAgentToSwarm('m', 'a0');
       app.renameSwarm(app.activeSwarmId, 'My work');
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyW);
       expect(app.panes, isEmpty);
       await chord(tester, LogicalKeyboardKey.keyT, shift: true);
       expect(app.panes, isEmpty);

@@ -178,6 +178,10 @@ class _StatusSegmentsPainter extends CustomPainter {
     );
     canvas.save();
     canvas.clipRect(Offset.zero & size);
+    // Fill through the next click target's join, including subpixel rounding.
+    if (nextBackground != null) {
+      canvas.drawRect(Offset.zero & size, Paint()..color = nextBackground!);
+    }
     var x = 0.0;
     for (var i = 0; i < segments.length; i++) {
       final segment = segments[i];

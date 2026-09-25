@@ -1,3 +1,5 @@
+import 'support/open_harness.dart';
+
 import 'package:harness/widgets/swarm_switcher.dart';
 
 import 'dart:convert';
@@ -84,7 +86,7 @@ TerminalSession terminal(String id, List<TerminalBinaryFrame> input) =>
 
 void main() {
   testWidgets(
-    'tabs omit close buttons and Command-Shift-W closes the active tab',
+    'tabs omit close buttons and redundant hints; Command-W closes the active tab',
     (tester) async {
       final app = createApp();
       final first = app.activeSwarm;
@@ -97,12 +99,16 @@ void main() {
       final label = find.text('2:Second tab');
       final tab = find.byKey(ValueKey(second.id));
       expect(
+        find.descendant(of: tab, matching: find.byType(Tooltip)),
+        findsNothing,
+      );
+      expect(
         tester.getCenter(label).dx,
         closeTo(tester.getCenter(tab).dx, .01),
       );
       Focus.of(tester.element(label)).requestFocus();
       await tester.pumpAndSettle();
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+      await chord(tester, LogicalKeyboardKey.keyW);
       await tester.pumpAndSettle();
       expect(app.swarms.map((swarm) => swarm.id), [first.id]);
       await tester.pumpWidget(const SizedBox());
@@ -150,7 +156,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
         expect(app.swarms, hasLength(31));
         expect(find.byKey(const ValueKey('swarm-search-input')), findsNothing);
-        await chord(tester, LogicalKeyboardKey.keyP);
+        await openHarnessPicker(tester);
         final input = find.byKey(const ValueKey('swarm-search-input'));
         await tester.enterText(input, 'Agent 1');
         await tester.pump();
@@ -469,7 +475,7 @@ void main() {
       );
       await mount(tester, app);
       expect(find.text('Existing project'), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -512,7 +518,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('swarm-models-button')), findsOneWidget);
       expect(find.text('Machines'), findsNothing);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.pump();
       await tester.enterText(
         find.byKey(const ValueKey('swarm-search-input')),
@@ -528,7 +534,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       final zoom = app.zoomedPaneId;
       final before = tester.getSize(find.byType(PaneGrid));
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await openHarnessPicker(tester);
       await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const ValueKey('swarm-search-results')),

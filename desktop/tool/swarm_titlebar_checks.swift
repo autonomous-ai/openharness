@@ -16,8 +16,8 @@ private final class TitlebarMouseUpProbe: NSResponder {
   override func mouseUp(with event: NSEvent) { mouseUps += 1 }
 }
 
-private extension NSButton {
-  func renderedPixels() -> Data {
+private extension NSView {
+  func renderedBitmap() -> NSBitmapImageRep {
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
       pixelsWide: Int(bounds.width), pixelsHigh: Int(bounds.height),
       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -28,13 +28,69 @@ private extension NSButton {
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
     draw(bounds)
     NSGraphicsContext.restoreGraphicsState()
-    return Data(bytes: bitmap.bitmapData!, count: count)
+    return bitmap
+  }
+  func renderedPixels() -> Data {
+    let bitmap = renderedBitmap()
+    return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
   }
 }
 
 private extension SwarmTabButton {
   // `label` is private to the tab; a same-file extension reads what it draws.
   var drawnFont: NSFont? { label.attribute(.font, at: 0, effectiveRange: nil) as? NSFont }
+
+  func checkHoverStyleAndTooltips() throws {
+    frame = NSRect(x: 0, y: 0, width: 160, height: 40)
+    contentCenterY = 20
+    name = "office"
+    displayLabel = "2:office"
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(toolTip == nil, "A fully visible tab name has no repeating tooltip")
+    displayLabel = "2:code"
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(toolTip == "office", "A different underlying tab name remains available")
+    name = "code"
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(toolTip == nil, "Renaming a tab clears a redundant tooltip immediately")
+    name = "a-very-long-project-name"
+    displayLabel = "2:\(name)"
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(toolTip == displayLabel, "An ellipsized tab reveals its full label")
+    frame.size.width = 400
+    needsLayout = true
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(toolTip == nil, "Widening a tab removes a now-redundant tooltip")
+
+    let symbol = SwarmStatusSymbolButton(frame: NSRect(x: 0, y: 0, width: 32, height: 28))
+    symbol.title = "+"
+    symbol.selection = selection
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    symbol.mouseEntered(with: hover)
+    let expectedColor = symbol.renderedBitmap().colorAt(x: 1, y: 1)!
+    mouseEntered(with: hover)
+    let hovered = renderedBitmap()
+    let filledRows = (0..<hovered.pixelsHigh).filter { hovered.colorAt(x: 1, y: $0)!.alphaComponent > 0 }
+    try checkTitlebar(filledRows.count == Int(symbol.bounds.height),
+      "Tab and symbol hover rectangles have the same height")
+    try checkTitlebar(hovered.colorAt(x: 1, y: 20) == expectedColor,
+      "Tab and symbol hover rectangles use the same selection tint")
+    mouseExited(with: hover)
+    let resting = renderedPixels()
+    selectButton.highlight(true)
+    try checkTitlebar(renderedPixels() != resting, "Pressing a tab uses the same visible highlight")
+    selectButton.highlight(false)
+    actionsEnabled = false
+    mouseEntered(with: hover)
+    try checkTitlebar(renderedPixels() == resting, "Disabled tabs never show an actionable hover")
+    actionsEnabled = true
+    selected = true
+    let active = renderedBitmap()
+    let selectedRows = (0..<active.pixelsHigh).filter { active.colorAt(x: 1, y: $0)!.alphaComponent > 0 }
+    try checkTitlebar(selectedRows == filledRows && active.colorAt(x: 1, y: 20)!.alphaComponent == 1,
+      "Tab selection shares hover geometry with full selection opacity")
+  }
 
   func checkDoubleClickIsolation() throws {
     let parent = nextResponder
@@ -207,6 +263,93 @@ private extension SwarmTabStrip {
       "Segmented PR renders and exposes its full state")
     pullRequestButton.performClick(nil)
     try checkTitlebar(events.last == "focusedPullRequest", "PR opens its own action rather than the model picker")
+    let pointer = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    pullRequestButton.mouseEntered(with: pointer)
+    try checkTitlebar(pullRequestButton.renderedPixels() != mergedPixels, "A PR has the same visible rectangular hover cue")
+    pullRequestButton.mouseExited(with: pointer)
+    let join = SwarmContextButton(frame: NSRect(x: 0, y: 0, width: 100, height: 28))
+    join.font = contextButton.font
+    join.update(["text": "main", "segmented": true, "interactive": true,
+      "segments": [["text": "main", "foreground": Int64(0xff000000), "background": Int64(0xff4e9a06)]]], enabled: true)
+    join.setFrameSize(NSSize(width: join.preferredWidth + 0.5, height: 28))
+    join.nextBackground = pullRequestButton.firstBackground
+    let pixels = join.renderedBitmap()
+    try checkTitlebar((pixels.colorAt(x: 0, y: 14)?.alphaComponent ?? 0) > 0.99,
+      "Fractional segment padding never leaves a vertical seam before its text")
+    let tail = pixels.colorAt(x: pixels.pixelsWide - 1, y: 19)?.usingColorSpace(.sRGB)
+    let expectedJoin = pullRequestButton.firstBackground?.usingColorSpace(.sRGB)
+    try checkTitlebar(tail != nil && expectedJoin != nil && tail!.alphaComponent > 0.99 &&
+      abs(tail!.redComponent - expectedJoin!.redComponent) < 0.02 &&
+      abs(tail!.greenComponent - expectedJoin!.greenComponent) < 0.02 &&
+      abs(tail!.blueComponent - expectedJoin!.blueComponent) < 0.02,
+      "The last arrow paints through to the adjacent PR background without a dark divider")
+    let contextFields: [[String: Any]] = ["machine", "project", "branch"].map { field in
+      ["text": field, "field": field, "paneId": 7, "interactive": true,
+       "detail": "Find harnesses: \(field)",
+       "segments": [["text": field, "foreground": Int64(0xffdddddd)]]]
+    }
+    var linked = prState
+    linked["focusedContext"] = ["text": "machine project branch", "fields": contextFields]
+    var clickedFields: [(String, Int)] = []
+    emit = { method, args in
+      if method == "focusedContext", let args = args as? [String: Any],
+         let field = args["field"] as? String, let pane = args["paneId"] as? Int {
+        clickedFields.append((field, pane))
+      }
+    }
+    update(linked)
+    try checkTitlebar(contextButton.fieldButtons.count == 3, "Context fields have separate native controls")
+    for control in contextButton.fieldButtons {
+      let before = control.renderedPixels()
+      control.mouseEntered(with: pointer)
+      try checkTitlebar(control.renderedPixels() != before, "Each context field advertises its own clickable rectangle")
+      control.mouseExited(with: pointer)
+      control.performClick(nil)
+      try checkTitlebar(control.toolTip?.hasPrefix("Find harnesses") == true, "Context tooltip explains navigation")
+      try checkTitlebar(contextButton.hitTest(contextButton.convert(NSPoint(x: control.frame.midX, y: control.frame.midY), to: contextButton.superview)) === control, "Context child is clickable inside its informational parent")
+    }
+    try checkTitlebar(clickedFields.map { $0.0 } == ["machine", "project", "branch"] &&
+      clickedFields.allSatisfy { $0.1 == 7 }, "Each context action preserves field and pane identity")
+    linked["focusedModel"] = ["text": "Fable", "paneId": 7, "agentId": "a0", "interactive": true,
+      "detail": "Switch model · Subscription or local models",
+      "segments": [["text": "Fable", "foreground": Int64(0xffdddddd)]]]
+    var modelClicks: [(Int, String)] = []
+    emit = { method, args in
+      if method == "focusedModel", let args = args as? [String: Any],
+         let pane = args["paneId"] as? Int, let agent = args["agentId"] as? String {
+        modelClicks.append((pane, agent))
+      }
+    }
+    update(linked)
+    try checkTitlebar(!focusedModelButton.isHidden && focusedModelButton.isEnabled,
+      "Focused model has its own enabled status control")
+    try checkTitlebar(focusedModelButton.frame.maxX < contextButton.frame.minX &&
+      focusedModelButton.frame.height == harnessesButton.frame.height,
+      "Model sits before machine/repo with the shared control height")
+    try checkTitlebar(focusedModelButton.toolTip == "Switch model · Subscription or local models",
+      "Model hint explains switching without repeating the visible name")
+    let modelResting = focusedModelButton.renderedPixels()
+    focusedModelButton.mouseEntered(with: pointer)
+    try checkTitlebar(focusedModelButton.renderedPixels() != modelResting, "Model uses the same flat hover feedback")
+    focusedModelButton.mouseExited(with: pointer)
+    focusedModelButton.performClick(nil)
+    try checkTitlebar(modelClicks.count == 1 && modelClicks[0].0 == 7 && modelClicks[0].1 == "a0",
+      "Model actions carry the focused pane and agent identity")
+    linked["enabled"] = false
+    update(linked)
+    focusedModelButton.performClick(nil)
+    try checkTitlebar(!focusedModelButton.isEnabled && modelClicks.count == 1,
+      "Disabled model controls cannot switch a harness")
+    linked["enabled"] = false
+    update(linked)
+    for control in contextButton.fieldButtons {
+      try checkTitlebar(!control.isEnabled, "Modal state disables each context link")
+      control.performClick(nil)
+    }
+    try checkTitlebar(clickedFields.count == 3, "Disabled context links cannot dispatch")
+    emit = { method, _ in events.append(method) }
+
     prState["enabled"] = false
     update(prState)
     try checkTitlebar(!pullRequestButton.isEnabled, "A modal disables the PR action")
@@ -214,13 +357,14 @@ private extension SwarmTabStrip {
     try checkTitlebar(pullRequestButton.actionURL == nil && pullRequestButton.accessibilityValue() as? String == "",
       "Changing to a pane without a PR clears the old link and state")
     try checkTitlebar(contextButton.nextBackground == nil, "A missing PR clears the joined background")
+    try checkTitlebar(contextButton.fieldButtons.isEmpty, "Leaving a context clears its former link controls")
     try tabs[0].checkDoubleClickIsolation()
     try checkTitlebar(tabs.count == 24 && newButton.isEnabled, "All overflow tabs and New Tab remain available")
     try checkTitlebar(scroll.frame.maxX <= newButton.frame.minX &&
       newButton.frame.maxX < contextButton.frame.minX, "Tabs are left of the right-aligned focused context")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
       "Short numbered labels use text-sized widths")
-    try checkTitlebar(subviews.count == 8 && pullRequestButton.isHidden,
+    try checkTitlebar(subviews.count == 9 && pullRequestButton.isHidden && focusedModelButton.isHidden,
       "Four management symbols join the status controls; help stays hidden")
     let controls = [harnessesButton, machinesButton, modelsButton, storeButton]
     for (control, symbol) in zip(controls, [">", "@", ":", "*"]) {
@@ -524,8 +668,8 @@ private extension SwarmTitlebar {
       "The main-menu dispatcher retains the actual Edit submenu and its targets")
     try checkTitlebar(newSwarm.keyEquivalent == "t" && newSwarm.toolTip == nil,
       "Native shortcuts display in the menu without duplicate hover hints")
-    try checkTitlebar(addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
-      "The exported keymap keeps Open Harness on Command-P")
+    try checkTitlebar(addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
+      "The exported keymap keeps Open Harness on Command-O")
     for (action, key) in [("splitRight", "r"), ("splitDown", "d")] {
       let split = agent.items.first(where: { $0.representedObject as? String == action })!
       try checkTitlebar(split.keyEquivalent == key && split.keyEquivalentModifierMask == [.command],
@@ -608,7 +752,7 @@ private extension SwarmTitlebar {
     }
     actionsEnabled = true
     // Orchestrator has no default chord now. Exercise an explicit user binding;
-    // Cmd-P belongs to Open Harness and is covered by the exported default keymap.
+    // Cmd-O opens projects; Cmd-P opens commands through the exported default keymap.
     let viewerMap = HarnessNativeKeymap(["version": 1, "contexts": [
       "workspace": [["keys": ["cmd+y"], "command": "project.orchestrate", "hint": "⌘Y", "repeatable": false]],
       "terminal": [], "picker": [], "project": [],
@@ -713,8 +857,8 @@ private extension SwarmTitlebar {
     try checkTitlebar(settings.title == "Settings…" && settings.representedObject as? String == "settings", "Settings stays in the application menu")
     let agent = main.item(withTitle: "File")!.submenu!
     let addHarness = agent.items.first(where: { $0.representedObject as? String == "addAgent" })!
-    try checkTitlebar(addHarness.title == "Open Harness" && addHarness.keyEquivalent == "p" && addHarness.keyEquivalentModifierMask == [.command],
-      "Open Harness advertises Command-P")
+    try checkTitlebar(addHarness.title == "Open Harness" && addHarness.keyEquivalent == "o" && addHarness.keyEquivalentModifierMask == [.command],
+      "Open Harness advertises Command-O")
     try checkTitlebar(!agent.items.contains { $0.representedObject as? String == "newTerminal" },
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
@@ -766,10 +910,13 @@ private extension SwarmTitlebar {
     try checkTitlebar(agent.items.contains { $0.title == "Close Tab" && $0.representedObject as? String == "closeActive" }, "Close Tab preserves its command")
     let closeTabShortcut = agent.items.first { $0.representedObject as? String == "closeActive" }!
     let closePaneShortcut = agent.items.first { $0.representedObject as? String == "closePane" }!
-    try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command, .shift], "Close Tab defaults to Command-Shift-W")
-    try checkTitlebar(closePaneShortcut.keyEquivalent == "w" && closePaneShortcut.keyEquivalentModifierMask == [.command], "Close Pane defaults to Command-W")
+    try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command], "Close Tab defaults to Command-W")
+    try checkTitlebar(closePaneShortcut.keyEquivalent == "w" && closePaneShortcut.keyEquivalentModifierMask == [.command, .shift], "Close Pane defaults to Command-Shift-W")
     let commands = edit.submenu!.items.first(where: { $0.representedObject as? String == "commands" })!
     try checkTitlebar(commands.keyEquivalent == "p" && commands.keyEquivalentModifierMask == [.command, .shift], "Command search keeps its native menu owner")
+    let harnesses = main.item(withTitle: "View")!.submenu!.items.first { $0.representedObject as? String == "sessions" }!
+    try checkTitlebar(harnesses.keyEquivalent == "p" && harnesses.keyEquivalentModifierMask == [.command],
+      "Command-P keeps harness search; commands use Command-Shift-P")
     try checkTitlebar(edit.submenu!.items.allSatisfy { $0.representedObject as? String != "jump" }, "Edit has no Navigate action")
     try checkTitlebar(agent.items.contains { $0.title == "New Tab" && $0.keyEquivalent == "t" && $0.representedObject as? String == "new" }, "New Tab opens the chooser with Command-T")
     let reopen = historyMenu.items.first(where: { $0.representedObject as? String == "reopen" })!
@@ -1088,6 +1235,7 @@ do {
   try strip.runChecks()
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
+  try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),

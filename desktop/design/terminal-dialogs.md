@@ -2,17 +2,19 @@
 
 **Fixed cells. Plain text. One-line selection.**
 
+This is the dialog chapter of the [terminal workspace design system](terminal-workspace.md).
+
 Harness's terminal-workspace dialogs should feel like part of the terminal.
 This is the agreed design direction from the Cmd-N and Cmd-P review on
 2026-09-24. Apply it to new and revised workspace pickers, forms, confirmations,
 and their previews. It is the current source of truth for their presentation,
 including where older design handoffs describe different visuals.
 
-Cmd-N (`NewHarnessForm`) and Cmd-P (`SwarmSearchResults` in its terminal setup
+Cmd-N (`NewHarnessForm`) and Cmd-O (`SwarmSearchResults` in its terminal setup
 layout) are the implementation references. Full Settings pages and embedded
 viewers keep their own component systems.
 
-![Cmd-P rendered with fixture data](images/terminal-open-harness.png)
+![Open Harness rendered with fixture data](images/terminal-open-harness.png)
 
 The fixture above shows the terminal grid, plain-text rows, and unselected
 opening state. Live surfaces use the user's selected terminal font and palette.
