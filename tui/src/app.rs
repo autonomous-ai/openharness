@@ -91,6 +91,8 @@ pub struct App {
     /// What the outer terminal's title was last set to.
     pub title: String,
     pub first_frame: bool,
+    /// Where each tab was drawn in the strip, for clicks.
+    pub tab_hits: Vec<(usize, u16, u16)>,
     /// Terminal frames for a stream no pane has yet — the keyframe can outrun `terminal_ready`.
     orphans: HashMap<Uuid, (Instant, Vec<proto::Frame>)>,
     /// Desk writes sent and not yet answered; while any are out, the desk is not reconciled.
@@ -147,6 +149,7 @@ impl App {
             last_click: None,
             title: String::new(),
             first_frame: false,
+            tab_hits: Vec::new(),
             orphans: HashMap::new(),
             desk_inflight: 0,
             desk_stale: false,

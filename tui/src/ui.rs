@@ -93,24 +93,33 @@ fn tab_label(app: &App, index: usize) -> (String, Option<(char, Color)>) {
     (name, mark)
 }
 
-/// Where each tab sits in the strip: (index, x from, x to).
-fn tab_spans(app: &App) -> Vec<(usize, u16, u16)> {
-    let mut x = 10u16;
-    let mut out = Vec::new();
-    for index in 0..app.tabs.len() {
+/// Where each tab sits in the strip, between x=10 and [limit]: (index, x from, x to). When they do
+/// not all fit, the strip scrolls so the active tab is always in it.
+fn tab_spans(app: &App, limit: u16) -> (Vec<(usize, u16, u16)>, bool, bool) {
+    let widths: Vec<u16> = (0..app.tabs.len()).map(|index| {
         let (name, mark) = tab_label(app, index);
-        let w = (format!(" {} ", index + 1).width() + name.width() + 1 + if mark.is_some() { 2 } else { 0 }) as u16;
-        out.push((index, x, x + w));
-        x += w;
+        (format!(" {} ", index + 1).width() + name.width() + 1 + if mark.is_some() { 2 } else { 0 }) as u16
+    }).collect();
+    let room = limit.saturating_sub(10 + 2);
+    // Skip tabs from the left until the active one fits.
+    let mut first = 0;
+    while first < app.active && widths[first..=app.active].iter().sum::<u16>() > room { first += 1 }
+    let mut x = 10 + if first > 0 { 2 } else { 0 };
+    let mut out = Vec::new();
+    let mut clipped = false;
+    for index in first..app.tabs.len() {
+        if x + widths[index] > limit { clipped = true; break }
+        out.push((index, x, x + widths[index]));
+        x += widths[index];
     }
-    out
+    (out, first > 0, clipped)
 }
 
 pub fn tab_at(app: &App, x: u16) -> Option<usize> {
-    tab_spans(app).into_iter().find(|(_, from, to)| x >= *from && x < *to).map(|(i, _, _)| i)
+    app.tab_hits.iter().find(|(_, from, to)| x >= *from && x < *to).map(|(i, _, _)| *i)
 }
 
-fn tab_strip(buf: &mut Buffer, app: &App, area: Rect) {
+fn tab_strip(buf: &mut Buffer, app: &mut App, area: Rect) {
     buf.set_style(area, Style::default());
     buf.set_string(0, 0, " ▍", fg(theme::ACCENT));
     buf.set_string(2, 0, "harness", bold(theme::ACCENT));
@@ -129,8 +138,11 @@ fn tab_strip(buf: &mut Buffer, app: &App, area: Rect) {
     let right_x = area.width.saturating_sub(right_w);
     let mut x = right_x;
     for span in &right { buf.set_string(x, 0, span.content.as_ref(), span.style); x += span.content.width() as u16 }
-    for (index, from, to) in tab_spans(app) {
-        if to > right_x.saturating_sub(1) { buf.set_string(from, 0, " …", fg(theme::MUTED)); break }
+    let (spans, before, after) = tab_spans(app, right_x.saturating_sub(3));
+    if before { buf.set_string(10, 0, "‹ ", fg(theme::MUTED)); }
+    if after { if let Some((_, _, to)) = spans.last() { buf.set_string(*to, 0, " ›", fg(theme::MUTED)); } }
+    app.tab_hits = spans.clone();
+    for (index, from, _to) in spans {
         let (name, mark) = tab_label(app, index);
         let active = index == app.active;
         let base = if active { Style::default().bg(theme::SELECT).fg(theme::TEXT).add_modifier(Modifier::BOLD) } else { fg(theme::SOFT) };
