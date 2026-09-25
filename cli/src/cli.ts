@@ -142,6 +142,7 @@ import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
+import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
@@ -374,6 +375,7 @@ Machine:
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
@@ -7157,6 +7159,9 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'tui':
+    tuiCommand(rest, { port: daemonPort() }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({
