@@ -693,10 +693,12 @@ void main() {
     expect(find.text('Explore models'), findsNothing);
     await openWorkspaceTool(tester, 'models');
     await tester.pump();
+    await tester.enterText(resourceField, ':Qwen3.8-27B');
+    await tester.pump();
     await selectResource(tester, 'model:local:qwen');
     await tester.pump();
     expect(find.text('Qwen3.8-27B'), findsWidgets);
-    expect(find.text('Search models'), findsOneWidget);
+    expect(resourceSearch(tester).isModelMode, isTrue);
     expect(tester.getSize(resourceScope(':')).height, greaterThan(620));
     expect(tester.getRect(resourceScope(':')).bottom, lessThan(760));
     tester.view.physicalSize = const Size(1200, 480);
@@ -732,10 +734,15 @@ void main() {
     expect(panel.top, greaterThan(0));
     expect(panel.width, greaterThan(1000));
     expect(find.byType(Dialog), findsNothing);
-    expect(find.text('Search models'), findsOneWidget);
+    expect(resourceSearch(tester).isModelMode, isTrue);
     expect(
       resourceSearch(tester).rows
           .any((row) => row.modelId == 'model:local:qwen'),
+      isFalse,
+    );
+    expect(
+      resourceSearch(tester).rows
+          .any(resourceSearch(tester).isModelDownloadsRow),
       isTrue,
     );
     expect(find.text('Run AI on this computer'), findsNothing);
