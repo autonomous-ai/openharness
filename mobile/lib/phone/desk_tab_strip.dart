@@ -347,9 +347,18 @@ class _DeskTabPill extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Before the name, as on the agent rows below it: the same
-                // mark in the same place, one level up.
-                if (unread case final kind?) UnreadDot(kind: kind),
+                // ⚠️ Before the name here, where the agent rows below put it at
+                // their far end — see [UnreadDot]. A pill is read as one thing,
+                // so the mark belongs to it wherever it sits; a column of rows
+                // is not, and a leading dot there moved every name.
+                //
+                // The gap is the caller's: the dot carries no margin, because
+                // the two placements need it on opposite sides.
+                if (unread case final kind?)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 7),
+                    child: UnreadDot(kind: kind),
+                  ),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: _maxLabelWidth),
                   child: Text(
