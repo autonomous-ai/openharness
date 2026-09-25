@@ -2009,8 +2009,8 @@ class AppNotifier extends ChangeNotifier {
     railFocused = false;
     // Remembered only on a REAL move. Re-focusing the tile you are already on
     // happens constantly — see the note below about why it is announced anyway
-    // — and recording it would make ⌘; a key that returns you to where you
-    // already are, which is the same as a key that does nothing.
+    // — and recording it would make the previous-pane command return you to
+    // where you already are.
     if (moved) _previousPaneId = focusedPaneId;
     focusedPaneId = paneId;
     selectedMachineId = focusedPane?.machineId;
@@ -5411,6 +5411,15 @@ class AppNotifier extends ChangeNotifier {
     required bool start,
   }) => _conn(machineId).request(
     start ? 'grid_fleet_model_start' : 'grid_fleet_model_stop',
+    payload: {'modelId': modelId},
+    timeout: const Duration(seconds: 12),
+  );
+
+  Future<Map<String, dynamic>> downloadLocalModel(
+    String machineId,
+    String modelId,
+  ) => _conn(machineId).request(
+    'grid_fleet_model_download',
     payload: {'modelId': modelId},
     timeout: const Duration(seconds: 12),
   );
@@ -9729,12 +9738,8 @@ class AppNotifier extends ChangeNotifier {
     return best;
   }
 
-  /// ⌘; — the pane focused before this one.
-  ///
-  /// tmux spells it the same way, and the reason it earns a key is that two
-  /// agents at a time is the shape most work actually has: a thing being built
-  /// and a thing being watched. Walking a list to get back to the other one is
-  /// the wrong motion, and it gets longer as the grid fills.
+  /// The pane focused before this one, used by the remappable `pane.last`
+  /// command to switch between two agents without walking the whole layout.
   int? get _previousPaneId => activeSwarm.previousPaneId;
   set _previousPaneId(int? value) => activeSwarm.previousPaneId = value;
 

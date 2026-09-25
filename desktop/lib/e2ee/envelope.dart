@@ -20,6 +20,7 @@ const Set<String> encryptedDownTypes = {
   'machine_resources',
   'grid_fleet_models_list',
   'grid_fleet_model_start',
+  'grid_fleet_model_download',
   'grid_fleet_model_stop',
   'message',
   'question_response',

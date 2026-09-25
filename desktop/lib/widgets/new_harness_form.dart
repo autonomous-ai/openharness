@@ -347,6 +347,15 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     _revealRow();
   }
 
+  void _switchPane() {
+    if (box.locked) return;
+    if (_picking) {
+      _backToRows();
+    } else if (_hasChoices) {
+      setState(() => _listOpen = true);
+    }
+  }
+
   /// Folder paths, project names and repository URLs keep their prompt active
   /// even before anything is typed.
   static const _prompts = {
@@ -676,13 +685,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
     }
     switch (event.logicalKey) {
       case LogicalKeyboardKey.tab:
-        // Tab is never let through. Unhandled, it runs Flutter's focus
-        // traversal, which moves focus OUT of this form and leaves it deaf
-        // to every later key — the screen looked frozen. Here it walks the
-        // rows, which is what a form's Tab is expected to do anyway.
-        _picking
-            ? _stepMatch(HardwareKeyboard.instance.isShiftPressed ? -1 : 1)
-            : _moveRow(HardwareKeyboard.instance.isShiftPressed ? -1 : 1);
+        // Arrows move within a pane; Tab switches panes without choosing.
+        _switchPane();
       case LogicalKeyboardKey.arrowDown:
         // While the list is open it owns ↑↓, so the rows below do not move
         // under a highlight the reader is using to choose.
@@ -887,10 +891,8 @@ class _NewHarnessFormState extends State<NewHarnessForm> {
             _runCommand(() => _picking ? _stepMatch(1) : _moveRow(1)),
         'picker.previous': () =>
             _runCommand(() => _picking ? _stepMatch(-1) : _moveRow(-1)),
-        'picker.complete': () =>
-            _runCommand(() => _picking ? _stepMatch(1) : _moveRow(1)),
-        'picker.complete_back': () =>
-            _runCommand(() => _picking ? _stepMatch(-1) : _moveRow(-1)),
+        'picker.complete': () => _runCommand(_switchPane),
+        'picker.complete_back': () => _runCommand(_switchPane),
         'picker.more_options': () {
           if (!box.locked) _toggleAdvanced();
         },

@@ -449,38 +449,31 @@ void main() {
       expect(daemon.requests, contains('agent_create'));
     });
 
-    testWidgets(
-      'remapped next and previous keys move the rows, then the list',
-      (tester) async {
-        final keymap = MemoryKeymap()
-          ..apply(
-            '{"bindings":['
-            '{"keys":"ctrl+l","command":"picker.complete","when":"picker"},'
-            '{"keys":"ctrl+h","command":"picker.complete_back","when":"picker"}]}',
-          );
-        final (box, _) = await mount(tester, keymap: keymap);
-        expect(box.field, NewHarnessField.harness);
-        for (final (move, back) in [
-          (LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP),
-          (LogicalKeyboardKey.keyL, LogicalKeyboardKey.keyH),
-        ]) {
-          // The list closed: they walk the rows.
-          await key(tester, move, ctrl: true);
-          expect(box.field, NewHarnessField.projectMenu);
-          await key(tester, back, ctrl: true);
-          expect(box.field, NewHarnessField.harness);
-          // The list open: they walk the choices, and the row stays put.
-          await key(tester, LogicalKeyboardKey.arrowRight);
-          final first = box.selected!.id;
-          await key(tester, move, ctrl: true);
-          expect(box.selected!.id, isNot(first));
-          expect(box.field, NewHarnessField.harness);
-          await key(tester, back, ctrl: true);
-          expect(box.selected!.id, first);
-          await key(tester, LogicalKeyboardKey.escape);
-        }
-      },
-    );
+    testWidgets('remapped Tab switches panes while arrow aliases browse', (
+      tester,
+    ) async {
+      final keymap = MemoryKeymap()
+        ..apply(
+          '{"bindings":[{"keys":"ctrl+l","command":"picker.complete","when":"picker"},{"keys":"ctrl+h","command":"picker.complete_back","when":"picker"}]}',
+        );
+      final (box, _) = await mount(tester, keymap: keymap);
+      expect(box.field, NewHarnessField.harness);
+      final engine = box.engine;
+      await key(tester, LogicalKeyboardKey.keyL, ctrl: true);
+      expect(harnessChoicesActive(tester), isTrue);
+      final first = box.selected!.id;
+      await key(tester, LogicalKeyboardKey.keyN, ctrl: true);
+      expect(box.selected!.id, isNot(first));
+      expect(box.field, NewHarnessField.harness);
+      await key(tester, LogicalKeyboardKey.keyP, ctrl: true);
+      expect(box.selected!.id, first);
+      await key(tester, LogicalKeyboardKey.keyH, ctrl: true);
+      expect(harnessChoicesActive(tester), isFalse);
+      expect(box.field, NewHarnessField.harness);
+      expect(box.engine, engine);
+      await key(tester, LogicalKeyboardKey.keyN, ctrl: true);
+      expect(box.field, NewHarnessField.projectMenu);
+    });
 
     testWidgets('a narrow window keeps a status line on the grid', (
       tester,

@@ -160,6 +160,7 @@ void main() {
         final app = createApp(connectionForTest: (_) => connection);
         addTearDown(app.dispose);
         app.machineStates['m']!.nodeOnline = true;
+        app.modelManager.models = await app.readGridPicture('m');
         app.machineStates['m']!.agents = [
           Agent.fromJson({
             'id': 'a0',
@@ -209,7 +210,12 @@ void main() {
           await tester.tap(selectors);
         }
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Local-Test-Model'));
+        final modelSearch = find.byKey(const ValueKey('swarm-search-input'));
+        expect(modelSearch, findsOneWidget);
+        expect(tester.widget<TextField>(modelSearch).controller!.text, ':');
+        await tester.enterText(modelSearch, ':Local-Test-Model');
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
         expect(connection.retargets.single['agentId'], 'a0');
         expect(connection.retargets.single['gridModel'], 'Local-Test-Model');
@@ -221,10 +227,22 @@ void main() {
           await tester.tap(selectors);
         }
         await tester.pumpAndSettle();
-        expect(find.text('Local-Test-Model'), findsOneWidget);
+        expect(modelSearch, findsOneWidget);
         app.focusPane(second.id);
         await tester.pumpAndSettle();
-        expect(find.text('Local-Test-Model'), findsNothing);
+        if (modelSearch.evaluate().isNotEmpty) {
+          await tester.enterText(modelSearch, ':Local-Test-Model');
+          await tester.pumpAndSettle();
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          expect(connection.retargets, hasLength(1));
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+        }
+        // Dismissing the picker restores its originating pane. Move again
+        // before checking that a callback captured for that pane is stale.
+        app.focusPane(second.id);
+        await tester.pump();
         stale();
         await tester.pump();
         expect(connection.retargets, hasLength(1));
@@ -884,22 +902,9 @@ void main() {
         }
       }
       expect(tester.getSize(secondTab).width, lessThan(150));
-      final harnesses = find.byKey(const ValueKey('swarm-harnesses-button'));
-      final machines = find.byKey(const ValueKey('swarm-machines-button'));
-      final models = find.byKey(const ValueKey('swarm-models-button'));
-      final store = find.byKey(const ValueKey('swarm-store-button'));
-      expect(harnesses, findsOneWidget);
-      expect(machines, findsOneWidget);
-      expect(models, findsOneWidget);
-      expect(store, findsOneWidget);
-      expect(find.byKey(const ValueKey('swarm-help-button')), findsNothing);
-      final tools = [harnesses, machines, models, store];
-      final symbols = ['>', '@', ':', '*'];
-      for (var i = 0; i < tools.length; i++) {
-        expect(
-          find.descendant(of: tools[i], matching: find.text(symbols[i])),
-          findsOneWidget,
-        );
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsNothing);
+      for (final old in ['harnesses', 'machines', 'models', 'store', 'help']) {
+        expect(find.byKey(ValueKey('swarm-$old-button')), findsNothing);
       }
       expect(
         find.descendant(
@@ -923,68 +928,10 @@ void main() {
           tester.view.physicalSize = Size(width, 800);
           await tester.pump(const Duration(milliseconds: 100));
           expect(tester.takeException(), isNull);
-          final rects = tools.map(tester.getRect).toList();
-          expect(tester.getRect(context).right, lessThan(rects.first.left));
-          expect(rects.last.right, lessThan(width));
-          final paragraphs = tools
-              .map(
-                (tool) => tester.renderObject<RenderParagraph>(
-                  find.descendant(of: tool, matching: find.byType(RichText)),
-                ),
-              )
-              .toList();
-          final baselines = paragraphs
-              .map(
-                (paragraph) => paragraph
-                    .localToGlobal(
-                      Offset(
-                        0,
-                        paragraph.getDryBaseline(
-                          paragraph.constraints,
-                          TextBaseline.alphabetic,
-                        )!,
-                      ),
-                    )
-                    .dy,
-              )
-              .toList();
-          for (var i = 0; i < rects.length; i++) {
-            expect(rects[i].width, closeTo(rects.first.width, .01));
-            expect(rects[i].height, closeTo(rects.first.height, .01));
-            expect(rects[i].width, greaterThanOrEqualTo(28));
-            expect(rects[i].center.dy, rects.first.center.dy);
-            expect(baselines[i], closeTo(baselines.first, .01));
-            if (i > 0) {
-              expect(rects[i].left, closeTo(rects[i - 1].right, .01));
-              expect(
-                rects[i].center.dx - rects[i - 1].center.dx,
-                closeTo(rects.first.width, .01),
-              );
-            }
-          }
+          expect(tester.getRect(context).right, lessThan(width));
         }
       }
-      final symbol = find.descendant(of: machines, matching: find.text('@'));
-      Color? color() => DefaultTextStyle.of(tester.element(symbol)).style.color;
-      final resting = color();
-      FontWeight? weight() => tester.widget<Text>(symbol).style?.fontWeight;
-      expect(weight(), FontWeight.normal);
-      final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await pointer.addPointer(location: Offset.zero);
-      await pointer.moveTo(tester.getCenter(machines));
-      await tester.pump(const Duration(milliseconds: 800));
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.text('Machines'), findsOneWidget);
-      expect(color(), resting);
-      expect(weight(), FontWeight.bold);
-      await pointer.removePointer();
-      await tester.pumpAndSettle();
-      final focus = Focus.of(tester.element(symbol));
-      focus.requestFocus();
-      await tester.pumpAndSettle();
-      expect(focus.hasFocus, isTrue);
-      expect(color(), resting);
-      expect(weight(), FontWeight.bold);
+      await captureControls(tester, 'unified-search-toolbar', height: 100);
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpWidget(const SizedBox());
     },

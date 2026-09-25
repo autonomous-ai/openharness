@@ -64,6 +64,9 @@ class GridModelPicker extends StatefulWidget {
   final AppNotifier notifier;
   final String machineId;
 
+  /// Uses the shared resource picker while keeping this control's live label.
+  final VoidCallback? onOpen;
+
   /// Called with the chosen grid model.
   final ValueChanged<GridModel>? onSelected;
 
@@ -104,6 +107,7 @@ class GridModelPicker extends StatefulWidget {
     super.key,
     required this.notifier,
     required this.machineId,
+    this.onOpen,
     this.onSelected,
     this.onUseOwnLogin,
     this.onRunLocalModel,
@@ -329,6 +333,10 @@ class _GridModelPickerState extends State<GridModelPicker> {
 
   Future<void> _open() async {
     if (_loading || !widget.enabled) return;
+    if (widget.onOpen case final open?) {
+      open();
+      return;
+    }
     // A warm answer opens the menu with no wait at all. It is at most seconds old — the daemon's own
     // memo is what bounds that — and the refresh below lands in time for the next open.
     final GridModels answer;

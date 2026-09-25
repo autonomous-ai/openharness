@@ -16,8 +16,10 @@ Use meaningful names and familiar terminal punctuation. Menu actions such as
 Standalone actions can use brackets, such as `[ Customize Harness ]`, instead
 of rounded buttons with pictograms. A checkbox is
 `[x]` or `[ ]`. Harness search has no prefix; `#` selects projects and `>` selects
-commands as editable text. Small, established actions may use `+`,
-`@`, `:`, and `*`, with a descriptive tooltip and accessible name.
+commands as editable text. `@`, `:`, and `*` scope machines, models, and Store
+inside the same picker. The top bar keeps focused model, machine, and project links plus `+` for New
+Tab. Leave global search in Cmd-P and the app menu. Keep descriptive tooltips
+and accessible names.
 
 There is no broadly understood ASCII pencil. Keep `[ Customize Harness ]` after
 customization as well as before it. The same action should retain its name and
@@ -30,8 +32,14 @@ User content and embedded viewers retain their own visual language.
 
 Every workspace action needs an existing command or a clear keyboard interaction.
 Resolve shortcut hints from the live keymap. Cmd-N creates a harness, Cmd-O opens projects (`#`), Cmd-P searches harnesses, and Cmd-Shift-P opens
-commands (`>`) in the shared picker. Cmd-T opens a tab, Cmd-W closes a tab, and
-Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates, Space toggles, and Escape backs out or dismisses.
+commands (`>`) in the shared picker. Cmd-I opens models with `:` already entered;
+typing Shift is unnecessary. From a live harness pane, Enter uses a served or
+downloaded model for that pane, starting installed weights when necessary; Tab
+switches between the list and controls. In Cmd-N, Tab switches between fields
+and their choices. Up/Down navigates the active pane and Enter activates.
+Cmd-P's model scope uses the same behavior. Cmd-T opens a tab, Cmd-W closes a tab, and
+Cmd-Shift-W closes the focused pane view. Cmd-Q quits the app. Enter activates,
+Space toggles, and Escape backs out or dismisses.
 
 Closing a pane removes its view immediately, without a minimize animation.
 

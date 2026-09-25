@@ -747,17 +747,17 @@ void main() {
     },
   );
 
-  testWidgets('reverse Tab, key repeats and Page keys stay within setup', (
+  testWidgets('reverse navigation, key repeats and Page keys stay within setup', (
     tester,
   ) async {
     final scenario = await _mount(tester, engine: 'claude');
     await focusLaunchRow(tester, 'harness');
-    await key(tester, LogicalKeyboardKey.tab, shift: true);
+    await key(tester, LogicalKeyboardKey.arrowUp);
     expect(
       tester.widget<Semantics>(_field('start')).properties.selected,
       isTrue,
     );
-    await key(tester, LogicalKeyboardKey.tab, shift: true);
+    await key(tester, LogicalKeyboardKey.arrowUp);
     expect(
       tester.widget<Semantics>(_field('advanced')).properties.selected,
       isTrue,
@@ -1283,7 +1283,7 @@ void main() {
   );
 
   testWidgets(
-    'folder completion can switch machines and reverse Tab walks choices',
+    'folder completion uses arrows for choices and can switch machines',
     (tester) async {
       final scenario = await _mount(tester);
       scenario.app.machineStates['m']!.localOnly = false;
@@ -1295,9 +1295,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpAndSettle();
       final first = scenario.box.selected!.id;
-      await key(tester, LogicalKeyboardKey.tab, shift: true);
+      await key(tester, LogicalKeyboardKey.arrowUp);
       expect(scenario.box.selected!.id, isNot(first));
-      await key(tester, LogicalKeyboardKey.tab);
+      await key(tester, LogicalKeyboardKey.arrowDown);
       expect(scenario.box.selected!.id, first);
       for (
         var i = 0;

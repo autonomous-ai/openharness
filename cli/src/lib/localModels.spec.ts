@@ -371,7 +371,7 @@ describe('local model discovery and lifecycle', () => {
   })
 
   it('encrypts inventory and lifecycle requests and responses', () => {
-    for (const type of ['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
+    for (const type of ['grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
       expect(encryptDownFrame(type)).toBe(true); expect(encryptRpcResult(`${type}_result`)).toBe(true)
     }
   })
@@ -1088,5 +1088,48 @@ describe("a model is labelled with the machine's name as Harness shows it", () =
     await named.act('home', 'org/Small-GGUF', 'start'); await named.settled()
     expect(joined()).not.toContain('--name')
     expect((await named.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+})
+
+
+describe('download without starting', () => {
+  it('stores the weights without waking a grid, installing an engine, or sending a prompt', async () => {
+    gridState = 'asleep'
+    const result = await service.act('home', 'org/Small-GGUF', 'download')
+    await service.settled()
+    expect(result.operation).toMatchObject({ action: 'download', phase: 'done' })
+    expect(calls.filter(args => args[0] === 'pull')).toHaveLength(1)
+    expect(calls.some(args => args.includes('sync') || args.includes('join') || args.includes('start') || args.includes('install'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(false)
+    expect(gridState).toBe('asleep')
+    expect((await service.list('home')).models[0]).toMatchObject({ state: 'downloaded', canStart: true, canStop: false })
+    expect((await service.list('home')).supportsDownload).toBe(true)
+  })
+
+  it('a download request for a running model never runs another reply test', async () => {
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    calls.length = 0; request.mockClear()
+    const result = await service.act('home', 'org/Small-GGUF', 'download'); await service.settled()
+    expect(result.operation?.phase).toBe('done')
+    expect(serving).toBe(true)
+    expect(calls.some(args => args.includes('join') || args.includes('pull') || args.includes('sync'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes('chat/completions'))).toBe(false)
+  })
+
+  it('keeps failed downloads retryable and starts only after a separate Start', async () => {
+    downloadFails = true
+    const first = await service.act('home', 'org/Small-GGUF', 'download')
+    await service.settled()
+    expect(first.operation?.phase).toBe('failed')
+    expect(serving).toBe(false)
+    downloadFails = false
+    await service.act('home', 'org/Small-GGUF', 'download')
+    await service.settled()
+    expect(serving).toBe(false)
+    const pulls = calls.filter(args => args[0] === 'pull').length
+    await service.act('home', 'org/Small-GGUF', 'start')
+    await service.settled()
+    expect(serving).toBe(true)
+    expect(calls.filter(args => args[0] === 'pull')).toHaveLength(pulls)
   })
 })

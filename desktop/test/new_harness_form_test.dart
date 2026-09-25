@@ -423,25 +423,34 @@ void main() {
     );
   });
 
-  testWidgets('Tab walks the rows and never escapes the form', (tester) async {
+  testWidgets('Tab switches panes without changing the selected agent', (
+    tester,
+  ) async {
     final box = await mount(tester, focus: 'harness');
-    for (var i = 0; i < 1; i++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pumpAndSettle();
-    }
+    final engine = box.engine;
+    await press(tester, LogicalKeyboardKey.tab);
+    expect(harnessChoicesActive(tester), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.engine, engine);
+    await press(tester, LogicalKeyboardKey.tab);
+    expect(harnessChoicesActive(tester), isFalse);
+    expect(box.field, NewHarnessField.harness);
     expect(
-      box.field,
-      NewHarnessField.projectMenu,
-      reason: 'Tab walks the rows.',
+      box.engine,
+      engine,
+      reason: 'Switching panes must not choose a value.',
     );
-    // The real bug: traversal moved focus out and the form went deaf. Up
-    // rather than down, since the row under Branch edits no field at all.
-    await press(tester, LogicalKeyboardKey.arrowUp);
-    expect(
-      box.field,
-      NewHarnessField.harness,
-      reason: 'Keys must still reach the form after Tab.',
-    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await press(tester, LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    expect(harnessChoicesActive(tester), isTrue);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    final selected = box.selected!.engine;
+    await press(tester, LogicalKeyboardKey.enter);
+    expect(harnessChoicesActive(tester), isFalse);
+    expect(box.engine, selected);
+    await press(tester, LogicalKeyboardKey.arrowDown);
+    expect(box.field, NewHarnessField.projectMenu);
   });
 
   testWidgets('the doors can be reached and opened', (tester) async {
@@ -842,7 +851,7 @@ void main() {
 
     await focusLaunchRow(tester, 'approvals');
     expect(box.field, NewHarnessField.mode);
-    await press(tester, LogicalKeyboardKey.tab);
+    await press(tester, LogicalKeyboardKey.arrowDown);
     expect(
       tester
           .widget<Semantics>(

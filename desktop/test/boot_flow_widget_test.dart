@@ -1,3 +1,4 @@
+import 'support/workspace_tools.dart';
 import 'swarm_interactions_test.dart' show chord;
 
 import 'package:flutter/services.dart';
@@ -1179,7 +1180,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
     await tester.tap(
@@ -1263,7 +1264,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
     await tester.tap(
