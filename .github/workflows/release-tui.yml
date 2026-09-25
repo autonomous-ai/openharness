@@ -34,6 +34,17 @@ jobs:
       - name: Unit tests
         working-directory: tui
         run: cargo test --locked
+      # The real binary, driven in tmux against tests/mock-daemon.mjs: no account, no real harnesses.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: End-to-end against the mock daemon
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y tmux
+          (cd cli && npm ci --no-audit --no-fund)
+          (cd tui && cargo build --locked --release)
+          tui/tests/e2e.sh
 
   build:
     needs: test
