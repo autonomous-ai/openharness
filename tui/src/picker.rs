@@ -60,6 +60,8 @@ pub struct Picker {
     pub prefixed: bool,
     /// Screen row → visible index, from the last draw (for clicks).
     pub row_at: Vec<(u16, usize)>,
+    /// A row whose action needs a second Enter (a big download).
+    pub armed: Option<String>,
     matcher: Matcher,
 }
 
@@ -83,6 +85,7 @@ impl Picker {
             cursor_pos: None,
             prefixed: false,
             row_at: Vec::new(),
+            armed: None,
             matcher: Matcher::new(Config::DEFAULT),
         }
     }

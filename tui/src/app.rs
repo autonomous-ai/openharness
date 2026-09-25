@@ -79,6 +79,8 @@ pub struct App {
     pub dsh: HashMap<String, Vec<Value>>,
     /// Each harness's selectable models (`models_list`), for ⌥I.
     pub models: HashMap<(String, String), Vec<Value>>,
+    /// Each machine's local models (the grid): downloaded, running, available.
+    pub local_models: HashMap<String, Vec<Value>>,
     pub homes: HashMap<String, String>,
     last_focus_sent: Option<(String, String)>,
     pub mouse_drag: Option<(u64, u16, u16)>,
@@ -137,6 +139,7 @@ impl App {
             daemon_down: false,
             dsh: HashMap::new(),
             models: HashMap::new(),
+            local_models: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
             mouse_drag: None,
