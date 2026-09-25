@@ -11,7 +11,6 @@ use crossterm::event::{Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModi
 use serde_json::json;
 
 use crate::app::{App, Placement};
-use crate::daemon::http_json;
 use crate::layout::{self, Dir, Preset, Toward};
 use crate::modal::{self, Filter, Modal, PickerKind, Prompt, PromptKind, What};
 use crate::pane::{encode_key, encode_mouse, Phase};
@@ -373,7 +372,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
 }
 
 fn prompt(app: &mut App, kind: PromptKind, title: &str, label: &str, hint: &str, value: &str, secret: bool) {
-    app.modal = Some(Modal::Prompt(Prompt { kind, title: title.into(), label: label.into(), hint: hint.into(), value: value.into(), secret, busy: None }));
+    app.modal = Some(Modal::Prompt(Prompt { kind, title: title.into(), label: label.into(), hint: hint.into(), value: value.into(), secret }));
 }
 
 fn focused_agent(app: &App) -> Option<(String, String)> {
@@ -821,4 +820,3 @@ fn submit_prompt(app: &mut App, p: Prompt) {
     }
 }
 
-pub async fn desk_ping(port: u16) -> bool { http_json(port, "GET", "/api/status", None).await.is_ok() }

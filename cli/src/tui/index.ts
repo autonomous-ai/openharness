@@ -72,11 +72,44 @@ export async function installTui(log: (line: string) => void): Promise<string> {
   return target
 }
 
-export async function tuiCommand(argv: string[], opts: { port: number }): Promise<number> {
+async function daemonUp(port: number): Promise<boolean> {
+  try { return (await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(2_000) })).ok } catch { return false }
+}
+
+/** This CLI, run again: `harness login`, `harness start`. Their output is the person's to read. */
+function runSelf(args: string[]): number {
+  const script = process.argv[1]
+  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit' })
+  return result.status ?? 1
+}
+
+/**
+ * One command on a fresh server: sign in if this computer never has (over SSH the login prints a URL
+ * and takes the pasted callback), start the daemon if it is down, then open.
+ */
+async function ensureDaemon(port: number, signedIn: () => boolean): Promise<boolean> {
+  if (!signedIn()) {
+    console.log('\n  This computer is not signed in to Harness yet.')
+    if (runSelf(['login']) !== 0 || !signedIn()) return false
+  }
+  if (await daemonUp(port)) return true
+  console.log('  Starting the Harness daemon…')
+  runSelf(['start'])
+  for (let i = 0; i < 60; i++) {
+    if (await daemonUp(port)) return true
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  console.error('  ✗ The Harness daemon did not come up. See `harness status`.')
+  return false
+}
+
+export async function tuiCommand(argv: string[], opts: { port: number; signedIn?: () => boolean }): Promise<number> {
   if (argv[0] === '--install' || argv[0] === 'install') {
     try { await installTui((line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }
   if (argv[0] === '--where') { console.log(findTuiBinary() ?? '(not installed)'); return 0 }
+  const informational = argv.some((arg) => ['-h', '--help', '-V', '--version'].includes(arg))
+  if (!informational && opts.signedIn && !(await ensureDaemon(opts.port, opts.signedIn))) return 1
   let binary = findTuiBinary()
   if (!binary) {
     try { binary = await installTui((line) => console.log(line)) } catch (error) {

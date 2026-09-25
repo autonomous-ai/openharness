@@ -96,12 +96,6 @@ impl Node {
         }
     }
 
-    pub fn swap(&mut self, x: u64, y: u64) {
-        match self {
-            Node::Leaf(id) => { if *id == x { *id = y } else if *id == y { *id = x } }
-            Node::Split { a, b, .. } => { a.swap(x, y); b.swap(x, y) }
-        }
-    }
 
     /// Grow [target] toward [toward] by [delta] of its parent split (the nearest split in that axis).
     pub fn resize(&mut self, target: u64, dir: Dir, delta: f32) -> bool {

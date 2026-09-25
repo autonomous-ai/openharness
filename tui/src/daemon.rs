@@ -44,10 +44,12 @@ type Pending = Arc<Mutex<HashMap<String, (String, oneshot::Sender<(String, Value
 
 #[derive(Clone)]
 pub struct Link {
+    #[allow(dead_code)]
     pub machine_id: String,
     tx: mpsc::UnboundedSender<Out>,
     pending: Pending,
     /// Bumped per connection so the app can tell a stale link's events from the live one's.
+    #[allow(dead_code)]
     pub generation: u64,
 }
 

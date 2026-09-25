@@ -19,7 +19,7 @@ use crate::input::home_agents;
 use crate::modal::Modal;
 use crate::pane::{Pane, Phase};
 use crate::picker::Picker;
-use crate::theme::{self, bold, engine_label, engine_mark, fg, state_mark};
+use crate::theme::{self, bold, engine_mark, fg, state_mark};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -164,6 +164,11 @@ fn header(buf: &mut Buffer, fleet: &crate::fleet::Fleet, pane: &Pane, rect: Rect
     };
     let scrolled = pane.scrolled();
     let right = if scrolled > 0 { format!(" ↑{scrolled} ⇧PgDn {right}") } else { right };
+    // What typing here costs, measured: keystroke out → first echo back (p50).
+    let right = match pane.echo_ms() {
+        Some((p50, _)) if active => format!(" {}{right}", if p50 < 10.0 { format!("{p50:.1}ms ") } else { format!("{p50:.0}ms ") }),
+        _ => right,
+    };
     let right_w = right.width() as u16;
     let mut x = rect.x;
     let limit = rect.x + rect.width.saturating_sub(right_w + 1);
@@ -468,4 +473,3 @@ fn toast(buf: &mut Buffer, area: Rect, text: &str, color: Color) {
     Paragraph::new(Line::from(vec![Span::styled(format!("  {text}  "), Style::default().fg(color).bg(theme::PANEL).add_modifier(Modifier::BOLD))])).render(rect, buf);
 }
 
-pub fn describe_engine(engine: &str) -> String { engine_label(engine).to_string() }
