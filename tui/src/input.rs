@@ -64,7 +64,7 @@ fn chord(key: &KeyEvent) -> Option<&'static str> {
             '}' => "next-tab",
             '=' => "equalize",
             'g' | 'G' => "send",
-            'f' | 'F' => "find",
+            'F' => "find",
             'q' | 'Q' => "quit",
             'a' | 'A' => "next-waiting",
             '`' => "last-tab",
@@ -226,6 +226,8 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
         return;
     }
     let (x, y) = (mouse.column, mouse.row);
+    // A drag ends wherever the button comes up — the tab strip included.
+    if matches!(mouse.kind, MouseEventKind::Up(_)) && app.mouse_drag.is_some() { app.mouse_drag = None; return }
     // The tab strip.
     if y == 0 {
         let Some(index) = crate::ui::tab_at(app, x) else { return };
@@ -611,7 +613,7 @@ pub fn run(app: &mut App, command: &str) {
             }
         }
         "quit" => app.quit = true,
-        c if c.starts_with("tab-") => { let n: usize = c[4..].parse().unwrap_or(1); app.select_tab(n - 1) }
+        c if c.starts_with("tab-") => { if let Some(n) = c[4..].parse::<usize>().ok().and_then(|n| n.checked_sub(1)) { app.select_tab(n) } }
         _ => {}
     }
 }

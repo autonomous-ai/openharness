@@ -35,7 +35,7 @@ works in every terminal, including ones where `⌥` types accented letters.
 | `⌥N` / `⌥⇧T` | new harness / new terminal |
 | `⌥T` `⌥1…9` `⌥{` `⌥}` `⌥⇧R` `⌥⇧W` | new, go to, previous/next, rename, close tab |
 | `⌥\` `⌥-` `⌥h/j/k/l` `⌥H/J/K/L` `⌥Z` `⌥W` `⌥L` `⌥=` | split right/down, focus, grow, zoom, close, layout, equalize |
-| `⌥F` | find in the pane's history |
+| `⌥⇧F` | find in the pane's history |
 | `⌥B` | send a task — Harness picks the harness |
 | `⌥Q` | quit (harnesses keep running) |
 
