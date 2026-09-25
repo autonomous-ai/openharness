@@ -315,5 +315,4 @@ automatically. Revoke closes only the selected device connection. Existing Harne
 requirements remain unchanged; the running daemon's direct device transport works offline from
 its backend. Browser/dial behavior and Buddy are unchanged.
 
-See [the contract](../docs/autonomous-device-integration.md) and
-[Vietnamese guide](../docs/vi/autonomous-device-integration_vi.md).
+See [the contract](../docs/autonomous-device-integration.md).
