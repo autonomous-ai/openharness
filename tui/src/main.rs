@@ -60,6 +60,12 @@ impl Drop for Restore {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> io::Result<()> {
+    let started = Instant::now();
+    let mark = |what: &str| {
+        if let Ok(path) = std::env::var("HARNESS_TUI_DEBUG") {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) { let _ = writeln!(f, "{:>6.1}ms {what}", started.elapsed().as_secs_f64() * 1000.0); }
+        }
+    };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") { usage(); return Ok(()) }
     if args.iter().any(|a| a == "--version" || a == "-V") { println!("harness-tui {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
@@ -76,7 +82,9 @@ async fn main() -> io::Result<()> {
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange, cursor::SetCursorStyle::SteadyBar)?;
     // The kitty keyboard protocol, where the terminal has it: ⌘ arrives as SUPER, and ^I is not Tab.
-    let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false)
+    // Pushed without asking first: the capability query waits for an answer that terminals without
+    // the protocol never send (half a second of blank screen), and those terminals ignore the push.
+    let enhanced = std::env::var("HARNESS_TUI_KITTY_KEYS").as_deref() != Ok("off")
         && execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)).is_ok();
     let restore = Restore { enhanced };
     let default_hook = std::panic::take_hook();
@@ -107,6 +115,7 @@ async fn main() -> io::Result<()> {
         loop { interval.tick().await; if ticks.send(Event::Tick).is_err() { break } }
     });
 
+    mark("terminal ready");
     let mut app = app::App::new(port, tx.clone(), size);
     app.boot();
 
@@ -143,6 +152,8 @@ async fn main() -> io::Result<()> {
             queue!(backend, BeginSynchronizedUpdate)?;
             term.draw(|frame| ui::draw(frame, &mut app))?;
             execute!(term.backend_mut(), EndSynchronizedUpdate)?;
+            if !app.fleet.agents.is_empty() && !app.fleet_marked { app.fleet_marked = true; mark("first frame with harnesses") }
+            if !app.first_frame { app.first_frame = true; mark("first frame") }
             last_draw = Instant::now();
             need_draw = false;
             let title = app.window_title();

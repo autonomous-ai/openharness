@@ -199,6 +199,17 @@ impl Fleet {
         self.agents.extend(next);
     }
 
+    /// Upsert rows without dropping anyone — the fast live-only list arriving before the full one.
+    pub fn merge_roster(&mut self, machine_id: &str, rows: &[Value]) {
+        for row in rows {
+            let id = s(row, "id");
+            if id.is_empty() { continue }
+            let key = (machine_id.to_string(), id);
+            let agent = agent_from(machine_id, row, self.agents.get(&key));
+            self.agents.insert(key, agent);
+        }
+    }
+
     pub fn find_by_session(&mut self, machine_id: &str, session: &str) -> Option<&mut Agent> {
         self.agents.values_mut().find(|a| a.machine_id == machine_id && a.session_id == session)
     }
