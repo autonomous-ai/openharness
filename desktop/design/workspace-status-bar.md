@@ -112,12 +112,16 @@ name; outside Git, use the ordinary folder name. A worktree follows exactly the
 same rule. Its generated path and `[worktree]` marker do not belong in the bar.
 Keep the full actual path in the tooltip and accessibility detail.
 
-A focused viewer shows its owning harness's context. Omit absent project or Git
-metadata; detached commits say `detached:<commit>`. Clear it for an empty tab.
+A focused viewer shows its owning harness's context. Show only named branches;
+omit detached commit hashes and absent project or Git metadata. Clear it for an
+empty tab.
+
+![Detached checkout showing its model, machine, and project, rendered with synthetic data](images/workspace-detached-status.png)
+
 Each field is independently clickable, with the same bold hover/keyboard-focus
 text and hand cursor as the status symbols. Machine opens the shared picker scoped by machine
 identity; project opens its harnesses across matching remote checkouts; branch
-opens that project filtered by its exact branch or detached commit. Escape returns
+opens that project filtered by its exact branch. Escape returns
 from branch to project, then to project search. Names never establish identity.
 Branch navigation does not check out or create a branch.
 

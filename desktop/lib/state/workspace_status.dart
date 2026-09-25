@@ -170,9 +170,7 @@ class WorkspacePaneContext {
           _ => engineIdentity(engine).label,
         };
     final projectName = project?.label ?? '';
-    final branch = project?.detached == true
-        ? 'detached:${project!.branch!.substring(kDetachedBranchPrefix.length)}'
-        : project?.shownBranch;
+    final branch = project?.shownBranch;
     return WorkspacePaneContext(
       pane: pane,
       agent: agent,
