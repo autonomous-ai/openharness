@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/notify/agent_notice.dart';
+import 'package:harness_mobile/notify/unread_marks.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
@@ -47,7 +49,7 @@ const double _minRowHeight = 56;
 /// LIGHTER, which is how iOS draws its own sheets.
 Color get sheetFill => AppPalette.cardBg;
 
-/// A group's rows, the search field and the mode chips: the sheet's fill with
+/// A group's rows and the search field: the sheet's fill with
 /// a wash of white over it.
 ///
 /// A wash rather than the palette's next step, because the steps are not
@@ -421,9 +423,22 @@ class SheetAgentStatus extends StatelessWidget {
     super.key,
     required this.summary,
     this.onScreen = false,
+    this.unread,
   });
 
   final PhoneSummary summary;
+
+  /// News nobody has gone to yet — a turn finished, or a question asked, while
+  /// the person was elsewhere. Drawn here as an [UnreadDot].
+  ///
+  /// ⚠️ **It takes this slot from the spinner rather than sitting beside it.**
+  /// One mark at the end of a row is read at a glance; two are a pair to be
+  /// told apart, on a row whose other two lines are already full. And the
+  /// clash is rarer than it looks — an agent carries unread news because it
+  /// STOPPED, so it is almost never spinning at the same time. When it is, the
+  /// news is what somebody needs to be sent to; that it has since picked up
+  /// more work is on the screen the dot takes them to.
+  final NoticeKind? unread;
 
   /// The agent this sheet was opened over: it says so, and nothing else —
   /// whatever it is doing is on the screen behind the sheet.
@@ -438,6 +453,9 @@ class SheetAgentStatus extends StatelessWidget {
         size: 18,
         color: AppPalette.accentOnSurface,
       );
+    }
+    if (unread case final kind?) {
+      return UnreadDot(kind: kind, diameter: UnreadDot.trailing);
     }
     return switch (summary.tone) {
       PhoneTone.busy || PhoneTone.attention => StatusDot(

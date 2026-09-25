@@ -5,7 +5,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:harness_mobile/core/app_version.dart';
-import 'package:harness_mobile/core/background_hold.dart';
 import 'package:harness_mobile/core/device_name.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -129,17 +128,6 @@ class _Body extends StatelessWidget {
           buildStatsSettingsRow(context, notifier),
         ],
       ),
-      // Android only, and the row is absent rather than disabled elsewhere —
-      // see [BackgroundHoldStore.available].
-      if (backgroundHoldStore.available) ...[
-        const SettingsCaption('Connection'),
-        SettingsGroup(children: [_BackgroundHoldRow()]),
-        const SettingsNote(
-          'Android only runs an app that is out of sight if it shows a '
-          'notification, so one appears while you are in another app. The hold '
-          'lets go by itself after ten minutes.',
-        ),
-      ],
       const SettingsCaption('Terminal'),
       SettingsGroup(
         children: [
@@ -427,40 +415,6 @@ class _TerminalThemeRow extends StatelessWidget {
           );
         },
       );
-}
-
-/// Whether to keep the machine connection alive while the app is off screen.
-///
-/// ⚠️ **The detail says what it costs, not what it does.** "Stay connected" already
-/// says what it does; what somebody cannot guess is that saying yes puts a
-/// notification in their status bar every time they leave the app. A switch whose
-/// price is only discovered after flipping it is a switch people turn on once and
-/// then hunt for. See [BackgroundHoldStore] for why the price is not ours to waive.
-class _BackgroundHoldRow extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
-    valueListenable: backgroundHoldStore,
-    builder: (context, enabled, _) {
-      AppTheme.watch(context);
-      return SettingsRow(
-        title: 'Stay connected in the background',
-        detail: enabled
-            ? 'Shows a notification while you are in another app'
-            : 'Switching apps reconnects after about 30 seconds',
-        leading: Icon(
-          LucideIcons.plug300,
-          size: 18,
-          color: AppPalette.textSecondary,
-        ),
-        trailing: Switch.adaptive(
-          value: enabled,
-          onChanged: (value) =>
-              unawaited(backgroundHoldStore.setEnabled(value)),
-        ),
-        onTap: () => unawaited(backgroundHoldStore.setEnabled(!enabled)),
-      );
-    },
-  );
 }
 
 /// The app's palette — the six [HarnessPalette] choices the desktop lays out as swatch cards.

@@ -419,7 +419,7 @@ class DeskAgentRow extends StatelessWidget {
 
   final AgentEntry entry;
 
-  /// Its news nobody has gone to yet — see [SheetAgentTitle.unread].
+  /// Its news nobody has gone to yet — see [SheetAgentStatus.unread].
   final NoticeKind? unread;
 
   /// The agent on screen. It keeps its row — it is the one you came from, and
@@ -449,7 +449,6 @@ class DeskAgentRow extends StatelessWidget {
       title: SheetAgentTitle(
         entry: entry,
         now: DateTime.now(),
-        unread: unread,
         name: Text(
           agent.displayName,
           maxLines: 1,
@@ -458,7 +457,11 @@ class DeskAgentRow extends StatelessWidget {
         ),
       ),
       subtitle: SheetAgentMeta(entry: entry),
-      trailing: SheetAgentStatus(summary: entry.summary, onScreen: onScreen),
+      trailing: SheetAgentStatus(
+        summary: entry.summary,
+        onScreen: onScreen,
+        unread: unread,
+      ),
       chevron: !onScreen,
     );
   }

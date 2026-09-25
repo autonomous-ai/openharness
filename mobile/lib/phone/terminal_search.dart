@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -13,7 +12,6 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'agent_index.dart';
 import 'desk_groups.dart';
 import 'desk_tabs_panel.dart';
-import 'phone_prompt_context.dart';
 import 'phone_search_actions.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_field.dart';
@@ -47,12 +45,11 @@ import 'sheet_list.dart';
 /// until the field is focused; then the results take their place, and Cancel
 /// puts the tabs back.
 ///
-/// ⚠️ **The keyboard lifts the sheet; nothing else moves it.** The results take
-/// the tabs' place and focusing the field changes nothing about the sheet's
-/// size. A keyboard, when it comes, pushes the whole sheet up on its top edge
-/// — as far as just under the status bar — rather than taking the sheet's
-/// bottom: pinned where it rested, the sheet let the keys cover all but two
-/// rows of results.
+/// ⚠️ **Full height from the moment it opens.** Its top edge stands just under
+/// the status bar and stays there; the results take the tabs' place, and a
+/// keyboard, when it comes, takes the sheet's foot onto its own top rather
+/// than covering the rows — pinned to the window's foot, the sheet let the
+/// keys cover all but two rows of results.
 ///
 /// ⚠️ **The field is not focused on the way in.** The tabs are what the sheet
 /// is opened to read, and focus is what trades them for the results.
@@ -114,8 +111,8 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// own read as Material wearing its clothes.
   static const double _radius = 14;
 
-  /// What the field says while it reads the tabs. The modes it also takes are
-  /// offered as chips once it is focused — see [_SearchHead].
+  /// What the field says while it reads the tabs. The modes it also takes
+  /// (`>`, `#`, `@`, `?`) are typed — see [_SearchHead].
   static const String _hint = 'Search harnesses';
 
   /// How dark the page goes behind the sheet — a step past Material's
@@ -136,22 +133,15 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   /// [BottomSheet]'s own figure, so this sheet lets go like the others do.
   static const double _flingSpeed = 700;
 
-  /// What the sheet stands at: this share of the screen, the strip at its
-  /// foot included — the same above a keyboard, up to where [_topGap] stops
-  /// it.
-  ///
-  /// ⚠️ **One height, whatever the tab holds** — see [DeskTabsPanel]. Enough
-  /// for four or five rows, and the terminal keeps the rest in view above it.
-  ///
-  /// ⚠️ **Not [TerminalSearchOverlay.bottomInset] on top of a share.** That
-  /// inset reads zero while a keyboard is up and comes back as the keyboard
-  /// lands, so a height that counted it would jump by the home indicator's
-  /// worth the moment Cancel's keyboard finished going down.
-  static const double _restingShare = 0.64;
-
-  /// How close under the status bar a keyboard may push the sheet: a strip of
+  /// How close under the status bar the sheet's top edge stands: a strip of
   /// the dimmed page left showing, which is what says it is a layer over the
   /// terminal rather than a page of its own.
+  ///
+  /// ⚠️ **The sheet opens full height, up to here, and stays there.** It used
+  /// to rest at a share of the screen and climb to this edge only when a
+  /// keyboard pushed it; now it opens where the keyboard used to take it, so
+  /// the tabs get the whole screen to list in and focusing the field moves
+  /// only the sheet's foot, never its top.
   static const double _topGap = 8;
 
   final _controller = TextEditingController();
@@ -311,13 +301,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
     );
   }
 
-  /// A mode chip: its character in the field, and the caret after it, ready
-  /// for the rest of the query.
-  void _pickMode(String prefix) {
-    _search.setQuery(prefix);
-    _focus.requestFocus();
-  }
-
   /// Back steps out of a chosen project or machine first, then out of the
   /// search, and only then out of the sheet — the steps `#`/`@` and the field
   /// took on the way in.
@@ -403,8 +386,8 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
           // ⚠️ **A sideways drag anywhere over the page is claimed here and
           // goes nowhere.** The pager under the terminal swipes on exactly
           // that, and it would carry the sheet off with the page it belongs
-          // to. The tab pills and the mode chips scroll sideways too, and win
-          // it for themselves where they are.
+          // to. The tab pills scroll sideways too, and win it for themselves
+          // where they are.
           onHorizontalDragStart: (_) {},
           child: LayoutBuilder(
             builder: (context, box) => _layOut(context, box.biggest, sheet),
@@ -417,7 +400,6 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   Widget _layOut(BuildContext context, Size area, Widget sheet) {
     final screen = MediaQuery.sizeOf(context).height;
     final ceiling = MediaQuery.paddingOf(context).top + _topGap;
-    final resting = screen * _restingShare;
     return AnimatedBuilder(
       animation: Listenable.merge([widget.animation, _pull, _keyboard]),
       child: sheet,
@@ -430,9 +412,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
         // because this overlay starts at the window's top (see where
         // `terminal_page.dart` places it, under the status bar).
         //
-        // A keyboard lifts the sheet whole, at the height it rests at. Only
-        // the ceiling stops it: a keyboard that leaves less room than that
-        // shortens the sheet instead.
+        // The sheet runs from the ceiling down to whatever is under it — the
+        // foot of the window, or the keyboard's top — so a keyboard shortens
+        // it from below and its top edge never moves.
         //
         // ⚠️ **Read from the view HERE, not from the notifier's last value.**
         // [_keyboard] is written from metrics ticks and is what makes this
@@ -447,10 +429,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
           area.height,
           math.max(0.0, area.height - (screen - keyboard)),
         );
-        final height = math.min(
-          resting,
-          math.max(0.0, area.height - covered - ceiling),
-        );
+        final height = math.max(0.0, area.height - covered - ceiling);
         final open = widget.animation.value;
         final pull = _pull.value;
         // How much of the veil is up: all of it with the sheet, and less of it
@@ -591,7 +570,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _SearchHead(search: _search, onMode: _pickMode, onBack: _back),
+                _SearchHead(search: _search, onBack: _back),
                 // ⚠️ Handed the query and nothing else. Ranking lives inside
                 // it, so this sheet and [PhoneSearchPage] cannot drift into
                 // returning different rows for the same words.
@@ -629,34 +608,26 @@ class _MetricsWatch extends WidgetsBindingObserver {
   void didChangeMetrics() => onChange();
 }
 
-/// What sits over the results: the modes while the field is empty, and once
-/// there is a query, a caption naming what is listed and how much of it.
+/// What sits over the results once there is a query: a caption naming what is
+/// listed and how much of it. Nothing while the field is empty.
 ///
 /// ```
-///  (> Commands) (# Projects) (@ Machines) (? Help)   ← nothing typed yet
 ///    HARNESSES                                4/14   ← a query
 ///  ‹ MACBOOK PRO                                 9   ← inside a machine
 /// ```
 ///
-/// ⚠️ **The chips are where the modes are taught now.** The field used to
-/// spell all four out in its hint — `Search harnesses  > commands  # proj…` —
-/// at 13pt and still cut off on a phone. A chip is read at full size and
-/// takes you into its mode, which is the lesson a hint could only describe.
+/// ⚠️ **No row of mode chips over an empty field.** `> Commands`, `# Projects`,
+/// `@ Machines` and `? Help` stood here while nothing was typed, and cost the
+/// results a row on a sheet the keyboard already shortens. The modes are still
+/// one character away — `?` lists all four.
 ///
 /// ⚠️ **No caption over an untouched list.** "Recent" over the rows the
 /// search opens on would cost a row of a sheet the keyboard has already
 /// halved, and say nothing the order of the rows does not.
 class _SearchHead extends StatelessWidget {
-  const _SearchHead({
-    required this.search,
-    required this.onMode,
-    required this.onBack,
-  });
+  const _SearchHead({required this.search, required this.onBack});
 
   final PhoneSearchController search;
-
-  /// A chip tapped: the mode's character, to go in the field.
-  final ValueChanged<String> onMode;
 
   /// The caption's chevron, inside a project or a machine.
   final VoidCallback onBack;
@@ -668,7 +639,7 @@ class _SearchHead extends StatelessWidget {
       AppTheme.watch(context);
       final scoped = search.canGoBack;
       if (!scoped && search.query.trim().isEmpty) {
-        return _ModeChips(onPick: onMode);
+        return const SizedBox.shrink();
       }
       return SheetCaption(
         label: scoped
@@ -685,126 +656,6 @@ class _SearchHead extends StatelessWidget {
       );
     },
   );
-}
-
-/// The four modes the field takes, as a row of chips — see [_SearchHead].
-class _ModeChips extends StatelessWidget {
-  const _ModeChips({required this.onPick});
-
-  final ValueChanged<String> onPick;
-
-  /// The desktop's four, in the order the field's hint used to spell them
-  /// out, with Help last: it is the one that explains the other three.
-  static const _modes = [
-    ('>', 'Commands'),
-    ('#', 'Projects'),
-    ('@', 'Machines'),
-    ('?', 'Help'),
-  ];
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    // A 30pt chip, the 6pt the pills keep above theirs, and the 12pt a group
-    // keeps from what is over it.
-    height: 48,
-    child: ListView.separated(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(kSheetInset, 6, kSheetInset, 12),
-      itemCount: _modes.length,
-      separatorBuilder: (context, index) => const SizedBox(width: 8),
-      itemBuilder: (context, index) {
-        final (glyph, label) = _modes[index];
-        return _ModeChip(
-          glyph: glyph,
-          label: label,
-          // The space is the desktop's: `> ` is where a query in that mode
-          // starts, and the caret lands after it.
-          onTap: () => onPick('$glyph '),
-        );
-      },
-    ),
-  );
-}
-
-class _ModeChip extends StatefulWidget {
-  const _ModeChip({
-    required this.glyph,
-    required this.label,
-    required this.onTap,
-  });
-
-  final String glyph;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  State<_ModeChip> createState() => _ModeChipState();
-}
-
-class _ModeChipState extends State<_ModeChip> {
-  bool _pressed = false;
-
-  void _press(bool pressed) {
-    if (_pressed == pressed) return;
-    setState(() => _pressed = pressed);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      label: '${widget.label} mode',
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => _press(true),
-        onTapUp: (_) => _press(false),
-        onTapCancel: () => _press(false),
-        onTap: () {
-          HapticFeedback.selectionClick();
-          widget.onTap();
-        },
-        child: AnimatedContainer(
-          duration: AppMotion.press,
-          curve: AppMotion.curve,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            // The rows' own fill: a chip is a row of the list that happens
-            // to be short, not a button of the chrome.
-            color: _pressed ? sheetRowPressedFill : sheetRowFill,
-            borderRadius: BorderRadius.circular(15),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // The character in the terminal's face and the accent — it is
-              // what gets typed, and it should look like something typed.
-              Text(
-                widget.glyph,
-                style: phoneBoxMonoStyle(
-                  size: 13,
-                  color: AppPalette.accentOnSurface,
-                  weight: FontWeight.w600,
-                ).copyWith(height: 1),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                widget.label,
-                maxLines: 1,
-                style: TextStyle(
-                  color: AppPalette.textPrimary,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// The sheet's top edge, drawn: a hairline of light round its two corners and
