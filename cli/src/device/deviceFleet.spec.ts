@@ -30,6 +30,7 @@ function make(over: { rows?: Partial<Listed>[]; linked?: string[]; rpc?: (t: str
     detach: vi.fn(),
     release: vi.fn(),
     send: (f: DeviceFrame) => { sent.push(f) },
+    sendSealed: async (f: DeviceFrame) => { sent.push(f) },
     rpc: over.rpc ?? (async () => ({})),
     resetSession: vi.fn((machineId: string) => { resets.push(machineId); return true }),
   }

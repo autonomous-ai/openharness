@@ -11,7 +11,7 @@
  */
 import { WebSocket } from 'ws'
 import * as C from './core.js'
-import { encryptDownFrame } from './applicationFrames.js'
+import { encryptDownFrameFor } from './applicationFrames.js'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary, type TerminalBinaryClear } from '../terminalBinary.js'
 import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
@@ -38,6 +38,7 @@ export class RelaySessionCrypto {
   private epoch = ''
   private p2pVersion = 0
   private viewerVersion = 0
+  private strict = false
   private groupRecv = new Map<string, number>() // epoch -> highest counter seen
 
   constructor(private readonly deps: RelayCryptoDeps) {}
@@ -45,6 +46,8 @@ export class RelaySessionCrypto {
   get ready(): boolean { return this.c2s !== null && this.s2c !== null }
   get terminalP2pVersion(): number { return this.p2pVersion }
   get viewerForwardingVersion(): number { return this.viewerVersion }
+  /** The daemon opens every sealed type and refuses STRICT_DOWN_TYPES unsealed (its welcome said so). */
+  get strictDown(): boolean { return this.strict }
 
   helloFrame(): Frame {
     return {
@@ -72,7 +75,7 @@ export class RelaySessionCrypto {
     } catch { return false }
     const opened = C.aeadOpen(keys.s2c, 0, C.utf8('e2e-welcome'), C.b64d(encB64))
     if (!opened) return false
-    let initial: { groupKey?: string; epoch?: string; features?: { terminalP2p?: unknown; viewerForwarding?: unknown } }
+    let initial: { groupKey?: string; epoch?: string; features?: { terminalP2p?: unknown; viewerForwarding?: unknown; strictDown?: unknown } }
     try { initial = JSON.parse(new TextDecoder().decode(opened)) as typeof initial } catch { return false }
     if (!initial.groupKey || !initial.epoch) return false
     this.c2s = keys.c2s
@@ -85,6 +88,7 @@ export class RelaySessionCrypto {
       ? Number(initial.features?.terminalP2p)
       : 0
     this.viewerVersion = initial.features?.viewerForwarding === 1 ? 1 : 0
+    this.strict = initial.features?.strictDown === 1
     return true
   }
 
@@ -109,7 +113,7 @@ export class RelaySessionCrypto {
     const type = frame.type as string | undefined
     // Sharing, viewer forwarding and fleet RPCs are negotiated extensions; the shared crypto core stays
     // byte-identical — see applicationFrames.ts for the one list.
-    if (!type || !this.c2s || !encryptDownFrame(type)) return frame
+    if (!type || !this.c2s || !encryptDownFrameFor(type, this)) return frame
     const payload = C.wrapPayload(this.c2s, 'p', this.c2sCounter++, type, undefined, frame.payload)
     return { ...frame, payload }
   }

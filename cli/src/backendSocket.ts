@@ -106,7 +106,7 @@ import {
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
-import { encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
+import { encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from './lib/runtimeProfileController.js'
@@ -195,6 +195,12 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * two escaped that rule because they are not `__`-prefixed.
  */
 const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'machines_changed'])
+
+/** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
+ *  and escaped rather than trusted not to carry a newline that forges the next line. */
+function logSafeType(type: string): string {
+  return JSON.stringify(type.length > 64 ? `${type.slice(0, 64)}…` : type)
+}
 
 interface QueueItem {
   id: number
@@ -1454,17 +1460,32 @@ export class BackendSocket {
       if (!local) await this.autonomousDeviceRelay?.handle(connId, frame)
       return
     }
-    // Client→adapter encrypted frames: chat messages plus trusted web control actions. Plaintext
-    // passes through for legacy/device transition paths; undecryptable ciphertext is dropped.
-    if (!local && encryptDownFrame(type)) {
-      if (type !== 'message' && type !== 'question_response' && !isWrapped(frame.payload)) {
+    // ⚠️ Default-deny: the relay is NOT trusted. A non-local frame is acted on only if it opens under
+    // this connId's E2EE session — whatever its type — or is one of the backend's own plaintext frames.
+    // A list of "sensitive" types to check instead fails open: every type missing from it, including
+    // ones added later, would be taken in the clear.
+    //
+    // The backend's own control frames are the mirror image: only ever plaintext, because the backend
+    // holds no key — so one that arrives SEALED was sealed by a paired client, and opening it would let
+    // that client speak as the backend (`machine_meta` repoints this computer's grid).
+    if (!local) {
+      const from = `${transport} (${connId ? `conn:${sid(connId)}` : 'backend'})`
+      const wrapped = isWrapped(frame.payload)
+      if (type.startsWith('__') || BACKEND_ONLY_DOWN_TYPES.has(type)) {
+        if (transport !== 'relay' || wrapped) {
+          console.warn(`[backend] ignoring ${logSafeType(type)} from ${from} — only the backend sends it, and only in the clear`)
+          return
+        }
+      } else if (wrapped) {
+        const dec = this.e2ee.unwrapDown(connId, frame)
+        if (!dec) return
+        frame = dec
+      } else {
+        console.warn(`[backend] refusing plaintext ${logSafeType(type)} from ${from} — E2EE required`)
         const requestId = (frame.payload as { requestId?: unknown } | undefined)?.requestId
         if (requestId !== undefined) this.emitReply(connId, type, requestId, { error: 'E2EE_REQUIRED' })
         return
       }
-      const dec = this.e2ee.unwrapDown(connId, frame)
-      if (!dec) return
-      frame = dec
     }
     if (!local && TERMINAL_P2P_SIGNAL_TYPES.has(type)) {
       await this.terminalP2p.handleSignal(connId, type, frame.payload)
@@ -2117,8 +2138,9 @@ export class BackendSocket {
 
         case 'voice_route': {
           // Voice router (REMOTE machine): pick the best-fit agent for a transcribed Overview voice task,
-          // using each agent's name + recent-turn recap. Backend-originated (connId===''), so the transcript
-          // is plaintext and the reply falls through emitReply's plaintext path (voice_route is not E2EE-gated).
+          // using each agent's name + recent-turn recap. Once asked plaintext by the backend's legacy
+          // device-ws voice path; that path no longer reaches a harness machine, and the relay gate now
+          // refuses it unsealed like any other RPC.
           const transcript = typeof payload.transcript === 'string' ? payload.transcript : ''
           if (!transcript.trim()) {
             console.log('[voice-route] backend sent an empty transcript — nothing to route')
@@ -2619,7 +2641,8 @@ export class BackendSocket {
           if (!content || !target) return
           // Inject into the pane; the resulting JSONL user/assistant lines drive the turn lifecycle back
           // to the web (mirror-all) — no synthetic events here. Prefer cli.ts's handler (inject + Enter
-          // retry); fall back to a direct inject when unwired (isolation/tests).
+          // retry); fall back to a direct inject when unwired (isolation/tests). From the relay this is
+          // only reached sealed: text typed into an agent is never taken from the relay in the clear.
           if (this.onMessage) this.onMessage(target, content)
           else console.warn('[backend] message handler is not wired; terminal input was not dispatched')
           return
@@ -2679,12 +2702,6 @@ export class BackendSocket {
           reply(type, requestId, { applied: true })
           return
         }
-
-        // v1 no-ops: no programmatic session control over an interactive tmux claude.
-        case 'new_chat':
-        case 'compact':
-        case 'permission_response':
-          return
 
         default:
           // Unknown RPC with a requestId: reject fast so the web promise doesn't wait out its 20s.
