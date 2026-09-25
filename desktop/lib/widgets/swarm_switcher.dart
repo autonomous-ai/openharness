@@ -665,9 +665,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                 700 *
                     scale.scale(grid.AppType.monoSize) /
                     grid.AppType.monoSize;
-        final singleLine =
-            search.isCommandMode ||
-            (search.setupLayout && search.scopePrefix.isEmpty);
+        final singleLine = search.isCommandMode || search.setupLayout;
         _rowHeight = swarmSearchRowHeight(
           scale,
           commands: search.isCommandMode,
@@ -675,8 +673,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           stacked: stacked,
         );
         if (widget.bios) {
-          // Session context lives in the preview. Resource choices retain
-          // their description and one blank terminal row.
+          // All Cmd-P types put context in the preview and use one row per
+          // result. Other pickers retain their descriptions and spacing.
           _rowHeight = cell.height * (singleLine ? 1 : 3);
         }
         final height = widget.fitRows
