@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -264,7 +265,7 @@ void main() {
       } else {
         await configured.mount(tester, app, map);
       }
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final field = find.byKey(const ValueKey('swarm-search-input'));
       await tester.enterText(field, 'Checkout');
       await tester.pump();

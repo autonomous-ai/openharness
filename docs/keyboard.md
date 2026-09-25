@@ -7,7 +7,8 @@ The defaults, in the workspace:
 | Keys | Action |
 |---|---|
 | ⌘T | New Tab — opens the same quiet welcome page shown at startup. Use ⌘N to create a harness, ⌘P to open one, or ⌘S for the store |
-| ⌘P / Ctrl+P (Linux) | Open Harness — the unified picker for harnesses, machines (`@`), projects (`#`), models (`:`), and Store (`*`). Opens in the current tab and tiles its panes, or focuses the harness if already here |
+| ⌘O / Ctrl+O (Linux) | Open projects — the unified picker starts in projects (`#`), with projects containing open panes first and alphabetical order within each group |
+| ⌘P / Ctrl+P (Linux) | Search harnesses — the unified picker for harnesses, machines (`@`), projects (`#`), models (`:`), and Store (`*`). Opens in the current tab and tiles its panes, or focuses the harness if already here |
 | ⇧⌘P / Ctrl+Shift+P (Linux) | Search commands; from a selected picker result, search actions for that item |
 | ⌘R / ⌘D | Split right / down — open the New Pane picker with the requested direction, then choose an existing harness or create one |
 | ⌘N | New Harness directly — the box opens on the task: type what it should do and press Return, and it starts as another of the pane you were in (labeled agent, machine, project, and mode defaults stay visible above `task >`). Tab and ⇧Tab step out to those answers; each is a list you filter by typing, with a ✓ on the current one. One verb per field: in a list Return **chooses** and comes back to the task, on the task Return **makes it**, and ⌘↵ makes it from anywhere with the highlighted row. In the project field a word names a new project, `owner/repo` clones it, a path completes the way zsh's does (Tab: common prefix, then walk the candidates, ⇧Tab back; `/` goes in) and Browse… opens the folder chooser. ⌥↵ breaks the line in the task; ⌥1–⌥9 pick a row; ⌘. opens the full form. Escape keeps what you typed for the next ⌘N |
@@ -33,11 +34,11 @@ The defaults, in the workspace:
 New Tab starts with three clickable shortcuts: ⌘N to start your first harness,
 ⌘M to manage it from another computer, and ⌘I to power it with a local model.
 Checkmarks record actual use and persist per account on this device. After all
-three are complete, the next New Tab shows the everyday ⌘N, ⌘P, and ⌘S shortcuts.
+three are complete, the next New Tab shows the everyday ⌘N, ⌘O, and ⌘S shortcuts.
 
 A harness can have views in several tabs, with one view per tab; closing a pane only removes that view.
 
-Hover near a pane’s right or bottom edge to reveal its **+** button, or use **File → Split Right… / Split Down…**. The picker shows **New Pane to the Right** or **New Pane Below**. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged.
+Use **⌘R / ⌘D** or **File → Split Right / Split Down** to open the pane picker. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged. A pane header reveals its `x` close action on hover; **⇧⌘W** closes the focused pane and **⌘W** closes the tab.
 
 When a split needs more room, the workspace expands and scrolls to keep both panes readable. Keyboard focus brings the selected pane into view. Splitting remains available up to the tab’s 64-pane limit.
 

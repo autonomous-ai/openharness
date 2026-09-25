@@ -1,4 +1,5 @@
 import 'support/open_harness.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,7 +37,7 @@ void main() {
     expect(search.submit(), isNull);
     for (final query in ['@ Office', '# openharness']) {
       search.setQuery(query);
-      expect(search.rows.first.isCreate, isTrue);
+      expect(search.rows.any((row) => row.isCreate), query.startsWith('@'));
       expect(search.selected!.isCreate, isFalse);
       expect(search.submit(), isNull);
       expect(search.canGoBack, isTrue);

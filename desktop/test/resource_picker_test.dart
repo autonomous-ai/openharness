@@ -165,7 +165,7 @@ void main() {
         terminalThemeStore.value = originalTheme;
       });
       await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final hints = find.byKey(const ValueKey('swarm-search-type-hints'));
       final input = tester.widget<TextField>(field);
       final inputPosition = tester.getTopLeft(field);
@@ -472,7 +472,7 @@ void main() {
       final originalFont = terminalFontStore.value;
       addTearDown(() => terminalFontStore.value = originalFont);
       await configured.mount(tester, app, MemoryKeymap());
-      await chord(tester, LogicalKeyboardKey.keyP);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true);
       final controller = search(tester);
       ScrollPosition position() => tester
           .widget<ListView>(

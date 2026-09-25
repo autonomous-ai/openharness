@@ -217,18 +217,18 @@ void main() {
 
         for (final from in panels.keys) {
           for (final to in panels.keys) {
-            // Opening command search dismisses the old panel first.
-            if (!nativeTabs && from == 'sessions' && to == 'sessions') continue;
             await open(from);
             await open(to);
             for (final entry in panels.entries) {
               expect(
                 entry.value,
-                from != to && entry.key == to ? findsOneWidget : findsNothing,
+                (from != to || to == 'sessions') && entry.key == to
+                    ? findsOneWidget
+                    : findsNothing,
                 reason: '$from → $to should leave only the chosen panel open',
               );
             }
-            if (from != to) {
+            if (from != to || to == 'sessions') {
               await key(tester, LogicalKeyboardKey.escape);
               await tester.pumpAndSettle();
             }
