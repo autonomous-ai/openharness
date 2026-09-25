@@ -61,6 +61,9 @@ pub struct Agent {
     pub question: Option<Question>,
     pub unread: bool,
     pub dsh: String,
+    /// The runtime profile it runs (`runtime-v1:…:claude:opus@high`) — what ⌥I switches.
+    pub model: String,
+    pub project_root: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,6 +150,8 @@ pub fn agent_from(machine_id: &str, row: &Value, previous: Option<&Agent>) -> Ag
         question: previous.and_then(|p| p.question.clone()),
         unread: previous.map(|p| p.unread).unwrap_or(false),
         dsh,
+        model: s(row, "selectedModel"),
+        project_root: { let r = s(&project, "root"); if r.is_empty() { s(&project, "cwd") } else { r } },
     }
 }
 

@@ -104,7 +104,14 @@ impl Link {
                             Message::Text(text) => {
                                 let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
                                 let ty = value.get("type").and_then(Value::as_str).unwrap_or("").to_string();
-                                let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+                                let mut payload = value.get("payload").cloned().unwrap_or(Value::Null);
+                                // Agent events name their agent on the ENVELOPE (`agentId`, `dbSessionId`),
+                                // beside the payload — `commander_question` among them. Fold those in.
+                                if let Value::Object(map) = &mut payload {
+                                    for key in ["agentId", "dbSessionId"] {
+                                        if !map.contains_key(key) { if let Some(v) = value.get(key) { map.insert(key.into(), v.clone()); } }
+                                    }
+                                }
                                 if !selected {
                                     if ty == "connected" { selected = true; emit(MachineEvent::Connected) }
                                     else if ty == "machine_select_error" {

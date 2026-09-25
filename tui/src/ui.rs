@@ -52,9 +52,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let body = app.body();
     let rects = app.rects.clone();
     if let Some(modal) = &mut app.modal {
-        cursor = None;
         match modal {
-            Modal::Picker { picker, .. } => picker_box(buf, area, picker),
+            Modal::Picker { picker, .. } => { picker_box(buf, area, picker); cursor = picker.cursor_pos }
             Modal::Prompt(prompt) => cursor = Some(prompt_box(buf, area, prompt)),
             Modal::Find { pane, query, found } => {
                 let rect = rects.iter().find(|(id, _)| id == pane).map(|(_, r)| *r).unwrap_or(body);
@@ -352,7 +351,7 @@ fn home(buf: &mut Buffer, app: &App, area: Rect) {
         }
     }
     lines.push(Line::raw(""));
-    let keys = [("↵", "open"), ("o", "open…"), ("n", "new"), ("t", "terminal"), ("i", "needs input"), ("b", "send"), ("m", "machines"), ("s", "store"), ("p", "commands"), ("/", "keys")];
+    let keys = [("↵", "open"), ("p", "harnesses"), ("o", "projects"), ("n", "new"), ("t", "terminal"), ("i", "models"), ("I", "needs input"), ("m", "machines"), ("s", "store"), (">", "commands"), ("?", "help")];
     let mut row: Vec<Span> = Vec::new();
     let mut row_w = 0;
     for (k, w) in keys {
@@ -381,88 +380,143 @@ fn overlay_rect(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + 2.min(area.height.saturating_sub(h)), w, h)
 }
 
+/// The launcher, docked at the bottom the way fzf draws with `--height`: the panes stay in view
+/// above it, the prompt is the last line, the best match sits right above the prompt, and the
+/// count reads `4/7`. Full width, no card — a terminal's own furniture.
 fn picker_box(buf: &mut Buffer, area: Rect, picker: &mut Picker) {
-    let want_h = (picker.visible.len() as u16 + picker.visible.len().min(8) as u16 / 2 + 6).clamp(10, area.height * 3 / 4);
-    let rect = overlay_rect(area, (area.width * 4 / 5).clamp(60, 120), want_h);
+    let want = (picker.visible.len() as u16 + picker.visible.len().min(12) as u16 / 3 + 3).max(10);
+    let h = want.min((area.height * 11 / 20).max(12)).min(area.height.saturating_sub(1));
+    let rect = Rect::new(area.x, area.y + area.height - h, area.width, h);
+    dim_backdrop(buf, Rect::new(area.x, area.y, area.width, area.height - h));
     Clear.render(rect, buf);
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(fg(theme::ACCENT))
-        .title(Line::from(vec![Span::styled(format!(" {} ", picker.title), bold(theme::ACCENT_SOFT))]))
-        .title(Line::from(Span::styled(format!(" {} ", picker.status), fg(theme::MUTED))).right_aligned())
-        .style(Style::default().bg(theme::PANEL));
-    let inner = block.inner(rect);
-    block.render(rect, buf);
-    // Query line.
-    let busy = picker.busy.as_ref().map(|b| format!("  {b}")).unwrap_or_default();
-    let query_line = if picker.query.is_empty() {
-        Line::from(vec![Span::styled("❯ ", bold(theme::ACCENT)), Span::styled(picker.placeholder.clone(), fg(theme::MUTED)), Span::styled(busy, fg(theme::MUTED))])
-    } else {
-        Line::from(vec![Span::styled("❯ ", bold(theme::ACCENT)), Span::styled(picker.query.clone(), fg(theme::TEXT)), Span::styled("▏", fg(theme::ACCENT)), Span::styled(busy, fg(theme::MUTED))])
-    };
-    buf.set_line(inner.x + 1, inner.y, &query_line, inner.width.saturating_sub(2));
-    for x in inner.x..inner.x + inner.width { if let Some(c) = buf.cell_mut((x, inner.y + 1)) { c.set_symbol("─").set_style(fg(theme::LINE).bg(theme::PANEL)); } }
-    // Rows (with group headings when not searching).
-    let body = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(3));
-    let mut lines: Vec<(Option<usize>, Line)> = Vec::new();
-    let searching = !picker.query.trim().is_empty();
-    let mut last_group: Option<&str> = None;
-    for (vi, (ri, hits)) in picker.visible.iter().enumerate() {
-        let row = &picker.rows[*ri];
-        if !searching {
-            if let Some(g) = row.group.as_deref() {
-                if last_group != Some(g) { lines.push((None, Line::styled(format!(" {}", g.to_uppercase()), bold(theme::MUTED)))); last_group = Some(g) }
-            }
-        }
-        let selected = vi == picker.cursor;
-        let base = if selected { Style::default().bg(theme::SELECT) } else { Style::default().bg(theme::PANEL) };
-        let mut spans: Vec<Span> = vec![Span::styled(if selected { "▍" } else { " " }, base.fg(theme::ACCENT))];
-        for s in &row.lead { spans.push(Span::styled(s.content.clone(), s.style.patch(base.bg.map(|b| Style::default().bg(b)).unwrap_or_default()))) }
-        // The label, matched characters lit.
-        let label_style = base.fg(theme::TEXT).add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() });
-        let mut current = String::new();
-        let mut lit = false;
-        for (i, ch) in row.label.chars().enumerate() {
-            let on = hits.contains(&(i as u32));
-            if on != lit && !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), if lit { base.fg(theme::ACCENT_SOFT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { label_style }));
-            }
-            lit = on;
-            current.push(ch);
-        }
-        if !current.is_empty() { spans.push(Span::styled(current, if lit { base.fg(theme::ACCENT_SOFT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED) } else { label_style })) }
-        spans.push(Span::styled("  ", base));
-        for s in &row.detail { spans.push(Span::styled(s.content.clone(), s.style.patch(Style { bg: base.bg, ..Style::default() }))) }
-        let used: usize = spans.iter().map(|s| s.content.width()).sum();
-        let right_w = row.right.width();
-        let room = body.width as usize;
-        if used + right_w + 2 < room { spans.push(Span::styled(" ".repeat(room - used - right_w - 1), base)); spans.push(Span::styled(row.right.clone(), base.fg(theme::MUTED))); spans.push(Span::styled(" ", base)) }
-        else { spans.push(Span::styled(" ".repeat(room.saturating_sub(used)), base)) }
-        lines.push((Some(vi), Line::from(spans)));
-    }
-    let cursor_line = lines.iter().position(|(v, _)| *v == Some(picker.cursor)).unwrap_or(0);
-    let h = body.height as usize;
-    if cursor_line < picker.scroll { picker.scroll = cursor_line.saturating_sub(if cursor_line > 0 && lines[cursor_line - 1].0.is_none() { 1 } else { 0 }) }
-    if cursor_line >= picker.scroll + h { picker.scroll = cursor_line + 1 - h }
-    picker.scroll = picker.scroll.min(lines.len().saturating_sub(h));
-    if lines.is_empty() {
-        buf.set_string(body.x + 2, body.y, &picker.empty, fg(theme::MUTED));
-    }
-    for (i, (_, line)) in lines.iter().skip(picker.scroll).take(h).enumerate() {
-        buf.set_line(body.x, body.y + i as u16, line, body.width);
-    }
-    // Key line.
-    let hint_y = inner.y + inner.height.saturating_sub(1);
-    let hint: Line = if let Some((text, _)) = &picker.flash { Line::styled(format!(" {text}"), fg(theme::ONLINE)) } else {
+    buf.set_style(rect, Style::default().bg(theme::PANEL));
+    let width = rect.width as usize;
+    // Top rule: title on the left, the keys on the right — fzf's --header, in one line.
+    let rule_y = rect.y;
+    for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rule_y)) { c.set_symbol("─").set_style(fg(theme::LINE).bg(theme::PANEL)); } }
+    let title = format!(" {} ", picker.title);
+    buf.set_string(rect.x + 1, rule_y, &title, bold(theme::ACCENT_SOFT).bg(theme::PANEL));
+    let hint_line: Line = if let Some((text, _)) = &picker.flash { Line::styled(format!(" {text} "), bold(theme::ONLINE).bg(theme::PANEL)) } else {
         let mut spans = Vec::new();
+        let mut used = title.width() + 4;
         for (k, w) in picker.hints.iter().chain([("esc", "close")].iter()) {
-            spans.push(Span::styled(format!(" {k}"), bold(theme::ACCENT)));
-            spans.push(Span::styled(format!(" {w}  "), fg(theme::SOFT)));
+            let piece = k.width() + w.width() + 3;
+            if used + piece > width { break }
+            used += piece;
+            spans.push(Span::styled(format!(" {k}"), bold(theme::ACCENT).bg(theme::PANEL)));
+            spans.push(Span::styled(format!(" {w} "), fg(theme::SOFT).bg(theme::PANEL)));
         }
         Line::from(spans)
     };
-    buf.set_line(inner.x, hint_y, &hint, inner.width);
+    let hint_w = hint_line.width() as u16;
+    buf.set_line(rect.x + rect.width.saturating_sub(hint_w + 1), rule_y, &hint_line, hint_w);
+    // The list, bottom-up: groups keep their heading on top, the first group sits nearest the prompt.
+    let body_h = rect.height.saturating_sub(2) as usize;
+    let searching = !picker.query.trim().is_empty();
+    let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+    for (vi, (ri, _)) in picker.visible.iter().enumerate() {
+        let g = if searching { None } else { picker.rows[*ri].group.clone() };
+        match groups.last_mut() { Some((last, list)) if *last == g => list.push(vi), _ => groups.push((g, vec![vi])) }
+    }
+    let mut lines: Vec<(Option<usize>, Line)> = Vec::new();
+    for (g, list) in groups.iter().rev() {
+        if let Some(g) = g { lines.push((None, Line::styled(format!("  {}", g.to_uppercase()), bold(theme::MUTED).bg(theme::PANEL)))) }
+        for vi in list.iter().rev() { lines.push((Some(*vi), picker_row(picker, *vi, width))) }
+    }
+    let n = lines.len();
+    let cursor_line = lines.iter().position(|(v, _)| *v == Some(picker.cursor)).unwrap_or(n.saturating_sub(1));
+    // `scroll` counts from the bottom: 0 shows the last `body_h` lines.
+    let from_bottom = n.saturating_sub(1).saturating_sub(cursor_line);
+    if from_bottom < picker.scroll { picker.scroll = from_bottom }
+    if from_bottom >= picker.scroll + body_h { picker.scroll = from_bottom + 1 - body_h }
+    let end = n.saturating_sub(picker.scroll);
+    let start = end.saturating_sub(body_h);
+    let top = rect.y + 1 + (body_h - (end - start)) as u16;
+    if n == 0 { buf.set_string(rect.x + 2, rect.y + rect.height - 2, &picker.empty, fg(theme::MUTED).bg(theme::PANEL)); }
+    for (i, (_, line)) in lines[start..end].iter().enumerate() { buf.set_line(rect.x, top + i as u16, line, rect.width); }
+    // The prompt: mode ❯ query▏            4/7  status
+    let y = rect.y + rect.height - 1;
+    let total = picker.rows.iter().filter(|r| !r.disabled).count();
+    let count = format!("{}/{}", picker.visible.len(), total);
+    let right = if picker.status.is_empty() { format!(" {count} ") } else { format!(" {}  {count} ", picker.status) };
+    let busy = picker.busy.as_ref().map(|b| format!("  {b}")).unwrap_or_default();
+    let mut spans = vec![Span::styled(" ❯ ", bold(theme::ACCENT).bg(theme::PANEL))];
+    if picker.query.is_empty() { spans.push(Span::styled(picker.placeholder.clone(), fg(theme::MUTED).bg(theme::PANEL))) }
+    else { spans.push(Span::styled(picker.query.clone(), fg(theme::TEXT).bg(theme::PANEL))) }
+    spans.push(Span::styled(busy, fg(theme::MUTED).bg(theme::PANEL)));
+    buf.set_line(rect.x, y, &Line::from(spans), rect.width);
+    let rw = right.width() as u16;
+    if rw + 20 < rect.width { buf.set_string(rect.x + rect.width - rw, y, &right, fg(theme::MUTED).bg(theme::PANEL)); }
+    picker.cursor_pos = Some(Position::new(rect.x + 3 + picker.query.width() as u16, y));
+}
+
+/// One row of the launcher: pointer, lead marks, the label lit where the query matched, the
+/// detail (cut to fit), the right column when there is room.
+fn picker_row(picker: &Picker, vi: usize, width: usize) -> Line<'static> {
+    let (ri, hits) = &picker.visible[vi];
+    let row = &picker.rows[*ri];
+    let selected = vi == picker.cursor;
+    let base = if selected { Style::default().bg(theme::SELECT) } else { Style::default().bg(theme::PANEL) };
+    let mut spans: Vec<Span> = vec![Span::styled(if selected { "▌ " } else { "  " }, base.fg(theme::ACCENT))];
+    for s in &row.lead { spans.push(Span::styled(s.content.clone(), s.style.patch(Style { bg: base.bg, ..Style::default() }))) }
+    let label_style = base.fg(theme::TEXT).add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() });
+    let hit_style = base.fg(theme::ACCENT_SOFT).add_modifier(Modifier::BOLD);
+    let mut current = String::new();
+    let mut lit = false;
+    for (i, ch) in row.label.chars().enumerate() {
+        let on = hits.contains(&(i as u32));
+        if on != lit && !current.is_empty() { spans.push(Span::styled(std::mem::take(&mut current), if lit { hit_style } else { label_style })) }
+        lit = on;
+        current.push(ch);
+    }
+    if !current.is_empty() { spans.push(Span::styled(current, if lit { hit_style } else { label_style })) }
+    let right_w = row.right.width();
+    let head_w: usize = spans.iter().map(|s| s.content.width()).sum();
+    let show_right = head_w + right_w + 4 <= width;
+    let detail_room = width.saturating_sub(head_w + 2 + if show_right { right_w + 2 } else { 1 });
+    spans.push(Span::styled("  ", base));
+    let mut left = detail_room;
+    for s in &row.detail {
+        if left == 0 { break }
+        let text = clip(&s.content, left);
+        left = left.saturating_sub(text.width());
+        spans.push(Span::styled(text, s.style.patch(Style { bg: base.bg, ..Style::default() })));
+    }
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    if show_right && used + right_w + 1 <= width {
+        spans.push(Span::styled(" ".repeat(width - used - right_w - 1), base));
+        spans.push(Span::styled(row.right.clone(), base.fg(theme::MUTED)));
+        spans.push(Span::styled(" ", base));
+    } else { spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), base)) }
+    Line::from(spans)
+}
+
+/// Everything behind an overlay steps back, so the overlay is the one thing in front.
+fn dim_backdrop(buf: &mut Buffer, area: Rect) {
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                let style = cell.style();
+                cell.set_style(style.fg(theme::MUTED).add_modifier(Modifier::DIM));
+            }
+        }
+    }
+}
+
+/// [text] cut to [cols] display columns, with an ellipsis when cut.
+fn clip(text: &str, cols: usize) -> String {
+    if text.width() <= cols { return text.to_string() }
+    let mut out = String::new();
+    for ch in text.chars() {
+        if out.width() + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) + 1 > cols { break }
+        out.push(ch);
+    }
+    out.push('…');
+    out
 }
 
 fn prompt_box(buf: &mut Buffer, area: Rect, prompt: &crate::modal::Prompt) -> Position {
+    dim_backdrop(buf, area);
     let rect = overlay_rect(area, 76, 8);
     Clear.render(rect, buf);
     let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(fg(theme::ACCENT))

@@ -77,6 +77,8 @@ pub struct App {
     pub started: Instant,
     pub daemon_down: bool,
     pub dsh: HashMap<String, Vec<Value>>,
+    /// Each harness's selectable models (`models_list`), for ⌥I.
+    pub models: HashMap<(String, String), Vec<Value>>,
     pub homes: HashMap<String, String>,
     last_focus_sent: Option<(String, String)>,
     pub mouse_drag: Option<(u64, u16, u16)>,
@@ -119,6 +121,7 @@ impl App {
             started: Instant::now(),
             daemon_down: false,
             dsh: HashMap::new(),
+            models: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
             mouse_drag: None,
@@ -239,6 +242,15 @@ impl App {
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
                 if machine_id == self.fleet.local_id { self.daemon_down = false }
                 self.relist(&machine_id);
+                // Its home folder, so its paths read `~/…` like this machine's do.
+                if !self.homes.contains_key(&machine_id) {
+                    if let Some(link) = self.link(&machine_id) {
+                        let id = machine_id.clone();
+                        self.spawn(async move { link.rpc("fs_list_dir", json!({}), Duration::from_secs(20)).await }, move |app, reply| {
+                            if let Some(path) = reply.ok().and_then(|r| r.get("path").and_then(Value::as_str).map(str::to_string)) { app.homes.insert(id, path); }
+                        });
+                    }
+                }
                 if machine_id == self.fleet.local_id && !self.desk_loaded { self.load_desk() }
                 // Every pane of this machine that lost its stream gets it back.
                 let ids: Vec<u64> = self.panes.values().filter(|p| p.machine_id == machine_id && p.stream.is_none() && !matches!(p.phase, Phase::Card { .. })).map(|p| p.id).collect();
