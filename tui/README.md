@@ -45,8 +45,10 @@ Inside the launcher: type to filter (fzf matching), `↑/↓` or `^P/^N`, `enter
 `^V`/`^S` split right/down, `^R` replace this pane, `tab` cycle all / needs input / running /
 paused, `^X` pause or resume, `esc` back out of a machine or project, then close.
 
-**macOS terminals send ⌥ as a symbol by default** (⌥P types π). Either press `^Space` then the
-key, or make ⌥ a Meta key once: iTerm2 → Profiles → Keys → Left Option key: *Esc+*; Terminal.app →
+**macOS terminals send ⌥ as a symbol by default** (⌥P types π). The TUI reads the unambiguous ones
+(π µ † ∑ Ω ˙∆˚¬ √ © ÷ …) as their chords, so ⌥P ⌥M ⌥T ⌥H/J/K/L ⌥V work anyway
+(`HARNESS_TUI_MAC_OPTION=off` stops that). For every chord, press `^Space` then the key, or make ⌥
+a Meta key once: iTerm2 → Profiles → Keys → Left Option key: *Esc+*; Terminal.app →
 Settings → Profiles → Keyboard → *Use Option as Meta key*; Ghostty → `macos-option-as-alt = true`;
 kitty → `macos_option_as_alt yes`; WezTerm → `send_composed_key_when_left_alt_is_pressed = false`.
 

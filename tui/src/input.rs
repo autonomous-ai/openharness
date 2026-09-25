@@ -101,7 +101,27 @@ fn prefixed(key: &KeyEvent) -> Option<&'static str> {
     chord(key)
 }
 
+/// A Mac whose terminal sends ⌥ as a symbol (the default in Terminal.app, iTerm2, Ghostty): the
+/// US layout's ⌥+letter characters that nobody types on purpose stand for the chord. Dead keys
+/// (⌥I, ⌥N, ⌥E, ⌥U, ⌥`) produce nothing to catch; characters some layouts type directly (ß, £,
+/// ø, å, digits) are left alone.
+/// `HARNESS_TUI_MAC_OPTION=off` turns it off.
+fn mac_option(key: KeyEvent) -> KeyEvent {
+    let KeyCode::Char(c) = key.code else { return key };
+    if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() { return key }
+    let letter = match c {
+        // Not ø, å, æ: those are plain keys on Nordic layouts.
+        'π' => 'p', '∏' => 'P', 'µ' => 'm', 'Â' => 'M', '†' => 't', 'ˇ' => 'T',
+        '∑' => 'w', '„' => 'W', 'Ω' => 'z', '˙' => 'h', '∆' => 'j', '˚' => 'k', '¬' => 'l',
+        '√' => 'v', '©' => 'g', '÷' => '/', '¿' => '?', '«' => '\\', '≠' => '=', '”' => '{', '’' => '}',
+        _ => return key,
+    };
+    if std::env::var("HARNESS_TUI_MAC_OPTION").as_deref() == Ok("off") { return key }
+    KeyEvent::new(KeyCode::Char(letter), KeyModifiers::ALT | if letter.is_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE })
+}
+
 fn on_key(app: &mut App, key: KeyEvent) {
+    let key = mac_option(key);
     let mods = key.modifiers;
     // The prefix.
     if app.prefix {
