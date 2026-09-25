@@ -13,11 +13,13 @@ class TerminalTextAction extends StatelessWidget {
     required this.onPressed,
     this.focusNode,
     this.overArtwork = false,
+    this.padding,
   });
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final FocusNode? focusNode;
   final bool overArtwork;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +43,11 @@ class TerminalTextAction extends StatelessWidget {
                     ? const Color(0xcc242424)
                     : Colors.transparent,
                 textStyle: terminalContentStyle(),
-                padding: EdgeInsets.symmetric(horizontal: cell.width),
+                padding:
+                    padding ?? EdgeInsets.symmetric(horizontal: cell.width),
+                disabledForegroundColor: theme.foreground.withValues(
+                  alpha: .28,
+                ),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 shape: const RoundedRectangleBorder(),

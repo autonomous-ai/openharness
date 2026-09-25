@@ -19,6 +19,8 @@ Up/Down moves between fields and automatically reveals that field's chooser to
 the right, without moving the form. Right, typing, or Enter moves keyboard focus
 into the chooser. Enter accepts a value and returns focus to New Harness; a
 second Enter launches. Escape discards the search and returns to the form.
+Tab and Shift-Tab switch between the form and its chooser without applying a
+choice; Up/Down navigates the active pane, matching Cmd-P and Cmd-I.
 There is no summary pane. Agent combines coding agents and specialized
 harnesses in one list. Choosing Blender opens a compatible coding-agent list
 in the chooser. Project
@@ -50,18 +52,18 @@ The Store and orchestration tabs cannot host a terminal pane. Generic creation
 from either uses a new tab. Command-bar requests keep the workspace context and
 apply any agent or machine explicitly named by the request.
 
-The unified picker has search and results on the left, with a read-only preview
-on the right. It has no action strip or keyboard footer. Enter opens a result;
-machines and projects drill into their session lists. Cmd-P never offers New
+The unified picker has search and results on the left, with details and inline
+management controls on the right. Enter opens a harness, uses or gets a model,
+or focuses a machine's controls. Projects drill into their session lists. Cmd-P never offers New
 Harness, including when no sessions match or a scoped list is empty. Cmd-N opens
 creation explicitly. Cmd-Shift-P searches named
 commands for the selected resource and returns to the same search after an action
 or cancellation. Each item action names its target, which is revalidated before
 execution. Filters and sorting are explicit commands, with no More menu.
 
-Workspace panes remain terminals, with viewers as the only exception. Do not add
-model or API details tabs: status stays in the picker preview, Model Manager opens
-as a terminal session, and API configuration uses the existing edit dialog.
+Workspace panes remain terminals, with viewers as the only exception. Model,
+machine, and API management stays inside the picker. Tab switches panes;
+arrows navigate within the active pane and Enter activates the focused item.
 
 ## Harness and agent choices
 

@@ -19,6 +19,7 @@ import '../core/test_run.dart';
 import '../logging/debug_surface.dart';
 import '../models/models_panel.dart';
 import '../models/model_search_catalog.dart';
+import '../widgets/resting_section.dart' show confirmSwitchAnyway;
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -62,7 +63,6 @@ import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
 import '../widgets/harness_start_page.dart';
-import '../widgets/link_another_machine_dialog.dart';
 import '../widgets/machines_panel.dart';
 import '../widgets/harness_session_manager.dart';
 import '../widgets/onboarding_card.dart';
@@ -244,6 +244,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   List<Object?>? _machinesPresentation;
   ModelsMenuController? _modelsMenu;
   ModelSearchCatalog? _pickerModels;
+  WorkspacePaneContext? _modelSelectionTarget;
   final _previewControls = SearchPreviewControls();
   bool _modelSearchVisible = false;
   bool _machineSearchVisible = false;
@@ -513,7 +514,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final split = _search!.split;
       final placement = _search!.placement;
       final task = _search!.createTask;
-      final machineId = _search!.scopedMachineId;
+      final selected = _search!.selected;
+      final machineId =
+          _search!.scopedMachineId ??
+          (selected?.isMachine == true ? selected!.machineId : null);
       _closeSearch(restoreFocus: false);
       unawaited(
         _newAgent(
@@ -1271,7 +1275,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (call.method == 'models') {
-      _toggleModels();
+      _togglePaneModels();
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -2651,6 +2655,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _toggleModels({ModelsTab initialTab = ModelsTab.all}) {
+    _modelSelectionTarget = null;
+    _search?.setModelSelection(null, null);
     _onboarding.acknowledge(OnboardingStep.models);
     _openResourcePicker(':');
     if (_search?.isModelMode == true && initialTab != ModelsTab.all) {
@@ -2664,6 +2670,55 @@ class _SwarmScreenState extends State<SwarmScreen> {
         }}',
       );
     }
+  }
+
+  void _togglePaneModels() => _toggleModels();
+
+  void _bindModelSelection() {
+    final focused = WorkspacePaneContext.focused(app);
+    if (focused == null ||
+        !_canSwitchFocusedModel(focused) ||
+        _modelSelectionTarget != null) {
+      return;
+    }
+    final search = _search;
+    if (search == null) return;
+    _modelSelectionTarget = focused;
+    search.setModelSelection(
+      focused.engine,
+      app.gridPictures[focused.pane.machineId],
+      machineId: focused.pane.machineId,
+    );
+    void selectCurrent() {
+      if (search.query != ':' || search.managing) return;
+      final current = focused.agent?.gridModel;
+      final index = search.rows.indexWhere((row) {
+        final entry = search.models?.entries[row.modelId];
+        return current != null
+            ? entry?.gridModel?.id.toLowerCase() == current.toLowerCase()
+            : entry?.subscription?['engine'] == focused.engine &&
+                  search.canSelectModel(row);
+      });
+      if (index >= 0) search.move(index - search.cursor);
+    }
+
+    selectCurrent();
+    final initialSelection = search.selected?.id;
+    unawaited(
+      app.readGridPicture(focused.pane.machineId).then((choices) {
+        if (!mounted ||
+            !identical(_search, search) ||
+            !identical(_modelSelectionTarget, focused)) {
+          return;
+        }
+        search.setModelSelection(
+          focused.engine,
+          choices,
+          machineId: focused.pane.machineId,
+        );
+        if (search.selected?.id == initialSelection) selectCurrent();
+      }),
+    );
   }
 
   void _toggleHarnessControls() {
@@ -2965,6 +3020,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (_modelSearchVisible != search.isModelMode) {
       _modelSearchVisible = search.isModelMode;
       app.modelManager.setPanelVisible(_modelSearchVisible);
+      _pickerModels?.setVisible(_modelSearchVisible);
+      if (_modelSearchVisible) _bindModelSelection();
       if (_modelSearchVisible && !kUnderTest) {
         unawaited(app.modelManager.refresh());
         unawaited(app.modelManager.apis.refresh());
@@ -3009,8 +3066,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _search!.removeListener(_syncSearch);
     _search!.dispose();
     _search = null;
+    _modelSelectionTarget = null;
     _modelSearchVisible = false;
     app.modelManager.setPanelVisible(false);
+    _pickerModels?.setVisible(false);
     _searchHeaderState = null;
     _searchText.clear();
     _syncToolbarNotices();
@@ -3047,14 +3106,77 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final placement = _search?.placement;
     final answering = _search?.sessionFilter == SessionFilter.needsInput;
     if (target == null) return;
-    if (choice.destination.isModel) {
+    if (choice.destination.isModel &&
+        _search!.canGetModel(choice.destination)) {
+      await _search!.getModel(choice.destination);
+      return;
+    }
+    if (choice.destination.isModel &&
+        _search!.canSelectModel(choice.destination)) {
+      final search = _search!;
+      if (search.usingModelId != null) return;
+      final chosenFor = _modelSelectionTarget;
+      bool current() {
+        final now = WorkspacePaneContext.focused(app);
+        return mounted &&
+            identical(_search, search) &&
+            search.isModelMode &&
+            chosenFor != null &&
+            now != null &&
+            now.pane.id == chosenFor.pane.id &&
+            now.agentId == chosenFor.agentId &&
+            now.pane.machineId == chosenFor.pane.machineId &&
+            _canSwitchFocusedModel(now);
+      }
+
+      if (!current()) return;
+      var selected = search.selectableGridModel(choice.destination);
+      if (selected == null && search.canStartModelForUse(choice.destination)) {
+        selected = await search.startModelForUse(
+          choice.destination,
+          stillCurrent: current,
+        );
+        if (!mounted || !current() || selected == null) return;
+      }
+      if (selected?.unavailable case final offline?) {
+        _pickerModalChanged(true);
+        bool proceed;
+        try {
+          proceed = await confirmSwitchAnyway(
+            context,
+            model: selected!.id,
+            offline: offline,
+          );
+        } finally {
+          _pickerModalChanged(false);
+        }
+        if (!proceed || !mounted || !current() || _search == null) return;
+      }
+      final now = WorkspacePaneContext.focused(app)!;
+      _closeSearch();
+      if (selected == null) {
+        if (now.agent?.gridModel != null) {
+          await app.clearAgentGrid(now.pane.machineId, now.agentId!);
+        }
+      } else if (selected.id != now.agent?.gridModel) {
+        await app.retargetAgentToGridModel(
+          now.pane.machineId,
+          now.agentId!,
+          selected.id,
+          gridName: selected.grid,
+        );
+      }
+      return;
+    }
+    if (choice.destination.isModel) return;
+    if (_search!.setupLayout && choice.destination.isMachine) {
       final index = _search!.rows.indexWhere(
         (row) => row.id == choice.destination.id,
       );
       if (index >= 0) _search!.move(index - _search!.cursor);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _search?.selected?.id == choice.destination.id) {
-          _previewControls.invoke('picker.accept');
+          _previewControls.invoke('picker.focus_actions');
         }
       });
       return;
@@ -3066,18 +3188,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (choice.destination.isCreate) {
       if (_search!.isMachineMode) {
-        _pickerModalChanged(true);
-        try {
-          await showLinkAnotherMachineDialog(context, app, keymap: _keymap);
-        } finally {
-          _pickerModalChanged(false);
-        }
-        if (mounted) _focusSearch();
+        _previewControls.invoke('picker.focus_actions');
         return;
       }
       if (_search!.isModelMode) {
-        await app.modelManager.open();
-        if (app.modelManager.error == null) _closeSearch(restoreFocus: false);
+        _previewControls.invoke('picker.resource_add_api');
         return;
       }
       // What was typed and found nothing is what the new harness starts on.
@@ -3148,10 +3263,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       onRefocus: _focusSearch,
       onModalChanged: _pickerModalChanged,
       onCommands: _showSearchCommands,
-      onManageModels: () async {
-        await app.modelManager.open();
-        if (app.modelManager.error == null) _closeSearch(restoreFocus: false);
-      },
     );
     final terminalTheme = terminalThemeFor(
       grid.AppTheme.palette.value,
@@ -3596,8 +3707,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     'machine.link': _showMachinesControls,
     'machines.manage': _manageMachines,
     'machines.list': _openMachines,
-    'models.list': _toggleModels,
+    'models.list': _togglePaneModels,
     'harnesses.list': _toggleSessions,
+    'harnesses.manage': _toggleHarnessControls,
+    'machines.connections': _showMachinesControls,
+    'models.manage': _toggleModelsControls,
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
     'keyboard.quick_start': _startQuickStart,
@@ -4345,6 +4459,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       subscriptionModel: focused.agent?.modelName,
       webSearch: focused.agent?.gridWebSearch,
       engineLabel: focused.engine,
+      onOpen: () {
+        if (current()) _toggleModels();
+      },
       onSelected: (model) {
         if (current()) {
           unawaited(
@@ -4386,19 +4503,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         for (var index = 0; index < app.swarms.length; index++)
           '${index + 1}:${names[app.swarms[index].id]}',
       ];
-      final toolColumns = math.max(
-        (28 / cell.width).ceil(),
-        math.min(
-          4,
-          ((constraints.maxWidth - cell.width * 9) / (cell.width * 4)).floor(),
-        ),
-      );
-      final toolWidth = cell.width * toolColumns;
       final toolHeight = workspaceBarControlHeight(context);
-      final contentWidth = math.max(
-        0.0,
-        constraints.maxWidth - toolWidth * 4 - cell.width * 9,
-      );
+      final contentWidth = math.max(0.0, constraints.maxWidth - cell.width * 7);
       final tabBudget = contentWidth * .45;
       _tabWidths = [
         for (final label in labels)
@@ -4594,39 +4700,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ),
                 ),
               ],
-              SizedBox(width: cell.width * 2),
-              _statusToolSymbol(
-                'harnesses',
-                'Harnesses',
-                _toggleHarnessControls,
-                '>',
-                Size(toolWidth, toolHeight),
-                theme,
-              ),
-              _statusToolSymbol(
-                'machines',
-                'Machines',
-                () => unawaited(_showMachinesControls()),
-                '@',
-                Size(toolWidth, toolHeight),
-                theme,
-              ),
-              _statusToolSymbol(
-                'models',
-                'Models',
-                _toggleModelsControls,
-                ':',
-                Size(toolWidth, toolHeight),
-                theme,
-              ),
-              _statusToolSymbol(
-                'store',
-                'Harness Store',
-                _openStore,
-                '*',
-                Size(toolWidth, toolHeight),
-                theme,
-              ),
               SizedBox(width: cell.width),
             ],
           ),

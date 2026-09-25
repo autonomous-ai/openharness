@@ -36,6 +36,14 @@ class HarnessCommand {
         defaultTargetPlatform == TargetPlatform.linux) {
       return const ['ctrl+p'];
     }
+    if (id == 'models.list' && defaultTargetPlatform == TargetPlatform.linux) {
+      return const ['ctrl+i', 'cmd+i'];
+    }
+    if (id == 'picker.complete' &&
+        defaultTargetPlatform == TargetPlatform.linux) {
+      // Ctrl-I opens Models on Linux, including from another picker scope.
+      return const ['tab'];
+    }
     return action == null ? extraKeys : _workspaceKeys[action] ?? const [];
   }
 
@@ -411,6 +419,24 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'addProject',
   ),
   const HarnessCommand(
+    'harnesses.manage',
+    'Manage harnesses',
+    ShortcutGroup.actions,
+    keywords: ['running', 'paused', 'sessions'],
+  ),
+  const HarnessCommand(
+    'machines.connections',
+    'Machine connection settings',
+    ShortcutGroup.actions,
+    keywords: ['password', 'connect', 'link'],
+  ),
+  const HarnessCommand(
+    'models.manage',
+    'Manage models',
+    ShortcutGroup.actions,
+    keywords: ['download', 'start', 'stop', 'local', 'API'],
+  ),
+  const HarnessCommand(
     'machines.refresh',
     'Refresh machines and agents',
     ShortcutGroup.actions,
@@ -515,6 +541,29 @@ final harnessCommands = <HarnessCommand>[
     repeatable: true,
   ),
   const HarnessCommand(
+    'picker.control_next',
+    'Next control in the resource preview',
+    ShortcutGroup.navigate,
+    extraKeys: ['right'],
+    context: KeymapContext.picker,
+    repeatable: true,
+  ),
+  for (final kind in ['app', 'cli'])
+    HarnessCommand(
+      'picker.machine_$kind',
+      'Show machine setup with ${kind == 'app' ? 'the app' : 'the CLI'}',
+      ShortcutGroup.actions,
+      context: KeymapContext.picker,
+    ),
+  const HarnessCommand(
+    'picker.control_previous',
+    'Previous control in the resource preview',
+    ShortcutGroup.navigate,
+    extraKeys: ['left'],
+    context: KeymapContext.picker,
+    repeatable: true,
+  ),
+  const HarnessCommand(
     'picker.page_up',
     'Page up in the results',
     ShortcutGroup.navigate,
@@ -575,6 +624,13 @@ final harnessCommands = <HarnessCommand>[
     context: KeymapContext.picker,
   ),
   // Contextual resource actions leave the query and result selection in place.
+  for (final action in ['download', 'start', 'stop'])
+    HarnessCommand(
+      'picker.model_$action',
+      '${action[0].toUpperCase()}${action.substring(1)} the selected model',
+      ShortcutGroup.actions,
+      context: KeymapContext.picker,
+    ),
   for (final (name, key, label) in [
     ('toggle', 'ctrl+s', 'Pause or resume the selected harness or model'),
     ('more', 'ctrl+period', 'Search actions for the selected resource'),

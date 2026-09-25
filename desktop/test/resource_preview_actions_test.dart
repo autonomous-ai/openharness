@@ -4,13 +4,14 @@ import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
-import 'package:harness/models/api_connections_panel.dart';
+import 'package:harness/widgets/api_picker_form.dart';
 import 'package:harness/models/model_search_catalog.dart';
 import 'package:harness/state/harness_sessions.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/usage/models_menu_controller.dart';
 import 'package:harness/widgets/swarm_resource_preview.dart';
+import 'package:harness/widgets/terminal_text_action.dart';
 
 import 'support/model_manager.dart';
 import 'support/real_fonts.dart';
@@ -93,7 +94,6 @@ void main() {
   late SwarmSearchController search;
   late SearchPreviewControls controls;
   final choices = <SwarmSearchSelection>[];
-  int managerOpens = 0;
   int refocuses = 0;
   final modals = <bool>[];
 
@@ -114,6 +114,11 @@ void main() {
       models: [],
       grids: [
         GridSection(
+          name: 'home',
+          own: true,
+          models: [GridModel(id: 'qwen3.8-27b', node: 'mac.lan')],
+        ),
+        GridSection(
           name: 'Team',
           own: false,
           models: [GridModel(id: 'Shared Qwen', node: 'Team computer')],
@@ -133,7 +138,11 @@ void main() {
     await app.modelManager.refresh();
     await app.modelManager.apis.refresh();
     subscriptions = _Subscriptions();
-    catalog = ModelSearchCatalog(app.modelManager, subscriptions);
+    catalog = ModelSearchCatalog(
+      app.modelManager,
+      subscriptions,
+      pollHosts: false,
+    );
     search = SwarmSearchController(
       app,
       const [],
@@ -145,7 +154,7 @@ void main() {
     controls = SearchPreviewControls();
     choices.clear();
     modals.clear();
-    managerOpens = refocuses = 0;
+    refocuses = 0;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -154,7 +163,6 @@ void main() {
             controls: controls,
             onChoose: choices.add,
             onRefocus: () => refocuses++,
-            onManageModels: () async => managerOpens++,
             onModalChanged: modals.add,
             onCommands: () {},
           ),
@@ -177,30 +185,82 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> closeDialog(WidgetTester tester) async {
-    Navigator.of(
-      tester.element(find.byType(SwarmResourcePreview, skipOffstage: false)),
-    ).pop();
-    await tester.pumpAndSettle();
-    expect(modals.last, isFalse);
+  Future<void> closeApiEditor(WidgetTester tester) async {
+    await invoke(tester, 'picker.cancel');
+    expect(find.byType(ApiPickerForm), findsNothing);
+    expect(modals, isEmpty);
     expect(refocuses, greaterThan(0));
   }
 
-  testWidgets('shared and subscription metadata opens the terminal manager', (
+  testWidgets('shared and subscription management stays in the picker', (
     tester,
   ) async {
     await mount(tester, ':Shared Qwen');
     expect(find.text('Shared · Team · Team computer'), findsOneWidget);
-    expect(find.text('Available'), findsOneWidget);
+    expect(find.text('Available'), findsNothing);
     await invoke(tester, 'picker.accept');
-    expect(managerOpens, 1);
+    expect(choices, isEmpty);
     search.setQuery(':Codex subscription');
+    search.setModelSelection('claude', app.inventory, machineId: 'm');
     await tester.pumpAndSettle();
-    expect(find.text('Account Fixture account'), findsOneWidget);
+    expect(find.text('Codex subscription · Fixture account'), findsOneWidget);
     expect(find.text('10% used'), findsOneWidget);
     expect(find.text('Usage available'), findsOneWidget);
+    final before = refocuses;
     await invoke(tester, 'picker.accept');
-    expect(managerOpens, 2);
+    expect(choices, isEmpty);
+    expect(refocuses, before);
+    expect(search.managing, isFalse);
+    await invoke(tester, 'picker.complete');
+    expect(search.managing, isTrue);
+    expect(
+      tester
+          .widget<TerminalTextAction>(
+            find.byKey(const ValueKey('resource-action:picker.refresh')),
+          )
+          .focusNode!
+          .hasFocus,
+      isTrue,
+    );
+    await invoke(tester, 'picker.accept');
+    expect(subscriptions.refreshes, 1);
+    expect(app.actions, isEmpty);
+  });
+
+  testWidgets('own-machine models remain visible when local discovery fails', (
+    tester,
+  ) async {
+    await mount(tester, ':mac.lan');
+    expect(find.text('qwen3.8-27b'), findsOneWidget);
+    expect(find.text('On your machines · mac.lan'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('resource-action:picker.accept')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('resource-action:picker.model_stop')),
+      findsNothing,
+    );
+    final selected = search.selected!.id;
+    app.localReadFails = true;
+    await invoke(tester, 'picker.refresh');
+    expect(search.selected!.id, selected);
+    expect(
+      find.textContaining('Local models · Models are unavailable'),
+      findsOneWidget,
+    );
+    search.setQuery(':Shared Qwen');
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Local models · Models are unavailable'),
+      findsOneWidget,
+    );
+    app.localReadFails = false;
+    await invoke(tester, 'picker.refresh');
+    expect(
+      find.byKey(const ValueKey('local-model-inventory-notice')),
+      findsNothing,
+    );
     expect(app.actions, isEmpty);
   });
 
@@ -208,20 +268,153 @@ void main() {
     tester,
   ) async {
     await mount(tester, ':Qwen3.8-27B', scenario: 'ready');
-    expect(find.text('17.6 tokens/sec'), findsOneWidget);
-    expect(find.text('42 requests / 86400 sec'), findsOneWidget);
+    expect(find.text('17.6 tok/s · 42 requests / 1d'), findsOneWidget);
     await invoke(tester, 'picker.accept');
-    expect(managerOpens, 1);
+    expect(choices, isEmpty);
     final reads = app.localReads;
     await invoke(tester, 'picker.refresh');
     expect(app.localReads, greaterThan(reads));
     expect(subscriptions.refreshes, 1);
     expect(app.apiCalls.last, 'list');
-    await invoke(tester, 'picker.resource_toggle');
+    await tester.tap(
+      find.byKey(const ValueKey('resource-action:picker.model_stop')),
+    );
+    await tester.pumpAndSettle();
     expect(app.actions.single.start, isFalse);
     await invoke(tester, 'picker.resource_toggle');
     expect(app.actions, hasLength(1));
   });
+
+  testWidgets('Grid hostname resolves to remote Harness controls in place', (
+    tester,
+  ) async {
+    await mount(tester, ':mac.lan');
+    final id = search.selected!.id;
+    app.machineStates['other']!.machine = const Machine(
+      machineId: 'other',
+      authMode: MachineAuthMode.remote,
+      name: 'M2',
+      hostname: 'mac.lan',
+    );
+    const modelId = 'local:Qwen3.8-27B-Q4_0.gguf';
+    final running = <String, dynamic>{
+      'id': modelId,
+      'name': 'qwen3.8-27b',
+      'state': 'running',
+      'canStart': false,
+      'canStop': true,
+      'sizeBytes': 16 * 1024 * 1024 * 1024,
+      'tokensPerSecond': 17.6,
+      'requests': 42,
+      'windowSeconds': 86400,
+    };
+    app.machineInventories['other'] = {
+      'models': [running],
+      'busy': false,
+    };
+    catalog.setVisible(true);
+    await tester.pumpAndSettle();
+    expect(search.selected!.id, id);
+    expect(
+      search.rows.where((row) => row.title == 'qwen3.8-27b · Q4_0'),
+      hasLength(1),
+    );
+    expect(find.text('M2 · 16.0 GB'), findsOneWidget);
+    expect(find.text('17.6 tok/s · 42 requests / 1d'), findsOneWidget);
+    TerminalTextAction button(String action) => tester.widget(
+      find.byKey(ValueKey('resource-action:picker.model_$action')),
+    );
+    expect(
+      find.byKey(const ValueKey('resource-action:picker.model_download')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('resource-action:picker.model_start')),
+      findsNothing,
+    );
+    expect(button('stop').onPressed, isNotNull);
+    final originalLocal = app.localInventory;
+    await invoke(tester, 'picker.model_stop');
+    expect(app.actions, [(machine: 'other', model: modelId, start: false)]);
+    expect(app.localInventory, same(originalLocal));
+    expect(find.text('Stopping'), findsOneWidget);
+    expect(app.connection.creations, isEmpty);
+
+    // Stop removes the serving row, but its management row and selection stay.
+    app.machineInventories['other'] = {
+      'models': [
+        {...running, 'state': 'downloaded', 'canStart': true, 'canStop': false},
+      ],
+      'busy': false,
+    };
+    app.inventory = const GridModels(gridName: 'home', models: []);
+    await catalog.refresh(force: true);
+    await tester.pumpAndSettle();
+    expect(search.selected!.id, id);
+    search.setModelSelection('codex', app.inventory, machineId: 'm');
+    await tester.pump();
+    expect(button('start').onPressed, isNotNull);
+    expect(
+      find.byKey(const ValueKey('resource-action:picker.model_stop')),
+      findsNothing,
+    );
+    app.machineStates['other']!.connectionStatus =
+        ConnectionStatus.disconnected;
+    app.notifyListeners();
+    await tester.pumpAndSettle();
+    expect(button('start').onPressed, isNull);
+    expect(find.text('Connect to M2 to manage its models.'), findsOneWidget);
+    await invoke(tester, 'picker.model_start');
+    expect(app.actions, hasLength(1));
+  });
+
+  testWidgets(
+    'older hosts prepare models with Get and explain their combined download and start',
+    (tester) async {
+      await mount(tester, ':Falcon');
+      app.machineStates['other']!.machine = const Machine(
+        machineId: 'other',
+        authMode: MachineAuthMode.remote,
+        name: 'M2',
+        hostname: 'mac.lan',
+      );
+      app.machineInventories['other'] = {
+        'models': [
+          {
+            'id': 'falcon-q4',
+            'name': 'Falcon-H1R-7B',
+            'quant': 'Q4_K_XL',
+            'state': 'available',
+            'canStart': true,
+          },
+        ],
+      };
+      catalog.setVisible(true);
+      await tester.pumpAndSettle();
+      TerminalTextAction button(String action) => tester.widget(
+        find.byKey(ValueKey('resource-action:picker.model_$action')),
+      );
+      expect(find.text('Downloads and starts on M2.'), findsOneWidget);
+      expect(find.textContaining('Update Harness'), findsNothing);
+      expect(button('download').label, 'Get');
+      expect(button('download').onPressed, isNotNull);
+      expect(
+        find.byKey(const ValueKey('resource-action:picker.model_start')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('resource-action:picker.model_stop')),
+        findsNothing,
+      );
+      await invoke(tester, 'picker.model_download');
+      expect(app.actions, [
+        (machine: 'other', model: 'falcon-q4', start: true),
+      ]);
+      expect(app.downloads, isEmpty);
+      expect(find.text('Downloading 42%'), findsOneWidget);
+      expect(find.text('Downloads and starts on M2.'), findsNothing);
+    },
+  );
 
   testWidgets('empty and refreshing models never invent a result', (
     tester,
@@ -236,7 +429,7 @@ void main() {
     app.localReadFails = true;
     await invoke(tester, 'picker.refresh');
     expect(app.modelManager.error, isNotNull);
-    expect(find.text(app.modelManager.error!), findsWidgets);
+    expect(find.textContaining(app.modelManager.error!), findsOneWidget);
     expect(choices, isEmpty);
   });
 
@@ -245,24 +438,25 @@ void main() {
     (tester) async {
       await mount(tester, ':DeepSeek');
       await invoke(tester, 'picker.resource_remove');
-      expect(find.text('Remove DeepSeek API?'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
+      expect(find.text('Delete DeepSeek API?'), findsOneWidget);
+      expect(find.byType(Dialog), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('api-form:cancel')));
       await tester.pumpAndSettle();
       expect(app.apiCalls, ['list']);
       expect(search.selected!.modelId, 'model:api:deepseek');
       app.removeFails = true;
       await invoke(tester, 'picker.resource_remove');
-      await tester.tap(find.text('Remove'));
+      await tester.tap(find.byKey(const ValueKey('api-form:delete')));
       await tester.pumpAndSettle();
       expect(find.text('Try removal again'), findsOneWidget);
       app.removeFails = false;
       await invoke(tester, 'picker.resource_remove');
-      await tester.tap(find.text('Remove'));
+      await tester.tap(find.byKey(const ValueKey('api-form:delete')));
       await tester.pumpAndSettle();
       expect(app.apiCalls.where((action) => action == 'remove'), hasLength(2));
       expect(search.rows, isEmpty);
       expect(find.text('No matching models'), findsOneWidget);
-      expect(modals, [true, false, true, false, true, false]);
+      expect(modals, isEmpty);
     },
   );
 
@@ -271,13 +465,12 @@ void main() {
     (tester) async {
       await mount(tester, ':DeepSeek');
       await invoke(tester, 'picker.resource_settings');
-      expect(find.byType(ApiConnectionsPanel), findsOneWidget);
-      await tester.tap(find.byTooltip('Back to APIs'));
-      await tester.pumpAndSettle();
-      await closeDialog(tester);
+      expect(find.byType(ApiPickerForm), findsOneWidget);
+      expect(find.byType(Dialog), findsNothing);
+      await closeApiEditor(tester);
       await invoke(tester, 'picker.resource_add_api');
-      expect(find.byType(ApiConnectionsPanel), findsOneWidget);
-      await closeDialog(tester);
+      expect(find.byType(ApiPickerForm), findsOneWidget);
+      await closeApiEditor(tester);
       expect(search.selected!.modelId, 'model:api:deepseek');
       expect(app.apiCalls, ['list']);
     },
@@ -289,8 +482,8 @@ void main() {
     await mount(tester, ':missing', create: true);
     expect(search.selected!.isCreate, isTrue);
     await invoke(tester, 'picker.resource_add_api');
-    expect(find.byType(ApiConnectionsPanel), findsOneWidget);
-    await closeDialog(tester);
+    expect(find.byType(ApiPickerForm), findsOneWidget);
+    await closeApiEditor(tester);
     expect(app.actions, isEmpty);
     expect(choices, isEmpty);
   });
@@ -320,10 +513,10 @@ void main() {
       expect(find.textContaining('RAM 4.0 / 16 GB'), findsOneWidget);
       await invoke(tester, 'picker.resource_settings');
       expect(find.textContaining('password'), findsWidgets);
-      await closeDialog(tester);
+      await invoke(tester, 'picker.cancel');
       await invoke(tester, 'picker.resource_link');
-      expect(find.text('Link another machine'), findsWidgets);
-      await closeDialog(tester);
+      expect(search.query, '@');
+      search.setQuery('@This Mac');
       final machine = app.machineStates['m']!;
       machine.machine = const Machine(
         machineId: 'm',
@@ -344,10 +537,10 @@ void main() {
       await mount(tester, '@Other computer');
       await invoke(tester, 'picker.resource_remove');
       expect(app.deleted, isEmpty);
-      await closeDialog(tester);
+      await invoke(tester, 'picker.cancel');
       expect(app.deleted, isEmpty);
       final original = app.machineStates.remove('other');
-      expect(controls.invoke('picker.accept'), isFalse);
+      expect(controls.invoke('picker.resource_rename'), isFalse);
       app.machineStates['other'] = original!;
     },
   );
@@ -357,14 +550,16 @@ void main() {
   ) async {
     await mount(tester, '@Other computer');
     await invoke(tester, 'picker.resource_rename');
-    expect(find.text('Rename Machine'), findsOneWidget);
-    await closeDialog(tester);
+    expect(find.text('Rename machine'), findsOneWidget);
+    expect(find.byType(Dialog), findsNothing);
+    await invoke(tester, 'picker.cancel');
     app.machineStates['other']!.needsLink = true;
     app.notifyListeners();
     await tester.pump();
     await invoke(tester, 'picker.resource_connect');
     expect(find.textContaining('Other computer'), findsWidgets);
-    await closeDialog(tester);
+    expect(find.byType(Dialog), findsNothing);
+    await invoke(tester, 'picker.cancel');
     expect(app.deleted, isEmpty);
     expect(choices, isEmpty);
     expect(search.selected!.machineId, 'other');

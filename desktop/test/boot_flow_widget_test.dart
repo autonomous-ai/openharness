@@ -1,3 +1,4 @@
+import 'support/workspace_tools.dart';
 import 'swarm_interactions_test.dart' show chord;
 
 import 'package:flutter/services.dart';
@@ -1130,7 +1131,13 @@ void main() {
         ),
         findsNothing,
       );
-      expect(find.textContaining('Offline'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Icon && widget.semanticLabel == 'remote-mac: Offline',
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Harness is offline'), findsNothing);
       expect(find.text('harness start'), findsNothing);
       await tester.pumpWidget(const SizedBox());
@@ -1179,7 +1186,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
     await tester.tap(
@@ -1263,7 +1270,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-machines-button')));
+    await openWorkspaceManagement(tester, 'machines');
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('link-mac'));
     await tester.tap(

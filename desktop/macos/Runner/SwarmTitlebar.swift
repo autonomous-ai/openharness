@@ -1215,10 +1215,6 @@ private final class SwarmTabStrip: NSView {
   fileprivate let focusedModelButton = SwarmContextButton()
   private var focusedModelTarget: [String: Any]?
   fileprivate let pullRequestButton = SwarmContextButton()
-  fileprivate let harnessesButton = SwarmStatusSymbolButton()
-  fileprivate let machinesButton = SwarmStatusSymbolButton()
-  fileprivate let modelsButton = SwarmStatusSymbolButton()
-  fileprivate let storeButton = SwarmStatusSymbolButton()
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   private var terminalForeground = NSColor(white: 0.85, alpha: 1)
   private var tabs: [SwarmTabButton] = []
@@ -1238,19 +1234,10 @@ private final class SwarmTabStrip: NSView {
     scroll.hasVerticalScroller = false
     scroll.documentView = document
     addSubview(scroll)
-    func button(_ button: NSButton, _ symbol: String, _ label: String, _ action: Selector) {
-      button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-      button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-      button.isBordered = false
-      button.title = ""
-      button.imagePosition = .imageOnly
-      button.contentTintColor = terminalForeground
-      button.target = self
-      button.action = action
-      button.setAccessibilityLabel(label)
-      addSubview(button)
-    }
-    button(newButton, "plus", "New Tab", #selector(newSwarm))
+    newButton.isBordered = false
+    newButton.target = self
+    newButton.action = #selector(newSwarm)
+    addSubview(newButton)
     newButton.setAccessibilityLabel("New Tab")
     newButton.isEnabled = false
     newButton.toolTip = "New Tab ⌘T"
@@ -1279,25 +1266,7 @@ private final class SwarmTabStrip: NSView {
     pullRequestButton.setAccessibilityLabel("Open pull request on GitHub")
     pullRequestButton.isHidden = true
     addSubview(pullRequestButton)
-    for (control, name, symbol, action) in [
-      (harnessesButton, "Harnesses", ">", #selector(openHarnessControls)),
-      (machinesButton, "Machines", "@", #selector(openMachineControls)),
-      (modelsButton, "Models", ":", #selector(openModelControls)),
-      (storeButton, "Harness Store", "*", #selector(openStore)),
-    ] {
-      control.title = symbol
-      control.imagePosition = .noImage
-      control.isBordered = false
-      control.font = barFont
-      control.target = self
-      control.action = action
-      control.setAccessibilityLabel(name)
-      control.toolTip = name
-      control.isEnabled = false
-      addSubview(control)
-    }
-    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton,
-      harnessesButton, machinesButton, modelsButton, storeButton])
+    setAccessibilityChildren([scroll, newButton, focusedModelButton, contextButton, pullRequestButton])
     registerForDraggedTypes([swarmPasteboardType])
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1323,7 +1292,7 @@ private final class SwarmTabStrip: NSView {
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
       terminalForeground = statusColor(style["foreground"], fallback: terminalForeground)
     }
-    for control in [newButton, harnessesButton, machinesButton, modelsButton, storeButton] {
+    for control in [newButton] {
       control.font = barFont
       control.foreground = terminalForeground
       control.isEnabled = actionsEnabled
@@ -1398,17 +1367,10 @@ private final class SwarmTabStrip: NSView {
     let previousDocumentSize = document.frame.size
     let cell = ceil(("m" as NSString).size(withAttributes: [.font: barFont]).width)
     let trailing = cell
-    let toolColumns = max(ceil(28 / cell), min(4, floor((bounds.width - cell * 9) / (cell * 4))))
-    let toolWidth = cell * toolColumns
     let toolHeight = workspaceBarControlHeight(barFont)
-    let toolsX = bounds.width - trailing - toolWidth * 4
-    for (index, control) in [harnessesButton, machinesButton, modelsButton, storeButton].enumerated() {
-      control.frame = NSRect(x: toolsX + CGFloat(index) * toolWidth,
-        y: (bounds.height - toolHeight) / 2, width: toolWidth, height: toolHeight)
-    }
-    let statusRight = toolsX - cell * 2
+    let statusRight = bounds.width - trailing
     // Compact windows keep a scrolling tab list; context never overlaps it.
-    let available = max(0, bounds.width - toolWidth * 4 - cell * 9)
+    let available = max(0, bounds.width - cell * 7)
     let widths = tabs.map { min($0.preferredWidth, available * 0.45) }
     let total = widths.reduce(0, +)
     let occupied = min(total, available * 0.45)
@@ -1486,18 +1448,6 @@ private final class SwarmTabStrip: NSView {
   }
   @objc private func newSwarm() {
     if actionsEnabled && newButton.isEnabled { emit?("new", nil) }
-  }
-  @objc private func openMachineControls() {
-    if actionsEnabled && machinesButton.isEnabled { emit?("machineControls", nil) }
-  }
-  @objc private func openHarnessControls() {
-    if actionsEnabled && harnessesButton.isEnabled { emit?("harnessControls", nil) }
-  }
-  @objc private func openModelControls() {
-    if actionsEnabled && modelsButton.isEnabled { emit?("modelControls", nil) }
-  }
-  @objc private func openStore() {
-    if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }
   }
   private func draggedTab(_ sender: NSDraggingInfo) -> SwarmTabButton? {
     guard actionsEnabled, sender.draggingSourceOperationMask.contains(.move),

@@ -21,10 +21,15 @@ class ModelManagerController extends ChangeNotifier {
     this.app, {
     LocalKeyValueStore? storage,
     this.poll = true,
+    this.targetMachineId,
   }) : _storage = storage ?? (kUnderTest ? null : HarnessFileStore.shared);
   final AppNotifier app;
   final LocalKeyValueStore? _storage;
   final bool poll;
+
+  /// A remote host uses the same inventory and lifecycle RPCs, without setting
+  /// up a Model Manager harness or reading another copy of the shared catalog.
+  final String? targetMachineId;
   ApiConnectionsController? _apis;
   ApiConnectionsController get apis => _apis ??= ApiConnectionsController(app);
   static const introKey = 'models.introduction.dismissed';
@@ -45,11 +50,15 @@ class ModelManagerController extends ChangeNotifier {
   String? hardware, error, _managerError;
   bool preparing = false, opening = false, scanning = false, loaded = false;
   bool inventoryAvailable = false, operationBusy = false;
+  bool supportsDownload = false;
   LocalModelOperation? pendingOperation;
   String? pendingId;
   bool pendingStart = true;
+  bool pendingDownload = false;
 
-  MachineState? get machine => app.localMachineState;
+  MachineState? get machine => targetMachineId == null
+      ? app.localMachineState
+      : app.stateOf(targetMachineId!);
   Agent? get manager => machine?.agents
       .where((a) => a.dsh == AppNotifier.gridHarness)
       .firstOrNull;
@@ -96,13 +105,14 @@ class ModelManagerController extends ChangeNotifier {
     app.addListener(_observe);
     app.foreground.addListener(_foregroundChanged);
     app.gridPictures.addListener(_pictureChanged);
-    unawaited(_loadPreferences());
+    if (targetMachineId == null) unawaited(_loadPreferences());
     _observe();
     if (poll) {
       _timer = Timer.periodic(const Duration(seconds: 4), (_) {
         // A minimised or background app reads nothing, busy or not: the daemon owns the operation
         // either way, and the one refresh on return ([_foregroundChanged]) catches up.
         if (!app.inForeground) return;
+        if (targetMachineId != null && !_panelVisible && !busy) return;
         if (busy ||
             _panelVisible ||
             _lastLocalRead == null ||
@@ -140,6 +150,7 @@ class ModelManagerController extends ChangeNotifier {
       scanning = false;
       loaded = false;
       inventoryAvailable = false;
+      supportsDownload = false;
       operationBusy = false;
       pendingOperation = null;
       pendingId = null;
@@ -151,17 +162,22 @@ class ModelManagerController extends ChangeNotifier {
       error = null;
       _managerError = null;
     }
-    if (current?.connectionStatus != ConnectionStatus.connected) {
+    if (current?.connectionStatus != ConnectionStatus.connected ||
+        current?.needsLink == true ||
+        (targetMachineId != null && current?.isOffline == true)) {
       inventoryAvailable = false;
     }
     if (current != null &&
         current.connectionStatus == ConnectionStatus.connected &&
-        current.agentLoadStatus == AgentLoadStatus.loaded &&
+        (targetMachineId != null ||
+            current.agentLoadStatus == AgentLoadStatus.loaded) &&
         !_autoPrepared) {
       _autoPrepared = true;
-      unawaited(prepare());
+      if (targetMachineId == null) unawaited(prepare());
       // In the background the first read waits for the app to come back ([_foregroundChanged]).
-      if (app.inForeground) unawaited(refresh());
+      if (app.inForeground && (targetMachineId == null || _panelVisible)) {
+        unawaited(refresh());
+      }
     }
     _changed();
   }
@@ -169,6 +185,7 @@ class ModelManagerController extends ChangeNotifier {
   /// Back in front of the person: exactly one refresh, whatever the background skipped.
   void _foregroundChanged() {
     if (_disposed || !app.inForeground) return;
+    if (targetMachineId != null && !_panelVisible && !busy) return;
     final owner = machine;
     if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
       return;
@@ -179,6 +196,7 @@ class ModelManagerController extends ChangeNotifier {
   /// Another surface's read, or the daemon's `grid_models_changed` push, changed the app's picture
   /// of this machine's grids: take it, with no read of our own.
   void _pictureChanged() {
+    if (targetMachineId != null) return;
     final owner = machine;
     if (_disposed || owner == null) return;
     final picture = app.gridPictures[owner.machine.machineId];
@@ -342,9 +360,14 @@ class ModelManagerController extends ChangeNotifier {
 
   Future<void> _refresh({required bool force}) async {
     final owner = machine;
-    if (owner == null || owner.connectionStatus != ConnectionStatus.connected) {
+    if (owner == null ||
+        owner.connectionStatus != ConnectionStatus.connected ||
+        owner.needsLink ||
+        (targetMachineId != null && owner.isOffline)) {
       inventoryAvailable = false;
-      error = 'Connect this computer to see its models.';
+      error = targetMachineId == null
+          ? 'Connect this computer to see its models.'
+          : 'Connect to ${owner?.machine.displayName ?? 'this machine'} to manage its models.';
       _changed();
       return;
     }
@@ -356,7 +379,7 @@ class ModelManagerController extends ChangeNotifier {
         DateTime.now().difference(_lastModelsRead!) >
             const Duration(seconds: 20);
     await Future.wait([
-      if (readShared)
+      if (readShared && targetMachineId == null)
         app.refreshGridModels(owner.machine.machineId).then((answer) {
           if (_current(owner)) {
             // The panel says so when ITS read could not reach the machine ("Shared models are
@@ -383,6 +406,7 @@ class ModelManagerController extends ChangeNotifier {
           error = (answer['notice'] ?? answer['error']) as String?;
           if (answer['models'] is! List) {
             inventoryAvailable = false;
+            error ??= 'Models are unavailable. Try again.';
             return;
           }
           localModels = (answer['models'] as List)
@@ -396,6 +420,7 @@ class ModelManagerController extends ChangeNotifier {
               : null;
           hardware = answer['hardware'] as String?;
           operationBusy = answer['busy'] == true;
+          supportsDownload = answer['supportsDownload'] == true;
           inventoryAvailable = true;
           loaded = true;
           _lastLocalRead = DateTime.now();
@@ -439,30 +464,58 @@ class ModelManagerController extends ChangeNotifier {
     _changed();
   }
 
-  Future<void> toggle(LocalModel model) async {
+  Future<void> toggle(LocalModel model) =>
+      control(model, model.canStop ? 'stop' : 'start');
+
+  Future<void> control(LocalModel model, String action) async {
     final owner = machine;
-    if (owner == null || busy || !inventoryAvailable) return;
-    final startModel = !model.canStop;
-    if (startModel && !model.canStart) return;
+    if (owner == null ||
+        owner.connectionStatus != ConnectionStatus.connected ||
+        owner.needsLink ||
+        (targetMachineId != null && owner.isOffline) ||
+        owner.machine.isShared ||
+        busy ||
+        !inventoryAvailable) {
+      return;
+    }
+    final current = localModels
+        .where((entry) => entry.id == model.id)
+        .firstOrNull;
+    if (current == null) return;
+    final download = action == 'download';
+    final startModel = action == 'start';
+    if (download) {
+      if (!supportsDownload || current.downloaded || !current.canStart) return;
+    } else if (startModel) {
+      if (!current.canStart) return;
+    } else if (action != 'stop' || !current.canStop) {
+      return;
+    }
     pendingId = model.id;
     _actionRevision++;
     inventoryAvailable = false;
     pendingStart = startModel;
+    pendingDownload = download;
     error = null;
-    unawaited(dismissIntroduction());
+    if (targetMachineId == null) unawaited(dismissIntroduction());
     _changed();
     try {
-      final answer = await app.controlLocalModel(
-        owner.machine.machineId,
-        model.id,
-        start: startModel,
-      );
+      final answer = download
+          ? await app.downloadLocalModel(owner.machine.machineId, model.id)
+          : await app.controlLocalModel(
+              owner.machine.machineId,
+              model.id,
+              start: startModel,
+            );
       if (!_current(owner)) return;
       error = answer['error'] as String?;
       pendingOperation = LocalModelOperation.parse(answer['operation']);
       operationBusy = pendingOperation?.active == true;
     } catch (_) {
-      if (_current(owner)) error = 'Checking whether the model started. Your click will not be repeated.';
+      if (_current(owner)) {
+        error =
+            'Checking the model operation. Your click will not be repeated.';
+      }
     } finally {
       if (_current(owner)) {
         pendingId = null;

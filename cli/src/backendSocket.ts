@@ -1660,13 +1660,14 @@ export class BackendSocket {
             .catch(() => reply(type, requestId, { error: 'UNAVAILABLE' }))
           return
         case 'grid_fleet_models_list':
+        case 'grid_fleet_model_download':
         case 'grid_fleet_model_start':
         case 'grid_fleet_model_stop': {
           // A daemon-owned operation survives panel closure and a lost reply.
           // Keep hardware/catalog/network reads off the ordered terminal queue.
           void this.resolveGridName().then(async grid => type === 'grid_fleet_models_list'
             ? this.localModels.list(grid, payload.refresh === true)
-            : this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_start' ? 'start' : 'stop'))
+            : this.localModels.act(grid, payload.modelId, type === 'grid_fleet_model_download' ? 'download' : type === 'grid_fleet_model_start' ? 'start' : 'stop'))
             .then(result => reply(type, requestId, { ...result }))
             .catch(() => reply(type, requestId, { error: 'Models are unavailable. Try again.' }))
           return

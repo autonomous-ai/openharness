@@ -260,12 +260,13 @@ void main() {
 
     test('the terminal verbs tmux trained people on are all here', () {
       expect(chordsFor(ShortcutAction.zoomPane), contains('⌘⏎'));
-      expect(chordsFor(ShortcutAction.lastPane), contains('⌘;'));
+      // The previous-pane command remains available through remapping.
+      expect(chordsFor(ShortcutAction.lastPane), isEmpty);
       expect(chordsFor(ShortcutAction.newSwarm), ['⌘T']);
       expect(chordsFor(ShortcutAction.showLayout), ['⇧⌘L']);
       expect(chordsFor(ShortcutAction.orchestrate), isEmpty);
       expect(chordsFor(ShortcutAction.routeTask), ['⌘B']);
-      expect(chordsFor(ShortcutAction.addAgent), ['⌘P']);
+      expect(chordsFor(ShortcutAction.addAgent), ['⌘O']);
       expect(chordsFor(ShortcutAction.newAgent), ['⌘N']);
       expect(chordsFor(ShortcutAction.showAttention), ['⇧⌘I']);
       expect(chordsFor(ShortcutAction.findTerminal), ['⌘F']);
