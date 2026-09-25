@@ -3555,6 +3555,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The build to install now: the newest the manifest offers, or [captured]
+  /// when the manifest cannot be read or has nothing newer. Null means the
+  /// manifest no longer offers anything at all — the build was pulled.
+  ///
+  /// Only ever forward: a manifest that regressed (a bad publish, a stale
+  /// mirror) must not talk this into a downgrade, which is what `semverGt`
+  /// settles. And never onto a version this person SKIPPED — pressing Update
+  /// on one build is not consent to a different one they already said no to,
+  /// and nothing is lost by installing what they pressed: the skipped newer
+  /// one raises no offer afterwards either (`_recordUpdateCheck`).
+  Future<UpdateInfo?> _freshestUpdate(UpdateInfo captured) async {
+    final DesktopUpdateCheck result;
+    try {
+      result = await _updater.check();
+    } catch (error) {
+      // A network that cannot answer is not a reason to refuse an update whose
+      // bytes are verified against their own sha256 anyway.
+      debugPrint('AppNotifier.installAvailableUpdate: refresh failed · $error');
+      return captured;
+    }
+    if (_disposed) return captured;
+    lastUpdateCheck = result;
+    final latest = result.update;
+    if (latest != null) {
+      final newer =
+          semverGt(latest.version, captured.version) &&
+          _skippedDesktopUpdateVersion != latest.version;
+      return newer ? latest : captured;
+    }
+    return result.status == DesktopUpdateCheckStatus.upToDate ? null : captured;
+  }
+
   /// Clears a failed install without burying the offer.
   ///
   /// Skipping is permanent — it records the version so the background check
@@ -3582,19 +3614,43 @@ class AppNotifier extends ChangeNotifier {
   /// Downloads, verifies, and installs only after an explicit user action.
   /// A failed operation leaves the running app untouched and retryable.
   Future<bool> installAvailableUpdate({UpdateInfo? update}) async {
-    final info = update ?? availableUpdate;
-    if (_disposed || viewer != null || info == null || isInstallingUpdate) {
+    final chosen = update ?? availableUpdate;
+    if (_disposed || viewer != null || chosen == null || isInstallingUpdate) {
       return false;
     }
-    // The displayed version is the one the user chose. Later manifest
-    // responses cannot change the installation or the offer a failure retains.
-    availableUpdate = info;
+    // Reassigned once the manifest has been re-read below; the failure messages
+    // at the end name whichever build was actually attempted.
+    var info = chosen;
     isInstallingUpdate = true;
     updateDownloadFraction = null;
     updateError = null;
     notifyListeners();
     try {
       final updater = _updater;
+      // One press, the newest build. What is on screen can be minutes old, and
+      // installing THAT only to be offered the next one on the way back is two
+      // updates for one thing. The check costs a small GET against a manifest
+      // the download already depends on.
+      //
+      // `isInstallingUpdate` is set above first, so the answer cannot race
+      // `_recordUpdateCheck` — which bows out while an install is running —
+      // and the offer is published here instead, once the version is settled.
+      final fresh = await _freshestUpdate(info);
+      if (fresh == null) {
+        // Withdrawn from the channel between the offer and the press. Installing
+        // a build that has just been pulled is the one outcome here worth
+        // refusing; everything else falls through to the captured one.
+        //
+        // Not an `updateError`: nothing failed, and the banner that would carry
+        // one is keyed on there being an offer — which there is not any more.
+        // Dropping the offer IS the state, and the dialog that asked turns
+        // itself into "You're up to date" on the false return.
+        availableUpdate = null;
+        updateError = null;
+        return false;
+      }
+      info = fresh;
+      availableUpdate = info;
       // One notify per whole percent. Dio reports every chunk, and each notify
       // rebuilds the whole app shell (the banner lives in its ListenableBuilder),
       // so a 45 MB build would repaint thousands of times for a bar 200px wide.

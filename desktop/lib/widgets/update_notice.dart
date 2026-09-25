@@ -370,62 +370,85 @@ Future<void> showUpdateCheckDialog(
             // the number here count along with the band behind it.
             child: ListenableBuilder(
               listenable: notifier,
-              builder: (context, _) => _UpdateDialog(
-                icon: LucideIcons.arrowDownToLine300,
-                title: installing
-                    ? 'Installing Harness ${update.version}…'
-                    : 'Harness ${update.version} is available',
-                body: installing
-                    ? [
-                        if (notifier.updateDownloadPercent case final percent?)
-                          'Downloading… $percent%.',
-                        'Don’t quit Harness. It will restart on its own.',
-                      ].join(' ')
-                    : current.isSkipped
-                    ? 'You skipped this version earlier. You can still install it.'
-                    : 'Download and install it now? Harness will restart when it '
-                          'finishes.',
-                busy: installing,
-                update: installing ? null : update,
-                actions: installing
-                    ? const []
-                    : [
-                        _DialogAction(
-                          key: const Key('close-update-dialog-button'),
-                          label: 'Close',
-                          onPressed: () async {
-                            Navigator.of(dialogContext).pop();
-                          },
-                        ),
-                        if (!current.isSkipped)
+              builder: (context, _) {
+                // Update re-reads the manifest and installs the newest build,
+                // which may be newer than the one this dialog opened on. Name
+                // the one going in, not the one that was reviewed.
+                final installingVersion =
+                    notifier.availableUpdate?.version ?? update.version;
+                return _UpdateDialog(
+                  icon: LucideIcons.arrowDownToLine300,
+                  title: installing
+                      ? 'Installing Harness $installingVersion…'
+                      : 'Harness ${update.version} is available',
+                  body: installing
+                      ? [
+                          if (notifier.updateDownloadPercent
+                              case final percent?)
+                            'Downloading… $percent%.',
+                          'Don’t quit Harness. It will restart on its own.',
+                        ].join(' ')
+                      : current.isSkipped
+                      ? 'You skipped this version earlier. You can still install it.'
+                      : 'Download and install it now? Harness will restart when it '
+                            'finishes.',
+                  busy: installing,
+                  update: installing ? null : update,
+                  actions: installing
+                      ? const []
+                      : [
                           _DialogAction(
-                            label: 'Skip ${update.version}',
+                            key: const Key('close-update-dialog-button'),
+                            label: 'Close',
                             onPressed: () async {
-                              await notifier.skipAvailableUpdate(
-                                update: update,
-                              );
-                              if (dialogContext.mounted) {
-                                Navigator.of(dialogContext).pop();
-                              }
+                              Navigator.of(dialogContext).pop();
                             },
                           ),
-                        _DialogAction(
-                          label: 'Update',
-                          primary: true,
-                          onPressed: () async {
-                            setState(() => installing = true);
-                            final installed = await notifier
-                                .installAvailableUpdate(update: update);
-                            // A successful install never returns — the process is
-                            // replaced. Reaching here means it failed, and the banner
-                            // behind this dialog is already showing why.
-                            if (!context.mounted || installed) return;
-                            setState(() => installing = false);
-                            Navigator.of(dialogContext).pop();
-                          },
-                        ),
-                      ],
-              ),
+                          if (!current.isSkipped)
+                            _DialogAction(
+                              label: 'Skip ${update.version}',
+                              onPressed: () async {
+                                await notifier.skipAvailableUpdate(
+                                  update: update,
+                                );
+                                if (dialogContext.mounted) {
+                                  Navigator.of(dialogContext).pop();
+                                }
+                              },
+                            ),
+                          _DialogAction(
+                            label: 'Update',
+                            primary: true,
+                            onPressed: () async {
+                              setState(() => installing = true);
+                              final installed = await notifier
+                                  .installAvailableUpdate(update: update);
+                              // A successful install never returns — the process is
+                              // replaced. Reaching here means it did not happen.
+                              if (!context.mounted || installed) return;
+                              // The install re-reads the manifest, and the build
+                              // can be gone from it by then. There is no error to
+                              // show for that and no offer left to carry one, so
+                              // say the true thing here rather than closing on
+                              // nothing.
+                              if (notifier.availableUpdate == null) {
+                                setState(() {
+                                  installing = false;
+                                  current = const ManualUpdateCheck(
+                                    check: DesktopUpdateCheck.upToDate(),
+                                  );
+                                });
+                                return;
+                              }
+                              // Otherwise it failed, and the banner behind this
+                              // dialog is already showing why.
+                              setState(() => installing = false);
+                              Navigator.of(dialogContext).pop();
+                            },
+                          ),
+                        ],
+                );
+              },
             ),
           );
         },
