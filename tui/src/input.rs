@@ -1526,7 +1526,7 @@ fn pipe_to(cmd: &str, text: &str) {
     use std::io::Write;
     let mut c = std::process::Command::new("/bin/sh");
     c.arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
+    c.envs(crate::ipc::job_env());
     if let Ok(mut child) = c.spawn() {
         if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(text.as_bytes()); }
         std::thread::spawn(move || { let _ = child.wait(); });

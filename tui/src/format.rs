@@ -34,6 +34,12 @@ pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool
     expand1(&mut es, fmt)
 }
 
+/// A format as a config's %if reads it: no #() jobs run (tmux's FORMAT_NOJOBS).
+pub fn expand_nojobs(app: &App, fmt: &str) -> String {
+    let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs() };
+    expand1(&mut es, fmt)
+}
+
 /// tmux's FORMAT_LOOP_LIMIT: formats that expand into themselves stop here.
 const LOOP_LIMIT: u32 = 100;
 
@@ -91,11 +97,11 @@ fn job_get(es: &mut Es, cmd: &str) -> String {
     };
     if run {
         let key = cmd.to_string();
-        let socket = crate::ipc::here().unwrap_or_default();
+        let env = crate::ipc::job_env();
         app.spawn(async move {
-            // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder; HN_SOCKET names
-            // this client, so an `hn` inside the command talks to it.
-            tokio::process::Command::new("/bin/sh").arg("-c").arg(&expanded).env("HN_SOCKET", socket)
+            // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder; HN_SOCKET (and
+            // a `tmux` that is hn) so a command inside it talks to this client.
+            tokio::process::Command::new("/bin/sh").arg("-c").arg(&expanded).envs(env)
                 .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null())
                 .output().await.map(|o| o.stdout).unwrap_or_default()
         }, move |app, stdout| {
@@ -431,7 +437,8 @@ fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<
             Some(Val::Time(v)) => t = v,
             Some(Val::Str(v)) => found = Some(v),
             None => {
-                if !f.timestring { found = app.env.get(key).cloned().or_else(|| std::env::var(key).ok()) }
+                // format_find: the session's environment, then the global one.
+                if !f.timestring { found = app.session_env.get(key).or_else(|| app.global_env.get(key)).and_then(|e| e.value.clone()) }
                 found.as_ref()?;
             }
         }

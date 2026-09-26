@@ -7,6 +7,7 @@ mod borders;
 mod cli;
 mod clipboard;
 mod cmd;
+mod cmdparse;
 mod commands;
 mod ipc;
 mod keys;
@@ -103,7 +104,13 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     if f.long_help { println!("{}", cli::USAGE); return Ok(()) }
     if f.help { eprintln!("{}", cli::USAGE); std::process::exit(1) }
-    if f.version && f.rest.is_empty() { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), tmuxconf::TMUX_VERSION); return Ok(()) }
+    // Run as `tmux` (hn's jobs' PATH): tmux's version, and no client started without a terminal.
+    let as_tmux = std::env::var("HN_AS_TMUX").map(|v| v == "1").unwrap_or(false);
+    if f.version && f.rest.is_empty() {
+        if as_tmux { println!("tmux {}", tmuxconf::TMUX_VERSION) } else { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), tmuxconf::TMUX_VERSION) }
+        return Ok(());
+    }
+    if as_tmux && f.rest.is_empty() { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
     // -f file: that tmux.conf instead of ~/.tmux.conf (-f /dev/null: none).
     if let Some(c) = &f.config { unsafe { std::env::set_var("HARNESS_TUI_TMUX_CONF", if c == "/dev/null" { "off" } else { c.as_str() }) } }
     if f.keys {
@@ -172,18 +179,18 @@ async fn run(config: config::Config) -> io::Result<()> {
     // `hn <command>` from a shell comes in here.
     let socket = ipc::serve(tx.clone());
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
-    let settings = tmuxconf::load(&mut app.keymap);
-    app.apply_settings(&settings);
     // Mouse on (Shift-drag is still the terminal's own selection) unless tmux.conf says off.
-    app.mouse = settings.mouse.unwrap_or(true);
+    app.mouse = true;
     app.mouse_changed = true;
+    // ~/.tmux.conf, read and run as tmux reads and runs it.
+    app.update_environment();
+    let read = commands::load_config(&mut app);
     if config.prefix_set { app.keymap.prefix = config.prefix }
     for (chord, command) in &config.keys {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
     }
-    if let Some(problem) = config.problems.first().or(settings.problems.first()) { app.say(problem.clone(), theme::DANGER) }
-    else if !settings.notes.is_empty() { app.say(format!("tmux.conf: {} line{} not used here — hn --keys lists them", settings.notes.len(), if settings.notes.len() == 1 { "" } else { "s" }), theme::WARN) }
-    else if let Some(path) = &settings.path { app.say(format!("{} read — your prefix is {}", path.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) }
+    if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
+    else if let Some(path) = read.last() { if app.messages.is_empty() { app.say(format!("{} read — your prefix is {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) } }
     app.boot();
 
     let frame_budget = Duration::from_millis(6);
