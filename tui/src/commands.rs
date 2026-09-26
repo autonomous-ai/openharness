@@ -413,6 +413,15 @@ fn run_words(app: &mut App, words: &[String]) {
                 "main-horizontal" | "main-horizontal-mirrored" => Preset::MainRow, "main-vertical" | "main-vertical-mirrored" => Preset::MainStack,
                 "tiled" => Preset::Grid,
                 "" => { input::run(app, "layout"); return }
+                // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
+                other if other.contains('x') && other.contains(',') => {
+                    let ids = app.tab().panes();
+                    match crate::layout::Node::from_tmux(other, &ids) {
+                        Some(root) => { let tab = app.tab_mut(); tab.root = Some(root); tab.zoomed = false; app.fit_panes() }
+                        None => app.say(format!("invalid layout: {other}"), theme::WARN),
+                    }
+                    return;
+                }
                 other => { app.say(format!("unknown layout: {other}"), theme::WARN); return }
             };
             app.apply_preset(preset);
