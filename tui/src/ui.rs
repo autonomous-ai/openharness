@@ -899,7 +899,7 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let right_w = row.right.width();
     let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
-    let cells: Vec<(char, Style)> = hscroll(cells, avail, &o.ellipsis, o.hscroll, o.hscroll_off).into_iter().map(|(c, part, on)| (c, cell(part, on))).collect();
+    let cells: Vec<(char, Style)> = hscroll(cells, avail, &o.ellipsis, o.hscroll, o.hscroll_off, o.keep_right).into_iter().map(|(c, part, on)| (c, cell(part, on))).collect();
     let mut run = String::new();
     let mut run_style = None::<Style>;
     for (c, st) in &cells {
@@ -1277,7 +1277,7 @@ fn repeat_to_fill(s: &str, limit: usize) -> String {
 
 /// fzf's hscroll (terminal.go, printHighlighted): a line wider than its room keeps its last match
 /// in view with --hscroll-off columns after it, the ellipsis where it was cut on either side.
-fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_off: usize) -> Vec<Cell> {
+fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_off: usize, keep_right: bool) -> Vec<Cell> {
     let cw = |c: char| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
     let w = |c: &[Cell]| -> usize { c.iter().map(|x| cw(x.0)).sum() };
     if w(&cells) <= room { return cells }
@@ -1291,6 +1291,14 @@ fn hscroll(cells: Vec<Cell>, room: usize, ellipsis: &str, scroll: bool, scroll_o
         for x in c { if used + cw(x.0) > width { break } used += cw(x.0); out.push(*x) }
         out
     };
+    // --keep-right, a row the query did not light: its end in view, the ellipsis before it (trimLeft).
+    if scroll && keep_right && !cells.iter().any(|c| c.2) {
+        let mut from = cells.len().saturating_sub(room);
+        while from < cells.len() && w(&cells[from..]) > room.saturating_sub(ew) { from += 1 }
+        let mut out: Vec<Cell> = ell.iter().map(|c| (*c, None, false)).collect();
+        out.extend(cells[from..].iter().cloned());
+        return out;
+    }
     let max_end = cells.iter().rposition(|c| c.2).map(|i| i + 1).unwrap_or(0);
     // (Less than the last match's end when the ellipsis is wider than half the room.)
     let maxe = (max_end as i64 + ((room / 2) as i64 - ew as i64).min(scroll_off as i64)).clamp(0, cells.len() as i64) as usize;
@@ -1804,13 +1812,13 @@ mod fzf_list_tests {
         let line = |lit: &[usize], part: std::ops::Range<usize>| -> Vec<Cell> { "abcdefghijklmnop".chars().enumerate().map(|(i, c)| (c, part.contains(&i).then_some(dim), lit.contains(&i))).collect() };
         let tail = |cells: Vec<Cell>| cells[8..].to_vec();
         // --no-hscroll: a match past the cut lights both dots; one on the first dot's cell, that one.
-        assert_eq!(tail(hscroll(line(&[14], 0..0), 10, "··", false, 10)), [('·', None, true), ('·', None, true)]);
-        assert_eq!(tail(hscroll(line(&[8], 0..0), 10, "··", false, 10)), [('·', None, true), ('·', None, false)]);
+        assert_eq!(tail(hscroll(line(&[14], 0..0), 10, "··", false, 10, false)), [('·', None, true), ('·', None, true)]);
+        assert_eq!(tail(hscroll(line(&[8], 0..0), 10, "··", false, 10, false)), [('·', None, true), ('·', None, false)]);
         // Cut at the end: a dim part running on under the dots dims them.
-        assert_eq!(tail(hscroll(line(&[0], 5..16), 10, "··", true, 10)), [('·', Some(dim), false), ('·', Some(dim), false)]);
-        assert_eq!(tail(hscroll(line(&[0], 5..9), 10, "··", true, 10)), [('·', Some(dim), false), ('·', None, false)]);
+        assert_eq!(tail(hscroll(line(&[0], 5..16), 10, "··", true, 10, false)), [('·', Some(dim), false), ('·', Some(dim), false)]);
+        assert_eq!(tail(hscroll(line(&[0], 5..9), 10, "··", true, 10, false)), [('·', Some(dim), false), ('·', None, false)]);
         // Scrolled to a match at the end: the dots are the row's own.
-        assert_eq!(hscroll(line(&[15], 0..16), 10, "··", true, 10)[..2], [('·', None, false), ('·', None, false)]);
+        assert_eq!(hscroll(line(&[15], 0..16), 10, "··", true, 10, false)[..2], [('·', None, false), ('·', None, false)]);
     }
 
     fn screen(p: &mut Picker) -> String {
