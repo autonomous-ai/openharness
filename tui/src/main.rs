@@ -153,9 +153,10 @@ async fn run(config: config::Config) -> io::Result<()> {
         cli::out(&text);
         return Ok(())
     }
-    let port = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok())).unwrap_or(18473u16);
+    let explicit = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()));
+    let port = explicit.unwrap_or(18473u16);
     // hn <command>: answered from here (hn ls) or by the running client (a tmux command).
-    if let Some(code) = cli::run(&f.rest, port, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
+    if let Some(code) = cli::run(&f.rest, explicit, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
     // -L name, starting a client: its socket's name.
     if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
 
@@ -205,7 +206,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     mark("terminal ready");
     let mut app = app::App::new(port, tx.clone(), size);
     // `hn <command>` from a shell comes in here.
-    let socket = ipc::serve(tx.clone());
+    let socket = ipc::serve(tx.clone(), port);
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
     // Mouse on (Shift-drag is still the terminal's own selection) unless tmux.conf says off.
     app.mouse = true;

@@ -64,7 +64,10 @@ pub fn flags(args: &[String]) -> Result<Flags, String> {
 }
 
 /// Run a command given on the command line; None when there is none (the client starts).
-pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<&str>) -> Option<i32> {
+pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&str>, name: Option<&str>) -> Option<i32> {
+    // hn's own commands ask a daemon: --port or $PORT, else the one the named (or newest) client
+    // talks to, else the default — never a daemon other than the client's the command names.
+    let port = explicit_port.or_else(|| crate::ipc::client_port(socket, name)).unwrap_or(18473);
     let socket = socket.map(str::to_string);
     let name = name.map(str::to_string);
     let cmd = args.first()?.as_str();

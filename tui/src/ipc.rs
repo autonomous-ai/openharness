@@ -25,7 +25,7 @@ pub fn dir() -> PathBuf {
 }
 
 /// Listen for commands from shells; each is run on the app loop, its output sent back.
-pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
+pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
     let dir = dir();
     std::fs::create_dir_all(&dir).ok()?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)); }
@@ -40,6 +40,9 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
     let listener = tokio::net::UnixListener::bind(&path).ok()?;
     let _ = HERE.set(path.clone());
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)); }
+    // Which daemon this client talks to, beside its socket: `hn -L name list-harnesses` asks that
+    // one, never another it happens to find on the default port.
+    let _ = std::fs::write(path.with_extension("port"), port.to_string());
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             let sink = sink.clone();
@@ -127,8 +130,15 @@ fn sweep(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let p = e.path();
-        if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() { let _ = std::fs::remove_file(&p); }
+        if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() { let _ = std::fs::remove_file(&p); let _ = std::fs::remove_file(p.with_extension("port")); }
     }
+}
+
+/// The daemon port of the client a command names (-S, -L, $HN_SOCKET, else the newest one): what
+/// it wrote beside its socket. None when no client is found.
+pub fn client_port(socket: Option<&str>, name: Option<&str>) -> Option<u16> {
+    let path = chosen(socket, name)?;
+    std::fs::read_to_string(path.with_extension("port")).ok()?.trim().parse().ok()
 }
 
 /// Which client to ask: -S path, -L name, $HN_SOCKET, else the newest.
@@ -188,5 +198,25 @@ pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) ->
                 let _ = std::fs::remove_file(&path); tried += 1; if tried > 8 { eprintln!("no client running (start one with: hn)"); return 1 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A command naming a client asks that client's daemon (the port it wrote beside its socket),
+    /// and a client that wrote none gives no port — never a guess.
+    #[test]
+    fn a_named_client_says_which_daemon() {
+        let tmp = std::env::temp_dir().join(format!("hn-port-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        unsafe { std::env::set_var("HN_TMPDIR", &tmp) }
+        let dir = super::dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("work.sock"), "").unwrap();
+        std::fs::write(dir.join("work.port"), "18999\n").unwrap();
+        assert_eq!(super::client_port(None, Some("work")), Some(18999));
+        assert_eq!(super::client_port(None, Some("other")), None);
+        assert_eq!(super::client_port(Some(dir.join("work.sock").to_str().unwrap()), None), Some(18999));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
