@@ -992,6 +992,8 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let mut run = String::new();
     let mut run_style = None::<Style>;
     for (c, st) in &cells {
+        // A combining mark (a decomposed accent) stays with its letter, whatever lit it.
+        if !run.is_empty() && unicode_width::UnicodeWidthChar::width(*c) == Some(0) { run.push(*c); continue }
         if run_style != Some(*st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
         run_style = Some(*st);
         run.push(*c);
@@ -1378,6 +1380,7 @@ fn fzf_row_part(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, te
     }
     let (mut run, mut run_style) = (String::new(), None::<Style>);
     for (c, part, on) in cells {
+        if !run.is_empty() && unicode_width::UnicodeWidthChar::width(*c) == Some(0) { run.push(*c); continue }
         let st = paint(base, matched, *part, *on);
         if run_style != Some(st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
         run_style = Some(st);
