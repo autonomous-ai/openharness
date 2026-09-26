@@ -857,6 +857,8 @@ pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layo
 /// one), or None when there is no such variable. Times are seconds since the epoch.
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
+    // A hook's (#{hook}, #{hook_pane}, #{hook_flag_t} …), as cmdq_add_formats adds them.
+    if let Some((_, v)) = app.hook_state.as_ref().and_then(|h| h.formats.iter().find(|(k, _)| k == name)) { return Some(Val::Str(v.clone())) }
     // list-commands -F's.
     if let Some((n, a, u)) = &app.format_command {
         match name { "command_list_name" => return Some(Val::Str(n.clone())), "command_list_alias" => return Some(Val::Str(a.clone())), "command_list_usage" => return Some(Val::Str(u.clone())), _ => {} }

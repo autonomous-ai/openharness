@@ -24,10 +24,10 @@ pub fn handle(app: &mut App, event: CEvent) {
         CEvent::Key(key) if key.kind != KeyEventKind::Release => on_key(app, key),
         CEvent::Paste(text) => on_paste(app, text),
         CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
-        CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes() }
+        CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }
         // The terminal in front: the dial follows its pane again (and hears it is in front).
-        CEvent::FocusGained => { app.terminal_focused = true; crate::dial::announce(app, false); app.announce_focus() }
-        CEvent::FocusLost => { app.terminal_focused = false; crate::dial::announce(app, false) }
+        CEvent::FocusGained => { app.terminal_focused = true; crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
+        CEvent::FocusLost => { app.terminal_focused = false; crate::dial::announce(app, false); crate::commands::notify(app, "client-focus-out", None, None) }
         _ => {}
     }
     app.sync_copy_modal();
@@ -590,7 +590,10 @@ pub fn run(app: &mut App, command: &str) {
             SPLIT.with(|s| s.set(Some(dir)));
         }
         "close-pane" => { if let Some(f) = app.focused() { app.close_pane(f) } else if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
-        "zoom" => { let tab = app.tab_mut(); if tab.panes().len() > 1 { tab.zoomed = !tab.zoomed } app.fit_panes() }
+        "zoom" => {
+            let tab = app.tab_mut();
+            if tab.panes().len() > 1 { tab.zoomed = !tab.zoomed; app.fit_panes(); let t = app.active; app.layout_changed(t) } else { app.fit_panes() }
+        }
         "equalize" => { if let Some(f) = app.focused() { if let Some(root) = app.tab_mut().root.as_mut() { root.spread_out(f) } } app.fit_panes() }
         "pane-tab" => {
             let Some(f) = app.focused() else { return };

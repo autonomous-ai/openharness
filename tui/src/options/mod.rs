@@ -12,14 +12,44 @@ use std::sync::OnceLock;
 pub enum Scope { Server, Session, Window, Pane }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Kind { Flag, Number(i64, i64), Choice(&'static [&'static str]), String, Colour, Key }
+pub enum Kind { Flag, Number(i64, i64), Choice(&'static [&'static str]), String, Colour, Key, Command }
 
 pub struct Opt { pub name: &'static str, pub scope: Scope, pub pane: bool, pub kind: Kind, pub array: bool }
 
 /// The table's entry for `name` (or `name[3]`).
 pub fn find(name: &str) -> Option<&'static Opt> {
     let base = name.split('[').next().unwrap_or(name);
-    table::TABLE.iter().find(|o| o.name == base)
+    table::TABLE.iter().chain(table::HOOKS.iter()).find(|o| o.name == base)
+}
+
+/// A hook (set-hook's, show-hooks'), not an option.
+pub fn is_hook(name: &str) -> bool { let base = name.split('[').next().unwrap_or(name); table::HOOKS.iter().any(|o| o.name == base) }
+
+/// Where options_array_assign splits a value into items: the table's separator (" ," when it
+/// has none); a hook's is empty, so its value is one item.
+fn separator(base: &str) -> &'static str {
+    match base {
+        "command-alias" | "terminal-overrides" | "terminal-features" | "user-keys" => ",",
+        b if is_hook(b) => "",
+        _ => " ,",
+    }
+}
+
+/// A name and its index: `status-format[1]` → (`status-format`, Some(1)).
+fn split_index(name: &str) -> (&str, Option<usize>) {
+    match name.split_once('[') { Some((b, rest)) => (b, rest.strip_suffix(']').and_then(|n| n.parse().ok())), None => (name, None) }
+}
+
+/// A layer holds an array (all of it, however few items — tmux's options_array_clear leaves an
+/// empty array there, not the defaults) when it has the array's own name as a key.
+fn holds(map: &BTreeMap<String, String>, base: &str) -> bool { map.contains_key(base) }
+
+/// An array's items in a layer, in index order.
+fn items(map: &BTreeMap<String, String>, base: &str) -> Vec<(usize, String)> {
+    let prefix = format!("{base}[");
+    let mut v: Vec<(usize, String)> = map.iter().filter_map(|(k, val)| k.strip_prefix(&prefix).and_then(|r| r.strip_suffix(']')).and_then(|n| n.parse().ok()).map(|n| (n, val.clone()))).collect();
+    v.sort_by_key(|(n, _)| *n);
+    v
 }
 
 /// tmux's defaults, raw, by name (`name[i]` for an array's items). hn's own differ in one place,
@@ -122,11 +152,8 @@ impl Store {
     /// A global array option's items in index order (command-alias, update-environment): the
     /// defaults, as set over them.
     pub fn array(&self, name: &str) -> Vec<String> {
-        let prefix = format!("{name}[");
-        let index = |k: &str| k.strip_prefix(&prefix).and_then(|r| r.strip_suffix(']')).and_then(|n| n.parse::<usize>().ok());
-        let mut items: BTreeMap<usize, String> = BTreeMap::new();
-        for (k, v) in defaults().iter().chain(self.server.iter()).chain(self.global_session.iter()).chain(self.global_window.iter()) { if let Some(i) = index(k) { items.insert(i, v.clone()); } }
-        items.into_values().collect()
+        for m in [&self.server, &self.global_session, &self.global_window] { if holds(m, name) { return items(m, name).into_iter().map(|(_, v)| v).collect() } }
+        items(defaults(), name).into_iter().map(|(_, v)| v).collect()
     }
 
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
@@ -140,6 +167,12 @@ impl Store {
                 None => return None,
             }
         };
+        // An array's item: from the nearest layer holding the array (none there is none).
+        if find(name).map(|o| o.array).unwrap_or(false) {
+            let (base, index) = split_index(name);
+            index?;
+            return match layers.into_iter().flatten().find(|m| holds(m, base)) { Some(m) => m.get(name).cloned(), None => defaults().get(name).cloned() };
+        }
         layers.into_iter().flatten().find_map(|m| m.get(name).cloned()).or_else(|| defaults().get(name).cloned())
     }
 
@@ -161,11 +194,25 @@ impl Store {
         let scope = scope_of(name, f)?;
         let global = f.global || scope == Scope::Server;
         let opt = find(name);
+        let array = opt.map(|o| o.array).unwrap_or(false);
+        let (base, index) = split_index(name);
+        // An array changed in a layer is all there: the global one starts from tmux's defaults
+        // (its items), another from nothing.
+        if array && (!f.unset || index.is_some()) {
+            let from: Vec<(usize, String)> = if global { items(defaults(), base) } else { Vec::new() };
+            let map = self.map_mut(scope, global, window, pane);
+            if !holds(map, base) {
+                map.insert(base.to_string(), String::new());
+                for (i, v) in from { map.insert(format!("{base}[{i}]"), v); }
+            }
+        }
         if f.unset {
             let map = self.map_mut(scope, global, window, pane);
-            if opt.map(|o| o.array).unwrap_or(false) && !name.contains('[') {
-                map.retain(|k, _| !k.starts_with(&format!("{name}[")));
-            } else { map.remove(name); }
+            match (array, index) {
+                // The whole array: back to what is further out (tmux's defaults, globally).
+                (true, None) => { map.remove(base); map.retain(|k, _| !k.starts_with(&format!("{base}["))); }
+                _ => { map.remove(name); }
+            }
             return Ok(self.get(name, window, Some(pane)));
         }
         // cmd_set_option: a user option needs a value.
@@ -175,16 +222,31 @@ impl Store {
         let now = self.get(name, window, Some(pane));
         let new = match (opt.map(|o| o.kind), value) {
             // A user option, or a string: as given (appended with -a).
-            (None | Some(Kind::String), v) => {
+            (None | Some(Kind::String) | Some(Kind::Command), v) => {
                 let v = v.unwrap_or("");
-                if opt.map(|o| o.array).unwrap_or(false) && !name.contains('[') {
-                    // An array: `set -a` adds an item, a plain set replaces them all with this one.
+                if array {
+                    if value.is_none() { return Err("empty value".into()) }
                     let map = self.map_mut(scope, global, window, pane);
-                    let n = if f.append { (0..).find(|i| !map.contains_key(&format!("{name}[{i}]"))).unwrap_or(0) } else {
-                        map.retain(|k, _| !k.starts_with(&format!("{name}[")));
-                        0
-                    };
-                    map.insert(format!("{name}[{n}]"), v.to_string());
+                    match index {
+                        // options_array_assign: the value split at the array's separator, each
+                        // piece at the next free index — after the items there with -a, else in
+                        // place of them.
+                        None => {
+                            if !f.append { map.retain(|k, _| !k.starts_with(&format!("{base}["))) }
+                            let sep = separator(base);
+                            let pieces: Vec<&str> = if sep.is_empty() { vec![v] } else { v.split(|c| sep.contains(c)).collect() };
+                            for piece in pieces.into_iter().filter(|p| !p.is_empty()) {
+                                let n = (0..).find(|i| !map.contains_key(&format!("{base}[{i}]"))).unwrap_or(0);
+                                map.insert(format!("{base}[{n}]"), piece.to_string());
+                            }
+                        }
+                        // options_array_set: that item (-a adds to a string's).
+                        Some(i) => {
+                            let key = format!("{base}[{i}]");
+                            let v = if f.append && opt.map(|o| !matches!(o.kind, Kind::Command)).unwrap_or(true) { format!("{}{v}", map.get(&key).cloned().unwrap_or_default()) } else { v.to_string() };
+                            map.insert(key, v);
+                        }
+                    }
                     return Ok(Some(v.to_string()));
                 }
                 let v = if f.append { format!("{}{v}", here.clone().or(now.clone()).unwrap_or_default()) } else { v.to_string() };
@@ -231,17 +293,19 @@ impl Store {
         Ok(Some(new))
     }
 
-    /// Every option of a scope in force globally: tmux's defaults, then what was set with -g.
+    /// Every option of a scope in force globally: tmux's defaults (its hooks empty arrays), then
+    /// what was set with -g.
     fn global_rows(&self, scope: Scope) -> BTreeMap<String, String> {
         let in_scope = |o: &Opt| match scope { Scope::Server => o.scope == Scope::Server, Scope::Session => o.scope == Scope::Session, Scope::Window => matches!(o.scope, Scope::Window | Scope::Pane), Scope::Pane => false };
         let mut rows: BTreeMap<String, String> = defaults().iter().filter(|(k, _)| find(k).map(in_scope).unwrap_or(false)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        for h in table::HOOKS.iter().filter(|o| in_scope(o)) { rows.insert(h.name.to_string(), String::new()); }
         if let Some(map) = self.map(scope, true, "", 0) { overlay(&mut rows, map) }
         rows
     }
 
     /// `show-options`: the lines tmux prints for these flags (every option in the scope, or `name`).
     /// [inherited] (-A) adds the values in force from further out, marked `*`.
-    pub fn show(&self, name: Option<&str>, f: &SetFlags, inherited: bool, values_only: bool, window: &str, pane: u64) -> Result<Vec<String>, String> {
+    pub fn show(&self, name: Option<&str>, f: &SetFlags, inherited: bool, values_only: bool, which: Which, window: &str, pane: u64) -> Result<Vec<String>, String> {
         let scope = match name { Some(n) => scope_of(n, f)?, None => if f.server { Scope::Server } else if f.pane { Scope::Pane } else if f.window { Scope::Window } else { Scope::Session } };
         let global = f.global || scope == Scope::Server;
         let mut rows: BTreeMap<String, (String, bool)> = BTreeMap::new();
@@ -255,32 +319,59 @@ impl Store {
                 rows = plain.into_iter().map(|(k, v)| { let local = map.contains_key(&k); (k, (v, inherited && !local)) }).collect();
             }
         }
+        // cmd_show_options_all's order: user options by name, then the table's (the options,
+        // then the hooks), an array's items by index — its own name alone only while it is empty.
+        let rank = |k: &str| {
+            let (base, idx) = split_index(k);
+            let item = idx.map(|i| i + 1).unwrap_or(0);
+            if base.starts_with('@') { return (0, 0, 0, k.to_string()) }
+            match table::TABLE.iter().position(|o| o.name == base) {
+                Some(p) => (1, p, item, String::new()),
+                None => (2, table::HOOKS.iter().position(|o| o.name == base).unwrap_or(usize::MAX), item, String::new()),
+            }
+        };
+        let empty = |k: &str| find(k).map(|o| o.array).unwrap_or(false) && !k.contains('[') && !rows.keys().any(|r| r.starts_with(&format!("{k}[")));
+        let shown = |k: &str| (find(k).map(|o| o.array).unwrap_or(false) && !k.contains('[')).then(|| empty(k)).unwrap_or(true) && !(values_only && empty(k));
+        let mut keys: Vec<&String> = rows.keys().collect();
+        keys.sort_by_key(|k| rank(k));
         let mut out = Vec::new();
         match name {
             Some(n) => {
                 let base = n.split('[').next().unwrap_or(n);
-                let hits: Vec<(&String, &(String, bool))> = rows.iter().filter(|(k, _)| k.as_str() == n || (!n.contains('[') && k.starts_with(&format!("{base}[")))).collect();
+                let hits: Vec<&String> = keys.into_iter().filter(|k| (k.as_str() == n || (!n.contains('[') && k.starts_with(&format!("{base}[")))) && shown(k)).collect();
                 // A user option nobody set does not exist; tmux's own just has no value here.
                 if hits.is_empty() && (n.starts_with('@') || find(n).is_none()) { return Err(format!("invalid option: {n}")) }
-                for (k, (v, inh)) in hits { out.push(line(k, v, *inh, values_only)) }
+                for k in hits { let (v, inh) = &rows[k]; out.push(line(k, v, *inh, values_only)) }
             }
-            None => for (k, (v, inh)) in &rows { out.push(line(k, v, *inh, values_only)) },
+            None => for k in keys {
+                let hook = is_hook(k);
+                if (which == Which::Options && hook) || (which == Which::Hooks && !hook) || !shown(k) { continue }
+                let (v, inh) = &rows[k];
+                out.push(line(k, v, *inh, values_only))
+            },
         }
         Ok(out)
     }
 }
 
-/// Values set over a list: an array set here replaces the list's items of that array.
+/// Values set over a list: an array a layer holds replaces the list's items of that array.
 fn overlay(rows: &mut BTreeMap<String, String>, map: &BTreeMap<String, String>) {
-    let arrays: std::collections::HashSet<&str> = map.keys().filter_map(|k| k.split_once('[').map(|(b, _)| b)).collect();
+    let arrays: std::collections::HashSet<&str> = map.keys().filter_map(|k| { let (b, i) = split_index(k); (i.is_some() || find(b).map(|o| o.array).unwrap_or(false)).then_some(b) }).collect();
     for a in arrays { rows.retain(|r, _| r != a && !r.starts_with(&format!("{a}["))) }
     for (k, v) in map { rows.insert(k.clone(), v.clone()); }
 }
+
+/// What `show` lists: a scope's options (show-options), with its hooks (-H), or its hooks
+/// (show-hooks).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Which { Options, All, Hooks }
 
 fn line(name: &str, value: &str, inherited: bool, values_only: bool) -> String {
     let star = if inherited { "*" } else { "" };
     if values_only { return value.to_string() }
     if value.is_empty() && find(name).map(|o| o.array).unwrap_or(false) && !name.contains('[') { return format!("{name}{star}") }
+    // A hook's commands print as commands (cmd_list_print), not as a quoted string.
+    if find(name).map(|o| matches!(o.kind, Kind::Command)).unwrap_or(false) { return format!("{name}{star} {value}") }
     format!("{name}{star} {}", escape(value))
 }
 
@@ -372,6 +463,41 @@ mod tests {
     }
 
     #[test]
+    fn arrays_and_hooks_as_tmux_keeps_them() {
+        let mut s = Store::default();
+        let g = SetFlags { global: true, ..Default::default() };
+        let ga = SetFlags { global: true, append: true, ..Default::default() };
+        // -a: split at the array's separator, after the defaults; the leading comma is no item.
+        s.set("terminal-overrides", Some(",xterm-256color:Tc"), &ga, "w", 1).unwrap();
+        assert_eq!(s.array("terminal-overrides"), vec!["linux*:AX@".to_string(), "xterm-256color:Tc".to_string()]);
+        // A plain set replaces them all; an empty one leaves an empty array, not the defaults.
+        s.set("command-alias", Some("x=y"), &g, "w", 1).unwrap();
+        assert_eq!(s.array("command-alias"), vec!["x=y".to_string()]);
+        s.set("command-alias", Some(""), &g, "w", 1).unwrap();
+        assert!(s.array("command-alias").is_empty());
+        assert_eq!(s.show(Some("command-alias"), &g, false, false, Which::Options, "w", 1), Ok(vec!["command-alias".into()]));
+        // -u: back to the defaults.
+        s.set("command-alias", None, &SetFlags { global: true, unset: true, ..Default::default() }, "w", 1).unwrap();
+        assert_eq!(s.array("command-alias").len(), 6);
+        // Hooks: arrays of commands, one item per set (no separator), listed by show-hooks.
+        s.set("after-new-window", Some("display-message a"), &ga, "w", 1).unwrap();
+        s.set("after-new-window", Some("display-message b, c"), &ga, "w", 1).unwrap();
+        assert_eq!(s.show(Some("after-new-window"), &g, false, false, Which::Hooks, "w", 1), Ok(vec!["after-new-window[0] display-message a".into(), "after-new-window[1] display-message b, c".into()]));
+        let hooks = s.show(None, &g, false, false, Which::Hooks, "w", 1).unwrap();
+        assert_eq!(hooks.len(), 56);
+        assert_eq!(hooks[0], "after-bind-key");
+        assert!(s.show(None, &g, false, false, Which::Options, "w", 1).unwrap().iter().all(|l| !l.starts_with("after-")));
+    }
+
+    #[test]
+    fn show_lists_in_tmux_order() {
+        let s = Store::default();
+        let w = SetFlags { global: true, window: true, ..Default::default() };
+        let rows = s.show(None, &w, false, false, Which::Options, "w", 1).unwrap();
+        assert_eq!(rows.iter().take(3).map(|r| r.split(' ').next().unwrap_or("")).collect::<Vec<_>>(), vec!["cursor-colour", "cursor-style", "menu-style"]);
+    }
+
+    #[test]
     fn set_checks_as_tmux_does() {
         let mut s = Store::default();
         let g = SetFlags { global: true, ..Default::default() };
@@ -385,14 +511,14 @@ mod tests {
         s.set("@y", Some("a"), &g, "w", 1).unwrap();
         assert_eq!(s.set("@y", Some("z"), &SetFlags { only_if_unset: true, ..g.clone() }, "w", 1), Err("already set: @y".into()));
         s.set("@y", Some("!"), &SetFlags { append: true, ..g.clone() }, "w", 1).unwrap();
-        assert_eq!(s.show(Some("@y"), &g, false, false, "w", 1), Ok(vec!["@y a!".into()]));
+        assert_eq!(s.show(Some("@y"), &g, false, false, Which::Options, "w", 1), Ok(vec!["@y a!".into()]));
         s.set("@y", None, &SetFlags { unset: true, ..g.clone() }, "w", 1).unwrap();
-        assert_eq!(s.show(Some("@y"), &g, false, false, "w", 1), Err("invalid option: @y".into()));
+        assert_eq!(s.show(Some("@y"), &g, false, false, Which::Options, "w", 1), Err("invalid option: @y".into()));
         // Local to the session: not in the global list.
         s.set("@l", Some("2"), &SetFlags::default(), "w", 1).unwrap();
-        assert_eq!(s.show(Some("@l"), &SetFlags::default(), false, false, "w", 1), Ok(vec!["@l 2".into()]));
-        assert!(s.show(Some("@l"), &g, false, false, "w", 1).is_err());
-        assert_eq!(s.show(Some("status-interval"), &g, false, true, "w", 1), Ok(vec!["15".into()]));
-        assert_eq!(s.show(Some("status-interval"), &SetFlags::default(), false, false, "w", 1), Ok(vec![]));
+        assert_eq!(s.show(Some("@l"), &SetFlags::default(), false, false, Which::Options, "w", 1), Ok(vec!["@l 2".into()]));
+        assert!(s.show(Some("@l"), &g, false, false, Which::Options, "w", 1).is_err());
+        assert_eq!(s.show(Some("status-interval"), &g, false, true, Which::Options, "w", 1), Ok(vec!["15".into()]));
+        assert_eq!(s.show(Some("status-interval"), &SetFlags::default(), false, false, Which::Options, "w", 1), Ok(vec![]));
     }
 }

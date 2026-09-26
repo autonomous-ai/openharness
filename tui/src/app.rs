@@ -292,6 +292,16 @@ pub struct App {
     pub origin: Option<(std::sync::Arc<str>, usize)>,
     /// Commands to run next, before the rest of the queue (source-file's).
     pub insert_next: std::collections::VecDeque<crate::commands::Item>,
+    /// The hook whose commands are running (their formats and current pane); commands run from a
+    /// hook fire none of their own.
+    pub hook_state: Option<std::sync::Arc<crate::commands::HookState>>,
+    /// Event hooks waiting to run (notify_add queues them; they run once the event's work is
+    /// done).
+    pub pending_hooks: std::collections::VecDeque<crate::commands::Item>,
+    /// Errors said so far (a command that failed fires command-error, not its after- hook).
+    pub errors: u64,
+    /// What the event hooks were last told of (notify_changes compares against it).
+    pub hooks_seen: HooksSeen,
 
     pub capture_err: Option<Vec<String>>,
     /// tmux's global environment: what hn started with, then set-environment -g and a config's
@@ -375,6 +385,10 @@ impl App {
             format_command: None,
             cli_stdin: None,
             insert_next: std::collections::VecDeque::new(),
+            hook_state: None,
+            pending_hooks: std::collections::VecDeque::new(),
+            errors: 0,
+            hooks_seen: HooksSeen::default(),
 
             capture_err: None,
             global_env: std::env::vars().map(|(k, v)| (k, EnvVar { value: Some(v), hidden: false })).collect(),
@@ -470,6 +484,7 @@ impl App {
     /// line with its first letter a capital, as tmux shows it there ("Invalid layout: foo"); a
     /// config file's keeps its file:line and its case.
     pub fn error(&mut self, text: impl Into<String>) {
+        self.errors += 1;
         let mut text = text.into();
         if self.capture_err.is_none() && self.origin.is_none() {
             if let Some(c) = text.chars().next() { text = c.to_uppercase().collect::<String>() + &text[c.len_utf8()..] }
@@ -1164,6 +1179,7 @@ impl App {
         tab.zoomed = false;
         tab.layout_at = layout::Named::ALL.iter().position(|n| *n == named);
         self.fit_panes();
+        self.layout_changed(index);
     }
 
 
@@ -1408,6 +1424,7 @@ impl App {
             self.open_stream(id, true);
             self.fit_panes();
             self.desk_pane_added(&tab_id, machine_id, agent_id);
+            self.layout_changed(t);
             return;
         }
         let empty = self.tab().root.is_none();
@@ -1446,10 +1463,12 @@ impl App {
                 self.drop_pane(old);
             }
             (Placement::At(_), _) => {}
-            (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => { if !self.split_focused(id, dir) { self.drop_pane(id); self.error("no space for new pane"); return } }
+            (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => { if !self.split_focused(id, dir) { self.drop_pane(id); self.error("no space for new pane"); return } let t = self.active; self.layout_changed(t) }
             (Placement::Auto(None), false) => {
                 let dir = self.smart_dir();
                 if !self.split_focused(id, dir) { self.drop_pane(id); self.error("no space for new pane"); return }
+                let t = self.active;
+                self.layout_changed(t);
             }
         }
         self.tab_mut().zoomed = false;
@@ -1511,6 +1530,7 @@ impl App {
         if !self.split_at(t, SLOT, &at) { return Err("create pane failed: pane too small".into()) }
         let point = self.tabs.iter().find_map(|x| x.points.get(&src).copied());
         let from = self.tabs.iter().position(|x| x.panes().contains(&src) && x.id != at.tab);
+        let from_id = from.map(|w| self.tabs[w].id.clone());
         match from {
             Some(_) => self.unhook_pane(src),
             None => {
@@ -1532,6 +1552,9 @@ impl App {
         self.desk_pane_added(&tab_id, &machine, &agent);
         self.sync_titles();
         self.fit_panes();
+        // cmd-join-pane.c: the window it left (if it is still there), then this one.
+        if let Some(w) = from_id.and_then(|id| self.tabs.iter().position(|x| x.id == id)) { self.layout_changed(w) }
+        self.layout_changed(t);
         Ok(())
     }
 
@@ -1545,6 +1568,8 @@ impl App {
         let back = self.tabs[self.active].id.clone();
         let point = self.tabs[from].points.get(&src).copied();
         self.unhook_pane(src);
+        // layout_close_pane in the window it leaves.
+        self.layout_changed(from);
         let label = name.clone().or_else(|| self.panes.get(&src).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone())).unwrap_or_else(|| "tab".into());
         let mut tab = Tab::new(&label);
         tab.named = name.is_some();
@@ -1650,6 +1675,8 @@ impl App {
         if let Some((machine, agent)) = agent { self.desk_op(json!({ "op": "pane.remove", "tabId": tab_id, "machineId": machine, "agentId": agent })) }
         if self.tabs[index].root.is_none() && self.tabs.len() > 1 { self.close_tab(index) }
         else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "home".into() }
+        // layout_close_pane: the window's other panes take the room.
+        else if self.tabs[index].root.is_some() { self.layout_changed(index) }
         self.sync_titles();
         self.fit_panes();
     }
@@ -1670,6 +1697,104 @@ impl App {
         if self.tabs.is_empty() { self.tabs.push(Tab::new("home")) }
         if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
         self.fit_panes();
+    }
+
+    /// The event hooks (notify.c) for what changed since they were last told: windows unlinked,
+    /// linked and renamed, a layout changed, the active pane of a window, the current window,
+    /// pane focus (the current window's active pane, while the terminal has focus and no menu is
+    /// over it), a pane entering or leaving a mode, the session renamed. The first look only
+    /// takes note.
+    pub fn notify_changes(&mut self) {
+        // tmux's CLIENT_FOCUSED: set when the client attaches; only focus-events brings the
+        // terminal's focus reports that clear and set it again.
+        let focus_events = self.options.get("focus-events", "", None).as_deref() == Some("on");
+        let client = !focus_events || self.terminal_focused;
+        let mut now = HooksSeen {
+            ready: true,
+            windows: self.tabs.iter().map(|t| (t.id.clone(), t.wid, t.name.clone(), t.focus, t.root.as_ref().map(|r| r.to_tmux()).unwrap_or_default())).collect(),
+            current: self.tabs.get(self.active).map(|t| t.id.clone()),
+            client,
+            session: self.session_name(),
+            modes: self.panes.values().filter(|p| p.copy.is_some()).map(|p| p.id).collect(),
+            focused: self.hooks_seen.focused.clone(),
+        };
+        let before = std::mem::replace(&mut self.hooks_seen, now.clone());
+        if !before.ready {
+            // The client attached (server_client_set_session): the current pane takes focus.
+            if let Some(p) = self.focused() { self.update_focus(p, &mut now.focused, false) }
+            self.hooks_seen.focused = now.focused;
+            return;
+        }
+        let at = |app: &App, id: &str| app.tabs.iter().position(|t| t.id == id);
+        for (id, wid, name, focus, _) in before.windows.iter().filter(|w| !now.windows.iter().any(|n| n.0 == w.0)) {
+            let _ = (id, focus);
+            crate::commands::notify_gone(self, "window-unlinked", *wid, name);
+        }
+        for (id, ..) in now.windows.iter().filter(|w| !before.windows.iter().any(|b| b.0 == w.0)) {
+            if let Some(w) = at(self, id) { crate::commands::notify(self, "window-linked", Some(w), None) }
+        }
+        for (id, _, name, focus, layout) in now.windows.iter() {
+            let Some(old) = before.windows.iter().find(|b| &b.0 == id) else { continue };
+            let Some(w) = at(self, id) else { continue };
+            if &old.2 != name { crate::commands::notify(self, "window-renamed", Some(w), None) }
+            let _ = layout;
+            if &old.3 != focus && old.3.is_some() { crate::commands::notify(self, "window-pane-changed", Some(w), None) }
+        }
+        if before.current != now.current && before.current.is_some() { crate::commands::notify(self, "session-window-changed", Some(self.active), None) }
+        // Pane focus (window_pane_update_focus), where tmux looks again: a window's active pane
+        // that changed and a window that became current only with focus-events; a window whose
+        // active pane went away (window_lost_pane), and the client's own focus, always.
+        let mut focused = now.focused.clone();
+        focused.retain(|p| self.panes.contains_key(p));
+        let old_window_active = |id: &str| before.windows.iter().find(|w| w.0 == id).and_then(|w| w.3);
+        if before.current != now.current && focus_events {
+            if let Some(p) = before.current.as_deref().and_then(old_window_active) { self.update_focus(p, &mut focused, true) }
+            if let Some(p) = self.focused() { self.update_focus(p, &mut focused, true) }
+        }
+        for (id, _, _, focus, _) in now.windows.iter() {
+            let Some(old) = before.windows.iter().find(|b| &b.0 == id).and_then(|b| b.3) else { continue };
+            let Some(new) = *focus else { continue };
+            if old == new { continue }
+            // window_lost_pane: the active pane left this window (closed, or moved to another).
+            let lost = !self.tabs.iter().find(|t| &t.id == id).map(|t| t.panes().contains(&old)).unwrap_or(false);
+            if lost {
+                let then = before.current.as_deref().and_then(|c| self.tabs.iter().position(|t| t.id == c)).unwrap_or(self.active);
+                self.update_focus_in(new, &mut focused, true, then)
+            }
+            else if focus_events { self.update_focus(old, &mut focused, true); self.update_focus(new, &mut focused, true) }
+        }
+        if before.client != now.client { if let Some(p) = self.focused() { self.update_focus(p, &mut focused, true) } }
+        self.hooks_seen.focused = focused;
+        let changed: Vec<u64> = now.modes.iter().filter(|p| !before.modes.contains(p)).chain(before.modes.iter().filter(|p| !now.modes.contains(p))).copied().filter(|p| self.panes.contains_key(p)).collect();
+        for p in changed {
+            let w = self.tabs.iter().position(|t| t.panes().contains(&p));
+            crate::commands::notify(self, "pane-mode-changed", w, Some(p));
+        }
+        if before.session != now.session { crate::commands::notify(self, "session-renamed", None, None) }
+    }
+
+    /// notify_window("window-layout-changed"), where tmux calls it: each preset (layout-set.c),
+    /// a layout string applied, select-layout's own after either, every resize
+    /// (layout_resize_layout), zoom and unzoom, a pane split in (spawn_pane) or closed
+    /// (layout_close_pane), swap-pane and join-pane in each window.
+    pub fn layout_changed(&mut self, t: usize) { crate::commands::notify(self, "window-layout-changed", Some(t), None) }
+
+    /// window_pane_update_focus: [pane] is focused when it is the current window's active pane,
+    /// the client has focus and no menu or popup is over it; a pane that gains or loses that
+    /// fires pane-focus-in or pane-focus-out ([notify]), its flag kept in [focused].
+    fn update_focus(&mut self, pane: u64, focused: &mut Vec<u64>, notify: bool) { let current = self.active; self.update_focus_in(pane, focused, notify, current) }
+
+    /// window_pane_update_focus with [current] the window current when tmux looks (a pane lost
+    /// before break-pane goes to its new window is looked at while the old one still is).
+    fn update_focus_in(&mut self, pane: u64, focused: &mut Vec<u64>, notify: bool, current: usize) {
+        let Some(w) = self.tabs.iter().position(|t| t.panes().contains(&pane)) else { return };
+        let overlay = matches!(self.modal, Some(crate::modal::Modal::Menu(_)) | Some(crate::modal::Modal::Popup { .. }));
+        let focus_events = self.options.get("focus-events", "", None).as_deref() == Some("on");
+        let client = !focus_events || self.terminal_focused;
+        let is = w == current && self.tabs[w].focus == Some(pane) && client && !overlay;
+        let had = focused.contains(&pane);
+        if !is && had { focused.retain(|p| *p != pane); if notify { crate::commands::notify(self, "pane-focus-out", Some(w), Some(pane)) } }
+        else if is && !had { focused.push(pane); if notify { crate::commands::notify(self, "pane-focus-in", Some(w), Some(pane)) } }
     }
 
     /// The last window (the top of tmux's lastw stack): C-b l's, the - flag's.
@@ -1749,6 +1874,9 @@ impl App {
         if !current { self.tabs[t].alerts |= flag }
         let applies = match self.options.get(action, "", None).as_deref() { Some("any") => true, Some("current") => current, Some("other") => !current, _ => false };
         if !applies { return }
+        // notify_winlink: alert-bell, alert-activity, alert-silence.
+        let hook = match flag { BELL => "alert-bell", ACTIVITY => "alert-activity", _ => "alert-silence" };
+        crate::commands::notify(self, hook, Some(t), None);
         let visual = self.options.get(visual, "", None).unwrap_or_default();
         if visual == "off" || visual == "both" { crate::bell() }
         if visual == "off" { return }
@@ -1857,6 +1985,10 @@ impl App {
     /// (cmd_find_from_mouse), else the active pane of the current window.
     pub fn current(&self) -> Option<(usize, u64)> {
         if let Some(found) = self.mouse_ev.as_ref().filter(|m| m.valid).and_then(|m| crate::mouse::mouse_pane(self, m)) { return Some(found) }
+        // A hook's commands: the pane (window) it is about.
+        if let Some((tab, pane)) = self.hook_state.as_ref().and_then(|h| h.target.clone()) {
+            if let Some(w) = self.tabs.iter().position(|t| t.id == tab) { return Some((w, pane)) }
+        }
         self.focused().map(|f| (self.active, f))
     }
 
@@ -1864,7 +1996,7 @@ impl App {
     pub fn drag_border(&mut self, w: usize, lx: u32, ly: u32, x: u32, y: u32) {
         self.fit_panes_of(w);
         let moved = self.tabs.get_mut(w).and_then(|t| t.root.as_mut()).map(|r| r.drag_border(lx, ly, x, y)).unwrap_or(false);
-        if moved { self.fit_panes() }
+        if moved { self.fit_panes(); self.layout_changed(w) }
     }
 
     /// The pane that way from `from`, as tmux's select-pane -L/-R/-U/-D finds it.
@@ -1909,8 +2041,10 @@ impl App {
     /// resize-pane -L/-R/-U/-D: the pane's nearest border in that direction moves `cells`.
     pub fn resize_pane(&mut self, tab: usize, pane: u64, dir: Dir, cells: i32) {
         self.fit_panes_of(tab);
+        let before = self.tabs.get(tab).and_then(|t| t.root.as_ref()).map(|r| r.to_tmux());
         if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.resize_pane(pane, dir, cells, true); }
         self.fit_panes();
+        if self.tabs.get(tab).and_then(|t| t.root.as_ref()).map(|r| r.to_tmux()) != before { self.layout_changed(tab) }
     }
 
     /// A window's cells at the client's size before they are moved.
@@ -1933,8 +2067,12 @@ impl App {
         let sy = self.body().height as u32;
         let own_row = match (status, g) { (layout::Status::Top, Some(g)) => g.y == 1, (layout::Status::Bottom, Some(g)) => g.y + g.h + 1 == sy, _ => false };
         let cells = if dir == Dir::Vertical && own_row { cells + 1 } else { cells };
+        let before = self.tabs.get(tab).and_then(|t| t.root.as_ref()).map(|r| r.to_tmux());
         if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.resize_pane_to(pane, dir, cells as u32); }
         self.fit_panes();
+        // layout_resize_pane_to returns early (nothing notified) when the pane has no parent to
+        // resize it in that way.
+        if self.tabs.get(tab).and_then(|t| t.root.as_ref()).map(|r| r.to_tmux()) != before { self.layout_changed(tab) }
     }
 
     /// tmux's swap-pane in one window: the two trade cells and places in the list; the target
@@ -1954,6 +2092,7 @@ impl App {
         tab.zoomed &= keep_zoom;
         self.sync_titles();
         self.fit_panes();
+        self.layout_changed(w);
     }
 
     /// swap-pane across two windows: each pane takes the other's cell and place in its list;
@@ -1984,6 +2123,8 @@ impl App {
         }
         self.sync_titles();
         self.fit_panes();
+        self.layout_changed(sw);
+        self.layout_changed(dw);
     }
 
     /// `rotate-window` (C-o): the list turns (the first pane to the end; -D the last to the
@@ -2290,6 +2431,12 @@ pub fn utc_offset() -> i64 {
         sign * (h * 3600 + m * 60)
     })
 }
+
+/// The state the event hooks compare against: each window (its id, @number, name, active pane
+/// and layout), the current window, the focused pane, the session's name, and which panes are
+/// in a mode.
+#[derive(Default, Clone)]
+pub struct HooksSeen { ready: bool, windows: Vec<(String, u64, String, Option<u64>, String)>, current: Option<String>, client: bool, session: String, modes: Vec<u64>, focused: Vec<u64> }
 
 pub fn hostname() -> String {
     static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();

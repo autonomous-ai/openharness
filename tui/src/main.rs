@@ -222,6 +222,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
     else if let Some(path) = read.last() { if app.messages.is_empty() { app.say(format!("{} read — your prefix is {}", path.replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) } }
     app.boot();
+    // The client is attached: the hooks' first look, then client-attached.
+    app.notify_changes();
+    commands::notify(&mut app, "client-attached", None, None);
 
     let frame_budget = Duration::from_millis(6);
     let mut last_draw = Instant::now() - frame_budget;
@@ -248,6 +251,9 @@ async fn run(config: config::Config) -> io::Result<()> {
         if let Some(event) = first { apply(&mut app, event, &mut refill); need_draw = true }
         // Everything else already waiting goes into the same frame.
         while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill); need_draw = true }
+        // The event hooks for what that changed, then any waiting.
+        app.notify_changes();
+        commands::run_pending_hooks(&mut app);
         if app.quit { break }
         if std::mem::take(&mut app.mouse_changed) {
             if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; } else { execute!(term.backend_mut(), DisableMouseCapture)?; }

@@ -149,6 +149,37 @@ impl Args {
     pub fn get(&self, c: char) -> Option<&str> { self.flags.iter().rev().find(|(f, v)| *f == c && v.is_some()).and_then(|(_, v)| v.as_deref()) }
     /// Every value the flag was given, in order (-e A=1 -e B=2).
     pub fn all(&self, c: char) -> Vec<&str> { self.flags.iter().filter(|(f, _)| *f == c).filter_map(|(_, v)| v.as_deref()).collect() }
+
+    /// The flags given, each once, in the order args_tree keeps them (by letter).
+    fn letters(&self) -> Vec<char> { let mut v: Vec<char> = self.flags.iter().map(|(f, _)| *f).collect(); v.sort(); v.dedup(); v }
+
+    /// args_print: the flags without values bundled (`-dh`), then each value a flag was given
+    /// (`-t 1`), then the arguments, escaped as show-options escapes them.
+    pub fn print(&self) -> String {
+        let mut out = String::new();
+        for f in self.letters() {
+            if self.all(f).is_empty() { if out.is_empty() { out.push('-') } for _ in 0..self.has(f) { out.push(f) } }
+        }
+        for f in self.letters() {
+            for v in self.all(f) { if !out.is_empty() { out.push(' ') } out.push_str(&format!("-{f} {}", crate::options::escape(v))) }
+        }
+        for v in &self.values { if !out.is_empty() { out.push(' ') } out.push_str(&crate::options::escape(v)) }
+        out
+    }
+
+    /// cmdq_insert_hook's formats for a command's arguments: #{hook_arguments}, each argument
+    /// (#{hook_argument_0} …) and flag (#{hook_flag_d} 1, #{hook_flag_t} its value, and each
+    /// value #{hook_flag_t_0} …).
+    pub fn hook_formats(&self) -> Vec<(String, String)> {
+        let mut out = vec![("hook_arguments".to_string(), self.print())];
+        for (i, v) in self.values.iter().enumerate() { out.push((format!("hook_argument_{i}"), v.clone())) }
+        for f in self.letters() {
+            let values = self.all(f);
+            out.push((format!("hook_flag_{f}"), self.get(f).map(str::to_string).unwrap_or_else(|| "1".into())));
+            for (i, v) in values.iter().enumerate() { out.push((format!("hook_flag_{f}_{i}"), v.to_string())) }
+        }
+        out
+    }
 }
 
 /// Flags hn adds to a tmux command, over tmux's own (as Vim's additions sit over vi's):

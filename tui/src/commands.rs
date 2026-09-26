@@ -497,7 +497,7 @@ pub fn execute_bound(app: &mut App, line: &str) {
 fn bound_queue(app: &mut App, line: &str) -> Queue {
     let mouse = app.mouse_ev.clone();
     queue_of(app, line).into_iter()
-        .flat_map(|item| crate::cmdparse::from_arguments(&item.words).into_iter().map(|words| Item { words, origin: None, mouse: mouse.clone() }).collect::<Vec<_>>())
+        .flat_map(|item| crate::cmdparse::from_arguments(&item.words).into_iter().map(|words| Item { words, origin: None, mouse: mouse.clone(), hook: app.hook_state.clone() }).collect::<Vec<_>>())
         .collect()
 }
 
@@ -512,13 +512,18 @@ pub fn execute_mouse(app: &mut App, line: &str, m: crate::mouse::Event) {
 
 /// A command given as arguments (`hn <command> …` from a shell), split as tmux splits them.
 pub fn execute_args(app: &mut App, words: &[String]) {
-    let q: Queue = crate::cmdparse::from_arguments(words).into_iter().map(|words| Item { words, origin: None, mouse: None }).collect();
+    let q: Queue = crate::cmdparse::from_arguments(words).into_iter().map(|words| Item { words, origin: None, mouse: None, hook: None }).collect();
     run_queue(app, q);
 }
 
 /// A command waiting in the queue, and the file and line it was read from (a config's).
 #[derive(Clone, Debug)]
-pub struct Item { pub words: Vec<String>, pub origin: Option<(std::sync::Arc<str>, usize)>, pub mouse: Option<crate::mouse::Event> }
+pub struct Item { pub words: Vec<String>, pub origin: Option<(std::sync::Arc<str>, usize)>, pub mouse: Option<crate::mouse::Event>, pub hook: Option<std::sync::Arc<HookState>> }
+
+/// What a hook's commands run with (cmdq_new_state, CMDQ_STATE_NOHOOKS): its formats and the pane
+/// it is about (the tab's id and the pane), their current one.
+#[derive(Clone, Debug, Default)]
+pub struct HookState { pub formats: Vec<(String, String)>, pub target: Option<(String, u64)> }
 
 pub type Queue = std::collections::VecDeque<Item>;
 
@@ -528,24 +533,32 @@ fn queue_of(app: &mut App, line: &str) -> Queue {
     match crate::cmdparse::parse(line, app, false) {
         // Commands a command queues (if-shell's, a menu's) keep its mouse event, as tmux's
         // inserted items keep their state.
-        Ok(cmds) => cmds.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None, mouse: app.mouse_ev.clone() }).collect(),
+        Ok(cmds) => cmds.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None, mouse: app.mouse_ev.clone(), hook: app.hook_state.clone() }).collect(),
         Err((_, e)) => { app.error(e); Queue::new() }
     }
 }
 
 fn run_queue(app: &mut App, mut queue: Queue) {
-    while let Some(Item { words, origin, mouse }) = queue.pop_front() {
+    while let Some(Item { words, origin, mouse, hook }) = queue.pop_front() {
         app.origin = origin;
         let saved = std::mem::replace(&mut app.mouse_ev, mouse);
-        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; continue } };
+        let saved_hook = std::mem::replace(&mut app.hook_state, hook.clone());
+        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; app.hook_state = saved_hook; continue } };
         let Some(Job { command, cwd, delay, background, done }) = job else {
+            let errors = app.errors;
             run_words(app, &words);
+            // cmdq_fire_command: a command that failed fires command-error, one that did not its
+            // after- hook — not a command a hook ran.
+            let hooks = if hook.is_none() { command_hooks(app, &words, app.errors != errors) } else { Queue::new() };
             app.origin = None;
             app.mouse_ev = saved;
-            // What source-file read runs next, before the rest.
+            app.hook_state = saved_hook;
+            // What source-file read runs next, before the rest; the hooks before that.
             if !app.insert_next.is_empty() { let mut next = std::mem::take(&mut app.insert_next); next.extend(queue); queue = next }
+            if !hooks.is_empty() { let mut next = hooks; next.extend(queue); queue = next }
             continue;
         };
+        app.hook_state = saved_hook;
         app.origin = None;
         // What the job chooses to run next keeps the item's mouse event.
         let mouse = std::mem::replace(&mut app.mouse_ev, saved);
@@ -592,6 +605,90 @@ fn run_queue(app: &mut App, mut queue: Queue) {
         });
         return;
     }
+}
+
+/// The commands a hook holds, as queue items run with [state] — each item of the hook array,
+/// looked up as notify_insert_hook looks (the pane's, the window's, the session's, globally).
+fn hook_items(app: &mut App, name: &str, target: Option<(usize, u64)>, state: HookState) -> Queue {
+    let (tab_id, pane) = match target { Some((w, p)) => (app.tabs.get(w).map(|t| t.id.clone()).unwrap_or_default(), p), None => (String::new(), 0) };
+    let values: Vec<String> = (0..64).filter_map(|i| app.options.get(&format!("{name}[{i}]"), &tab_id, Some(pane))).collect();
+    if values.is_empty() { return Queue::new() }
+    let state = std::sync::Arc::new(state);
+    let mut out = Queue::new();
+    for v in values {
+        match crate::cmdparse::parse(&v, app, false) {
+            Ok(cmds) => out.extend(cmds.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None, mouse: None, hook: Some(state.clone()) })),
+            Err(_) => {}
+        }
+    }
+    out
+}
+
+/// A command's hooks (cmdq_insert_hook): after-<command> when it did its work, command-error
+/// when it failed — with #{hook}, #{hook_arguments} and the rest, about the command's pane.
+fn command_hooks(app: &mut App, words: &[String], failed: bool) -> Queue {
+    let Some(first) = words.first() else { return Queue::new() };
+    let Ok(entry) = crate::cmd::find(first) else { return Queue::new() };
+    let name = if failed { "command-error".to_string() } else { format!("after-{}", entry.name) };
+    if !crate::options::is_hook(&name) || name == "after-queue" { return Queue::new() }
+    let args = crate::cmd::parse(entry, &crate::tmuxconf::unblock(words)).unwrap_or_default();
+    let target = app.current();
+    let mut formats = vec![("hook".to_string(), name.clone())];
+    formats.extend(args.hook_formats());
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    hook_items(app, &name, target, state)
+}
+
+/// An event's hook (notify_add): run once the work that caused it is done, with #{hook},
+/// #{hook_client}, #{hook_session}, #{hook_session_name} and — when it is about one — the
+/// window's #{hook_window} and #{hook_window_name} and the pane's #{hook_pane}.
+pub fn notify(app: &mut App, name: &str, window: Option<usize>, pane: Option<u64>) {
+    if app.hook_state.is_some() && name.starts_with("after-") { return }
+    let mut formats = vec![
+        ("hook".to_string(), name.to_string()),
+        ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
+        ("hook_session".to_string(), "$0".to_string()),
+        ("hook_session_name".to_string(), app.session_name()),
+    ];
+    let w = window.filter(|w| *w < app.tabs.len());
+    if let Some(w) = w {
+        formats.push(("hook_window".to_string(), crate::format::expand(app, "#{window_id}", w, None, false)));
+        formats.push(("hook_window_name".to_string(), app.tabs[w].name.clone()));
+    }
+    // #{hook_pane} only for an event about a pane (notify_pane); the commands' pane is the
+    // window's active one otherwise.
+    if let Some(p) = pane { formats.push(("hook_pane".to_string(), crate::pane::tag(p))) }
+    let target = w.or(Some(app.active)).and_then(|w| pane.or(app.tabs.get(w).and_then(|t| t.focus)).map(|p| (w, p)));
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let items = hook_items(app, name, target, state);
+    app.pending_hooks.extend(items);
+}
+
+/// An event about a window that is gone (window-unlinked): its @number and name, as it was.
+pub fn notify_gone(app: &mut App, name: &str, wid: u64, window_name: &str) {
+    let formats = vec![
+        ("hook".to_string(), name.to_string()),
+        ("hook_client".to_string(), crate::format::expand(app, "#{client_name}", app.active, None, false)),
+        ("hook_session".to_string(), "$0".to_string()),
+        ("hook_session_name".to_string(), app.session_name()),
+        ("hook_window".to_string(), format!("@{wid}")),
+        ("hook_window_name".to_string(), window_name.to_string()),
+    ];
+    let target = app.focused().map(|p| (app.active, p));
+    let state = HookState { formats, target: target.and_then(|(w, p)| app.tabs.get(w).map(|t| (t.id.clone(), p))) };
+    let items = hook_items(app, name, target, state);
+    app.pending_hooks.extend(items);
+}
+
+/// The event hooks waiting, run (from the main loop, after the event's work).
+pub fn run_pending_hooks(app: &mut App) {
+    // A hook's commands can raise events of their own: a few rounds, not forever.
+    for _ in 0..8 {
+        if app.pending_hooks.is_empty() { return }
+        let q = std::mem::take(&mut app.pending_hooks);
+        run_queue(app, q);
+    }
+    app.pending_hooks.clear();
 }
 
 /// How a job ended: tmux's exit status (128 + the signal for one killed), and what it printed.
@@ -719,7 +816,7 @@ pub fn source(app: &mut App, file: &str, parse_only: bool, verbose: bool) -> Res
     if let Some(e) = error { return Err(e) }
     if parse_only { return Ok(Queue::new()) }
     let origin: std::sync::Arc<str> = std::sync::Arc::from(file);
-    Ok(built.commands.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: Some((origin.clone(), c.line)), mouse: None }).collect())
+    Ok(built.commands.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: Some((origin.clone(), c.line)), mouse: None, hook: None }).collect())
 }
 
 /// The config at start, as tmux reads it: ~/.tmux.conf and the XDG ones that exist (or -f's);
@@ -1083,31 +1180,34 @@ fn run_words(app: &mut App, words: &[String]) {
         // -t: that window's layout, the current window staying where it is.
         "next-layout" | "previous-layout" => {
             let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
-            app.step_layout(target, command == "next-layout")
+            app.step_layout(target, command == "next-layout");
+            app.layout_changed(target);
         }
         "select-layout" => {
             // -t: that window (else this one).
             // select-layout [-Enop] [-t target-window] [layout-name]: tmux's seven by name (or the
             // one a prefix names), -n/-p the next/previous, -E spread out, or a layout string.
             let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
-            if flag(words, "-n") || flag(words, "-p") { return app.step_layout(target, !flag(words, "-p")) }
+            // cmd-select-layout.c notifies once more after whatever changed the layout.
+            if flag(words, "-n") || flag(words, "-p") { app.step_layout(target, !flag(words, "-p")); return app.layout_changed(target) }
             if flag(words, "-E") {
                 if let Some(f) = app.tabs[target].focus { if let Some(root) = app.tabs[target].root.as_mut() { root.spread_out(f) } }
-                return app.fit_panes();
+                app.fit_panes();
+                return app.layout_changed(target);
             }
             let name = positional(words).join(" ");
             let name = name.trim();
             // No name: the layout last applied, again (nothing if there was none).
             if name.is_empty() {
-                if let Some(at) = app.tabs[target].layout_at { app.arrange_tab(target, crate::layout::Named::ALL[at]) }
+                if let Some(at) = app.tabs[target].layout_at { app.arrange_tab(target, crate::layout::Named::ALL[at]); app.layout_changed(target) }
                 return;
             }
-            if let Some(named) = crate::layout::Named::lookup(name) { return app.arrange_tab(target, named) }
+            if let Some(named) = crate::layout::Named::lookup(name) { app.arrange_tab(target, named); return app.layout_changed(target) }
             // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
             let ids = app.tabs[target].panes();
             let body = app.body();
             match crate::layout::Node::from_tmux(name, &ids, body.width, body.height) {
-                Some(root) => { let tab = &mut app.tabs[target]; tab.root = Some(root); tab.zoomed = false; app.fit_panes() }
+                Some(root) => { let tab = &mut app.tabs[target]; tab.root = Some(root); tab.zoomed = false; app.fit_panes(); app.layout_changed(target); app.layout_changed(target) }
                 None => app.error(format!("invalid layout: {name}")),
             }
         }
@@ -1292,17 +1392,17 @@ fn run_words(app: &mut App, words: &[String]) {
             }
             app.print("list-keys", lines);
         }
-        "show-options" | "show-window-options" => {
+        "show-options" | "show-window-options" | "show-hooks" => {
             // tmux's show-options: -g global, -s server, -w window, -p pane, -v values only,
             // -A what is inherited too (marked *), -q quiet, -t the window or pane.
             let mut f = crate::options::SetFlags { window: command == "show-window-options", ..Default::default() };
-            let (mut values_only, mut inherited, mut quiet, mut target, mut name) = (false, false, false, None, None);
+            let (mut values_only, mut inherited, mut quiet, mut target, mut name, mut hooks) = (false, false, false, None, None, false);
             let mut i = 1;
             while i < words.len() {
                 let w = &words[i];
                 if name.is_none() && w.starts_with('-') && w.len() > 1 {
                     for c in w[1..].chars() {
-                        match c { 'g' => f.global = true, 's' => f.server = true, 'w' => f.window = true, 'p' => f.pane = true, 'v' => values_only = true, 'A' => inherited = true, 'q' => quiet = true, 't' => { i += 1; target = words.get(i).cloned() } _ => {} }
+                        match c { 'g' => f.global = true, 's' => f.server = true, 'w' => f.window = true, 'p' => f.pane = true, 'v' => values_only = true, 'A' => inherited = true, 'q' => quiet = true, 'H' => hooks = true, 't' => { i += 1; target = words.get(i).cloned() } _ => {} }
                     }
                 } else if name.is_none() { name = Some(w.clone()) } else { return app.error("command show-options: too many arguments (need at most 1)") }
                 i += 1;
@@ -1312,7 +1412,8 @@ fn run_words(app: &mut App, words: &[String]) {
                 None => app.current().unwrap_or((app.active, 0)),
             };
             let tab_id = app.tabs[tab].id.clone();
-            match app.options.show(name.as_deref(), &f, inherited, values_only, &tab_id, pane) {
+            let which = if command == "show-hooks" { crate::options::Which::Hooks } else if hooks { crate::options::Which::All } else { crate::options::Which::Options };
+            match app.options.show(name.as_deref(), &f, inherited, values_only, which, &tab_id, pane) {
                 Ok(lines) => { if !lines.is_empty() { app.print("show-options", lines) } }
                 Err(_) if quiet => {}
                 Err(e) => app.error(e),
@@ -1382,6 +1483,9 @@ fn run_words(app: &mut App, words: &[String]) {
                 else { app.tabs[tab].sync = on }
                 return;
             }
+            // An array is read where it is used (command-alias, update-environment …): nothing of
+            // hn's own follows it, and setting it again with its last item would replace it.
+            if crate::options::find(&name).map(|o| o.array).unwrap_or(false) { return }
             let mut settings = crate::tmuxconf::Settings::default();
             let words = vec!["set".to_string(), "-g".to_string(), name, now.unwrap_or_default()];
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
@@ -1527,7 +1631,29 @@ fn run_words(app: &mut App, words: &[String]) {
             };
             app.print("show-environment", lines)
         }
-        "set-hook" | "show-hooks" => {}
+        "set-hook" => {
+            // cmd-set-option.c, as set-hook [-agpRuw] [-t target-pane] hook [command] runs it: -R
+            // fires the hook now (notify_hook); else it is set as an option is — a hook is an
+            // array of commands, kept as tmux prints them (display → display-message), -a adding
+            // one, -u removing the hook (or hook[N]).
+            let args = positional(words);
+            let Some(name) = args.first().map(|n| expand(app, n)) else { return app.error("command set-hook: too few arguments (need at least 1)") };
+            let (tab, pane) = match opt(words, "-t") {
+                Some(t) => match pane_target(app, &t) { Some(tp) => tp, None => return app.error(format!("can't find pane: {t}")) },
+                None => app.current().unwrap_or((app.active, 0)),
+            };
+            if flag(words, "-R") { return notify(app, &name, Some(tab), Some(pane)) }
+            let f = crate::options::SetFlags { global: flag(words, "-g"), pane: flag(words, "-p"), window: flag(words, "-w"), unset: flag(words, "-u"), append: flag(words, "-a"), ..Default::default() };
+            let mut value = args.get(1).cloned();
+            if let (Some(v), Some(o)) = (value.as_ref(), crate::options::find(&name)) {
+                if matches!(o.kind, crate::options::Kind::Command) {
+                    if let Err((_, e)) = crate::cmdparse::parse(v, app, false) { return app.error(e) }
+                    value = Some(canonical_with(v, " ; "));
+                }
+            }
+            let tab_id = app.tabs[tab].id.clone();
+            if let Err(e) = app.options.set(&name, value.as_deref(), &f, &tab_id, pane) { app.error(e) }
+        }
         "wait-for" | "wait" => {}
         "pipe-pane" => app.error("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)"),
         "save-buffer" | "saveb" | "show-buffer" => {
