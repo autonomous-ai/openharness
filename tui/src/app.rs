@@ -893,6 +893,9 @@ impl App {
                     for frame in self.orphans.remove(&stream).map(|(_, f)| f).unwrap_or_default() { self.on_terminal(frame) }
                 }
                 if !read_only { for bytes in queued { self.send_input(pane_id, &bytes) } }
+                // What it runs, asked now rather than at the next two-second look: a shell's window
+                // is named for it (automatic-rename) from the start, as tmux names it.
+                self.refresh_pane_info(pane_id);
             }
             Ok((_, payload)) => {
                 let code = payload.get("code").and_then(Value::as_str).unwrap_or("TERMINAL_OPEN_FAILED").to_string();
@@ -1094,6 +1097,8 @@ impl App {
             p.live_path = text("path");
             p.remote_pid = info.get("pid").and_then(Value::as_u64);
             p.remote_tty = text("tty");
+            // automatic-rename follows what runs, at once.
+            app.sync_titles();
         });
     }
 
