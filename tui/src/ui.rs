@@ -641,6 +641,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if let Some(bg) = theme::fzf_opts().bg { buf.set_style(body, Style::default().bg(bg)) }
     let preview = picker_preview_area(body, picker);
     let area = match preview { Some(p) => Rect::new(body.x, body.y, p.x - body.x, body.height), None => body };
+    // fzf's listStickToRight: with a border on the right and nothing between (no preview), the
+    // list takes back the column of padding there, its scrollbar against the border.
+    let right_border = matches!(theme::fzf_opts().border.as_deref(), Some(b) if !matches!(b, "none" | "horizontal" | "top" | "bottom" | "left"));
+    let area = if right_border && preview.is_none() { Rect { width: area.width + 1, ..area } } else { area };
     if let Some(bg) = theme::fzf_opts().list_bg { buf.set_style(area, Style::default().bg(bg)) }
     let width = area.width as usize;
     let bottom = area.y + area.height;
@@ -761,9 +765,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if picker.cursor + so >= picker.scroll + list_h { picker.scroll = (picker.cursor + so + 1).saturating_sub(list_h) }
     picker.scroll = picker.scroll.min(n.saturating_sub(list_h.max(1)));
     picker.row_at.clear();
-    // A column of air before the scrollbar, so right-aligned keys never touch it.
-    let bar = n > list_h && list_h > 2 && theme::fzf_opts().scrollbar.is_some();
-    let text_w = width.saturating_sub(gutter_width() as usize + if bar { 2 } else { 1 });
+    // fzf's maxWidth: the window less the pointer and marker, and less barCol() — a column for the
+    // scrollbar whenever there is one (shown or not), or for whatever is on the right edge.
+    let bar_col = theme::fzf_opts().scrollbar.is_some() || right_border || preview.is_some();
+    let text_w = width.saturating_sub(gutter_width() as usize + bar_col as usize);
     // The right column lines up down the list: one edge for every row on screen, after the widest
     // line, within the list.
     let shown = picker.scroll..(picker.scroll + list_h.min(n - picker.scroll));
