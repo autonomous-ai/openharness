@@ -13,10 +13,6 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::App;
 use crate::tmuxconf::colour;
 
-/// Expand a format for a window (else the active one), with the time, and draw its styles.
-pub fn spans(app: &App, fmt: &str, window: Option<usize>, base: Style) -> Vec<Span<'static>> {
-    draw(&expand(app, fmt, window.unwrap_or(app.active), None, true), base)
-}
 
 /// The same for one pane (pane-border-format, list-panes -F).
 pub fn spans_for_pane(app: &App, fmt: &str, window: usize, pane: u64, base: Style) -> Vec<Span<'static>> {
@@ -658,6 +654,13 @@ fn format_width(s: &str) -> usize {
 }
 
 /// Past the `]` of the style whose `#` is at `i`.
+/// format_skip for a terminator: its index in characters, #{…} and escapes passed over.
+pub fn skip_to(s: &str, end: char) -> Option<usize> {
+    let mut buf = [0u8; 4];
+    let k = skip(s.as_bytes(), end.encode_utf8(&mut buf).as_bytes())?;
+    Some(s[..k].chars().count())
+}
+
 fn style_close(b: &[char], i: usize) -> usize {
     let s: String = b[i..].iter().collect();
     match skip(s.as_bytes(), b"]") { Some(k) => i + s[..k].chars().count() + 1, None => b.len() }
@@ -952,7 +955,13 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),
         // tim's face, for a status-right of your own: "#{tim} %H:%M".
-        "tim" => crate::tim::face(app).map(|(f, _)| f).unwrap_or_default(),
+        // tim's face, in its own colour (a status-right of your own: "#{tim} %H:%M").
+        "tim" => crate::tim::face(app).map(|(f, st)| { let s = crate::draw::style_text(st); if s.is_empty() { f } else { format!("#[{s}]{f}#[default]") } }).unwrap_or_default(),
+        "daemon_down" => app.daemon_down.then_some("1").unwrap_or("0").into(),
+        // The pane is another window's to type in (this one watches), when it is the only one.
+        "pane_watching" => (pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false) && tab.map(|t| t.panes().len() < 2).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
+        "pane_machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
+        "pane_far" => pane.map(|p| p.machine_id != app.fleet.local_id).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "session_id" => "$0".into(),
         "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
         "session_group" | "client_last_session" | "pane_dead_status" | "pane_start_command" => String::new(),

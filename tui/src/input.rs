@@ -1956,10 +1956,6 @@ pub fn is_command(id: &str) -> bool {
         | "choose-buffer" | "quit")
 }
 
-/// The focused pane's title: its harness's name (tmux `#T`).
-pub fn focused_title(app: &App) -> String {
-    focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.name.clone())).unwrap_or_default()
-}
 
 
 /// choose-buffer's pick: that buffer pasted into this pane, as paste-buffer -b does.
