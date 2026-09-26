@@ -1290,11 +1290,6 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
 
 /// Copy mode, `mode-keys vi`: tmux's copy-mode-vi table.
 /// $VISUAL / $EDITOR names vi (or is unset — vim is family here): copy mode's default keys.
-fn vi_editor() -> bool {
-    let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default();
-    editor.is_empty() || editor.contains("vi")
-}
-
 /// copy-mode's emacs table, as the vi one it mirrors (`set -g mode-keys emacs`, or tmux's own
 /// choice when EDITOR is not vi).
 fn emacs_copy(key: KeyEvent) -> Option<KeyEvent> {
@@ -1307,7 +1302,7 @@ fn emacs_copy(key: KeyEvent) -> Option<KeyEvent> {
         KeyCode::Char('n') if ctrl => k('j'), KeyCode::Char('p') if ctrl => k('k'),
         KeyCode::Char('a') if ctrl => k('0'), KeyCode::Char('e') if ctrl => k('$'),
         KeyCode::Char('v') if ctrl => code(KeyCode::PageDown), KeyCode::Char('v') if alt => code(KeyCode::PageUp),
-        KeyCode::Char(' ') if ctrl => k('v'), KeyCode::Char('@') if ctrl => k('v'),
+        KeyCode::Char(' ') if ctrl => k(' '), KeyCode::Char('@') if ctrl => k(' '),
         KeyCode::Char('w') if alt => k('y'), KeyCode::Char('w') if ctrl => k('y'),
         KeyCode::Char('f') if alt => k('w'), KeyCode::Char('b') if alt => k('b'),
         KeyCode::Char('<') if alt => k('g'), KeyCode::Char('>') if alt => k('G'),
@@ -1345,7 +1340,9 @@ fn copy_action_key(action: &str) -> Option<KeyEvent> {
 }
 
 fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
-    let emacs = app.opts.mode_keys_emacs.unwrap_or_else(|| !vi_editor());
+    let emacs = !app.copy_as_vi && app.mode_keys_emacs();
+    let region = app.mode_keys_emacs();
+    if let Some(p) = app.panes.get_mut(&pane) { p.copy_emacs = region }
     // Your tmux.conf's copy-mode bindings come first (`bind -T copy-mode-vi v send -X begin-selection`).
     if app.copy_pending.is_none() {
         let chord = keys::of(&key);
@@ -1365,10 +1362,9 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
                     // Run it as the vi key it is (no second lookup: the table is not asked again).
                     let saved = std::mem::take(&mut app.keymap.copy_vi);
                     let saved_e = std::mem::take(&mut app.keymap.copy_emacs);
-                    let was = app.opts.mode_keys_emacs;
-                    app.opts.mode_keys_emacs = Some(false);
+                    let was = std::mem::replace(&mut app.copy_as_vi, true);
                     copy_key(app, k, pane);
-                    app.opts.mode_keys_emacs = was;
+                    app.copy_as_vi = was;
                     app.keymap.copy_vi = saved;
                     app.keymap.copy_emacs = saved_e;
                 } else { app.say(format!("{action}: not a copy-mode action here"), theme::WARN); app.modal = Some(Modal::Copy { pane }) }
@@ -1420,8 +1416,6 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let Some(p) = app.panes.get_mut(&pane) else { return };
-    let rows = p.rows as i32;
-    let half = (rows / 2).max(1);
     match key.code {
         KeyCode::Char('q') => { p.copy_end(); return }
         KeyCode::Char('c') if ctrl => { p.copy_end(); return }
@@ -1431,18 +1425,19 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
         KeyCode::Char('k') | KeyCode::Up if !ctrl => p.copy_move(0, -1),
         KeyCode::Char('j') | KeyCode::Down if !ctrl => p.copy_move(0, 1),
-        KeyCode::Char('u') if ctrl => p.copy_move(0, -half),
-        KeyCode::Char('d') if ctrl => p.copy_move(0, half),
-        KeyCode::Char('b') if ctrl => p.copy_move(0, -rows),
-        KeyCode::Char('f') if ctrl => p.copy_move(0, rows),
+        // halfpage-up/-down and page-up/-down, as tmux moves the view.
+        KeyCode::Char('u') if ctrl => { p.copy_page(true, true); }
+        KeyCode::Char('d') if ctrl => { p.copy_page(false, true); }
+        KeyCode::Char('b') if ctrl => { p.copy_page(true, false); }
+        KeyCode::Char('f') if ctrl => { p.copy_page(false, false); }
         KeyCode::Char('y') if ctrl => p.copy_move(0, -1),
         KeyCode::Char('e') if ctrl => p.copy_move(0, 1),
         // tmux's copy-mode-vi, key for key: v / C-v rectangle-toggle, Space begin-selection.
         KeyCode::Char('v') if ctrl => p.copy_rect_toggle(),
         KeyCode::Char('h') if ctrl => p.copy_move(-1, 0),
         KeyCode::Backspace => p.copy_move(-1, 0),
-        KeyCode::PageUp => p.copy_move(0, -rows),
-        KeyCode::PageDown => p.copy_move(0, rows),
+        KeyCode::PageUp => { p.copy_page(true, false); }
+        KeyCode::PageDown => { p.copy_page(false, false); }
         KeyCode::Up if ctrl => p.copy_scroll(1),
         KeyCode::Down if ctrl => p.copy_scroll(-1),
         KeyCode::Char('K') => p.copy_scroll(1),
@@ -1515,13 +1510,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             if let Some(text) = text {
                 crate::clipboard::store(&text);
                 // copy-pipe's command, or tmux's copy-command, gets the text on its stdin.
-                if let Some(cmd) = app.copy_pipe.take().or_else(|| app.opts.copy_command.clone()) {
-                    use std::io::Write;
-                    if let Ok(mut child) = std::process::Command::new("sh").arg("-c").arg(&cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
-                        if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(text.as_bytes()); }
-                        std::thread::spawn(move || { let _ = child.wait(); });
-                    }
-                }
+                if let Some(cmd) = app.copy_pipe.take().or_else(|| app.opts.copy_command.clone()) { pipe_to(&cmd, &text) }
                 app.buffers.insert(0, text);
                 app.buffers.truncate(50);
             }
@@ -1530,6 +1519,18 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         _ => {}
     }
     app.modal = Some(Modal::Copy { pane });
+}
+
+/// A copied text to a shell command's stdin (copy-pipe, copy-command), not waited for.
+fn pipe_to(cmd: &str, text: &str) {
+    use std::io::Write;
+    let mut c = std::process::Command::new("/bin/sh");
+    c.arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
+    if let Ok(mut child) = c.spawn() {
+        if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(text.as_bytes()); }
+        std::thread::spawn(move || { let _ = child.wait(); });
+    }
 }
 
 /// choose-tree -w: j/k (or ↑/↓) move, Enter/l choose, h/← collapse, → expand, x kill, q/Esc leave.
@@ -1988,10 +1989,36 @@ fn send_copy_action(app: &mut App, words: &[String]) {
     let Some(pane) = pane else { return };
     let Some(action) = rest.first().cloned() else { return };
     let arg = rest.get(1).cloned().unwrap_or_default();
+    let region = app.mode_keys_emacs();
     let Some(p) = app.panes.get_mut(&pane) else { return };
     if p.copy.is_none() { if action == "cancel" { return } p.copy_start() }
+    p.copy_emacs = region;
     app.modal = Some(Modal::Copy { pane });
     match action.as_str() {
+        "page-up" | "halfpage-up" => { if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { p.copy_page(true, action == "halfpage-up"); } } }
+        "page-down" | "halfpage-down" | "page-down-and-cancel" | "halfpage-down-and-cancel" => {
+            let mut bottom = false;
+            if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { bottom = p.copy_page(false, action.starts_with("halfpage")); } }
+            if bottom && action.ends_with("-and-cancel") { if let Some(p) = app.panes.get_mut(&pane) { p.copy_end() } app.modal = None }
+        }
+        a if a.starts_with("copy-pipe") || a.starts_with("copy-selection") => {
+            // The selection copied (a paste buffer; copy-pipe's command, or copy-command, gets it
+            // on its stdin); -and-cancel leaves copy mode, else the selection goes and it stays.
+            let cmd = if a.starts_with("copy-pipe") { rest.get(1).cloned().filter(|c| !c.is_empty()).or_else(|| app.opts.copy_command.clone()) } else { None };
+            let selecting = app.panes.get(&pane).and_then(|p| p.copy).map(|c| c.selecting).unwrap_or(false);
+            let text = app.panes.get(&pane).and_then(|p| p.selection_text());
+            match text {
+                Some(text) => {
+                    crate::clipboard::store(&text);
+                    if let Some(cmd) = cmd { pipe_to(&cmd, &text) }
+                    app.buffers.insert(0, text);
+                    app.buffers.truncate(50);
+                }
+                None if selecting => { if let Some(cmd) = cmd { pipe_to(&cmd, "") } }
+                None => {}
+            }
+            if let Some(p) = app.panes.get_mut(&pane) { if a.ends_with("-and-cancel") { p.copy_end(); app.modal = None } else { p.copy_toggle(false) } }
+        }
         "goto-line" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_goto_line(arg.trim().parse().unwrap_or(0)) } }
         "search-backward" | "search-forward" | "search-backward-text" | "search-forward-text" if !arg.is_empty() => {
             let up = action.starts_with("search-backward");
@@ -2012,7 +2039,12 @@ fn send_copy_action(app: &mut App, words: &[String]) {
         "scroll-middle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll_middle() } }
         "scroll-up" | "scroll-down" => { let d = if action == "scroll-up" { 1 } else { -1 }; if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll(d * count as i32) } }
         a => match copy_action_key(a) {
-            Some(k) => { for _ in 0..count { app.modal = None; copy_key(app, k, pane); if app.modal.is_none() { break } } }
+            Some(k) => {
+                // The action is the vi key that does it here, whatever mode-keys is.
+                let was = std::mem::replace(&mut app.copy_as_vi, true);
+                for _ in 0..count { app.modal = None; copy_key(app, k, pane); if app.modal.is_none() { break } }
+                app.copy_as_vi = was;
+            }
             None => app.say(format!("{a}: not a copy-mode command here"), theme::WARN),
         },
     }

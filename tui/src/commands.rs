@@ -280,7 +280,7 @@ fn listing(app: &App, command: &str) -> Vec<String> {
         "list-clients" => vec![format!("{}: {} [{}x{} {}] (utf8)", std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_else(|_| "tty".into()), app.session_name(), app.size.0, app.size.1, std::env::var("TERM").unwrap_or_default())],
         _ => app.opts.user.iter().map(|(k, v)| format!("{k} \"{v}\"")).chain(vec![
             format!("base-index {}", app.base_index),
-            format!("mode-keys {}", if app.opts.mode_keys_emacs == Some(true) { "emacs" } else { "vi" }),
+            format!("mode-keys {}", if app.mode_keys_emacs() { "emacs" } else { "vi" }),
             format!("renumber-windows {}", if app.opts.renumber_windows == Some(true) { "on" } else { "off" }),
             format!("status {}", if app.opts.status == Some(false) { "off" } else { "on" }),
             format!("status-justify {}", app.opts.status_justify.clone().unwrap_or_else(|| "left".into())),
