@@ -987,7 +987,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_activity_flag" => flags(app, window).contains('#').then_some("1").unwrap_or("0").into(),
         "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
         "session_grouped" | "session_many_attached" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
-        | "client_readonly" | "pane_pipe" => "0".into(),
+        | "client_readonly" => "0".into(),
+        "pane_pipe" => pane.map(|p| app.pipes.contains_key(&p.id)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "server_sessions" | "session_attached_list" | "client_utf8" => "1".into(),
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
         "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),

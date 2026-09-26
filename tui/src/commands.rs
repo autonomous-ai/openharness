@@ -1672,7 +1672,19 @@ fn run_words(app: &mut App, words: &[String]) {
             if let Err(e) = app.options.set(&name, value.as_deref(), &f, &tab_id, pane) { app.error(e) }
         }
         "wait-for" | "wait" => {}
-        "pipe-pane" => app.error("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)"),
+        "pipe-pane" => {
+            // cmd-pipe-pane.c [-IOo] [-t pane] [command]: the pane's old pipe closed; then, given a
+            // command (expanded as a format), a new one — its stdin what the pane prints (-O, the
+            // default), its output typed into the pane (-I) — unless -o and there was one (a key
+            // toggles it: bind P pipe-pane -o 'cat >> ~/log').
+            let Some((w, p)) = target_pane(app, words) else { return };
+            let had = app.pipes.remove(&p).is_some();
+            let command = positional(words).first().cloned().unwrap_or_default();
+            if command.is_empty() || (flag(words, "-o") && had) { return }
+            let (input, output) = if flag(words, "-I") { (true, flag(words, "-O")) } else { (false, true) };
+            let command = crate::format::expand(app, &command, w, Some(p), true);
+            app.open_pipe(p, &command, input, output);
+        }
         "save-buffer" | "saveb" | "show-buffer" => {
             // tmux's save-buffer [-a] [-b buffer-name] path (show-buffer: to the shell, or a view):
             // the newest automatic buffer without -b; a path from the shell's folder (- its stdout).

@@ -306,6 +306,9 @@ pub struct App {
     pub pending_hooks: std::collections::VecDeque<crate::commands::Item>,
     /// Errors said so far (a command that failed fires command-error, not its after- hook).
     pub errors: u64,
+    /// pipe-pane's pipes, by pane: what the pane prints goes to the command (-O).
+    pub pipes: HashMap<u64, Pipe>,
+    pipe_seq: u64,
     /// What the event hooks were last told of (notify_changes compares against it).
     pub hooks_seen: HooksSeen,
 
@@ -394,6 +397,8 @@ impl App {
             hook_state: None,
             pending_hooks: std::collections::VecDeque::new(),
             errors: 0,
+            pipes: HashMap::new(),
+            pipe_seq: 0,
             hooks_seen: HooksSeen::default(),
 
             capture_err: None,
@@ -786,6 +791,7 @@ impl App {
             if matches!(pane.phase, Phase::Connecting(_)) { pane.phase = if pane.read_only { Phase::Watching(String::new()) } else { Phase::Live } }
         } else {
             pane.note_echo();
+            if let Some(out) = self.pipes.get(&pane.id).and_then(|p| p.out.as_ref()) { let _ = out.send(bytes.clone()); }
             pane.feed(&bytes);
             pane.settle_predictions();
             let belled = std::mem::replace(&mut pane.bell, false);
@@ -1657,6 +1663,7 @@ impl App {
 
     fn drop_pane(&mut self, id: u64) {
         if self.marked == Some(id) { self.marked = None }
+        self.pipes.remove(&id);
         if let Some(pane) = self.panes.remove(&id) {
             if let (Some(stream), Some(link)) = (pane.stream, self.links.get(&pane.machine_id).and_then(|s| s.link.clone())) {
                 link.send("terminal_close", json!({ "streamId": stream.to_string() }));
@@ -1808,6 +1815,43 @@ impl App {
         let had = focused.contains(&pane);
         if !is && had { focused.retain(|p| *p != pane); if notify { crate::commands::notify(self, "pane-focus-out", Some(w), Some(pane)) } }
         else if is && !had { focused.push(pane); if notify { crate::commands::notify(self, "pane-focus-in", Some(w), Some(pane)) } }
+    }
+
+    /// cmd-pipe-pane.c's child: `sh -c` [command], its stdin what [pane] prints from now on
+    /// ([output], -O), what it prints typed into the pane ([input], -I), its errors dropped; the
+    /// pipe closes when it ends.
+    pub fn open_pipe(&mut self, pane: u64, command: &str, input: bool, output: bool) {
+        use std::process::Stdio;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut c = tokio::process::Command::new("/bin/sh");
+        c.arg("-c").arg(command).envs(crate::ipc::job_env())
+            .stdin(if output { Stdio::piped() } else { Stdio::null() })
+            .stdout(if input { Stdio::piped() } else { Stdio::null() })
+            .stderr(Stdio::null());
+        let mut child = match c.spawn() { Ok(c) => c, Err(e) => return self.error(format!("fork error: {e}")) };
+        self.pipe_seq += 1;
+        let id = self.pipe_seq;
+        let out = child.stdin.take().map(|mut stdin| {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            tokio::spawn(async move { while let Some(b) = rx.recv().await { if stdin.write_all(&b).await.is_err() { break } } });
+            tx
+        });
+        if let Some(mut stdout) = child.stdout.take() {
+            let sink = self.sink.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                loop {
+                    match stdout.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => { let bytes = buf[..n].to_vec(); let _ = sink.send(Event::Apply(Box::new(move |app: &mut App| crate::input::send_to_pane(app, pane, bytes)))); }
+                    }
+                }
+            });
+        }
+        self.spawn(async move { let _ = child.wait().await; }, move |app, _| {
+            if app.pipes.get(&pane).map(|p| p.id == id).unwrap_or(false) { app.pipes.remove(&pane); }
+        });
+        self.pipes.insert(pane, Pipe { out, id });
     }
 
     /// The last window (the top of tmux's lastw stack): C-b l's, the - flag's.
@@ -2459,6 +2503,10 @@ pub fn utc_offset() -> i64 {
         sign * (h * 3600 + m * 60)
     })
 }
+
+/// A pane's pipe (pipe-pane): the command's stdin, fed what the pane prints (-O); which pipe it
+/// is, so one that ended does not close its successor.
+pub struct Pipe { out: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>, id: u64 }
 
 /// The state the event hooks compare against: each window (its id, @number, name, active pane
 /// and layout), the current window, the focused pane, the session's name, and which panes are
