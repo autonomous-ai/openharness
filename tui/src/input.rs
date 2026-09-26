@@ -37,6 +37,8 @@ fn typing(app: &App) -> bool {
 
 fn on_key(app: &mut App, key: KeyEvent) {
     let chord = keys::of(&key);
+    // A message goes on the next key, as tmux's does.
+    app.toast = None;
     // After the prefix: the prefix table.
     if app.prefix {
         app.prefix = false;
@@ -1713,5 +1715,7 @@ pub fn ensure_recent(app: &mut App, id: &str) {
 /// Where choose-tree's cursor starts: on the active pane's row.
 fn tree_cursor_now(app: &App) -> usize {
     let rows = crate::ui::tree_rows(app, &[]);
-    rows.iter().position(|r| r.window == app.active && r.pane == app.focused()).unwrap_or(0)
+    // The focused pane's row, or (a lone pane has none) its window's.
+    rows.iter().position(|r| r.window == app.active && r.pane.is_some() && r.pane == app.focused())
+        .or_else(|| rows.iter().position(|r| r.window == app.active && r.pane.is_none())).unwrap_or(0)
 }
