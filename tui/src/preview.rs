@@ -94,7 +94,8 @@ fn command(app: &App, id: &str) -> Vec<Line<'static>> {
     let key = app.keymap.key_for_name(id);
     let about = crate::commands::COMMANDS.iter().find(|(n, _, _)| *n == id).map(|(_, _, d)| d.to_string())
         .or_else(|| crate::modal::COMMANDS.iter().find(|c| c.0 == id).map(|c| c.3.to_string())).unwrap_or_default();
-    let mut out = vec![bold(id.to_string()).into(), Line::raw("")];
+    // The name is already the preview's label.
+    let mut out = Vec::new();
     if !about.is_empty() { out.push(Line::raw(about)) }
     if let Some(k) = key { out.push(Line::raw("")); out.push(kv("key", k)) }
     out
