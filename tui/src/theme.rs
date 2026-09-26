@@ -693,28 +693,38 @@ pub fn engine_label(engine: &str) -> &str {
     }
 }
 
-/// The state dot and word the desktop's tiles and rows use.
-pub fn state_mark(state: State) -> (&'static str, &'static str, Color) {
-    let (dot, word, color) = state_mark_raw(state);
+/// A harness's state at a glance, the same everywhere hn shows one (pane titles, the window list,
+/// the lists), in Orca's set: a spinner working, `?` needs you, `✓` done and not looked at yet, `·`
+/// idle, `✗` failed; hn adds `◌` starting, `‖` paused and `○` offline. [tick] turns the spinner.
+pub fn state_mark(state: State, tick: u64) -> (&'static str, &'static str, Color) {
+    let (dot, word, color) = state_mark_raw(state, tick);
     (dot, word, if color == MUTED { color } else { paint(color) })
 }
 
-fn state_mark_raw(state: State) -> (&'static str, &'static str, Color) {
+fn state_mark_raw(state: State, tick: u64) -> (&'static str, &'static str, Color) {
     match state {
-        State::NeedsInput => ("◆", "needs input", ATTENTION),
-        State::Working => ("●", "working", ACCENT_SOFT),
-        State::Done => ("●", "done", ONLINE),
-        State::Ready => ("○", "ready", ONLINE),
+        State::NeedsInput => ("?", "needs you", ATTENTION),
+        State::Working => (spinner(tick), "working", ACCENT_SOFT),
+        State::Done => ("✓", "done", ONLINE),
+        State::Ready => ("·", "idle", MUTED),
         State::Starting => ("◌", "starting", WARN),
-        State::Failed => ("✕", "failed", DANGER),
+        State::Failed => ("✗", "failed", DANGER),
         State::Paused => ("‖", "paused", MUTED),
-        State::Offline => ("·", "offline", MUTED),
+        State::Offline => ("○", "offline", MUTED),
     }
+}
+
+/// The most urgent of several states (a window's panes): needs you, failed, done, working,
+/// starting, idle, paused, offline.
+pub fn most_urgent(states: impl Iterator<Item = State>) -> Option<State> {
+    let rank = |s: &State| match s { State::NeedsInput => 0, State::Failed => 1, State::Done => 2, State::Working => 3, State::Starting => 4, State::Ready => 5, State::Paused => 6, State::Offline => 7 };
+    states.min_by_key(rank)
 }
 
 /// A spinner frame for things in motion (working dots, connecting cards).
 pub fn spinner(tick: u64) -> &'static str {
-    const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+    // fzf's frames, in its order.
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     FRAMES[(tick as usize) % FRAMES.len()]
 }
 

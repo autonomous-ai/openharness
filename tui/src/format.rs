@@ -881,6 +881,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_name" => app.session_name(),
         "window_index" => tab.map(|_| app.win_num(window).to_string()).unwrap_or_default(),
         "window_name" => tab.map(|t| t.name.clone()).unwrap_or_default(),
+        // The name in whole words within 20 columns, … after what is cut: a harness is named for its
+        // task, and the window list has room for a few words of each.
+        "window_short_name" => tab.map(|t| short_name(&t.name, 20)).unwrap_or_default(),
         "window_flags" => flags(app, window).replacen('#', "##", 1),
         "window_raw_flags" => flags(app, window),
         "window_active" => (window == app.active).then_some("1").unwrap_or("0").into(),
@@ -965,6 +968,14 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // The pane is another window's to type in (this one watches), when it is the only one.
         "pane_watching" => (pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false) && tab.map(|t| t.panes().len() < 2).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
         "pane_machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
+        // A pane's harness at a glance, as its title shows it (empty for a plain shell), and what it
+        // works on; a window's most urgent harness state, as the window list shows it.
+        "pane_agent_state" => pane.and_then(|p| app.pane_state(p.id)).map(state_word).unwrap_or("").into(),
+        "pane_agent_icon" => pane.and_then(|p| app.pane_state(p.id)).map(|s| crate::theme::state_mark(s, app.tick).0).unwrap_or("").into(),
+        "pane_project" => agent.map(|a| a.project.clone()).unwrap_or_default(),
+        "pane_branch" => agent.map(|a| a.branch.clone()).unwrap_or_default(),
+        "window_agent_state" => tab.and_then(|_| app.window_state(window)).map(state_word).unwrap_or("").into(),
+        "window_agent_icon" => tab.and_then(|_| app.window_state(window)).map(|s| crate::theme::state_mark(s, app.tick).0).unwrap_or("").into(),
         "pane_far" => pane.map(|p| p.machine_id != app.fleet.local_id).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "session_id" => "$0".into(),
         "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
@@ -1052,6 +1063,31 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
 }
 
 
+/// [name] in whole words within [max] columns, then `…` if any were left out (one word longer
+/// than that is cut where it reaches it).
+pub fn short_name(name: &str, max: usize) -> String {
+    let width = |s: &str| s.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>();
+    if width(name) <= max { return name.to_string() }
+    let mut out = String::new();
+    for word in name.split(' ') {
+        let next = if out.is_empty() { word.to_string() } else { format!("{out} {word}") };
+        if width(&next) > max { break }
+        out = next;
+    }
+    if out.is_empty() {
+        let mut used = 0;
+        out = name.chars().take_while(|c| { used += c.width().unwrap_or(0); used <= max }).collect();
+    }
+    format!("{}…", out.trim_end())
+}
+
+/// A harness state as one word (#{pane_agent_state}): needs, working, done, idle, starting,
+/// failed, paused, offline.
+fn state_word(s: crate::fleet::State) -> &'static str {
+    use crate::fleet::State::*;
+    match s { NeedsInput => "needs", Working => "working", Done => "done", Ready => "idle", Starting => "starting", Failed => "failed", Paused => "paused", Offline => "offline" }
+}
+
 /// `#{window_raw_flags}`: `#` activity, `!` bell, `~` silence, `*` current, `-` last, `M` the
 /// marked pane's, `Z` zoomed.
 pub fn flags(app: &App, window: usize) -> String {
@@ -1107,4 +1143,17 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
         }
     }
     style
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_short_name_keeps_whole_words() {
+        use super::short_name;
+        assert_eq!(short_name("Fix flaky login test", 20), "Fix flaky login test");
+        assert_eq!(short_name("Refactor billing service", 20), "Refactor billing…");
+        assert_eq!(short_name("Train tokenizer on the new corpus", 20), "Train tokenizer on…");
+        assert_eq!(short_name("supercalifragilisticexpialidocious", 20), "supercalifragilistic…");
+        assert_eq!(short_name("日本語のハーネスの名前です", 20), "日本語のハーネスの名…");
+    }
 }

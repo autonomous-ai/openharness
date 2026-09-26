@@ -241,13 +241,11 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
         let style = if c.marked { style.add_modifier(Modifier::REVERSED) } else { style };
         if let Some(cell) = buf.cell_mut((body.x + c.x as u16, body.y + c.y as u16)) { cell.set_symbol(&c.glyph).set_style(style); }
     }
-    let ids = tab.panes();
     for t in frame.titles() {
         let style = border_style(app, t.active);
         let (x, y) = (body.x + t.x as u16, body.y + t.y as u16);
         for (k, g) in t.fill.iter().enumerate() { if let Some(cell) = buf.cell_mut((x + k as u16, y)) { cell.set_symbol(g).set_style(style); } }
-        let index = ids.iter().position(|p| *p == t.pane).unwrap_or(0) + app.pane_base_index;
-        title_line(buf, app, t.pane, index, Rect::new(x, y, t.width as u16, 1), t.active, style);
+        title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
     }
 }
 
@@ -262,10 +260,11 @@ fn border_style(app: &App, active: bool) -> Style {
     else { app.look.border.map(|c| Style::default().fg(c)).unwrap_or_default() }
 }
 
-/// A pane's status line text over its border characters: your pane-border-format, or hn's —
-/// tmux's default (the index, reversed on the active pane, and the title in quotes), then because
-/// a harness has them, its state, and its machine at the far end.
-fn title_line(buf: &mut Buffer, app: &App, id: u64, index: usize, area: Rect, active: bool, style: Style) {
+/// A pane's status line text over its border characters: your pane-border-format, or hn's — the
+/// harness at a glance (its state's symbol, none for a plain shell) and its name, and where the
+/// pane is wide enough, its project and branch at the far end (the focused pane's are on the
+/// status line whatever the width).
+fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
     if area.width == 0 { return }
     let Some(pane) = app.panes.get(&id) else { return };
     if let Some(fmt) = &app.opts.pane_border_format {
@@ -274,16 +273,28 @@ fn title_line(buf: &mut Buffer, app: &App, id: u64, index: usize, area: Rect, ac
         return;
     }
     let title = crate::format::pane_title(app, app.active, id);
-    let mut spans: Vec<Span> = vec![Span::styled(index.to_string(), if active { style.add_modifier(Modifier::REVERSED) } else { style }), Span::styled(format!(" \"{title}\""), style)];
-    if let Some(word) = pane_state_word(app, pane) { spans.push(Span::raw(" ")); spans.push(word) }
-    let machine = if app.fleet.machines.len() > 1 { app.fleet.machine_name(&pane.machine_id) } else { String::new() };
-    let right = if machine.is_empty() { String::new() } else { format!(" {machine} ") };
-    let limit = (area.width as usize).saturating_sub(if right.is_empty() { 0 } else { right.width() + 1 });
-    let line = clip_spans(spans, limit);
+    let mut spans: Vec<Span> = vec![Span::styled(" ", style)];
+    if let Some(state) = app.pane_state(id) {
+        let (glyph, _, color) = theme::state_mark(state, app.tick);
+        spans.push(Span::styled(glyph, style.fg(color)));
+        spans.push(Span::styled(" ", style));
+    }
+    spans.push(Span::styled(title, style));
+    if let Some(word) = pane_state_word(app, pane) { spans.push(Span::styled(" ", style)); spans.push(word) }
+    spans.push(Span::styled(" ", style));
+    let (project, branch) = app.fleet.agent(&pane.machine_id, &pane.agent_id).filter(|a| a.engine != "terminal" || !a.branch.is_empty())
+        .map(|a| (a.project.clone(), a.branch.clone())).unwrap_or_default();
+    let line = clip_spans(spans, area.width as usize);
     let used = line.width();
     buf.set_line(area.x, area.y, &line, area.width);
-    if !right.is_empty() && area.width as usize >= used + right.width() + 2 {
-        buf.set_string(area.x + area.width - right.width() as u16, area.y, &right, style);
+    // As the status line writes them (zsh's robbyrussell prompt), shorter as the pane narrows.
+    let choices = [
+        (!project.is_empty() && !branch.is_empty()).then(|| format!(" {project} git:({branch}) ")),
+        (!branch.is_empty()).then(|| format!(" git:({branch}) ")),
+        (!branch.is_empty()).then(|| format!(" {branch} ")),
+    ];
+    if let Some(right) = choices.into_iter().flatten().find(|r| area.width as usize >= used + r.width() + 4) {
+        buf.set_string(area.x + area.width - right.width() as u16, area.y, &right, style.add_modifier(Modifier::DIM));
     }
 }
 
@@ -293,16 +304,7 @@ fn pane_state_word(app: &App, pane: &Pane) -> Option<Span<'static>> {
         return Some(Span::styled(format!("[watching{}]", if who.is_empty() { String::new() } else { format!(" — {who} has it") }), Style::default().fg(Color::Yellow)));
     }
     if app.marked == Some(pane.id) { return Some(Span::styled("[marked]", Style::default().add_modifier(Modifier::REVERSED))) }
-    let agent = app.fleet.agent(&pane.machine_id, &pane.agent_id)?;
-    Some(match app.fleet.state_of(agent) {
-        State::NeedsInput => Span::styled("[waiting]", Style::default().fg(Color::Black).bg(Color::Yellow)),
-        State::Working => Span::styled("[working]", Style::default().fg(Color::Cyan)),
-        State::Paused => Span::styled("[paused]", Style::default().add_modifier(Modifier::DIM)),
-        State::Offline => Span::styled("[offline]", Style::default().add_modifier(Modifier::DIM)),
-        State::Starting => Span::styled("[starting]", Style::default().fg(Color::Yellow)),
-        State::Failed => Span::styled("[failed]", Style::default().fg(Color::Red)),
-        State::Done | State::Ready => return None,
-    })
+    None
 }
 
 /// A window with no harness in it: the harnesses you were just with, one key away.
@@ -335,7 +337,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         for (index, (m, a)) in rows.iter().enumerate() {
             let Some(agent) = app.fleet.agent(m, a) else { continue };
             let state = app.fleet.state_of(agent);
-            let (dot, _, color) = state_mark(state);
+            let (dot, _, color) = state_mark(state, app.tick);
             let (mark, mark_color) = engine_mark(&agent.engine);
             // Narrow: the machine goes before the title gives way (then the age).
             let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(agent.recency())) };

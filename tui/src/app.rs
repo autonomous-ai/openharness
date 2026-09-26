@@ -1767,6 +1767,20 @@ impl App {
         self.modal = pane.map(|pane| Modal::Copy { pane });
     }
 
+    /// A pane's harness at a glance (theme::state_mark): None for a plain shell or no harness.
+    pub fn pane_state(&self, pane: u64) -> Option<fleet::State> {
+        let p = self.panes.get(&pane)?;
+        let agent = self.fleet.agent(&p.machine_id, &p.agent_id)?;
+        if agent.engine == "terminal" { return None }
+        Some(self.fleet.state_of(agent))
+    }
+
+    /// A window's most urgent harness state (its panes'), for the window list.
+    pub fn window_state(&self, w: usize) -> Option<fleet::State> {
+        let tab = self.tabs.get(w)?;
+        crate::theme::most_urgent(tab.panes().into_iter().filter_map(|p| self.pane_state(p)))
+    }
+
     /// The current pane for a command: while a mouse key's commands run, the pane under the mouse
     /// (cmd_find_from_mouse), else the active pane of the current window.
     pub fn current(&self) -> Option<(usize, u64)> {
@@ -1992,7 +2006,7 @@ impl App {
                     if relayout && missing_is_empty(&tab.panes(), &panes, &self.panes) {
                         let ids = tab.panes();
                         let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                        tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, ("80", "24"), ("0", "0"));
+                        tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0"));
                         continue;
                     }
                     let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
@@ -2010,7 +2024,7 @@ impl App {
                     let mut ids = tab.panes();
                     ids.extend(new_ids.iter().copied());
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, ("80", "24"), ("0", "0"));
+                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0"));
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
                 None => {
@@ -2021,7 +2035,7 @@ impl App {
                     tab.on_desk = true;
                     tab.layout = layout_doc;
                     let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
-                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, ("80", "24"), ("0", "0"));
+                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, DESK_MAIN, ("0", "0"));
                     tab.focus = ids.first().copied();
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
                     self.tabs.insert(at, tab);
@@ -2132,6 +2146,10 @@ impl App {
 }
 
 /// The desktop's preset ids (desktop/lib/state/pane_preset.dart, enum names) → our shapes.
+/// A desk tab's main pane, as the desktop app draws it: half the window (its presets' main tile is
+/// .5 wide or tall), not tmux's main-pane-width of 80 cells, which a narrow terminal can't spare.
+const DESK_MAIN: (&str, &str) = ("50%", "50%");
+
 fn preset_from_desk(id: &str, count: usize) -> Preset {
     match id {
         "columns" | "cols2" | "cols3" | "cols4" | "cols5" | "balanced2" | "balanced3" | "balanced4" | "balanced5" => Preset::Columns,

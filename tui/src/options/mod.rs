@@ -36,9 +36,19 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         }
         m.insert("pane-border-status".into(), "top".into());
         // The status line: tmux's, with what Harness adds — the name reversed while the prefix
-        // waits; before the clock, harnesses waiting on you, a far pane's machine, and tim.
+        // waits; on the right, harnesses waiting on you, the focused pane's machine (a far one, as
+        // scp writes it: gpu-box:ml-lab), project and branch (as zsh's robbyrussell prompt writes
+        // them) where tmux has the pane's title (in the pane's own title row here), tim, the clock;
+        // a space first, so a full window list never runs into it.
         m.insert("status-left".into(), "#{?client_prefix,#[reverse],}[#{session_name}]#{?client_prefix,#[noreverse],} ".into());
-        m.insert("status-right".into(), "#{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?#{>:#{waiting},0},#[reverse]#{waiting} waiting#[noreverse] ,}#{?pane_watching,[watching] ,}\"#{=21:pane_title}\" #{?pane_far,#{pane_machine} ,}#{?#{tim},#{tim} ,}%H:%M %d-%b-%y".into());
+        m.insert("status-right".into(), " #{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?#{>:#{waiting},0},#[reverse]#{waiting} waiting#[noreverse] ,}#{?pane_watching,[watching] ,}#{?pane_far,#{pane_machine}#{?pane_project,:, },}#{?pane_project,#{=/16/…:pane_project} ,}#{?pane_branch,git:(#{=/24/…:pane_branch}) ,}#{?#{tim},#{tim} ,}%H:%M".into());
+        // Each window's most urgent harness at a glance (the symbol its pane titles show) and its
+        // name in a few whole words (#{window_short_name}): a harness is named for its task.
+        for name in ["window-status-format", "window-status-current-format"] {
+            m.insert(name.into(), "#I:#{?window_agent_icon,#{window_agent_icon} ,}#{window_short_name}#{?window_flags,#{window_flags}, }".into());
+        }
+        // A session is a machine, named as the machine is (tmux's are 0, 1, …): room for its name.
+        m.insert("status-left-length".into(), "24".into());
         m.insert("status-right-length".into(), "60".into());
         // Agents print a lot: ten thousand lines of scrollback (tmux keeps two).
         m.insert("history-limit".into(), "10000".into());

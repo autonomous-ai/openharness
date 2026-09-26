@@ -194,7 +194,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
         .map(|a| {
             let state = app.fleet.state_of(a);
-            let (dot, _, color) = state_mark(state);
+            let (dot, _, color) = state_mark(state, app.tick);
             let (mark, mark_color) = engine_mark(&a.engine);
             let group = match state {
                 State::NeedsInput => "Needs input", State::Working => "Working", State::Paused => "Paused", State::Offline => "Offline", _ => "Running",

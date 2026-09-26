@@ -51,7 +51,13 @@ const question = (machine) => {
   const a = agents[machine]?.find((x) => x.name.startsWith('Add rate limiting'))
   return a && { type: 'commander_question', agentId: a.id, dbSessionId: a.sessionId, payload: { requestId: 'q-demo', questions: [{ q: 'Rate limit per API key or per IP?', options: ['Per API key', 'Per IP', 'Both'] }] } }
 }
-const desk = { revision: 1, tabs: [] }
+// The demo's desk: the tabs a window opens with — three harnesses side by side, two more in tabs.
+const demoPane = (machineId, start) => ({ machineId, agentId: agents[machineId].find((x) => x.name.startsWith(start)).id })
+const desk = DEMO ? { revision: 1, tabs: [
+  { id: 'demo-1', name: 'Fix flaky login test', panes: [demoPane(LOCAL, 'Fix flaky'), demoPane(LOCAL, 'Add rate'), demoPane(REMOTE, 'gpu-box')], layout: { presets: { 3: 'mainAndStack' } } },
+  { id: 'demo-2', name: 'Refactor billing service', panes: [demoPane(LOCAL, 'Refactor billing')], layout: {} },
+  { id: 'demo-3', name: 'Train tokenizer on the new corpus', panes: [demoPane(REMOTE, 'Train tokenizer')], layout: {} },
+] } : { revision: 1, tabs: [] }
 // The dial's side of the daemon, for the e2e: what the windows told it (the ring, the tabs, the
 // focus, spoken-task replies, messages sent), and every local window to push dial frames at.
 const dial = { said: {}, replies: [], messages: [] }
@@ -120,9 +126,12 @@ wss.on('connection', (ws) => {
       if (DEMO) {
         const asked = question(machine)
         if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
-        const busy = agents[machine].filter((x) => x.status === 'active' && x.engine !== 'terminal' && !x.name.startsWith('Add rate'))
+        let busy = agents[machine].filter((x) => x.status === 'active' && x.engine !== 'terminal' && !x.name.startsWith('Add rate'))
         const beat = setInterval(() => busy.forEach((x) => send('turn_heartbeat', { agentId: x.id, sessionId: x.sessionId })), 2000)
-        ws.on('close', () => clearInterval(beat))
+        // The billing refactor finishes its turn a few seconds in (done, until you look at it).
+        const finished = busy.find((x) => x.name.startsWith('Refactor billing'))
+        const finish = finished && setTimeout(() => { busy = busy.filter((x) => x !== finished); send('turn_ended', { agentId: finished.id, sessionId: finished.sessionId }) }, 5000)
+        ws.on('close', () => { clearInterval(beat); clearTimeout(finish) })
         setTimeout(() => busy.forEach((x) => send('turn_heartbeat', { agentId: x.id, sessionId: x.sessionId })), 200)
       }
       return
@@ -165,6 +174,12 @@ wss.on('connection', (ws) => {
         return
       }
       case 'terminal_close': streams.delete(payload.streamId); return
+      case 'terminal_resize': {
+        // A demo pane redraws at its new size, as the agent in it would: a keyframe of that size.
+        const stream = streams.get(payload.streamId)
+        if (DEMO && stream) ws.send(frame(3, payload.streamId, stream.seq++, Buffer.from(demoScreen(stream.agent)), [payload.cols, payload.rows]))
+        return
+      }
       default: return // acks, alive, resize, focus: nothing to do
     }
   })

@@ -57,14 +57,14 @@ expect "C-b : is the command prompt" ":"
 tmux_ send-keys -t t "split-window -h" Enter
 # tmux's split: a shell at once, and what is typed straight after it lands in it.
 tmux_ send-keys -t t "typed-ahead"
-expect "split-window -h gives a shell" '"Mock terminal"'
+expect "split-window -h gives a shell" '── Mock terminal ─'
 expect "keys typed while it starts go into it" "typed-ahead"
 tmux_ send-keys -t t C-b x y
 tmux_ send-keys -t t C-b s
 tmux_ send-keys -t t "remote"
 tmux_ send-keys -t t C-v
 expect "C-b s then C-v: a harness beside" "Remote shell (mock)"
-expect "pane titles, tmux pane-border-status" '"Remote shell"'
+expect "pane titles, tmux pane-border-status" '── Remote shell ─'
 # From a shell, as tmux is scripted: the running client answers.
 out=$(HOME=$home "$bin" -L "$client" display -p '#{session_windows} #{pane_index}')
 [ -n "$out" ] || fail "hn display -p from a shell answered nothing"
@@ -118,7 +118,7 @@ push "{\"type\":\"dial_swarm\",\"payload\":{\"swarmId\":\"$first\"}}"
 wait_eq "picking a window on the dial selects it" 0 hn display -p '#{window_index}'
 tmux_ send-keys -t t C-b 1
 tmux_ send-keys -t t C-b 0
-expect "C-b 0: back to window 0" "0:Mock Codex*"
+expect "C-b 0: back to window 0 (its harness idle: ·)" "0:· Mock Codex*"
 tmux_ send-keys -t t C-b w
 expect "C-b w: choose-tree" "windows (attached)"
 tmux_ send-keys -t t q

@@ -41,10 +41,13 @@ never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same sizes, the same
-pane numbers and the same active pane after each. Four defaults differ, and your `.tmux.conf`
-overrides each: `pane-border-status top` (each pane's title row names its harness),
-`allow-set-title off` (a pane's title is its harness's name, not what the program sets),
-`history-limit 10000` (agents print a lot; tmux keeps 2000), and `mouse on`.
+pane numbers and the same active pane after each. Some defaults differ, and your `.tmux.conf`
+overrides each: `pane-border-status top` (each pane's title row: its harness's state and name, and
+its project and branch where the pane has room), `allow-set-title off` (a pane's title is its
+harness's name, not what the program sets), `history-limit 10000` (agents print a lot; tmux keeps
+2000), `mouse on`, and the status line: each window's most urgent harness state before its name,
+and on the right the focused pane's machine (when it is another one), project and branch —
+`gpu-box:ml-lab git:(main)` — where tmux shows the pane's title.
 
 | tmux keys | |
 |---|---|
@@ -79,6 +82,26 @@ In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles 
 and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`, `16`, `bw`).
 
 Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
+
+## At a glance
+
+Every harness's state is one symbol, the same in its pane's title row, the window list and `C-b s`
+(a plain shell has none). A window shows its most urgent pane's, and a window with a harness
+waiting on you is reversed, as tmux shows a bell.
+
+| | |
+|---|---|
+| `⠹` (turning) | working |
+| `?` | needs you: a question or a permission |
+| `✓` | done, and you haven't looked yet |
+| `·` | idle |
+| `✗` | failed |
+| `◌` `‖` `○` | starting, paused, offline |
+
+For your own formats: `#{pane_agent_icon}` and `#{pane_agent_state}` (needs, working, done, idle,
+starting, failed, paused, offline), `#{window_agent_icon}` and `#{window_agent_state}` (its most
+urgent pane's), `#{pane_project}`, `#{pane_branch}`, `#{pane_machine}`, `#{pane_far}` (another
+machine's), and `#{waiting}` (harnesses waiting on you).
 
 ## From a shell
 
