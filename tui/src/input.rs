@@ -198,7 +198,20 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
                 else { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
             }
         }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { if picker.bar_drag { picker.drag_bar(mouse.column, mouse.row, false); } }
+        }
+        MouseEventKind::Up(_) => { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.bar_drag = false } }
+        // fzf's right click: the row under it, then toggle (a mark, in a list that takes marks).
+        MouseEventKind::Down(MouseButton::Right) => {
+            if let Some(Modal::Picker { kind, picker }) = &mut app.modal {
+                let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
+                if picker.click(mouse.row) && multi { picker.toggle_mark() }
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
+            // fzf's scrollbar: pressed, the list follows the mouse while it is held.
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal { if picker.drag_bar(mouse.column, mouse.row, true) { picker.bar_drag = true; return } }
             let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) => Some(picker.click(mouse.row)), _ => None };
             match hit {
                 Some(true) => {
@@ -207,8 +220,24 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
                     if double { app.last_click = None; modal_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) }
                 }
                 Some(false) => {
+                    // fzf: a click on the prompt's line puts the query's cursor there.
+                    if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
+                        let (py, px) = picker.prompt_at.get();
+                        if mouse.row == py {
+                            let len = picker.query.chars().count() as i64;
+                            let at = ((mouse.column as i64 - px as i64).clamp(0, len) + picker.xoffset.get() as i64).clamp(0, len);
+                            picker.qcursor = at as usize;
+                            picker.qmove(0, false);
+                            return;
+                        }
+                    }
+                    // Outside the box (above a short list's rows, the status line) it goes.
                     let top = app.size.1.saturating_sub(1);
-                    let inside = matches!(&app.modal, Some(Modal::Picker { picker, .. }) if picker.row_at.first().map(|(y, _)| mouse.row >= y.saturating_sub(1)).unwrap_or(false) || mouse.row >= top);
+                    let inside = matches!(&app.modal, Some(Modal::Picker { picker, .. }) if {
+                        let (lo, hi) = picker.box_rows.get();
+                        let (rlo, rhi) = picker.row_at.iter().fold((lo, hi), |(a, b), (y, _)| (a.min(*y), b.max(*y)));
+                        mouse.row + 1 >= rlo && mouse.row <= rhi + 1
+                    }) || mouse.row >= top;
                     if !inside { app.modal = None }
                 }
                 None => {}

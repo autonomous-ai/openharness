@@ -830,6 +830,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         if !text.is_empty() { shift = typed_w as i32 }
     }
     let cursor = Position::new(area.x + pw + before_w as u16, prompt_y);
+    picker.prompt_at.set((prompt_y, area.x + pw));
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
@@ -917,6 +918,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // with the prompt below (reverse-list).
     let (list_top, list_bottom) = if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
     picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
+    // The box's rows: the prompt's side through the rows' (the list's rows are added as drawn).
+    let edge_rows = [prompt_y, info_y, header_y];
+    picker.box_rows.set((edge_rows.iter().min().copied().unwrap_or(prompt_y), edge_rows.iter().max().copied().unwrap_or(prompt_y)));
     let list_h = list_bottom.saturating_sub(list_top) as usize;
     let n = picker.visible.len();
     if n == 0 {
@@ -948,8 +952,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     }
     // Scrollbar on the right edge, like fzf's: only the thumb, in the border colour.
     // fzf's getScrollbar: the thumb's length and its start from the prompt's side, both floored.
+    picker.bar.set(None);
     if let (true, Some(bar)) = (n > list_h && list_h > 2, theme::fzf_opts().scrollbar.clone()) {
         let thumb = ((list_h * list_h) / n).max(1);
+        picker.bar.set(Some((area.x + area.width - 1, list_top, list_bottom, reverse, thumb, 1)));
         let start = ((list_h - thumb) * picker.scroll.min(n - list_h) / (n - list_h)).min(list_h - thumb);
         for i in 0..thumb {
             let y = if reverse { list_top + (start + i) as u16 } else { list_bottom - 1 - (start + i) as u16 };
@@ -1355,8 +1361,10 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
     }
     // getScrollbar(avgNumLines, …): the thumb and its start from the prompt's side.
     let (total, h) = (n * per_line.max(1), max_lines);
+    picker.bar.set(None);
     if let (true, Some(bar)) = (total > h && h > 2, o.scrollbar.clone()) {
         let thumb = (h * h / total).max(1);
+        picker.bar.set(Some((area.x + area.width - 1, list_top, list_bottom, reverse, thumb, per_line.max(1))));
         let start = if n == h { 0 } else { ((h * per_line - thumb) * offset / (total - h)).min(h - thumb) };
         for i in 0..thumb {
             let y = if reverse { list_top + (start + i) as u16 } else { list_bottom - 1 - (start + i) as u16 };

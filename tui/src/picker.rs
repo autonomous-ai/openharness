@@ -96,6 +96,15 @@ pub struct Picker {
     /// counted in, for the width they were counted at — kept until the width, --wrap or the rows
     /// change, and trusted, as fzf trusts it, for any room at least as big.
     pub line_cache: std::cell::RefCell<(usize, HashMap<usize, (i64, usize)>)>,
+    /// The list's scrollbar as last drawn — its column, the list's rows (top, bottom), whether
+    /// they run top-down, the thumb's length and the lines a row averages — and whether the mouse
+    /// is dragging it.
+    pub bar: std::cell::Cell<Option<(u16, u16, u16, bool, usize, usize)>>,
+    pub bar_drag: bool,
+    /// The prompt's line and where the query starts on it, and the rows the list's box spans (from
+    /// the last draw), for the mouse.
+    pub prompt_at: std::cell::Cell<(u16, u16)>,
+    pub box_rows: std::cell::Cell<(u16, u16)>,
 }
 
 impl Picker {
@@ -130,6 +139,10 @@ impl Picker {
             wrap: crate::theme::fzf_opts().wrap,
             wrap_width: Default::default(),
             line_cache: Default::default(),
+            bar: Default::default(),
+            bar_drag: false,
+            prompt_at: Default::default(),
+            box_rows: Default::default(),
             preview_max: Default::default(),
             preview_lines: Default::default(),
             preview_rows: Default::default(),
@@ -399,8 +412,26 @@ impl Picker {
     /// Put the cursor on the row drawn at screen row [y]; false when there is none.
     pub fn click(&mut self, y: u16) -> bool {
         let Some((_, vi)) = self.row_at.iter().find(|(row, _)| *row == y).copied() else { return false };
-        self.cursor = vi;
-        self.selected_id = self.visible.get(vi).map(|(i, _)| self.rows[*i].id.clone());
+        self.vset(vi as i64, 1);
+        true
+    }
+
+    /// fzf's scrollbar dragging: the thumb's middle to the mouse's row, the offset from it, and the
+    /// cursor moved as far as the offset did. False when the mouse is not on the bar's column.
+    pub fn drag_bar(&mut self, x: u16, y: u16, start: bool) -> bool {
+        let Some((bx, top, bottom, reverse, thumb, per_line)) = self.bar.get() else { return false };
+        if start && (x != bx || y < top || y >= bottom) { return false }
+        if thumb == 0 || self.visible.is_empty() { return true }
+        let max_items = (bottom - top) as i64;
+        let line = if reverse { y as i64 - top as i64 } else { bottom as i64 - 1 - y as i64 };
+        let new_start = (line - thumb as i64 / 2).clamp(0, (max_items - thumb as i64).max(0));
+        let total = self.visible.len() as i64;
+        let denom = max_items * per_line as i64 - thumb as i64;
+        if denom <= 0 { return true }
+        let offset = ((new_start * (total * per_line as i64 - max_items)) as f64 / denom as f64).ceil() as i64;
+        let prev = self.scroll as i64;
+        self.scroll = offset.max(0) as usize;
+        self.vset(offset + self.cursor as i64 - prev, 1);
         true
     }
 
