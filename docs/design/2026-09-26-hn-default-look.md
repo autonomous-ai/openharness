@@ -200,3 +200,114 @@ next harness waiting. Nothing appears until you ask, the way Vim's popups work.
 4. C: docked in the waiting pane (as drawn), or at the bottom of the screen above the status line, like
    fzf's list?
 5. Keep tim (`\_O_/`) in the status line?
+
+---
+
+## Round 2, after review (26 September)
+
+What changed:
+
+- **The agents' own UIs already show what they are doing.** Claude Code and Codex draw their status at the
+  bottom of their panes, so hn doesn't repeat it.
+- **hn still owes a glance.** One symbol per pane says which one needs you, which is working, which is done
+  and which is idle, across every pane at once.
+- **Questions are rare now** (most people run with auto-approve), so answering in place (C) is shelved.
+- **No machine name in pane titles.**
+- **Project and branch matter** and have to be somewhere. The desktop app shows them for the focused pane
+  in its status bar, drawn in zsh prompt styles (Pure, Starship, Powerlevel10k); an earlier version put
+  them in each pane's title.
+
+The symbols follow [Orca](https://www.onorca.dev/docs/model/agents-sessions), which uses one set on every
+agent tab and sidebar row:
+
+| | State | Colour |
+|---|---|---|
+| `⠹` | working (a spinner, animated) | default |
+| `?` | needs you: a question or a permission | amber |
+| `✓` | done, not looked at yet | green |
+| `·` | idle | grey |
+| `✗` | failed, blocked or interrupted | red |
+| (none) | a plain shell | |
+
+### A2: project and branch in every title
+
+```
+── ⠹ Fix flaky login t webapp · fix/login-flake ──┬── ? Add rate limiting to t api · feat/rate-l… ──
+✳ Fix flaky login test                            │                                                 
+                                                  │> add rate limiting to the api                   
+> fix flaky login test                            │                                                 
+                                                  │⏺ Reading src/api/handler.ts                     
+⏺ Reading src/webapp/handler.ts                   │⏺ Running npm test -- api                        
+⏺ Running npm test -- webapp                      │  ✓ 41 passed  ✗ 1 failed                        
+  ✓ 41 passed  ✗ 1 failed                         │⏺ The failure is a race in the session refresh — 
+⏺ The failure is a race in the session refresh — t│the token is read                                
+  before the refresh promise settles. Fixing it an│  before the refresh promise settles. Fixing it a
+                                                  │nd re-running.                                   
+────────────────────────────────────────          │                                                 
+❯                                                 │────────────────────────────────────────         
+                                                  │❯                                                
+                                                  ├── gpu-box shell ─────────────── ml-lab · main ──
+                                                  │dev@gpu-box:~/ml-lab$ nvidia-smi --query-gpu=name
+                                                  │,utilization.gpu --format=csv                    
+                                                  │name, utilization.gpu [%]                        
+                                                  │NVIDIA RTX 4090, 97 %                            
+                                                  │NVIDIA RTX 4090, 95 %                            
+                                                  │dev@gpu-box:~/ml-lab$                            
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+[studio] 0:? Fix flaky login test*  1:✓ Refactor billing  2:⠹ Train tokenizer        10:10 26-Sep-26
+```
+
+At 50 columns a pane can't hold the name, the project and the branch, so the names get cut first.
+
+### B2: the focused pane's project and branch in the status line (recommended)
+
+```
+── ⠹ Fix flaky login test ────────────────────────┬── ? Add rate limiting to the API ───────────────
+✳ Fix flaky login test                            │                                                 
+                                                  │> add rate limiting to the api                   
+> fix flaky login test                            │                                                 
+                                                  │⏺ Reading src/api/handler.ts                     
+⏺ Reading src/webapp/handler.ts                   │⏺ Running npm test -- api                        
+⏺ Running npm test -- webapp                      │  ✓ 41 passed  ✗ 1 failed                        
+  ✓ 41 passed  ✗ 1 failed                         │⏺ The failure is a race in the session refresh — 
+⏺ The failure is a race in the session refresh — t│the token is read                                
+  before the refresh promise settles. Fixing it an│  before the refresh promise settles. Fixing it a
+                                                  │nd re-running.                                   
+────────────────────────────────────────          │                                                 
+❯                                                 │────────────────────────────────────────         
+                                                  │❯                                                
+                                                  ├── gpu-box shell ────────────────────────────────
+                                                  │dev@gpu-box:~/ml-lab$ nvidia-smi --query-gpu=name
+                                                  │,utilization.gpu --format=csv                    
+                                                  │name, utilization.gpu [%]                        
+                                                  │NVIDIA RTX 4090, 97 %                            
+                                                  │NVIDIA RTX 4090, 95 %                            
+                                                  │dev@gpu-box:~/ml-lab$                            
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+                                                  │                                                 
+[studio] 0:? Fix flaky login test*  1:✓ Refactor billing  2:⠹ Train   webapp  fix/login-flake  10:10
+```
+
+- **Pane titles** carry the state and the whole name.
+- **The window list** carries each window's most urgent state.
+- **The status line's right side** shows the focused pane's project and branch, as the desktop app does.
+  When a pane is wide enough, its own title can add its branch too.
+
+Questions:
+
+1. B2, with the branch added to wide titles?
+2. Should the spinner animate (Orca's does), or should working be a still `●`?
+3. Should the status line use your zsh prompt style for the project and branch, as the desktop app can?
