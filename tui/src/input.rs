@@ -392,7 +392,8 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             let installed = picker.rows.iter().filter(|r| r.lead.first().map(|s| s.content.contains('●')).unwrap_or(false)).count();
             picker.status = format!("{installed} installed");
             picker.hints = vec![("enter", "start one"), ("M-i", "install")];
-            if catalog.is_empty() { picker.empty = "Loading the Store…".into() }
+            // (While it loads the spinner turns and the list is blank, as fzf's is while it reads.)
+            if catalog.is_empty() { picker.empty = "Nothing in the Store yet.".into() }
         }
         PickerKind::NewMachine => {
             let prefer = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or(app.fleet.local_id.clone());
