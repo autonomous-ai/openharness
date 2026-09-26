@@ -142,6 +142,7 @@ import { terminalRouteKey, terminalRuntimeLabel } from './lib/terminalRuntime.js
 import { TerminalAgentReconciler } from './lib/terminalAgentReconciler.js'
 import { processRows, type DiscoveredTerminalAgent } from './lib/terminalAgentDiscovery.js'
 import { remoteCommand } from './remoteCommand.js'
+import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import {
@@ -374,6 +375,7 @@ Machine:
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
@@ -6971,6 +6973,9 @@ async function logsExportCommand(json: boolean): Promise<void> {
 import { orchestratorCommand } from './orchestrator/command.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
+// `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
+// back into this CLI from `hn` (login, start) is marked and runs as plain `harness`.
+if (/^hn(\.js)?$/.test(process.argv[1]?.split(/[\\/]/).pop() ?? '') && process.env.HARNESS_SELF !== '1') process.argv.splice(2, 0, 'tui')
 const [, , cmd, ...rest] = process.argv
 const flags = rest.filter((a) => a.startsWith('-'))
 const args = rest.filter((a) => !a.startsWith('-'))
@@ -7157,6 +7162,9 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'tui':
+    tuiCommand(rest, { port: daemonPort(), signedIn: () => readAuthSession() !== null }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({

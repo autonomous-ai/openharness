@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "type": "module",
   "bin": {
-    "harness": "dist/cli.js"
+    "harness": "dist/cli.js",
+    "hn": "dist/cli.js"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",

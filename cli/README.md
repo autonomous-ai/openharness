@@ -49,15 +49,15 @@ it uses temporary identities and loopback sockets, never live machine state.
 
 ## Install & run (`harness`)
 
-Prerequisite: **Node ≥ 20**. Install the CLI, then sign in once with the same SSO account used by
-Harness:
+Install the CLI, then sign in once with the same SSO account used by Harness:
 
 ```bash
 curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 ```
 
-(The installer is a first-party hosted script; it downloads the published bundle and writes the
-`~/.local/bin/harness` command.)
+(The installer is a first-party hosted script. It brings its own Node, downloads the published
+bundle and writes the `~/.local/bin/harness` command, and `hn`: Harness in a terminal, which signs in
+and starts the daemon the first time you run it.)
 
 ```bash
 harness login         # opens browser SSO and saves this computer's session
@@ -67,6 +67,7 @@ harness start -f      # foreground mode for a supervisor; logs to stdout
 harness status     # is it running? shows pid + the chat link
 harness stop       # stop the background adapter
 harness version    # print the installed version
+harness tui        # all of Harness in this terminal — tabs, panes, every machine (see tui/README.md)
 harness logout     # stop the adapter and clear this computer's SSO session
 ```
 

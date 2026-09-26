@@ -964,6 +964,31 @@ export function tmuxPaneState(pane: string): Promise<TmuxPaneState | null> {
   })
 }
 
+/** What a pane is running and where, as tmux knows it (terminal clients' #{pane_current_*}). */
+export interface TmuxPaneInfo { command: string; path: string; pid: number | null; tty: string }
+
+/**
+ * The foreground command, live working directory, pid and tty of a pane — tmux's
+ * `#{pane_current_command}` and `#{pane_current_path}`, which a terminal client (hn) shows and a
+ * vim-tmux-navigator style check asks. Null when tmux does not know the pane.
+ */
+export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInfo | null> {
+  return new Promise((resolve) => {
+    // A path can hold any character but a newline; the command, pid and tty cannot hold one either.
+    const format = '#{pane_current_command}\n#{pane_pid}\n#{pane_tty}\n#{pane_current_path}'
+    // `socket` names a server outright (tests pass their own); without it, the daemon's server.
+    const args = [...(socket ? ['-S', socket] : []), 'display-message', '-p', '-t', pane, format]
+    execFile('tmux', args, { timeout: 2_000 }, (err, stdout) => {
+      if (err) { resolve(null); return }
+      const [command = '', pid = '', tty = '', ...path] = stdout.replace(/\n$/, '').split('\n')
+      const n = Number(pid)
+      // tmux 3.5 answers a pane it does not know with empty fields rather than an error.
+      if (pid === '' || !Number.isSafeInteger(n)) { resolve(null); return }
+      resolve({ command, path: path.join('\n'), pid: n, tty })
+    })
+  })
+}
+
 /**
  * Hand a pane back to tmux's default disposal after `create()` asked tmux to keep it when dead.
  *
