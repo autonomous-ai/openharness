@@ -314,7 +314,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     let (clock, date) = local_time(app.utc_offset_secs);
     let title = crate::input::focused_title(app);
     let title: String = if title.is_empty() { host.clone() } else { title.chars().take(21).collect() };
-    let machine = app.focused().and_then(|f| app.panes.get(&f)).filter(|_| app.fleet.machines.len() > 1).map(|p| app.fleet.machine_name(&p.machine_id));
+    let machine = app.focused().and_then(|f| app.panes.get(&f)).filter(|p| p.machine_id != app.fleet.local_id).map(|p| app.fleet.machine_name(&p.machine_id));
     let mut right: Vec<Span> = Vec::new();
     let waiting = app.fleet.waiting();
     if app.daemon_down { right.push(Span::styled("daemon down ", base.add_modifier(Modifier::REVERSED))); right.push(Span::styled(" ", base)) }
@@ -323,26 +323,51 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         right.push(Span::styled("[watching] ", base));
     }
     let who = match machine { Some(m) => format!("\"{title}\" {m} "), None => format!("\"{title}\" ") };
-    right.push(Span::styled(format!("{who}{clock} {date}"), base));
+    right.push(Span::styled(who, base));
+    right.push(Span::styled(format!("{clock} {date}"), base));
+    // tmux's status-right-length is 40 (60 here: a waiting count, a far machine), and the window list comes first: what does not fit is
+    // cut from the left, so the clock and date stay.
+    let current_w = window_entry(app, app.active, 24).0.width() as u16 + 1;
+    let cap = 60u16.min(rect.width.saturating_sub(left.width() as u16 + current_w + 1));
+    // Too long: the pane title goes first, then the date, then what is left is cut.
+    let width = |r: &Vec<Span<'static>>| r.iter().map(|s| s.content.width()).sum::<usize>();
+    if width(&right) > cap as usize && right.len() >= 2 { let at = right.len() - 2; right.remove(at); }
+    if width(&right) > cap as usize { if let Some(last) = right.last_mut() { *last = Span::styled(clock.clone(), base) } }
+    let right = keep_tail(right, cap as usize);
     let right_line = Line::from(right);
-    let right_w = (right_line.width() as u16).min(rect.width.saturating_sub(12));
+    let right_w = right_line.width() as u16;
     let right_x = rect.x + rect.width - right_w;
     buf.set_line(right_x, rect.y, &right_line, right_w);
     // The window list, scrolled with < and > when it does not fit (as tmux does).
     let list_x = rect.x + left.width() as u16;
     let list_end = right_x.saturating_sub(1);
-    let entries: Vec<(String, bool)> = (0..app.tabs.len()).map(|i| window_entry(app, i)).collect();
-    let widths: Vec<u16> = entries.iter().map(|(e, _)| e.width() as u16 + 1).collect();
     let room = list_end.saturating_sub(list_x);
+    // Harness titles are long where tmux's names are short: the other windows give way first.
+    let mut entries: Vec<(String, bool)> = (0..app.tabs.len()).map(|i| window_entry(app, i, 24)).collect();
+    for short in [16, 10, 6] {
+        if entries.iter().map(|(e, _)| e.width() as u16 + 1).sum::<u16>() <= room { break }
+        entries = (0..app.tabs.len()).map(|i| window_entry(app, i, if i == app.active { 24 } else { short })).collect();
+    }
+    let widths: Vec<u16> = entries.iter().map(|(e, _)| e.width() as u16 + 1).collect();
     let mut first = 0;
-    while first < app.active && widths[first..=app.active].iter().sum::<u16>() > room.saturating_sub(2) { first += 1 }
+    if widths[..=app.active].iter().sum::<u16>() > room {
+        while first < app.active && widths[first..=app.active].iter().sum::<u16>() > room.saturating_sub(2) { first += 1 }
+    }
     let mut x = list_x;
     if first > 0 { buf.set_string(x, rect.y, "<", base); x += 1 }
     app.tab_hits.clear();
     for (i, (entry, alert)) in entries.iter().enumerate().skip(first) {
         let w = entry.width() as u16;
-        if x + w + 1 > list_end { buf.set_string(list_end.saturating_sub(1).max(x), rect.y, ">", base); break }
         let style = if *alert { base.add_modifier(Modifier::REVERSED) } else { base };
+        if x + w + 1 > list_end {
+            // The current window always shows, cut to fit if it must.
+            if i == app.active && list_end > x + 1 {
+                let fit = clip(entry, (list_end - x) as usize);
+                buf.set_string(x, rect.y, &fit, style);
+                app.tab_hits.push((i, x, list_end));
+            } else { buf.set_string(list_end.saturating_sub(1).max(x), rect.y, ">", base) }
+            break
+        }
         buf.set_string(x, rect.y, entry, style);
         app.tab_hits.push((i, x, x + w));
         x += w + 1;
@@ -350,12 +375,37 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     None
 }
 
+/// The last `width` columns of some spans.
+fn keep_tail(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut room = width;
+    for span in spans.into_iter().rev() {
+        if room == 0 { break }
+        let w = span.content.width();
+        if w <= room { room -= w; out.push(span); continue }
+        let mut tail: Vec<char> = Vec::new();
+        let mut used = 0;
+        for c in span.content.chars().rev() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + cw > room { break }
+            used += cw;
+            tail.push(c);
+        }
+        // A part that does not fit goes whole (a clock, not half a title); only the last part is cut.
+        let tail: String = if out.is_empty() { tail.into_iter().rev().collect() } else { String::new() };
+        let pad = room - tail.width();
+        out.push(Span::styled(format!("{}{tail}", " ".repeat(pad)), span.style));
+        room = 0;
+    }
+    out.reverse();
+    out
+}
+
 /// `#I:#W#{window_flags}` — `*` current, `-` last, `Z` zoomed, `!` a harness is waiting on you
 /// (tmux's bell flag), `#` one finished (activity). The bool: draw it reversed, as tmux does alerts.
-fn window_entry(app: &App, index: usize) -> (String, bool) {
+fn window_entry(app: &App, index: usize, max: usize) -> (String, bool) {
     let tab = &app.tabs[index];
-    let mut name: String = tab.name.chars().take(24).collect();
-    if tab.name.chars().count() > 24 { name.pop(); name.push('…') }
+    let name = clip(&tab.name, max);
     let mut flags = String::new();
     if index == app.active { flags.push('*') }
     else if app.last_tab.as_ref() == Some(&tab.id) { flags.push('-') }
@@ -630,7 +680,7 @@ fn tree(buf: &mut Buffer, app: &App, body: Rect, cursor: usize, collapsed: &[Str
         let text = match row.pane {
             None => {
                 let n = tab.panes().len();
-                let (entry, _) = window_entry(app, row.window);
+                let (entry, _) = window_entry(app, row.window, 24);
                 format!("({i}) {} {entry}: {n} pane{}", if collapsed.contains(&tab.id) { "+" } else { "-" }, if n == 1 { "" } else { "s" })
             }
             Some(p) => {
@@ -725,6 +775,7 @@ fn copy_indicator(buf: &mut Buffer, pane: &Pane, content: Rect) {
 
 fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }
+    if cols == 0 { return String::new() }
     let mut out = String::new();
     for ch in text.chars() {
         if out.width() + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) + 1 > cols { break }
@@ -800,13 +851,16 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     let spare = (pane.rows as i32 - area.height as i32).max(0);
     let shift = if content.display_offset > 0 { 0 } else { (cursor_view - area.height as i32 + 1).clamp(0, spare) };
     let offset = content.display_offset as i32 - shift;
+    // Wider than the tile (a pane under the daemon's 40 columns): likewise keep the cursor's column.
+    let hspare = (pane.cols as i32 - area.width as i32).max(0);
+    let hshift = (content.cursor.point.column.0 as i32 - area.width as i32 + 1).clamp(0, hspare) as u16;
     let colors = content.colors;
     let mode = content.mode;
     let cursor_point = content.cursor.point;
     let selection = content.selection;
     for indexed in content.display_iter {
         let row = indexed.point.line.0 + offset;
-        let col = indexed.point.column.0 as u16;
+        let Some(col) = (indexed.point.column.0 as u16).checked_sub(hshift) else { continue };
         if row < 0 || row as u16 >= area.height || col >= area.width { continue }
         let cell = indexed.cell;
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) { continue }
@@ -851,6 +905,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     // Local echo, drawn over the grid: underlined until the far side confirms it.
     for (col, row, c, _) in &pane.predictions {
         let row = (*row as i32 - shift).max(0) as u16;
+        let Some(col) = &col.checked_sub(hshift) else { continue };
         if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
             if *col < area.width && row < area.height { cell.set_char(*c).set_style(Style::default().add_modifier(Modifier::UNDERLINED)); }
         }
@@ -858,11 +913,12 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     if pane.scrolled() > 0 || !active { return None }
     if let Some((col, row, _, _)) = pane.predictions.last() {
         let row = (*row as i32 - shift).max(0) as u16;
+        let col = &col.saturating_sub(hshift);
         if col + 1 < area.width && row < area.height { return Some(Position::new(area.x + col + 1, area.y + row)) }
     }
     if !mode.contains(TermMode::SHOW_CURSOR) || matches!(pane.phase, Phase::Watching(_)) { return None }
     let row = cursor_point.line.0 + offset;
-    let col = cursor_point.column.0 as u16;
+    let col = (cursor_point.column.0 as u16).saturating_sub(hshift);
     (row >= 0 && (row as u16) < area.height && col < area.width).then(|| Position::new(area.x + col, area.y + row as u16))
 }
 
