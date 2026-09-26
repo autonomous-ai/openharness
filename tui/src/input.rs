@@ -130,14 +130,25 @@ fn on_paste(app: &mut App, text: String) {
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
     if app.modal.is_some() {
         match mouse.kind {
-            // The list reads bottom-up: the wheel moves the way the rows do.
-            MouseEventKind::ScrollUp => if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.move_by(3) },
-            MouseEventKind::ScrollDown => if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.move_by(-3) },
+            // The list reads bottom-up: the wheel moves the way the rows do; over the preview it
+            // scrolls the preview, as fzf's does.
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+                let half = app.size.0 / 2;
+                if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
+                    if picker.preview && mouse.column >= half { picker.preview_scroll = if up { picker.preview_scroll.saturating_sub(1) } else { picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()) } }
+                    else { picker.move_by(if up { 1 } else { -1 }) }
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) => Some(picker.click(mouse.row)), _ => None };
                 match hit {
-                    // A click on a row takes it; a click outside the box closes it.
-                    Some(true) => { let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE); modal_key(app, enter) }
+                    // A click takes the row, a second click on it opens it; a click outside the box closes it.
+                    Some(true) => {
+                        let double = matches!(app.last_click, Some((9, _, r, at, _)) if r == mouse.row && at.elapsed() < Duration::from_millis(400));
+                        app.last_click = Some((9, mouse.column, mouse.row, std::time::Instant::now(), 1));
+                        if double { app.last_click = None; modal_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) }
+                    }
                     Some(false) => {
                         let top = app.size.1.saturating_sub(1);
                         let inside = matches!(&app.modal, Some(Modal::Picker { picker, .. }) if picker.row_at.first().map(|(y, _)| mouse.row >= y.saturating_sub(1)).unwrap_or(false) || mouse.row >= top);
@@ -153,8 +164,8 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     let (x, y) = (mouse.column, mouse.row);
     // A drag ends wherever the button comes up — the tab strip included.
     if matches!(mouse.kind, MouseEventKind::Up(_)) && app.mouse_drag.is_some() { app.mouse_drag = None; return }
-    // The tab strip.
-    if y == 0 {
+    // The status line's window list.
+    if y == if app.status_top { 0 } else { app.size.1.saturating_sub(1) } {
         let Some(index) = crate::ui::tab_at(app, x) else { return };
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -264,11 +275,18 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
 // ── home: the empty tab ─────────────────────────────────────────────────────
 
 pub fn home_agents(app: &App) -> Vec<(String, String)> {
-    app.fleet.ranked().into_iter()
+    let ranked: Vec<(String, String)> = app.fleet.ranked().into_iter()
         .filter(|a| !matches!(app.fleet.state_of(a), crate::fleet::State::Paused | crate::fleet::State::Offline))
-        .take(9)
         .map(|a| a.key())
-        .collect()
+        .collect();
+    // Numbers are for fingers: a row keeps its number while you look at the list, however the
+    // harnesses' activity reorders them (the order is fresh each time the window is entered).
+    let mut order = app.home_order.borrow_mut();
+    let mut out: Vec<(String, String)> = order.iter().filter(|k| ranked.contains(k)).cloned().collect();
+    for k in &ranked { if out.len() >= 9 { break } if !out.contains(k) { out.push(k.clone()) } }
+    out.truncate(9);
+    *order = out.clone();
+    out
 }
 
 /// A window with no harness in it has no pane to take keys from, so plain letters work here.
@@ -866,7 +884,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
         KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
         KeyCode::Up if shift => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
-        KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1),
+        KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
         KeyCode::Up => picker.move_by(1),
         KeyCode::Down => picker.move_by(-1),
         KeyCode::Char('k' | 'p') if ctrl => picker.move_by(1),
@@ -877,7 +895,10 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-1) }
         KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(1) }
         KeyCode::Char('q') if view && picker.query.is_empty() => { return }
-        KeyCode::Backspace => picker.backspace(alt),
+        KeyCode::Backspace if alt => picker.kill_word(false),
+        KeyCode::Backspace => picker.backspace(false),
+        KeyCode::Char('d') if alt => picker.kill_word(true),
+        KeyCode::Char('y') if ctrl => picker.yank(),
         KeyCode::Char('h') if ctrl => picker.backspace(false),
         KeyCode::Delete => picker.delete_forward(),
         KeyCode::Char('d') if ctrl => picker.delete_forward(),

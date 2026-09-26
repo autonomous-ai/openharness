@@ -142,11 +142,22 @@ impl Keymap {
     }
 
     /// The first key that runs [command] (for hints: "C-b s").
+    /// The key for a command by name: its exact binding, else one that runs it with arguments
+    /// (`split-window -h`) or behind a prompt (`confirm-before … kill-window`) — never the wrapper's.
+    pub fn key_for_name(&self, name: &str) -> Option<String> {
+        let wrapper = matches!(name, "confirm-before" | "command-prompt");
+        let hit = |b: &&Binding| b.command == name || (!wrapper && (b.command.starts_with(&format!("{name} ")) || b.command.ends_with(&format!(" {name}"))));
+        let exact = self.prefix_table.iter().find(|b| b.command == name);
+        exact.or_else(|| self.prefix_table.iter().find(hit)).map(|b| format!("{} {}", name_of(&self.prefix), name_of(&b.chord)))
+    }
+
     pub fn hint(&self, command: &str) -> Option<String> {
         if let Some(b) = self.root_table.iter().find(|b| b.command == command) { return Some(name(&b.chord)) }
         self.prefix_table.iter().find(|b| b.command == command).map(|b| format!("{} {}", name(&self.prefix), name(&b.chord)))
     }
 }
+
+fn name_of(chord: &Chord) -> String { name(chord) }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Table { Prefix, Root }

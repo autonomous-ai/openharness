@@ -358,8 +358,7 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
 /// `>`: every tmux command there is, with the key that runs it.
 pub fn palette_rows(app: &App) -> Vec<Row> {
     crate::commands::COMMANDS.iter().map(|(name, alias, about)| {
-        let key = app.keymap.prefix_table.iter().find(|b| b.command == *name || b.command.starts_with(&format!("{name} ")) || b.command.ends_with(&format!(" {name}")))
-            .map(|b| format!("{} {}", crate::keys::name(&app.keymap.prefix), crate::keys::name(&b.chord))).unwrap_or_default();
+        let key = app.keymap.key_for_name(name).unwrap_or_default();
         Row::new(*name, *name).extra(format!("{alias} {about}")).detail(vec![span(*about, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(key)
     }).collect()
 }

@@ -463,7 +463,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // Prompt, then info, then the header (the keys), then the list above.
     let prompt_y = bottom - 1;
     let info_y = prompt_y.saturating_sub(1);
-    let header = header_line(picker, kind);
+    // Rows come first in a short window, as in fzf: the key hints go before any row does.
+    let header = if area.height >= 6 { header_line(picker, kind) } else { None };
     let header_y = if header.is_some() { info_y.saturating_sub(1) } else { info_y };
     let prompt = Style::default().fg(theme::FZF_PROMPT);
     buf.set_string(area.x, prompt_y, ">", prompt.add_modifier(Modifier::BOLD));
@@ -478,7 +479,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // Info: "  matched/total" then the title, then the separator to the edge.
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut info = format!("  {}/{}", picker.visible.len(), total);
-    if !picker.marked.is_empty() { info.push_str(&format!(" ({})", picker.marked.len())) }
+    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { info.push_str(&format!(" ({})", picker.marked.len())) }
     buf.set_string(area.x, info_y, &info, Style::default().fg(theme::FZF_INFO));
     let mut x = area.x + info.width() as u16;
     let label = picker.busy.clone().or_else(|| (!picker.title.is_empty()).then(|| picker.title.clone()));
@@ -492,7 +493,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     }
     if x + 1 < area.x + area.width {
         buf.set_string(x, info_y, " ", Style::default());
-        let sep = "─".repeat((area.x + area.width).saturating_sub(x + 1) as usize);
+        let gap = if preview.is_some() { 2 } else { 1 };
+        let sep = "─".repeat((area.x + area.width).saturating_sub(x + gap) as usize);
         buf.set_string(x + 1, info_y, &sep, Style::default().fg(theme::FZF_BORDER));
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
@@ -627,7 +629,10 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area
         }
     }
     let lines = crate::preview::lines(app, kind, &id);
-    for (i, line) in lines.iter().skip(picker.preview_scroll as usize).take(inner.height as usize).enumerate() {
+    // A preview that fits does not scroll; one that does stops at its last line.
+    let most = lines.len().saturating_sub(inner.height as usize) as u16;
+    picker.preview_max.set(most);
+    for (i, line) in lines.iter().skip(picker.preview_scroll.min(most) as usize).take(inner.height as usize).enumerate() {
         buf.set_line(inner.x, inner.y + i as u16, line, inner.width);
     }
 }

@@ -4,6 +4,8 @@
 
 use std::time::Instant;
 
+use std::collections::HashMap;
+
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::text::Span;
@@ -39,6 +41,10 @@ impl Row {
 }
 
 pub struct Picker {
+    /// The kill buffer (C-w, M-BSpace, M-d), for C-y.
+    pub kill: String,
+    /// How far the preview can scroll (the preview sets it as it draws).
+    pub preview_max: std::cell::Cell<u16>,
     pub title: String,
     pub placeholder: String,
     pub query: String,
@@ -98,10 +104,18 @@ impl Picker {
             preview: true,
             preview_scroll: 0,
             matcher: Matcher::new(Config::DEFAULT),
+            preview_max: Default::default(),
+            kill: String::new(),
         }
     }
 
-    pub fn set_rows(&mut self, rows: Vec<Row>) {
+    pub fn set_rows(&mut self, mut rows: Vec<Row>) {
+        // fzf's list stands still while you are in it: a refresh keeps the rows where they were
+        // and adds new ones after them.
+        if !self.rows.is_empty() {
+            let old: HashMap<&str, usize> = self.rows.iter().enumerate().map(|(i, r)| (r.id.as_str(), i)).collect();
+            rows.sort_by_key(|r| old.get(r.id.as_str()).copied().unwrap_or(usize::MAX));
+        }
         self.rows = rows;
         self.refilter();
     }
@@ -112,14 +126,15 @@ impl Picker {
         if query.is_empty() {
             self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
         } else {
-            // fzf's extended search: space-separated terms all match ('exact ^prefix suffix$ !not are
-            // nucleo's own); `a | b` is one term that either side satisfies.
-            let mut groups: Vec<Vec<Pattern>> = Vec::new();
+            // fzf's extended search: space-separated terms all match; `a | b` is one term either side
+            // satisfies; 'exact and fuzzy are nucleo's; ^prefix, suffix$ and their !negations are
+            // matched here against the title the row shows (nucleo's anchors miss uppercase).
+            let mut groups: Vec<Vec<Term>> = Vec::new();
             let mut or_next = false;
-            for word in query.split_whitespace() {
+            for word in terms(query) {
                 if word == "|" { or_next = true; continue }
-                let p = Pattern::parse(word, CaseMatching::Smart, Normalization::Smart);
-                match groups.last_mut() { Some(g) if or_next => g.push(p), _ => groups.push(vec![p]) }
+                let term = Term::parse(&word);
+                match groups.last_mut() { Some(g) if or_next => g.push(term), _ => groups.push(vec![term]) }
                 or_next = false;
             }
             let mut buf = Vec::new();
@@ -130,7 +145,7 @@ impl Picker {
                 let mut indices = Vec::new();
                 let mut total = Some(0u32);
                 for group in &groups {
-                    let best = group.iter().filter_map(|p| { let mut hits = Vec::new(); p.indices(Utf32Str::new(&haystack, &mut buf), &mut self.matcher, &mut hits).map(|s| (s, hits)) }).max_by_key(|(s, _)| *s);
+                    let best = group.iter().filter_map(|t| t.score(&row.label, &haystack, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s);
                     match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
                 }
                 if let Some(score) = total {
@@ -143,7 +158,8 @@ impl Picker {
                     scored.push((index, score + bonus, indices));
                 }
             }
-            if !self.keep_order { scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0))) }
+            // fzf's tiebreak: score, then the shorter line, then the original order.
+            if !self.keep_order { scored.sort_by(|a, b| b.1.cmp(&a.1).then(self.rows[a.0].label.chars().count().cmp(&self.rows[b.0].label.chars().count())).then(a.0.cmp(&b.0))) }
             self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
         }
         // Keep the cursor on the same item across a rebuild.
@@ -188,6 +204,8 @@ impl Picker {
     }
 
     /// Backspace (or, with [word], C-w / M-BS: the word before the cursor).
+    /// Backspace; C-w (word: back to whitespace, as unix-word-rubout); what a word-kill takes goes
+    /// to the kill buffer for C-y.
     pub fn backspace(&mut self, word: bool) {
         self.qcursor = self.qcursor.min(self.qlen());
         if self.qcursor == 0 { return }
@@ -196,10 +214,30 @@ impl Picker {
         if word {
             while from > 0 && chars[from].is_whitespace() { from -= 1 }
             while from > 0 && !chars[from - 1].is_whitespace() { from -= 1 }
+            self.kill = chars[from..self.qcursor].iter().collect();
         }
         self.query = chars[..from].iter().chain(chars[self.qcursor..].iter()).collect();
         self.qcursor = from;
         self.changed();
+    }
+
+    /// M-BSpace (back) and M-d (forward): kill an alphanumeric word, as readline and fzf do.
+    pub fn kill_word(&mut self, forward: bool) {
+        let chars: Vec<char> = self.query.chars().collect();
+        let at = self.qcursor.min(chars.len());
+        let to = word_edge(&chars, at, forward);
+        let (a, b) = if forward { (at, to) } else { (to, at) };
+        if a == b { return }
+        self.kill = chars[a..b].iter().collect();
+        self.query = chars[..a].iter().chain(chars[b..].iter()).collect();
+        self.qcursor = a;
+        self.changed();
+    }
+
+    /// C-y: put back what was last killed.
+    pub fn yank(&mut self) {
+        let kill = self.kill.clone();
+        for c in kill.chars() { self.type_char(c) }
     }
 
     /// Delete / C-d: the character under the cursor.
@@ -222,16 +260,7 @@ impl Picker {
     pub fn qmove(&mut self, by: i64, word: bool) {
         let chars: Vec<char> = self.query.chars().collect();
         let mut at = self.qcursor.min(chars.len()) as i64;
-        if word {
-            if by < 0 {
-                while at > 0 && chars[(at - 1) as usize].is_whitespace() { at -= 1 }
-                while at > 0 && !chars[(at - 1) as usize].is_whitespace() { at -= 1 }
-            } else {
-                let n = chars.len() as i64;
-                while at < n && chars[at as usize].is_whitespace() { at += 1 }
-                while at < n && !chars[at as usize].is_whitespace() { at += 1 }
-            }
-        } else { at = (at + by).clamp(0, chars.len() as i64) }
+        if word { at = word_edge(&chars, at as usize, by > 0) as i64 } else { at = (at + by).clamp(0, chars.len() as i64) }
         self.qcursor = at as usize;
     }
     pub fn qhome(&mut self) { self.qcursor = 0 }
@@ -267,6 +296,76 @@ impl Picker {
     pub fn say(&mut self, text: impl Into<String>) { self.flash = Some((text.into(), Instant::now())) }
 }
 
+/// Where an alphanumeric word ends, going back or forward from `at` (readline's M-b / M-f).
+fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
+    let word = |c: char| c.is_alphanumeric();
+    if forward {
+        while at < chars.len() && !word(chars[at]) { at += 1 }
+        while at < chars.len() && word(chars[at]) { at += 1 }
+    } else {
+        while at > 0 && !word(chars[at - 1]) { at -= 1 }
+        while at > 0 && word(chars[at - 1]) { at -= 1 }
+    }
+    at
+}
+
+/// Split a query into terms: whitespace separates, `\ ` is a literal space.
+fn terms(query: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut chars = query.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&' ') => { word.push(' '); chars.next(); }
+            c if c.is_whitespace() => { if !word.is_empty() { out.push(std::mem::take(&mut word)) } }
+            c => word.push(c),
+        }
+    }
+    if !word.is_empty() { out.push(word) }
+    out
+}
+
+/// One search term.
+enum Term {
+    Anchored { text: String, prefix: bool, suffix: bool, negate: bool },
+    Nucleo(Pattern),
+}
+
+impl Term {
+    fn parse(word: &str) -> Term {
+        let (negate, rest) = match word.strip_prefix('!') { Some(r) => (true, r), None => (false, word) };
+        let prefix = rest.starts_with('^');
+        let suffix = rest.ends_with('$') && !rest.ends_with("\\$") && rest.len() > 1;
+        if prefix || suffix {
+            let mut text = rest.trim_start_matches('^').to_string();
+            if suffix { text.pop(); }
+            return Term::Anchored { text, prefix, suffix, negate };
+        }
+        Term::Nucleo(Pattern::parse(&word.replace(' ', "\\ "), CaseMatching::Smart, Normalization::Smart))
+    }
+
+    /// A score and the matched character positions, or None when the row does not match.
+    fn score(&self, label: &str, haystack: &str, buf: &mut Vec<char>, matcher: &mut Matcher) -> Option<(u32, Vec<u32>)> {
+        match self {
+            Term::Nucleo(p) => {
+                let mut hits = Vec::new();
+                p.indices(Utf32Str::new(haystack, buf), matcher, &mut hits).map(|s| (s, hits))
+            }
+            Term::Anchored { text, prefix, suffix, negate } => {
+                let smart = text.chars().any(char::is_uppercase);
+                let (l, t) = if smart { (label.to_string(), text.clone()) } else { (label.to_lowercase(), text.to_lowercase()) };
+                let n = l.chars().count() as u32;
+                let k = t.chars().count() as u32;
+                let hit = match (prefix, suffix) { (true, true) => l == t, (true, false) => l.starts_with(&t), _ => l.ends_with(&t) };
+                if *negate { return (!hit).then(|| (0, Vec::new())) }
+                if !hit { return None }
+                let from = if *prefix { 0 } else { n - k };
+                Some((16 * k + 32, (from..from + k).collect()))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +391,12 @@ mod tests {
         p.set_query("^lo"); assert_eq!(ids(&p), ["b"]);
         p.set_query("page$"); assert_eq!(ids(&p), ["a"]);
         p.set_query("'site"); assert_eq!(ids(&p), ["c"]);
+        p.set_rows(vec![Row::new("f", "Fix flaky login test").extra("webapp main"), Row::new("g", "fix it")]);
+        p.set_query("^Fix"); assert_eq!(ids(&p), ["f"]);
+        p.set_query("test$"); assert_eq!(ids(&p), ["f"]);
+        p.set_query("main$"); assert!(ids(&p).is_empty());
+        p.set_query("Fix\\ flaky"); assert_eq!(ids(&p), ["f"]);
+        p.set_query("!^Fix"); assert_eq!(ids(&p), ["g"]);
     }
 }
 
@@ -307,3 +412,4 @@ mod colon_tests {
         assert_eq!(p.visible.len(), 1, "13:53");
     }
 }
+
