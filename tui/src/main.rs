@@ -32,6 +32,7 @@ mod pane;
 mod picker;
 mod proto;
 mod theme;
+mod term_out;
 mod tim;
 mod tmuxconf;
 mod ui;
@@ -45,7 +46,6 @@ use crossterm::event::{
 };
 use crossterm::terminal::{self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute, queue};
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
@@ -185,7 +185,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         default_hook(info);
     }));
 
-    let backend = CrosstermBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout()));
+    let backend = term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout()));
     let mut term = Terminal::new(backend)?;
     term.clear()?;
     let size = terminal::size()?;
@@ -275,7 +275,7 @@ async fn run(config: config::Config) -> io::Result<()> {
             app.cursor_shape.clear();
             // A fresh Terminal repaints everything (ratatui's clear() asks the terminal where its
             // cursor is, and the input reader would eat the answer).
-            term = Terminal::new(CrosstermBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout())))?;
+            term = Terminal::new(term_out::TmuxBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout())))?;
             need_draw = true;
         }
         app.flush_acks();

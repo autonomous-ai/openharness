@@ -414,7 +414,9 @@ fn format_draw_on(expanded: &str, base: Style, avail: u16, blank: &str) -> (Vec<
     }
     let mut out = Out { line: vec![(blank.to_string(), base); avail as usize], ranges: Vec::new() };
     if broken { return (out.line, Vec::new()) }
-    if let Some(f) = fill { for c in out.line.iter_mut() { *c = (" ".into(), Style::default().bg(f)) } }
+    // The fill: grid_default_cell with the fill as its background — the default foreground
+    // (explicitly, so a cell drawn over, a border's, keeps none of its own).
+    if let Some(f) = fill { for c in out.line.iter_mut() { *c = (" ".into(), Style::default().fg(Color::Reset).bg(f)) } }
     if list_align == Align::Default { draw_none(&mut out, avail, &s, &ranges) }
     else { draw_list(&mut out, avail, &mut s, &ranges, list_align, (focus_start, focus_end)) }
     (out.line, out.ranges)
