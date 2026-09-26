@@ -37,10 +37,13 @@ impl Fzf {
     pub fn gutter_style(&self) -> Style { if self.gutter_dim { Style::default().add_modifier(Modifier::DIM) } else { Style::default().fg(self.gutter) } }
 }
 
-/// FZF_DEFAULT_OPTS_FILE's options, then FZF_DEFAULT_OPTS's, as fzf reads them.
-pub fn default_opts() -> String {
+/// FZF_DEFAULT_OPTS_FILE's options, then FZF_DEFAULT_OPTS's, each split as fzf splits it (one
+/// fzf would refuse — a quote left open — gives none).
+pub fn default_opts() -> Vec<String> {
     let file = std::env::var("FZF_DEFAULT_OPTS_FILE").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-    format!("{} {}", file.replace('\n', " "), std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default())
+    let mut words = shell_words(&file).unwrap_or_default();
+    words.extend(shell_words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default()).unwrap_or_default());
+    words
 }
 
 /// A --color slot's value: `-1`, 0–255, #rrggbb, a name (bright-* too), and attributes, in any
@@ -62,7 +65,7 @@ pub fn fzf_spec(v: &str) -> (Option<Color>, Modifier) {
 pub fn fzf() -> &'static Fzf {
     static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
     FZF.get_or_init(|| {
-        let opts = words(&default_opts());
+        let opts = default_opts();
         // Every --color (either form), in order: a base scheme and slot:colour pairs.
         let mut specs: Vec<String> = Vec::new();
         let (mut reverse, mut pointer, mut marker, mut prompt) = (false, None, None, None);
@@ -135,7 +138,7 @@ pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_fir
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
-        let opts = words(&default_opts());
+        let opts = default_opts();
         let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3 };
         let mut i = 0;
         while i < opts.len() {
@@ -221,22 +224,48 @@ fn fzf_colour(v: &str) -> Option<Color> {
     crate::tmuxconf::colour(v)
 }
 
-/// Split options the way a shell would (quotes, backslashes).
-fn words(s: &str) -> Vec<String> {
-    let (mut out, mut w, mut q, mut any) = (Vec::new(), String::new(), None::<char>, false);
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        match (q, c) {
-            (Some(x), c) if c == x => q = None,
-            (Some(_), c) => w.push(c),
-            (None, '"' | '\'') => { q = Some(c); any = true }
-            (None, '\\') => { if let Some(n) = chars.next() { w.push(n); any = true } }
-            (None, c) if c.is_whitespace() => { if any || !w.is_empty() { out.push(std::mem::take(&mut w)); any = false } }
-            (None, c) => { w.push(c); any = true }
+/// Options split into words as fzf splits them (junegunn/go-shellwords with comments on): blanks
+/// between words, '…' and "…" quoting, a backslash taking the next character (`\t` and `\n` a tab
+/// and a newline), `#` at a word's start a comment to the end of its line; an unquoted ; & | < >
+/// ends the options there. None where fzf stops with "invalid command line string".
+fn shell_words(line: &str) -> Option<Vec<String>> {
+    #[derive(PartialEq)]
+    enum Got { No, Single, Quoted }
+    let (mut args, mut buf, mut got) = (Vec::new(), String::new(), Got::No);
+    let (mut escaped, mut dq, mut sq, mut bq, mut dollar, mut comment) = (false, false, false, false, false, false);
+    for r in line.chars() {
+        if comment { if r == '\n' { comment = false } continue }
+        if escaped {
+            buf.push(match r { 't' => '\t', 'n' => '\n', r => r });
+            escaped = false;
+            got = Got::Single;
+            continue;
         }
+        if r == '\\' { if sq { buf.push(r) } else { escaped = true } continue }
+        if matches!(r, ' ' | '\t' | '\r' | '\n') {
+            if sq || dq || bq || dollar { buf.push(r) } else if got != Got::No { args.push(std::mem::take(&mut buf)); got = Got::No }
+            continue;
+        }
+        match r {
+            '`' if !sq && !dq && !dollar => bq = !bq,
+            ')' if !sq && !dq && !bq => dollar = !dollar,
+            '(' if !sq && !dq && !bq => { if !dollar && buf.ends_with('$') { dollar = true; buf.push(r); continue } return None }
+            '"' if !sq && !dollar => { if dq { got = Got::Quoted } dq = !dq; continue }
+            '\'' if !dq && !dollar => { if sq { got = Got::Quoted } sq = !sq; continue }
+            ';' | '&' | '|' | '<' | '>' if !(sq || dq || bq || dollar) => {
+                // (`2>`: the descriptor is no word.)
+                if r == '>' && buf.starts_with(|c: char| c.is_ascii_digit()) { got = Got::No }
+                break;
+            }
+            '#' if buf.is_empty() && !sq && !dq => { comment = true; continue }
+            _ => {}
+        }
+        got = Got::Single;
+        buf.push(r);
     }
-    if any || !w.is_empty() { out.push(w) }
-    out
+    if got != Got::No { args.push(buf) }
+    if escaped || sq || dq || bq || dollar { return None }
+    Some(args)
 }
 
 // tmux's default colours.
@@ -374,4 +403,26 @@ fn state_mark_raw(state: State) -> (&'static str, &'static str, Color) {
 pub fn spinner(tick: u64) -> &'static str {
     const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
     FRAMES[(tick as usize) % FRAMES.len()]
+}
+
+#[cfg(test)]
+mod opts_tests {
+    use super::shell_words;
+
+    /// FZF_DEFAULT_OPTS and its file as fzf 0.67 splits them (go-shellwords, comments on).
+    #[test]
+    fn options_split_as_fzf_splits_them() {
+        let w = |s: &str| shell_words(s).unwrap();
+        // `#` at a word's start is a comment to the end of its line; in a word or quotes, itself.
+        assert_eq!(w("# --reverse\n--prompt='#> '   # a comment\n--marker=# --pointer=@#"), ["--prompt=#> ", "--marker=#", "--pointer=@#"]);
+        assert_eq!(w("--prompt=\\#\\  # escaped"), ["--prompt=# "]);
+        // \t and \n are a tab and a newline; in single quotes a backslash is itself; '' is a word.
+        assert_eq!(w(r#"--prompt=a\tb --header="x y" --x='a\tb' ''"#), ["--prompt=a\tb", "--header=x y", "--x=a\\tb", ""]);
+        // An unquoted ; & | < > ends the options.
+        assert_eq!(w("--cycle ; --reverse"), ["--cycle"]);
+        assert_eq!(w("--prompt=> x"), ["--prompt="]);
+        // What fzf refuses: a quote left open, a ( that is not $(.
+        assert_eq!(shell_words("--prompt='open"), None);
+        assert_eq!(shell_words("--bind=a:execute(ls)"), None);
+    }
 }
