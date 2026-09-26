@@ -149,6 +149,8 @@ pub mod fzfcolor {
         pub fn merge(self, o: P) -> P { self.merged(o, Col::Undef) }
         pub fn merge_non_default(self, o: P) -> P { self.merged(o, Col::Default) }
         pub fn with_attr(self, a: u32) -> P { P { attr: attr_merge(self.attr, a), ..self } }
+        /// ColorPair.WithBg: the other's colour as the background, its attributes merged in.
+        pub fn with_bg(self, bg: CA) -> P { self.merge(P { fg: Col::Undef, bg: bg.col, attr: bg.attr }) }
         /// HasBg: a background other than the default shows (a reverse shows its foreground).
         pub fn has_bg(self) -> bool { self.attr & REVERSE == 0 && self.bg != Col::Default || self.attr & REVERSE != 0 && self.fg != Col::Default }
         pub fn style(self) -> Style {
@@ -202,6 +204,8 @@ pub mod fzfcolor {
         pub cursor: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
         pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P,
+        /// --color=alt-bg: every other row's background (undefined: no stripes).
+        pub alt_bg: CA,
         /// Whether the base theme has colours (not bw / NO_COLOR).
         pub colored: bool,
     }
@@ -291,7 +295,7 @@ pub mod fzfcolor {
             current_cursor_empty: pair(blank, t.dark_bg), current_marker: pair(t.marker, t.dark_bg), current_selected_empty: pair(blank, t.dark_bg),
             spinner: pair(t.spinner, t.input_bg), info: pair(t.info, t.input_bg), separator: pair(t.separator, t.input_bg),
             scrollbar: pair(t.scrollbar, t.list_bg), border: pair(t.border, t.bg), header: pair(t.header, t.header_bg),
-            list_border: pair(t.list_border, t.list_bg), colored: base.colored,
+            list_border: pair(t.list_border, t.list_bg), alt_bg: t.alt_bg, colored: base.colored,
         }
     }
 
@@ -332,6 +336,14 @@ pub mod fzfcolor {
             assert_eq!(ansi(yellow, p.current, true), P { fg: Col::Idx(3), bg: Col::Idx(236), attr: BOLD_FORCE });
             let dim = own(Style::default().add_modifier(Modifier::DIM));
             assert_eq!(lit(p.normal, p.matched, Some(dim), true), P { fg: Col::Idx(108), bg: Col::Default, attr: DIM });
+        }
+
+        /// --color=alt-bg: the stripe's colour as the row's background, its attributes merged in.
+        #[test]
+        fn alt_bg_stripes() {
+            let p = pal(&["alt-bg:237:underline"], true);
+            assert_eq!(p.normal.with_bg(p.alt_bg), P { fg: Col::Default, bg: Col::Idx(237), attr: UNDERLINE });
+            assert_eq!(pal(&[], true).alt_bg.col, Col::Undef, "no stripes unless asked");
         }
 
         #[test]
