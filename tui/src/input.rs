@@ -32,7 +32,7 @@ pub fn handle(app: &mut App, event: CEvent) {
 
 /// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
 fn typing(app: &App) -> bool {
-    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }))
+    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }))
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
@@ -621,7 +621,11 @@ pub fn run(app: &mut App, command: &str) {
         "pane-tab" => {
             let Some((machine, agent)) = focused_agent(app) else { return };
             if app.tab().panes().len() < 2 { return }
+            // Moving a shell is not closing it.
+            let key = (machine.clone(), agent.clone());
+            let shell = app.shells.remove(&key);
             if let Some(f) = app.focused() { app.close_pane(f) }
+            if shell { app.shells.insert(key); }
             app.open_agent(&machine, &agent, Placement::Tab);
         }
         "focus-left" | "focus-right" | "focus-up" | "focus-down" => {
@@ -746,8 +750,42 @@ fn new_what(app: &mut App, machine: String) {
 /// (`-c` another), running `command` if one is given. Keys typed before it is up go into it.
 pub fn new_shell(app: &mut App, placement: Placement, cwd: Option<String>, command: Option<String>) {
     let focused = focused_agent(app);
+    new_shell_from(app, focused, placement, cwd, command)
+}
+
+/// display-popup: a shell in a box over the window, running `command` then leaving (-E).
+pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, command: Option<String>, title: String) {
+    let focused = focused_agent(app);
     let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
-    let cwd = cwd.or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
+    let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
+    let (w, h) = app.popup_size(width, height);
+    let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
+    if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
+    app.modal = None;
+    app.starting_shell = Some(command.map(|c| vec![format!("{c}; exit\r").into_bytes()]).unwrap_or_default());
+    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
+        let typed = app.starting_shell.take().unwrap_or_default();
+        let Ok(reply) = reply else { app.say("Could not start the popup", theme::DANGER); return };
+        let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { return };
+        app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+        app.shells.insert((machine.clone(), id.to_string()));
+        let pane = app.new_pane(&machine, id);
+        // The far terminal is at least 40×12; the box shows it whole when it can.
+        let (cols, rows) = crate::pane::stream_size(w.saturating_sub(2), h.saturating_sub(2));
+        if let Some(p) = app.panes.get_mut(&pane) { p.cols = cols; p.rows = rows; p.queued.extend(typed) }
+        app.modal = Some(Modal::Popup { pane, width: w, height: h, title: title.clone() });
+        app.open_stream(pane, true);
+    });
+}
+
+/// The same, for the pane `from` (new-window reads it before the new window takes the focus).
+pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placement: Placement, cwd: Option<String>, command: Option<String>) {
+    let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
+    // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
+    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
+    let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
     let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
@@ -759,6 +797,7 @@ pub fn new_shell(app: &mut App, placement: Placement, cwd: Option<String>, comma
             Ok(reply) => {
                 let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { app.say("The machine made no shell", theme::DANGER); return };
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                app.shells.insert((machine.clone(), id.to_string()));
                 app.open_agent(&machine, id, placement);
                 if let Some((_, pane)) = app.find_pane(&machine, id) {
                     if let Some(p) = app.panes.get_mut(&pane) { p.queued.extend(typed) }
@@ -806,6 +845,14 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             }
         }
         Modal::Clock { .. } => {}
+        // Everything goes to the popup's program (the prefix still works, as in tmux).
+        Modal::Popup { pane, width, height, title } => {
+            if let Some(bytes) = app.panes.get(&pane).and_then(|p| encode_key(&key, p.mode())) {
+                let live = app.panes.get(&pane).map(|p| p.stream.is_some()).unwrap_or(false);
+                if live { app.send_input(pane, &bytes) } else if let Some(p) = app.panes.get_mut(&pane) { p.queued.push(bytes) }
+            }
+            app.modal = Some(Modal::Popup { pane, width, height, title });
+        }
         Modal::Tree { cursor, collapsed } => tree_key(app, key, cursor, collapsed),
         Modal::Copy { pane } => copy_key(app, key, pane),
         Modal::Find { pane, mut query, mut found, up } => {

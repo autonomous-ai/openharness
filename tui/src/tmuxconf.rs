@@ -105,6 +105,14 @@ fn style(text: &str) -> (Option<Color>, Option<Color>) {
 
 fn on_off(v: &str) -> Option<bool> { match v { "on" | "yes" | "1" | "true" => Some(true), "off" | "no" | "0" | "false" => Some(false), _ => None } }
 
+/// A word as it must be written to read back as itself.
+pub fn quote_word(w: &str) -> String {
+    if w == ";" { return w.to_string() }
+    if !w.is_empty() && !w.chars().any(|c| c.is_whitespace() || matches!(c, '#' | '"' | '\'' | ';' | '\\')) { return w.to_string() }
+    if !w.contains('\'') { return format!("'{w}'") }
+    format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn expand_home(path: &str) -> String {
     match path.strip_prefix("~/") { Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()), None => path.to_string() }
 }
@@ -240,7 +248,9 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             }
             let Some(key) = words.get(i) else { return Err("bind without a key".into()) };
             let chord = keys::parse(key)?;
-            let command = words[i + 1..].iter().map(|w| if w.contains(' ') || w.is_empty() { format!("\"{w}\"") } else { w.clone() }).collect::<Vec<_>>().join(" ");
+            // Stored as a command line again: anything the tokenizer would read differently (a space,
+            // a `#` that would start a comment, a quote) goes back in quotes.
+            let command = words[i + 1..].iter().map(|w| quote_word(w)).collect::<Vec<_>>().join(" ");
             if command.is_empty() { return Err(format!("bind {key} without a command")) }
             keymap.bind(table, chord, command, repeat);
         }
@@ -320,6 +330,7 @@ run '~/.tmux/plugins/tpm/tpm'
         assert_eq!(s.look.active_border, Some(Color::Indexed(208)));
         assert_eq!(s.look.window_bg, Some(Color::Indexed(234)));
         assert_eq!(km.prefix_command(&keys::parse("r").unwrap()).unwrap().command, "source-file ~/.tmux.conf ; display Reloaded!");
+        assert_eq!(km.prefix_command(&keys::parse("|").unwrap()).unwrap().command, "split-window -h -c '#{pane_current_path}'");
         assert!(km.prefix_command(&keys::parse("Space").unwrap()).is_some());
         assert_eq!(s.look.active_window_bg, Some(Color::Reset));
     }

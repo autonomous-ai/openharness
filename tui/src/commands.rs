@@ -57,6 +57,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("show-buffer", "showb", "Show the newest paste buffer"),
     ("respawn-pane", "respawnp", "Restart the harness in this pane"),
     ("suspend-client", "suspendc", "Suspend (C-z); fg brings it back"),
+    ("display-popup", "popup", "A shell (or a command: display-popup -E lazygit) floating over the window"),
     ("rename-session", "rename", "Sessions are computers here — rename it from the desktop app"),
     ("clock-mode", "clock-mode", "A clock"),
     ("refresh-client", "refresh", "Redraw"),
@@ -241,13 +242,15 @@ fn run_words(app: &mut App, words: &[String]) {
             let was = app.active;
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let command = shell_command(words);
+            // The pane this came from decides the machine and folder — read before the new window.
+            let from = input::focused_agent(app);
             app.new_tab();
             if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
             // -d: made, not gone to.
             if flag(words, "-d") { let id = app.tabs[was.min(app.tabs.len() - 1)].id.clone(); if let Some(i) = app.tabs.iter().position(|t| t.id == id) { app.select_tab(i) } return }
             // -P: the harness list in it, instead of a shell.
             if flag(words, "-P") { input::launch(app, "", Filter::All); return }
-            input::new_shell(app, Placement::Auto(None), cwd, command);
+            input::new_shell_from(app, from, Placement::Auto(None), cwd, command);
         }
         "split-window" => {
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
@@ -413,7 +416,10 @@ fn run_words(app: &mut App, words: &[String]) {
                 let Some(p) = app.tabs[from].focus else { return };
                 let Some((machine, agent)) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };
                 let here_id = app.tabs[here].id.clone();
+                let key = (machine.clone(), agent.clone());
+                let shell = app.shells.remove(&key);
                 app.close_pane(p);
+                if shell { app.shells.insert(key); }
                 if let Some(i) = app.tabs.iter().position(|t| t.id == here_id) { app.select_tab(i) }
                 app.open_agent(&machine, &agent, Placement::Split(if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical }));
                 return;
@@ -423,7 +429,10 @@ fn run_words(app: &mut App, words: &[String]) {
             let n = app.win_num(to);
             if to == app.active { return }
             let Some((machine, agent)) = input::focused_agent(app) else { return };
+            let key = (machine.clone(), agent.clone());
+            let shell = app.shells.remove(&key);
             if let Some(f) = app.focused() { app.close_pane(f) }
+            if shell { app.shells.insert(key); }
             let to = app.tab_by_num(n).unwrap_or(to);
             app.select_tab(to);
             app.open_agent(&machine, &agent, Placement::Split(if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical }));
@@ -473,6 +482,21 @@ fn run_words(app: &mut App, words: &[String]) {
             if let Some(command) = pick.cloned() { execute(app, &command) }
         }
         // run-shell: on this computer, as tmux's server would; what it prints is shown.
+        "display-popup" | "popup" => {
+            // -C closes an open one; -w/-h size (50% by default); -d the folder; -T a title.
+            if flag(words, "-C") { app.close_popup(); return }
+            let w = opt(words, "-w").unwrap_or_else(|| "50%".into());
+            let h = opt(words, "-h").unwrap_or_else(|| "50%".into());
+            let cwd = opt(words, "-d").map(|d| expand(app, &d)).filter(|d| !d.is_empty());
+            let title = opt(words, "-T").map(|t| expand(app, &t)).unwrap_or_default();
+            let mut i = 1;
+            let mut command = None;
+            while i < words.len() {
+                match words[i].as_str() { "-w" | "-h" | "-d" | "-T" | "-x" | "-y" | "-t" | "-c" | "-b" | "-s" | "-S" | "-e" => i += 1, w if w.starts_with('-') && w.len() > 1 => {}, w => command = Some(w.to_string()) }
+                i += 1;
+            }
+            input::popup(app, &w, &h, cwd, command, title);
+        }
         "run-shell" | "run" => {
             let cmd = rest(words);
             if cmd.is_empty() { return }
