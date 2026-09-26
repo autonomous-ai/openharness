@@ -170,7 +170,7 @@ impl Picker {
             // scores and lit characters, the tiebreak — over the line as it is drawn.
             let o = crate::theme::fzf_opts();
             let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
-            let q = crate::fzf::Query::parse(query, case, !o.exact, true).searching(&o.tiebreak);
+            let q = crate::fzf::Query::parse(query, case, !o.exact, !o.literal).searching(&o.tiebreak);
             // (Each word's case read as fzf reads a term's: +i, -i, or smart — an upper-case letter.)
             let words: Vec<(String, bool)> = query.split_whitespace().map(|w| {
                 let w = w.trim_start_matches('\'');

@@ -11,9 +11,22 @@ const BONUS_NON_WORD: i32 = SCORE_MATCH / 2;
 const BONUS_CAMEL123: i32 = BONUS_BOUNDARY + SCORE_GAP_EXTENSION;
 const BONUS_CONSECUTIVE: i32 = -(SCORE_GAP_START + SCORE_GAP_EXTENSION);
 const BONUS_FIRST_CHAR_MULTIPLIER: i32 = 2;
-/// The "default" scheme's.
-const BONUS_BOUNDARY_WHITE: i32 = BONUS_BOUNDARY + 2;
-const BONUS_BOUNDARY_DELIMITER: i32 = BONUS_BOUNDARY + 1;
+/// --scheme (algo.Init): default, path or history — 0, 1, 2.
+static SCHEME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The scoring scheme --scheme names (an unknown one leaves the default).
+pub fn set_scheme(name: &str) {
+    let n = match name { "path" => 1, "history" => 2, _ => 0 };
+    SCHEME.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+fn scheme() -> u8 { SCHEME.load(std::sync::atomic::Ordering::Relaxed) }
+
+/// bonusBoundaryWhite: after whitespace (the default scheme's +2, path's and history's +0).
+fn bonus_boundary_white() -> i32 { if scheme() == 0 { BONUS_BOUNDARY + 2 } else { BONUS_BOUNDARY } }
+/// bonusBoundaryDelimiter: after a delimiter (+1; history's +0).
+fn bonus_boundary_delimiter() -> i32 { if scheme() == 2 { BONUS_BOUNDARY } else { BONUS_BOUNDARY + 1 } }
+/// initialCharClass: before the first character (a delimiter under the path scheme).
+fn initial_class() -> Class { if scheme() == 1 { Class::Delimiter } else { Class::White } }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Class { White, NonWord, Delimiter, Lower, Upper, Letter, Number }
@@ -25,7 +38,9 @@ fn class_of(c: char) -> Class {
             'A'..='Z' => Class::Upper,
             '0'..='9' => Class::Number,
             ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r' => Class::White,
-            '/' | ',' | ':' | ';' | '|' => Class::Delimiter,
+            '/' => Class::Delimiter,
+            // (The path scheme's delimiters are the path separator alone.)
+            ',' | ':' | ';' | '|' if scheme() != 1 => Class::Delimiter,
             _ => Class::NonWord,
         };
     }
@@ -40,8 +55,8 @@ fn class_of(c: char) -> Class {
 fn bonus_for(prev: Class, class: Class) -> i32 {
     if class > Class::NonWord {
         match prev {
-            Class::White => return BONUS_BOUNDARY_WHITE,
-            Class::Delimiter => return BONUS_BOUNDARY_DELIMITER,
+            Class::White => return bonus_boundary_white(),
+            Class::Delimiter => return bonus_boundary_delimiter(),
             Class::NonWord => return BONUS_BOUNDARY,
             _ => {}
         }
@@ -49,13 +64,13 @@ fn bonus_for(prev: Class, class: Class) -> i32 {
     if (prev == Class::Lower && class == Class::Upper) || (prev != Class::Number && class == Class::Number) { return BONUS_CAMEL123 }
     match class {
         Class::NonWord | Class::Delimiter => BONUS_NON_WORD,
-        Class::White => BONUS_BOUNDARY_WHITE,
+        Class::White => bonus_boundary_white(),
         _ => 0,
     }
 }
 
 fn bonus_at(text: &[char], idx: usize) -> i32 {
-    if idx == 0 { return BONUS_BOUNDARY_WHITE }
+    if idx == 0 { return bonus_boundary_white() }
     bonus_for(class_of(text[idx - 1]), class_of(text[idx]))
 }
 
@@ -83,7 +98,7 @@ fn fuzzy_v2(case_sensitive: bool, normalize: bool, forward: bool, text: &[char],
     let (mut max_score, mut max_pos) = (0i32, 0usize);
     let (mut pidx, mut last_idx) = (0usize, 0usize);
     let (pchar0, mut pchar) = (pattern[0], pattern[0]);
-    let (mut prev_h0, mut prev_class, mut in_gap) = (0i32, Class::White, false);
+    let (mut prev_h0, mut prev_class, mut in_gap) = (0i32, initial_class(), false);
     for off in 0..n {
         let mut ch = text[off];
         let class = class_of(ch);
@@ -179,7 +194,7 @@ fn fuzzy_v2(case_sensitive: bool, normalize: bool, forward: bool, text: &[char],
 /// fzf's calculateScore: a fixed alignment scored as V2 scores it.
 fn calculate_score(case_sensitive: bool, normalize: bool, text: &[char], pattern: &[char], sidx: usize, eidx: usize) -> i32 {
     let (mut pidx, mut score, mut in_gap, mut consecutive, mut first_bonus) = (0usize, 0i32, false, 0i32, 0i32);
-    let mut prev_class = if sidx > 0 { class_of(text[sidx - 1]) } else { Class::White };
+    let mut prev_class = if sidx > 0 { class_of(text[sidx - 1]) } else { initial_class() };
     for &raw in &text[sidx..eidx] {
         let class = class_of(raw);
         let ch = fold(raw, case_sensitive, normalize);
@@ -225,7 +240,7 @@ fn exact(case_sensitive: bool, normalize: bool, forward: bool, boundary: bool, t
             if p == 0 { bonus = bonus_at(text, idx) }
             if boundary {
                 if forward && p == 0 { bbonus = bonus }
-                else if !forward && p == m - 1 { bbonus = if idx < n - 1 { bonus_at(text, idx + 1) } else { BONUS_BOUNDARY_WHITE } }
+                else if !forward && p == m - 1 { bbonus = if idx < n - 1 { bonus_at(text, idx + 1) } else { bonus_boundary_white() } }
                 ok = bbonus >= BONUS_BOUNDARY;
                 if ok && p == 0 { ok = idx == 0 || class_of(text[idx - 1]) <= Class::Delimiter }
                 if ok && p == m - 1 { ok = idx == n - 1 || class_of(text[idx + 1]) <= Class::Delimiter }
@@ -255,7 +270,7 @@ fn exact(case_sensitive: bool, normalize: bool, forward: bool, boundary: bool, t
         let mut deduct = bonus - BONUS_BOUNDARY + 1;
         if sidx > 0 && text[sidx - 1] == '_' { score -= deduct + 1; deduct = 1 }
         if eidx < n && text[eidx] == '_' { score -= deduct }
-        score + SCORE_MATCH * m as i32 + BONUS_BOUNDARY_WHITE * (m as i32 + 1)
+        score + SCORE_MATCH * m as i32 + bonus_boundary_white() * (m as i32 + 1)
     } else { calculate_score(case_sensitive, normalize, text, pattern, sidx, eidx) };
     Some((sidx, eidx, score))
 }
@@ -306,7 +321,7 @@ fn equal(case_sensitive: bool, normalize: bool, text: &[char], pattern: &[char])
         let ch = if case_sensitive { text[lead + i] } else { lower(text[lead + i]) };
         if normalize { normalize_char(pattern[i]) == normalize_char(ch) } else { pattern[i] == ch }
     });
-    same.then(|| (lead, lead + m, (SCORE_MATCH + BONUS_BOUNDARY_WHITE) * m as i32 + (BONUS_FIRST_CHAR_MULTIPLIER - 1) * BONUS_BOUNDARY_WHITE))
+    same.then(|| (lead, lead + m, (SCORE_MATCH + bonus_boundary_white()) * m as i32 + (BONUS_FIRST_CHAR_MULTIPLIER - 1) * bonus_boundary_white()))
 }
 
 // ── the query (pattern.go) ──────────────────────────────────────────────────
