@@ -147,8 +147,11 @@ impl Picker {
                 let mut indices = Vec::new();
                 let mut total = Some(0u32);
                 for group in &groups {
-                    let mut best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s);
-                    if best.is_none() { best = group.iter().filter_map(|t| t.score(&row.label, &hidden, &mut buf, &mut self.matcher)).map(|(s, _)| (s / 4, Vec::new())).max_by_key(|(s, _)| *s) }
+                    // The title first (its hits are what gets highlighted), then the rest of the line
+                    // you see, then — whole words only — the keywords behind it (engine, machine).
+                    let mut best = group.iter().filter_map(|t| t.score(&row.label, &row.label, &mut buf, &mut self.matcher)).map(|(s, h)| (s + 40, h)).max_by_key(|(s, _)| *s);
+                    if best.is_none() { best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).map(|(s, _)| (s, Vec::new())).max_by_key(|(s, _)| *s) }
+                    if best.is_none() { best = group.iter().filter(|t| t.names_word(&hidden)).map(|_| (8u32, Vec::new())).next() }
                     match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
                 }
                 if let Some(score) = total {
@@ -156,10 +159,8 @@ impl Picker {
                     indices.sort_unstable();
                     indices.dedup();
                     indices.retain(|i| *i < label_len);
-                    // A hit in the title outranks the same hit in the detail. A row's boost (waiting,
-                    // live) only breaks ties: once you type, the match decides.
-                    let bonus = if indices.is_empty() { 0 } else { 40 };
-                    scored.push((index, score + bonus, indices));
+                    // A row's boost (waiting, live) only breaks ties: once you type, the match decides.
+                    scored.push((index, score, indices));
                 }
             }
             // fzf's tiebreak: score, then the shorter line, then the original order.
@@ -255,7 +256,9 @@ impl Picker {
     /// C-u: everything before the cursor.
     pub fn clear_query(&mut self) {
         let chars: Vec<char> = self.query.chars().collect();
-        self.query = chars[self.qcursor.min(chars.len())..].iter().collect();
+        let at = self.qcursor.min(chars.len());
+        if at > 0 { self.kill = chars[..at].iter().collect() }
+        self.query = chars[at..].iter().collect();
         self.qcursor = 0;
         self.changed();
     }
@@ -333,7 +336,7 @@ fn terms(query: &str) -> Vec<String> {
 /// One search term.
 enum Term {
     Anchored { text: String, prefix: bool, suffix: bool, negate: bool },
-    Nucleo(Pattern),
+    Nucleo(Pattern, String),
 }
 
 impl Term {
@@ -346,13 +349,19 @@ impl Term {
             if suffix { text.pop(); }
             return Term::Anchored { text, prefix, suffix, negate };
         }
-        Term::Nucleo(Pattern::parse(&word.replace(' ', "\\ "), CaseMatching::Smart, Normalization::Smart))
+        Term::Nucleo(Pattern::parse(&word.replace(' ', "\\ "), CaseMatching::Smart, Normalization::Smart), word.trim_start_matches('\'').to_lowercase())
+    }
+
+    /// A hidden keyword this term names from its start (`codex`, `gpu-box`): three letters or more.
+    fn names_word(&self, hidden: &str) -> bool {
+        let Term::Nucleo(_, raw) = self else { return false };
+        raw.chars().count() >= 3 && !raw.starts_with('!') && hidden.to_lowercase().split(|c: char| c.is_whitespace() || c == '/' || c == '·').any(|w| w.starts_with(raw.as_str()))
     }
 
     /// A score and the matched character positions, or None when the row does not match.
     fn score(&self, label: &str, haystack: &str, buf: &mut Vec<char>, matcher: &mut Matcher) -> Option<(u32, Vec<u32>)> {
         match self {
-            Term::Nucleo(p) => {
+            Term::Nucleo(p, _) => {
                 let mut hits = Vec::new();
                 p.indices(Utf32Str::new(haystack, buf), matcher, &mut hits).map(|s| (s, hits))
             }
