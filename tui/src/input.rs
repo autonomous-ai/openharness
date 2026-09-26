@@ -1514,7 +1514,8 @@ fn split_chain(actions: &str) -> Vec<String> {
 /// A bound key's (or event's) actions, in order: the ones this list knows, as fzf does them; the
 /// others (execute, become, change-prompt …) do nothing.
 fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, page: i64, up: i64, multi: bool) -> End {
-    let half = (page / 2).max(1);
+    // fzf: a page is the list's lines less one, half a page half of its lines (maxItems/2).
+    let half = (picker.page_rows.get() / 2).max(1);
     let len = picker.visible.len() as i64;
     for action in split_chain(actions) {
         match action.as_str() {
