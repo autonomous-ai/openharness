@@ -261,9 +261,14 @@ fn border_style(app: &App, active: bool) -> Style {
 fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
     if area.width == 0 { return }
     let Some(pane) = app.panes.get(&id) else { return };
+    // Your pane-border-format: format_draw over the border (screen_redraw_make_pane_status), so
+    // #[align=right], #[align=centre] and #[fill] place it as tmux does, the border showing
+    // wherever the format writes nothing.
     if let Some(fmt) = &app.opts.pane_border_format {
-        let line = clip_spans(crate::format::spans_for_pane(app, fmt, app.active, id, style), area.width as usize);
-        buf.set_line(area.x, area.y, &line, area.width);
+        let expanded = crate::format::expand(app, fmt, app.active, Some(id), true);
+        for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
+            if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+        }
         return;
     }
     let title = crate::format::pane_title(app, app.active, id);
