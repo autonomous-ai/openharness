@@ -147,6 +147,11 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// Output of a command run from a shell (`hn display -p …`): printed there, not on screen.
+    pub capture: Option<Vec<String>>,
+    pub capture_err: Option<Vec<String>>,
+    /// setenv's variables (this client's).
+    pub env: std::collections::BTreeMap<String, String>,
     /// tim, the creature in the status line.
     pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
@@ -194,6 +199,9 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            capture: None,
+            capture_err: None,
+            env: Default::default(),
             tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
@@ -269,6 +277,8 @@ impl App {
     /// A message in the status line (tmux `display-message`), kept for `show-messages`.
     pub fn say(&mut self, text: impl Into<String>, color: Color) {
         let text = text.into();
+        // Run from a shell: a message is the command's error, printed there.
+        if let Some(err) = self.capture_err.as_mut() { err.push(text); return }
         self.messages.push((std::time::SystemTime::now(), text.clone()));
         if self.messages.len() > 200 { self.messages.remove(0); }
         self.toast = Some((text, color, Instant::now()));
@@ -784,6 +794,13 @@ impl App {
 
     pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
 
+    /// What a command prints: to the shell that asked (hn <command>), else a message or a list.
+    pub fn print(&mut self, title: &str, lines: Vec<String>) {
+        if let Some(out) = self.capture.as_mut() { out.extend(lines); return }
+        if lines.len() <= 1 { self.say(lines.into_iter().next().unwrap_or_default(), crate::theme::WARN) }
+        else { crate::input::picker(self, crate::modal::PickerKind::Output { title: title.to_string(), lines }, title, "") }
+    }
+
     /// Close the popup and end its shell.
     pub fn close_popup(&mut self) {
         let Some(crate::modal::Modal::Popup { pane, .. }) = self.modal.take() else { return };
@@ -1240,9 +1257,18 @@ impl App {
     }
 
     pub fn apply_preset(&mut self, preset: Preset) {
+        let body = self.body();
         let tab = self.tab_mut();
         let ids = tab.panes();
         tab.root = layout::build(&ids, preset);
+        // tmux's main-pane-width 80 / main-pane-height 24, where the window has room for them.
+        if let Some(layout::Node::Split { ratio, .. }) = tab.root.as_mut() {
+            match preset {
+                Preset::MainStack if body.width > 100 => *ratio = (80.0 / body.width as f32).clamp(0.3, 0.8),
+                Preset::MainRow if body.height > 34 => *ratio = (24.0 / body.height as f32).clamp(0.3, 0.8),
+                _ => {}
+            }
+        }
         tab.zoomed = false;
         // The same shape on every window: the desk's layout keys presets by pane count.
         if tab.on_desk && !ids.is_empty() {

@@ -114,7 +114,7 @@ pub fn quote_word(w: &str) -> String {
     format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn expand_home(path: &str) -> String {
+pub fn expand_home(path: &str) -> String {
     match path.strip_prefix("~/") { Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()), None => path.to_string() }
 }
 

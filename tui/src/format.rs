@@ -59,8 +59,17 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "window_height" => app.body().height.to_string(),
         "pane_left" | "pane_top" | "pane_right" | "pane_bottom" => {
             let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
-            r.map(|r| match name { "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => r.y + r.height.saturating_sub(1) }.to_string()).unwrap_or_default()
+            r.map(|r| match name { "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => (r.y + r.height).saturating_sub(1) }.to_string()).unwrap_or_default()
         }
+        // At an edge of the window (vim-tmux-navigator style configs ask).
+        "pane_at_top" | "pane_at_bottom" | "pane_at_left" | "pane_at_right" => {
+            let body = app.body();
+            let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
+            r.map(|r| match name { "pane_at_top" => r.y <= body.y, "pane_at_bottom" => r.y + r.height >= body.y + body.height, "pane_at_left" => r.x <= body.x, _ => r.x + r.width >= body.x + body.width })
+                .map(|b| if b { "1" } else { "0" }.to_string()).unwrap_or_default()
+        }
+        "history_size" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().history_size().to_string() }).unwrap_or_default(),
+        "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "status" => (app.opts.status != Some(false)).then_some("on").unwrap_or("off").into(),
         "mouse" => app.mouse.then_some("on").unwrap_or("off").into(),
