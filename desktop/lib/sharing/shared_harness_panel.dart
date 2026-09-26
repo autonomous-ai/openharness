@@ -80,6 +80,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
       observerShareId: widget.grant.id,
       transportKind: WsTransportKind.localPlaintext,
       localWsUri: uri,
+      localTransport: widget.notifier.localDaemonTransport,
       accessTokenProvider: (_, _) async => '',
       onAuthFailure: (reason) {
         if (generation == _generation) _end(reason);

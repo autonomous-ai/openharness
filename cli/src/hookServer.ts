@@ -24,6 +24,7 @@ import { ENGINES, type AgentEngine } from './engines/types.js'
 import type { CommandBarService } from './lib/commandBar.js'
 import { handleCommandBarHttp } from './lib/commandBarHttp.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
+import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -367,23 +368,32 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
   handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
 }
 
+export interface HookServerOptions {
+  /** Also serve on this Unix socket (see lib/localSocket.ts). Null or absent: TCP only. */
+  socketPath?: string | null
+}
+
 export function startHookServer(
   port: number,
   handlers: HookServerHandlers,
-): Promise<{ server: http.Server; port: number }> {
+  options: HookServerOptions = {},
+): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
   let lastRefusalLogAt = 0
-  const server = http.createServer((req, res) => {
+  const handle: http.RequestListener = (req, res) => {
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
       const json = (code: number, body: unknown): void => {
         res.writeHead(code, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(body))
       }
+      // Over the daemon's own socket the filesystem already said who this is, and no browser can get
+      // there; everything else must prove it was addressed to this loopback server.
+      const trustedLocal = isTrustedLocal(req)
       // Before any route, reads included. See lib/loopbackRequest.ts.
-      if (!isLoopbackRequest(req, hosts)) {
+      if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
         // At most one line a minute: enough to explain a client that was refused, not a lever for a
         // page to flood the log. Host and Origin are the sender's, so they are escaped and bounded.
         if (Date.now() - lastRefusalLogAt > 60_000) {
@@ -412,7 +422,7 @@ export function startHookServer(
 
       if (url.startsWith('/api/autonomous-device/')) {
         const peer = req.socket.remoteAddress
-        const loopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
+        const loopback = trustedLocal || peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
         const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined
         if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer)) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
@@ -732,7 +742,8 @@ export function startHookServer(
 
       json(404, { error: 'not found' })
     })()
-  })
+  }
+  const server = http.createServer(handle)
 
   return new Promise((resolve, reject) => {
     server.once('error', (err: NodeJS.ErrnoException) => {
@@ -751,7 +762,20 @@ export function startHookServer(
       const actual = (server.address() as AddressInfo).port
       hosts = loopbackHosts(actual)
       console.log(`[hooks] listening on 127.0.0.1:${actual} (SessionStart/SessionEnd callbacks)`)
-      resolve({ server, port: actual })
+      const socketPath = options.socketPath
+      if (!socketPath) { resolve({ server, port: actual, localSocket: null }); return }
+      // After the port, never before: holding it is what makes a socket file already there stale.
+      // A socket that cannot be opened costs the app its fast path, not the daemon its start.
+      listenLocalSocket(handle, socketPath).then(
+        (localSocket) => {
+          console.log(`[hooks] listening on ${socketPath}`)
+          resolve({ server, port: actual, localSocket })
+        },
+        (error: unknown) => {
+          console.warn(`[hooks] local socket unavailable (${socketPath}): ${error instanceof Error ? error.message : error}`)
+          resolve({ server, port: actual, localSocket: null })
+        },
+      )
     })
   })
 }

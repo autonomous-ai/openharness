@@ -6,6 +6,7 @@ import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/http_log.dart';
+import '../ws/local_daemon_transport.dart';
 import 'access_token_source.dart';
 import 'bearer_auth_interceptor.dart';
 
@@ -27,9 +28,18 @@ class ApiClient {
   final AppConfig config;
   final AuthSession session;
   final AccessTokenSource? auth;
+
+  /// How the local CLI is reached — its Unix socket or the loopback port (see
+  /// [LocalDaemonTransport]). Null keeps the loopback port, as before.
+  final LocalDaemonTransport? localTransport;
   late final Dio _dio = _buildDio();
 
-  ApiClient({required this.config, required this.session, this.auth});
+  ApiClient({
+    required this.config,
+    required this.session,
+    this.auth,
+    this.localTransport,
+  });
 
   Dio _buildDio() {
     final dio = attachHttpLog(
@@ -45,6 +55,13 @@ class ApiClient {
         ),
       ),
     );
+    final transport = localTransport;
+    if (auth == null && transport != null) {
+      dio.httpClientAdapter = LocalDaemonHttpAdapter(
+        transport,
+        daemonBase: Uri.parse(config.localCliBaseUrl),
+      );
+    }
     final source = auth;
     if (source != null) {
       dio.interceptors.add(

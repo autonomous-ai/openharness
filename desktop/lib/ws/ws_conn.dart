@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../core/models.dart';
+import 'local_daemon_transport.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
 
@@ -76,6 +79,11 @@ class WsConn {
   final void Function(int code, String reason)? onLocalFailure;
   final WsTransportKind transportKind;
   final Uri? localWsUri;
+
+  /// How the local daemon is reached (see [LocalDaemonTransport]). When it
+  /// names a socket, a local connection dials [localWsUri]'s path over it and
+  /// falls back to [localWsUri] itself if the socket cannot be reached.
+  final LocalDaemonTransport? localTransport;
 
   /// Retained only for fixture constructor compatibility. Local transport ignores it.
   final String? localApiKey;
@@ -181,6 +189,7 @@ class WsConn {
     required this.onStatus,
     this.transportKind = WsTransportKind.cloudE2ee,
     this.localWsUri,
+    this.localTransport,
     this.localApiKey,
     this.observerShareId,
     this.localProtocolVersion = 1,
@@ -188,6 +197,41 @@ class WsConn {
     this.relayCodecs,
     this.transportPlugins,
   });
+
+  /// The socket to dial, decided afresh on every connect: whether the file is
+  /// there now, not whether it was the last time something looked. A dial
+  /// that failed while the daemon restarted must not keep this connection on
+  /// the port for good once the daemon is back with its socket.
+  String? _localSocket() {
+    final transport = localTransport;
+    if (transport == null) return null;
+    if (transport.socketPresent) return transport.candidate;
+    transport.useTcp();
+    return null;
+  }
+
+  /// The local WebSocket over the daemon's Unix socket, or null when that
+  /// failed and the loopback port should be used instead. A socket that could
+  /// not be reached at all sends everything back to the port until discovery
+  /// finds it again.
+  Future<WebSocketChannel?> _connectLocalSocket(Uri uri, String socket) async {
+    final pending = WebSocket.connect(
+      Uri(scheme: 'ws', host: 'localhost', path: uri.path).toString(),
+      customClient: unixHttpClient(socket),
+    );
+    try {
+      return IOWebSocketChannel(
+        await pending.timeout(const Duration(seconds: 5)),
+      );
+    } on TimeoutException {
+      // The dial goes on after the timeout; a socket it opens late is nobody's.
+      unawaited(pending.then((ws) => ws.close(), onError: (_) {}));
+      return null;
+    } catch (error) {
+      if (isConnectionFailure(error)) localTransport?.useTcp();
+      return null;
+    }
+  }
 
   Future<void> connect() async {
     if (_closing || _connecting) return;
@@ -236,9 +280,17 @@ class WsConn {
           },
         );
       }
-      final channel = isLocal
-          ? WebSocketChannel.connect(uri)
-          : WebSocketChannel.connect(uri, protocols: [token!]);
+      final socket = isLocal ? _localSocket() : null;
+      final channel = !isLocal
+          ? WebSocketChannel.connect(uri, protocols: [token!])
+          : socket != null
+          ? await _connectLocalSocket(uri, socket) ??
+                WebSocketChannel.connect(uri)
+          : WebSocketChannel.connect(uri);
+      if (_closing) {
+        await channel.sink.close();
+        return;
+      }
       _channel = channel;
       await channel.ready;
       if (_closing || !identical(_channel, channel)) {
