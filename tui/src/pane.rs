@@ -505,6 +505,62 @@ impl Pane {
         self.copy_set(p);
     }
 
+    /// `f` `F` `t` `T`: to (or just before) the next / previous `c` on this line.
+    pub fn copy_find_char(&mut self, c: char, forward: bool, till: bool) -> bool {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(copy) = self.copy else { return false };
+        let (_, _, last) = self.copy_bounds();
+        let at = copy.point.column.0;
+        let hit = if forward { (at + 1..=last).find(|x| self.copy_char(Point::new(copy.point.line, Column(*x))) == c) }
+            else { (0..at).rev().find(|x| self.copy_char(Point::new(copy.point.line, Column(*x))) == c) };
+        let Some(col) = hit else { return false };
+        let col = if till { if forward { col.saturating_sub(1).max(at) } else { (col + 1).min(at) } } else { col };
+        self.copy_set(Point::new(copy.point.line, Column(col)));
+        true
+    }
+
+    /// `%`: to the bracket that matches the one under (or after) the cursor, across lines.
+    pub fn copy_match_bracket(&mut self) {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let Some(copy) = self.copy else { return };
+        let (top, bottom, last) = self.copy_bounds();
+        let pairs = [('(', ')'), ('[', ']'), ('{', '}')];
+        let mut p = copy.point;
+        // The first bracket at or after the cursor on this line.
+        let start = (p.column.0..=last).find(|x| pairs.iter().any(|(a, b)| { let ch = self.copy_char(Point::new(p.line, Column(*x))); ch == *a || ch == *b }));
+        let Some(col) = start else { return };
+        p.column = Column(col);
+        let ch = self.copy_char(p);
+        let Some(&(open, close)) = pairs.iter().find(|(a, b)| *a == ch || *b == ch) else { return };
+        let forward = ch == open;
+        let mut depth = 0i32;
+        let mut q = p;
+        loop {
+            let c = self.copy_char(q);
+            if c == open { depth += if forward { 1 } else { -1 } } else if c == close { depth += if forward { -1 } else { 1 } }
+            if depth == 0 { self.copy_set(q); return }
+            q = if forward {
+                if q.column.0 < last { Point::new(q.line, Column(q.column.0 + 1)) } else if q.line.0 < bottom { Point::new(Line(q.line.0 + 1), Column(0)) } else { return }
+            } else if q.column.0 > 0 { Point::new(q.line, Column(q.column.0 - 1)) } else if q.line.0 > top { Point::new(Line(q.line.0 - 1), Column(last)) } else { return };
+        }
+    }
+
+    /// `{` `}`: to the previous / next blank line.
+    pub fn copy_paragraph(&mut self, forward: bool) {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let Some(copy) = self.copy else { return };
+        let (top, bottom, last) = self.copy_bounds();
+        let blank = |me: &Self, l: i32| (0..=last).all(|c| { let ch = me.copy_char(Point::new(Line(l), Column(c))); ch == ' ' || ch == '\0' });
+        let mut l = copy.point.line.0;
+        loop {
+            l += if forward { 1 } else { -1 };
+            if l <= top { l = top; break }
+            if l >= bottom { l = bottom; break }
+            if blank(self, l) { break }
+        }
+        self.copy_set(Point::new(Line(l), Column(0)));
+    }
+
     /// `^`: the first character on the line that is not blank.
     pub fn copy_first_nonblank(&mut self) {
         use alacritty_terminal::index::{Column, Point};
