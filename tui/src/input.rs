@@ -1484,6 +1484,8 @@ fn answer(app: &mut App, machine: &str, agent: &str, option: usize) -> bool {
 
 fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
     let id = picker.current_id();
+    // fzf's accept with nothing matched: the list goes.
+    if id.is_none() && picker.visible.is_empty() && choice == Choice::Enter { SPLIT.with(|s| s.set(None)); return }
     let keep = |app: &mut App, kind: PickerKind, picker: Picker| app.modal = Some(Modal::Picker { kind, picker });
     match kind.clone() {
         PickerKind::Open { .. } => {
