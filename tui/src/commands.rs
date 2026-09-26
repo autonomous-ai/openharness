@@ -143,6 +143,18 @@ fn shell_command(words: &[String]) -> Option<String> {
     last.filter(|c| !c.trim().is_empty())
 }
 
+/// vim-tmux-navigator's test of a pane's command: `^g?(view|l?n?vim?x?|fzf)(diff)?$`.
+fn is_vim_command(cmd: &str) -> bool {
+    let c = cmd.rsplit('/').next().unwrap_or(cmd);
+    let c = c.strip_prefix('g').filter(|r| !r.is_empty() && (r.starts_with('v') || r.starts_with('n') || r.starts_with('l'))).unwrap_or(c);
+    let c = c.strip_suffix("diff").unwrap_or(c);
+    if c == "view" || c == "fzf" { return true }
+    let c = c.strip_prefix('l').unwrap_or(c);
+    let c = c.strip_prefix('n').unwrap_or(c);
+    let c = c.strip_suffix('x').unwrap_or(c);
+    c == "vi" || c == "vim"
+}
+
 /// `40` or `30%` of `total`.
 fn size_arg(v: &str, total: u16) -> Option<u16> {
     match v.strip_suffix('%') { Some(p) => p.parse::<u32>().ok().map(|p| (total as u32 * p / 100) as u16), None => v.parse().ok() }
@@ -726,9 +738,14 @@ fn run_words(app: &mut App, words: &[String]) {
             // (vim-tmux-navigator), which lives on another machine: a harness pane is not vim.
             let truth = if format { !matches!(expand(app, cond).trim(), "" | "0") }
                 else if cond.contains("#{") || cond.contains("pane_tty") || cond.contains("is_vim") {
-                    // "Is vim in this pane?": a shell pane on the alternate screen is running a full-screen program.
-                    app.focused().and_then(|f| app.panes.get(&f)).filter(|p| app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.engine == "terminal").unwrap_or(false))
-                        .map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false)
+                    // "Is vim in this pane?": what tmux says the pane runs (vim-tmux-navigator's own test,
+                    // `g?(view|l?n?vim?x?|fzf)(diff)?`), else a shell pane on the alternate screen.
+                    let pane = app.focused().and_then(|f| app.panes.get(&f));
+                    match pane.and_then(|p| p.fg_command.clone()) {
+                        Some(cmd) => is_vim_command(&cmd),
+                        None => pane.filter(|p| app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.engine == "terminal").unwrap_or(false))
+                            .map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false),
+                    }
                 } else { crate::tmuxconf::shell_true(&expand(app, cond)) };
             let pick = if truth { words.get(i + 1) } else { words.get(i + 2) };
             if let Some(command) = pick.cloned() { execute(app, &command) }
@@ -808,6 +825,8 @@ mod tests {
         assert_eq!(split("copy-mode \\; send -X begin-selection"), vec![vec!["copy-mode", ";", "send", "-X", "begin-selection"]]);
         assert_eq!(split("send-keys 'make test' Enter"), vec![vec!["send-keys", "make test", "Enter"]]);
         assert_eq!(split("display 'a;b'"), vec![vec!["display", "a;b"]]);
+        for yes in ["vim", "nvim", "vi", "view", "gvim", "vimdiff", "nvimdiff", "lvim", "fzf", "/usr/bin/nvim", "vimx"] { assert!(is_vim_command(yes), "{yes}") }
+        for no in ["zsh", "bash", "claude", "node", "vite", "vim-server", "less"] { assert!(!is_vim_command(no), "{no}") }
     }
 
     #[test]

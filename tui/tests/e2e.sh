@@ -55,6 +55,11 @@ expect "pane titles, tmux pane-border-status" '"Remote shell"'
 out=$(HOME=$home "$bin" display -p '#{session_windows} #{pane_index}')
 [ -n "$out" ] || fail "hn display -p from a shell answered nothing"
 echo "✓ hn display -p from a shell: $out"
+sleep 2.3
+info=$(HOME=$home "$bin" display -p -t 0 '#{pane_current_command} #{pane_current_path}')
+[ "$info" = "zsh /home/demo/src" ] || fail "pane_current_* from the daemon's tmux: got '$info'"
+echo "✓ #{pane_current_command} and #{pane_current_path} come from the pane's tmux"
+
 tmux_ send-keys -t t C-b o
 tmux_ send-keys -t t C-b z
 expect "C-b z zooms (Z flag)" "*Z"

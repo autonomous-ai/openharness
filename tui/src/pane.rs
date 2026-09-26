@@ -89,6 +89,12 @@ pub struct Pane {
     pub queued: Vec<Vec<u8>>,
     /// The folder the shell says it is in (OSC 7), for #{pane_current_path} and new splits.
     pub cwd: Option<String>,
+    /// What tmux on the pane's machine says it runs, and where (the daemon's terminal_info):
+    /// #{pane_current_command}, #{pane_current_path}, #{pane_pid}, #{pane_tty}.
+    pub fg_command: Option<String>,
+    pub live_path: Option<String>,
+    pub remote_pid: Option<u64>,
+    pub remote_tty: Option<String>,
     /// When the oldest unanswered keystroke left — its echo closes the measurement.
     pub input_at: Option<Instant>,
     /// Keystroke → first output back, in microseconds (the last 256).
@@ -181,6 +187,10 @@ impl Pane {
             find_all: Vec::new(),
             copy_by_wheel: false,
             cwd: None,
+            fg_command: None,
+            live_path: None,
+            remote_pid: None,
+            remote_tty: None,
             in_screen_title: false,
             pending_esc: false,
             input_at: None,
