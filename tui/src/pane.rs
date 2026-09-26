@@ -48,6 +48,12 @@ pub struct CopyCursor {
 
 pub struct Size(pub u16, pub u16);
 
+/// tmux's `%id` for a pane: hn keeps 0 for no pane, so its first pane (1) is tmux's `%0`.
+pub fn tag(id: u64) -> String { format!("%{}", id.saturating_sub(1)) }
+
+/// The pane a `%id`'s number names.
+pub fn from_tag(n: &str) -> Option<u64> { n.parse::<u64>().ok().map(|n| n + 1) }
+
 impl Dimensions for Size {
     fn total_lines(&self) -> usize { self.1 as usize }
     fn screen_lines(&self) -> usize { self.1 as usize }
@@ -364,11 +370,6 @@ impl Pane {
         if self.predictions.len() != before { self.dirty = true }
     }
 
-    pub fn scroll(&mut self, lines: i32) {
-        self.term.scroll_display(Scroll::Delta(lines));
-        self.dirty = true;
-    }
-
     pub fn scroll_bottom(&mut self) {
         if self.term.grid().display_offset() != 0 {
             self.term.scroll_display(Scroll::Bottom);
@@ -405,25 +406,6 @@ impl Pane {
         let offset = self.term.grid().display_offset() as i32;
         let col = (col as usize).min(self.cols.saturating_sub(1) as usize);
         Point::new(Line(row as i32 - offset), Column(col))
-    }
-
-    /// Start a selection at a pane-local cell; [clicks] 2 selects a word, 3 a line.
-    pub fn select_start(&mut self, col: u16, row: u16, clicks: u8) {
-        use alacritty_terminal::index::Side;
-        use alacritty_terminal::selection::{Selection, SelectionType};
-        let ty = match clicks { 2 => SelectionType::Semantic, 3 => SelectionType::Lines, _ => SelectionType::Simple };
-        let point = self.grid_point(col, row);
-        let mut selection = Selection::new(ty, point, Side::Left);
-        if clicks > 1 { selection.update(point, Side::Right) }
-        self.term.selection = Some(selection);
-        self.dirty = true;
-    }
-
-    pub fn select_update(&mut self, col: u16, row: u16) {
-        use alacritty_terminal::index::Side;
-        let point = self.grid_point(col, row);
-        if let Some(selection) = self.term.selection.as_mut() { selection.update(point, Side::Right) }
-        self.dirty = true;
     }
 
     pub fn selection_text(&self) -> Option<String> {
@@ -671,6 +653,135 @@ impl Pane {
         let mut word = String::new();
         while x <= last && !stop(at(x)) { word.push(at(x)); x += 1 }
         word
+    }
+
+    /// select-word (window_copy_cmd_select_word): the word under the copy cursor selected — a run
+    /// of letters, or of word-separators; on a blank, the word before it. A one-character word
+    /// followed by a blank is just that character.
+    pub fn copy_select_word(&mut self, ws: &str, vi: bool) {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(c) = self.copy else { return };
+        let line = c.point.line;
+        let len = self.line_length(line.0);
+        let at = |x: usize| self.copy_char(Point::new(line, Column(x)));
+        // 0 a blank, 1 a separator, 2 a letter (grid_reader_in_set).
+        let class = |x: usize| -> u8 { let ch = if x < len { at(x) } else { ' ' }; if ch == ' ' || ch == '\0' { 0 } else if ws.contains(ch) { 1 } else { 2 } };
+        // grid_reader_cursor_previous_word: back to a word, then to its start.
+        let mut x = c.point.column.0;
+        if class(x) == 0 {
+            loop {
+                if x == 0 { return }
+                x -= 1;
+                if class(x) != 0 { break }
+            }
+        }
+        let kind = class(x);
+        while x > 0 && class(x - 1) == kind { x -= 1 }
+        let start = x;
+        // A one-character word before a blank; else grid_reader_cursor_next_word_end (vi's: one
+        // right, the blanks skipped, to the word's end, one back).
+        let end = if start >= len || class(start + 1) != 0 {
+            let mut x = start;
+            if vi && class(x) != 0 && x < len { x += 1 }
+            while x < len && class(x) == 0 { x += 1 }
+            let kind = class(x);
+            while x < len && class(x) == kind && kind != 0 { x += 1 }
+            if vi { x.saturating_sub(1) } else { x }
+        } else { start };
+        let (_, _, last) = self.copy_bounds();
+        if let Some(copy) = self.copy.as_mut() {
+            copy.anchor = Point::new(line, Column(start.min(last)));
+            copy.point = Point::new(line, Column(end.min(last)));
+            copy.selecting = true;
+        }
+        self.copy_reselect(false);
+    }
+
+    /// The copy cursor to a cell of the view (where the mouse is), the selection's end with it.
+    pub fn copy_cursor_at(&mut self, col: u16, row: u16) {
+        let point = self.grid_point(col, row);
+        self.copy_set(point);
+    }
+
+    /// window_copy_update_cursor: only the cursor moves to a cell of the view — the selection
+    /// keeps its end until something updates it (a copy right after select-word copies the word).
+    pub fn copy_cursor_only(&mut self, col: u16, row: u16) {
+        let point = self.grid_point(col, row);
+        let (_, _, last) = self.copy_bounds();
+        if let Some(c) = self.copy.as_mut() { c.point = alacritty_terminal::index::Point::new(point.line, alacritty_terminal::index::Column(point.column.0.min(last))) }
+        self.dirty = true;
+    }
+
+    /// grid_line_length: a line's cells up to its last one that is not a blank.
+    fn line_length(&self, line: i32) -> usize {
+        use alacritty_terminal::index::{Column, Line};
+        let row = &self.term.grid()[Line(line)];
+        let mut n = self.term.columns();
+        while n > 0 {
+            let c = &row[Column(n - 1)];
+            if c.c != ' ' && c.c != '\0' || c.flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER) { break }
+            n -= 1;
+        }
+        n
+    }
+
+    /// format_grid_word: the word at a cell of the view — back to a word-separator or a blank,
+    /// then on to the next, across lines that wrapped.
+    pub fn word_at(&self, col: u16, row: u16, ws: &str) -> String {
+        use alacritty_terminal::index::{Column, Line, Point};
+        use alacritty_terminal::term::cell::Flags;
+        let grid = self.term.grid();
+        let (top, bottom, last) = self.copy_bounds();
+        let start = self.grid_point(col, row);
+        let wrapped = |line: i32| grid[Line(line)][Column(last)].flags.contains(Flags::WRAPLINE);
+        let padding = |p: Point| grid[p].flags.contains(Flags::WIDE_CHAR_SPACER);
+        let separator = |p: Point| { let c = grid[p].c; c == ' ' || c == '\0' || ws.contains(c) };
+        let (mut x, mut y) = (start.column.0, start.line.0);
+        let mut found = false;
+        loop {
+            let p = Point::new(Line(y), Column(x));
+            if padding(p) { break }
+            if separator(p) { found = true; break }
+            if x == 0 {
+                if y == top || !wrapped(y - 1) { break }
+                y -= 1;
+                x = self.line_length(y);
+                if x == 0 { break }
+            }
+            x -= 1;
+        }
+        let mut word = String::new();
+        loop {
+            if found {
+                let end = self.line_length(y);
+                if end == 0 || x + 1 == end {
+                    if y == bottom || !wrapped(y) { break }
+                    y += 1;
+                    x = 0;
+                } else { x += 1 }
+            }
+            found = true;
+            let p = Point::new(Line(y), Column(x));
+            if x > last || padding(p) || separator(p) { break }
+            word.push(grid[p].c);
+            if let Some(extra) = grid[p].zerowidth() { word.extend(extra.iter()) }
+        }
+        word
+    }
+
+    /// format_grid_line: a row of the view, to its last character.
+    pub fn line_at(&self, row: u16) -> String {
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::term::cell::Flags;
+        let line = self.grid_point(0, row).line.0;
+        let cells = &self.term.grid()[Line(line)];
+        (0..self.line_length(line)).map(|x| &cells[Column(x)]).filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER)).map(|c| if c.c == '\0' { ' ' } else { c.c }).collect()
+    }
+
+    /// format_grid_hyperlink: the link (OSC 8) at a cell of the view.
+    pub fn hyperlink_at(&self, col: u16, row: u16) -> Option<String> {
+        let p = self.grid_point(col, row);
+        self.term.grid()[p].hyperlink().map(|h| h.uri().to_string())
     }
 
     /// The wheel in copy mode: the view moves, the cursor kept on screen.

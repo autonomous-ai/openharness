@@ -19,6 +19,7 @@ use crate::picker::Picker;
 use crate::theme;
 
 pub fn handle(app: &mut App, event: CEvent) {
+    app.sync_copy_modal();
     match event {
         CEvent::Key(key) if key.kind != KeyEventKind::Release => on_key(app, key),
         CEvent::Paste(text) => on_paste(app, text),
@@ -29,6 +30,8 @@ pub fn handle(app: &mut App, event: CEvent) {
         CEvent::FocusLost => { app.terminal_focused = false; crate::dial::announce(app, false) }
         _ => {}
     }
+    app.sync_copy_modal();
+    app.release_waiting();
     crate::dial::settle_voice(app);
 }
 
@@ -165,170 +168,46 @@ fn on_paste(app: &mut App, text: String) {
 }
 
 fn on_mouse(app: &mut App, mouse: MouseEvent) {
-    if app.modal.is_some() {
-        match mouse.kind {
-            // The list reads bottom-up: the wheel moves the way the rows do; over the preview it
-            // scrolls the preview, as fzf's does.
-            // Copy mode: the wheel moves the view; entered by the wheel, it ends back at the bottom
-            // (tmux's WheelUpPane → copy-mode -e).
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if matches!(app.modal, Some(Modal::Copy { .. })) => {
-                let pane = match &app.modal { Some(Modal::Copy { pane }) => *pane, _ => return };
-                let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
-                let mut done = false;
-                if let Some(p) = app.panes.get_mut(&pane) {
-                    p.copy_scroll(if up { 3 } else { -3 });
-                    if !up && p.scrolled() == 0 && p.copy_by_wheel { p.copy_end(); done = true }
-                }
-                if done { app.modal = None }
-                return;
-            }
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
-                let half = app.size.0 / 2;
-                if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
-                    if picker.preview && mouse.column >= half { picker.preview_scroll = if up { picker.preview_scroll.saturating_sub(1) } else { picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()) } }
-                    else { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
-                }
-            }
-            MouseEventKind::Down(MouseButton::Left) => {
-                let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) => Some(picker.click(mouse.row)), _ => None };
-                match hit {
-                    // A click takes the row, a second click on it opens it; a click outside the box closes it.
-                    Some(true) => {
-                        let double = matches!(app.last_click, Some((9, _, r, at, _)) if r == mouse.row && at.elapsed() < Duration::from_millis(400));
-                        app.last_click = Some((9, mouse.column, mouse.row, std::time::Instant::now(), 1));
-                        if double { app.last_click = None; modal_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) }
-                    }
-                    Some(false) => {
-                        let top = app.size.1.saturating_sub(1);
-                        let inside = matches!(&app.modal, Some(Modal::Picker { picker, .. }) if picker.row_at.first().map(|(y, _)| mouse.row >= y.saturating_sub(1)).unwrap_or(false) || mouse.row >= top);
-                        if !inside { app.modal = None }
-                    }
-                    None => {}
-                }
-            }
-            _ => {}
-        }
-        return;
+    app.tim.touched = std::time::Instant::now();
+    // tmux asks the terminal for bare motion only when a pane here wants it (or a menu opened by
+    // the mouse): the rest of the motion hn is sent never happened, as far as tmux is concerned.
+    if matches!(mouse.kind, MouseEventKind::Moved) {
+        let menu = matches!(&app.modal, Some(Modal::Menu(m)) if !m.no_mouse);
+        let wanted = app.rects.iter().any(|(id, _)| app.panes.get(id).map(|p| p.mode().contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)).unwrap_or(false));
+        if !menu && !wanted { return }
     }
-    let (x, y) = (mouse.column, mouse.row);
-    // A drag ends wherever the button comes up — the tab strip included.
-    if matches!(mouse.kind, MouseEventKind::Up(_)) && app.mouse_drag.is_some() { app.mouse_drag = None; return }
-    // The status line's window list.
-    if y == if app.status_top { 0 } else { app.size.1.saturating_sub(1) } && app.opts.status != Some(false) {
-        // The wheel over the status line walks the windows, as tmux's WheelUpStatus does.
-        match mouse.kind {
-            MouseEventKind::ScrollUp => { commands::execute(app, "previous-window"); return }
-            MouseEventKind::ScrollDown => { commands::execute(app, "next-window"); return }
-            _ => {}
-        }
-        let Some(index) = crate::ui::tab_at(app, x) else { return };
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                // A second click on the same tab within a moment: rename it.
-                let now = std::time::Instant::now();
-                let double = matches!(app.last_click, Some((0, c, 0, at, _)) if c == index as u16 && at.elapsed() < Duration::from_millis(400));
-                app.last_click = Some((0, index as u16, 0, now, 1));
-                app.select_tab(index);
-                if double { run(app, "rename-tab") }
-            }
-            MouseEventKind::Down(MouseButton::Middle) => app.close_tab(index),
-            _ => {}
-        }
-        return;
-    }
-    // Dragging a split border.
-    if let Some((pane, last_x, last_y)) = app.mouse_drag {
-        match mouse.kind {
-            MouseEventKind::Drag(MouseButton::Left) => {
-                // The border follows the mouse, a cell at a time (tmux's border drag).
-                let (dx, dy) = (x as i32 - last_x as i32, y as i32 - last_y as i32);
-                let tab = app.active;
-                if dx != 0 { app.resize_pane(tab, pane, Dir::Horizontal, dx) }
-                if dy != 0 { app.resize_pane(tab, pane, Dir::Vertical, dy) }
-                app.mouse_drag = Some((pane, x, y));
-                app.fit_panes();
-                return;
-            }
-            MouseEventKind::Up(_) => { app.mouse_drag = None; return }
-            _ => {}
-        }
-    }
-    let rects = app.rects.clone();
-    let hit = rects.iter().find(|(_, r)| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height).copied();
-    let Some((id, rect)) = hit else {
-        // On a border column: grab it.
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            if let Some((id, _)) = rects.iter().find(|(_, r)| x == r.x + r.width && y >= r.y && y < r.y + r.height) { app.mouse_drag = Some((*id, x, y)) }
-        }
-        return;
-    };
-    if let MouseEventKind::Down(_) = mouse.kind {
-        if app.focused() != Some(id) { let tab = app.active; app.focus_pane(tab, id) }
-    }
-    if y == rect.y {
-        // The pane's header: a grab handle for the split above.
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind { app.mouse_drag = Some((id, x, y)) }
-        return;
-    }
-    let (col, row) = (x - rect.x, y - rect.y - 1);
-    let Some(pane) = app.panes.get_mut(&id) else { return };
-    // Selecting text: whenever the program did not ask for the mouse — or always, with ⇧ held,
-    // the way every terminal lets you select over a mouse-driven TUI.
-    let wants_mouse = pane.mode().intersects(alacritty_terminal::term::TermMode::MOUSE_MODE);
-    let force = mouse.modifiers.contains(KeyModifiers::SHIFT);
-    if !wants_mouse || force || app.selecting == Some(id) {
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                let clicks = match app.last_click {
-                    Some((p, c, r, at, n)) if p == id && c == col && r == row && at.elapsed() < Duration::from_millis(400) => (n % 3) + 1,
-                    _ => 1,
-                };
-                app.last_click = Some((id, col, row, std::time::Instant::now(), clicks));
-                pane.select_start(col, row, clicks);
-                app.selecting = Some(id);
-                return;
-            }
-            MouseEventKind::Drag(MouseButton::Left) if app.selecting == Some(id) => { pane.select_update(col, row); return }
-            MouseEventKind::Up(MouseButton::Left) if app.selecting == Some(id) => {
-                app.selecting = None;
-                match pane.selection_text() {
-                    Some(text) => {
-                        crate::clipboard::store(&text);
-                        // tmux puts a mouse copy in a paste buffer too (C-b ] pastes it).
-                        app.add_buffer(text.clone());
-                        let n = text.chars().count();
-                        app.say(format!("Copied {n} character{}", if n == 1 { "" } else { "s" }), theme::ONLINE);
-                    }
-                    None => pane.clear_selection(),
-                }
-                return;
-            }
-            _ if !wants_mouse => {}
-            _ => {}
-        }
-    }
-    if let Some(bytes) = encode_mouse(mouse.kind, col, row, mouse.modifiers, pane.mode()) {
-        if pane.stream.is_some() && !pane.read_only { app.send_input(id, &bytes) }
-        return;
-    }
+    // hn's lists and prompts keep the mouse as they have it; copy mode and a menu are tmux's.
+    if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Menu(_))) { return modal_mouse(app, mouse) }
+    crate::mouse::on_event(app, mouse);
+}
+
+/// The mouse over hn's lists (the choose modes): the wheel moves the rows, or the preview under
+/// it; a click takes a row, a second one opens it; a click outside the box closes it.
+fn modal_mouse(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
-        MouseEventKind::ScrollUp => {
-            if pane.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN) {
-                let bytes = if pane.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR) { b"\x1bOA\x1bOA\x1bOA".to_vec() } else { b"\x1b[A\x1b[A\x1b[A".to_vec() };
-                app.send_input(id, &bytes);
-            } else {
-                // tmux: the wheel enters copy mode, which ends when scrolled back to the bottom.
-                if pane.copy.is_none() { pane.copy_start(); pane.copy_by_wheel = true }
-                pane.copy_scroll(3);
-                app.modal = Some(Modal::Copy { pane: id });
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+            let half = app.size.0 / 2;
+            if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
+                if picker.preview && mouse.column >= half { picker.preview_scroll = if up { picker.preview_scroll.saturating_sub(1) } else { picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()) } }
+                else { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
             }
         }
-        MouseEventKind::ScrollDown => {
-            if pane.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN) {
-                let bytes = if pane.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR) { b"\x1bOB\x1bOB\x1bOB".to_vec() } else { b"\x1b[B\x1b[B\x1b[B".to_vec() };
-                app.send_input(id, &bytes);
-            } else { pane.scroll(-3) }
+        MouseEventKind::Down(MouseButton::Left) => {
+            let hit = match &mut app.modal { Some(Modal::Picker { picker, .. }) => Some(picker.click(mouse.row)), _ => None };
+            match hit {
+                Some(true) => {
+                    let double = matches!(app.last_click, Some((9, _, r, at, _)) if r == mouse.row && at.elapsed() < Duration::from_millis(400));
+                    app.last_click = Some((9, mouse.column, mouse.row, std::time::Instant::now(), 1));
+                    if double { app.last_click = None; modal_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) }
+                }
+                Some(false) => {
+                    let top = app.size.1.saturating_sub(1);
+                    let inside = matches!(&app.modal, Some(Modal::Picker { picker, .. }) if picker.row_at.first().map(|(y, _)| mouse.row >= y.saturating_sub(1)).unwrap_or(false) || mouse.row >= top);
+                    if !inside { app.modal = None }
+                }
+                None => {}
+            }
         }
         _ => {}
     }
@@ -947,29 +826,46 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             }
         }
         Modal::Clock { .. } => {}
-        // tmux's menu: ↑↓ (k j, C-p C-n) move, Enter runs, an item's key runs it, q Esc C-c leave.
-        Modal::Menu { title, items, mut cursor } => {
+        // tmux's menu (menu_key_cb): an item's key chooses it; ↑ k ↓ j move (round the ends,
+        // past rules and disabled items), PPage C-b and NPage by five, g Home / G End the first
+        // and last, Enter the chosen one, Escape C-c C-g q leave.
+        Modal::Menu(mut menu) => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            let step = |from: usize, by: i64| -> usize {
-                let n = items.len() as i64;
-                let mut i = from as i64;
-                for _ in 0..n { i = (i + by).rem_euclid(n); if !items[i as usize].disabled && !items[i as usize].separator { return i as usize } }
-                from
-            };
             let name = keys::name(&keys::of(&key));
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => return,
-                KeyCode::Char('c' | 'g') if ctrl => return,
-                KeyCode::Up | KeyCode::Char('k') if !ctrl => cursor = step(cursor, -1),
-                KeyCode::Down | KeyCode::Char('j') if !ctrl => cursor = step(cursor, 1),
-                KeyCode::Char('p') if ctrl => cursor = step(cursor, -1),
-                KeyCode::Char('n') if ctrl => cursor = step(cursor, 1),
-                KeyCode::Enter => { let c = items[cursor].command.clone(); if !items[cursor].disabled { commands::execute(app, &c) } return }
-                _ => {
-                    if let Some(it) = items.iter().find(|it| !it.disabled && !it.separator && it.key == name) { let c = it.command.clone(); commands::execute(app, &c); return }
-                }
+            if let Some(i) = menu.items.iter().position(|it| !it.disabled && !it.separator && !it.key.is_empty() && it.key == name) {
+                menu.choice = Some(i);
+                return menu_chosen(app, menu);
             }
-            app.modal = Some(Modal::Menu { title, items, cursor });
+            let count = menu.items.len() as i64;
+            let skip = |menu: &crate::modal::Menu, i: i64| { let it = &menu.items[i as usize]; it.separator || it.disabled };
+            let mut choice = menu.choice.map(|c| c as i64).unwrap_or(-1);
+            let old = if choice == -1 { 0 } else { choice };
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') if !ctrl => loop {
+                    choice = if choice == -1 || choice == 0 { count - 1 } else { choice - 1 };
+                    if !skip(&menu, choice) || choice == old { break }
+                },
+                KeyCode::Down | KeyCode::Char('j') if !ctrl => loop {
+                    choice = if choice == -1 || choice == count - 1 { 0 } else { choice + 1 };
+                    if !skip(&menu, choice) || choice == old { break }
+                },
+                KeyCode::PageUp => choice = page_up(&menu, choice),
+                KeyCode::Char('b') if ctrl => choice = page_up(&menu, choice),
+                KeyCode::PageDown => {
+                    // (tmux counts its five up, not down: to the last item, as it does.)
+                    choice = count - 1;
+                    while choice > 0 && skip(&menu, choice) { choice -= 1 }
+                }
+                KeyCode::Char('g') if !ctrl => { choice = 0; while choice < count - 1 && skip(&menu, choice) { choice += 1 } }
+                KeyCode::Home => { choice = 0; while choice < count - 1 && skip(&menu, choice) { choice += 1 } }
+                KeyCode::Char('G') | KeyCode::End => { choice = count - 1; while choice > 0 && skip(&menu, choice) { choice -= 1 } }
+                KeyCode::Enter => return menu_chosen(app, menu),
+                KeyCode::Esc | KeyCode::Char('q') if !ctrl => return,
+                KeyCode::Char('c' | 'g') if ctrl => return,
+                _ => {}
+            }
+            menu.choice = (choice >= 0).then_some(choice as usize);
+            app.modal = Some(Modal::Menu(menu));
         }
         // Everything goes to the popup's program (the prefix still works, as in tmux).
         Modal::Popup { pane, width, height, title } => {
@@ -1357,7 +1253,7 @@ fn copy_action_key(action: &str) -> Option<KeyEvent> {
         "search-again" => k('n'), "search-reverse" => k('N'), "next-paragraph" => k('}'), "previous-paragraph" => k('{'),
         "next-matching-bracket" => k('%'), "jump-again" => k(';'), "jump-reverse" => k(','), "toggle-position" => k('P'),
         "append-selection-and-cancel" => k('A'), "copy-pipe-end-of-line-and-cancel" | "copy-end-of-line-and-cancel" => k('D'),
-        "refresh-from-pane" => k('r'), "select-word" => k('w'),
+        "refresh-from-pane" => k('r'),
         _ => return None,
     })
 }
@@ -1486,7 +1382,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             app.last_search_up = up;
         }
         KeyCode::Char(':') => {
-            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: Some(format!("send-keys -X -t %{pane} goto-line \"%%\"")), more: Vec::new(), answers: Vec::new(), one: false, digits: false }, "(goto line) ", "")));
+            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: Some(format!("send-keys -X -t {} goto-line \"%%\"", crate::pane::tag(pane))), more: Vec::new(), answers: Vec::new(), one: false, digits: false }, "(goto line) ", "")));
             return;
         }
         KeyCode::Char('D') => {
@@ -2019,23 +1915,16 @@ pub fn paste_into(app: &mut App, pane: u64, text: &str, sep: &str, bracket: bool
 /// `send-keys`: words are typed as text, key names (`Enter`, `C-c`, `Up`) as keys.
 /// send-keys -X ACTION [ARG]: a copy-mode command on the target pane (tmux's menus and binds
 /// use them: history-top, goto-line, search-backward "word", begin-selection …), -N times.
-fn send_copy_action(app: &mut App, words: &[String]) {
-    let mut target = None;
-    let mut count = 1usize;
-    let mut rest = Vec::new();
-    let mut i = 1;
-    while i < words.len() {
-        match words[i].as_str() {
-            "-t" => { target = words.get(i + 1).cloned(); i += 1 }
-            "-N" => { count = words.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(1); i += 1 }
-            w if w.starts_with('-') && w.len() > 1 && rest.is_empty() => {}
-            w => rest.push(w.to_string()),
-        }
-        i += 1;
-    }
-    let pane = match target { Some(t) => crate::commands::pane_target(app, &t).map(|(_, p)| p), None => app.focused() };
-    let Some(pane) = pane else { return };
+/// send -X: a copy-mode command for a pane in copy mode (window_copy_command) — run by a mouse
+/// key (not the wheel), the cursor first goes where the mouse is.
+fn send_copy_action(app: &mut App, pane: u64, args: &crate::cmd::Args) {
+    let count = args.get('N').and_then(|n| n.parse().ok()).unwrap_or(1usize);
+    let rest: Vec<String> = args.values.clone();
     let Some(action) = rest.first().cloned() else { return };
+    let mouse = app.mouse_ev.clone().filter(|m| m.valid);
+    if let Some(m) = mouse.as_ref().filter(|m| !crate::mouse::is_wheel(m.b)) { crate::mouse::copy_move_mouse(app, m) }
+    // begin-selection by the mouse: a drag, its end following the mouse.
+    if action == "begin-selection" { if let Some(m) = &mouse { return crate::mouse::copy_drag_begin(app, m) } }
     let arg = rest.get(1).cloned().unwrap_or_default();
     let region = app.mode_keys_emacs();
     let Some(p) = app.panes.get_mut(&pane) else { return };
@@ -2079,12 +1968,25 @@ fn send_copy_action(app: &mut App, words: &[String]) {
             if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { p.copy_find_char(c, fwd, till); } }
         }
         "begin-selection" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_begin() } }
+        "select-word" => {
+            let ws = app.options.get("word-separators", "", None).unwrap_or_default();
+            let vi = !app.mode_keys_emacs();
+            if let Some(p) = app.panes.get_mut(&pane) { p.copy_select_word(&ws, vi) }
+        }
         "rectangle-toggle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_rect_toggle() } }
         "other-end" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_other_end() } }
         "set-mark" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_set_mark() } }
         "jump-to-mark" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_jump_mark() } }
         "scroll-middle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll_middle() } }
-        "scroll-up" | "scroll-down" => { let d = if action == "scroll-up" { 1 } else { -1 }; if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll(d * count as i32) } }
+        // scroll-down leaves copy mode at the bottom when it was entered to scroll (-e);
+        // scroll-down-and-cancel always does.
+        "scroll-up" | "scroll-down" | "scroll-down-and-cancel" => {
+            let d = if action == "scroll-up" { 1 } else { -1 };
+            if let Some(p) = app.panes.get_mut(&pane) {
+                p.copy_scroll(d * count as i32);
+                if d < 0 && p.scrolled() == 0 && (p.copy_by_wheel || action == "scroll-down-and-cancel") { p.copy_end() }
+            }
+        }
         a => match copy_action_key(a) {
             Some(k) => {
                 // The action is the vi key that does it here, whatever mode-keys is.
@@ -2107,7 +2009,7 @@ pub fn send_chord(app: &mut App, pane: u64, chord: keys::Chord) {
 /// `C-c`, `Space`, `x`) or, naming none (or with -l), its characters; -H a byte in hex; -N the
 /// lot that many times; -X a copy-mode command, which the pane must be in copy mode for; a pane
 /// in copy mode takes the keys as its key table has them.
-pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args, words: &[String]) {
+pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
     let repeat = match args.get('N') {
         None => 1,
         Some(n) => match n.parse::<i64>() {
@@ -2120,7 +2022,7 @@ pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args, words: &[Str
     let in_mode = app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false);
     if args.has('X') > 0 {
         if !in_mode { return app.say("not in a mode", theme::WARN) }
-        return send_copy_action(app, words);
+        return send_copy_action(app, pane, args);
     }
     if args.values.is_empty() { return }
     let literal = args.has('l') > 0;
@@ -2135,6 +2037,14 @@ pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args, words: &[Str
                 continue;
             }
             match (!literal).then(|| keys::parse(word).ok()).flatten() {
+                // A mouse key by its name: nothing for a program (there is no event with it); in
+                // copy mode, what its table binds it to.
+                Some(chord) if keys::is_mouse(&chord.code) => {
+                    if in_mode {
+                        let table = if app.mode_keys_emacs() { "copy-mode" } else { "copy-mode-vi" };
+                        if let Some(b) = app.keymap.lookup(table, &chord) { commands::execute_bound(app, &b.command) }
+                    }
+                }
                 Some(chord) => {
                     let key = KeyEvent::new(chord.code, chord.mods);
                     if in_mode { keys.push(key) } else if let Some(b) = encode_key(&key, mode) { bytes.extend(b) }
@@ -2209,4 +2119,58 @@ fn tree_cursor_now(app: &App) -> usize {
     // The focused pane's row, or (a lone pane has none) its window's.
     rows.iter().position(|r| r.window == app.active && r.pane.is_some() && r.pane == app.focused())
         .or_else(|| rows.iter().position(|r| r.window == app.active && r.pane.is_none())).unwrap_or(0)
+}
+
+/// menu_key_cb's PPage / C-b: five items up (to the first when fewer).
+fn page_up(menu: &crate::modal::Menu, choice: i64) -> i64 {
+    if choice < 6 { return 0 }
+    let mut choice = choice;
+    let mut i = 5;
+    while i > 0 {
+        choice -= 1;
+        let it = &menu.items[choice as usize];
+        if choice != 0 && !(it.separator || it.disabled) { i -= 1 } else if choice == 0 { break }
+    }
+    choice
+}
+
+/// The menu's chosen item runs (with the event of the command that opened the menu); a rule or
+/// a disabled item closes it — unless -O keeps it open.
+fn menu_chosen(app: &mut App, menu: crate::modal::Menu) {
+    let Some(c) = menu.choice else { return };
+    let it = &menu.items[c];
+    if it.separator || it.disabled {
+        if menu.stay_open { app.modal = Some(Modal::Menu(menu)) }
+        return;
+    }
+    let command = it.command.clone();
+    commands::execute_in(app, &command, menu.mouse.clone());
+}
+
+/// menu_key_cb's mouse: over an item it is chosen (the one the mouse is on when the button comes
+/// up, or with -O on a press); outside, the button coming up closes the menu (with -O, a press).
+/// A menu opened from the keyboard: any button but the first closes it.
+pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
+    let Some(Modal::Menu(mut menu)) = app.modal.take() else { return };
+    use crate::mouse::{is_drag, is_release, is_wheel};
+    if menu.no_mouse {
+        // (tmux asks the terminal for no bare motion then: none reaches it.)
+        let motion = is_drag(m.sgr_b) && is_release(m.sgr_b);
+        if !motion && (m.b & 195) != 0 { return }
+        app.modal = Some(Modal::Menu(menu));
+        return;
+    }
+    let count = menu.items.len() as u16;
+    let (px, py, width) = (menu.x, menu.y, menu.width);
+    if m.x < px || m.x > px + 4 + width || m.y < py + 1 || m.y > py + count {
+        let close = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
+        if close { return }
+        menu.choice = None;
+        app.modal = Some(Modal::Menu(menu));
+        return;
+    }
+    let chosen = if !menu.stay_open { is_release(m.b) } else { !is_wheel(m.b) && !is_drag(m.b) };
+    if chosen { return menu_chosen(app, menu) }
+    menu.choice = Some((m.y - (py + 1)) as usize);
+    app.modal = Some(Modal::Menu(menu));
 }

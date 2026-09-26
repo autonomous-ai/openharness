@@ -23,6 +23,7 @@ mod fzf;
 mod input;
 mod layout;
 mod modal;
+mod mouse;
 mod options;
 mod paste;
 mod pane;

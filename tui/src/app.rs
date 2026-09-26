@@ -222,16 +222,18 @@ pub struct App {
     pub rtt: HashMap<String, Duration>,
     pub homes: HashMap<String, String>,
     last_focus_sent: Option<(String, String)>,
-    pub mouse_drag: Option<(u64, u16, u16)>,
-    /// A text selection being dragged out in this pane.
-    pub selecting: Option<u64>,
-    /// The last click (pane, col, row, when, count) — for double and triple clicks.
+    /// The mouse event of the key whose commands are running (tmux's item event): `-t =`, the
+    /// commands' target, send-keys -M and the mouse_* formats read it.
+    pub mouse_ev: Option<crate::mouse::Event>,
+    /// The client's mouse: the last event, a drag, the clicks being counted.
+    pub mouse_state: crate::mouse::State,
+    /// The last click in a list (row, when) — a second one opens it.
     pub last_click: Option<(u64, u16, u16, Instant, u8)>,
     /// What the outer terminal's title was last set to.
     pub title: String,
     pub first_frame: bool,
-    /// Where each tab was drawn in the strip, for clicks.
-    pub tab_hits: Vec<(usize, u16, u16)>,
+    /// The status line's ranges as drawn (row, range): where a click lands (status_get_range).
+    pub status_ranges: Vec<(u16, crate::draw::Range)>,
     /// Terminal frames for a stream no pane has yet — the keyframe can outrun `terminal_ready`.
     orphans: HashMap<Uuid, (Instant, Vec<proto::Frame>)>,
     /// Desk writes sent and not yet answered; while any are out, the desk is not reconciled.
@@ -260,6 +262,10 @@ pub struct App {
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
     pub return_to: Option<(String, Option<String>)>,
     pub held_reply: Option<tokio::sync::oneshot::Sender<Reply>>,
+    /// A command that waits for what it opened (display-menu; command-prompt and confirm-before
+    /// without -b): the shell that ran it is answered when that closes (CMD_RETURN_WAIT).
+    pub wait_cli: bool,
+    waiting_reply: Option<(tokio::sync::oneshot::Sender<Reply>, Reply)>,
     /// The shell waiting on the command it ran (hn <command>): its answer goes here when the
     /// command is done — at once, or when a job it waits on (run-shell, if-shell) has finished.
     pub cli_tx: Option<tokio::sync::oneshot::Sender<Reply>>,
@@ -354,6 +360,8 @@ impl App {
             copy_pipe: None,
             return_to: None,
             held_reply: None,
+            wait_cli: false,
+            waiting_reply: None,
             cli_tx: None,
             cli_code: 0,
             cli_cwd: None,
@@ -410,12 +418,12 @@ impl App {
             rtt: HashMap::new(),
             homes: HashMap::new(),
             last_focus_sent: None,
-            mouse_drag: None,
-            selecting: None,
+            mouse_ev: None,
+            mouse_state: Default::default(),
             last_click: None,
             title: String::new(),
             first_frame: false,
-            tab_hits: Vec::new(),
+            status_ranges: Vec::new(),
             orphans: HashMap::new(),
             desk_inflight: 0,
             desk_stale: false,
@@ -1007,7 +1015,17 @@ impl App {
         if self.print_new.is_some() && err.is_empty() { self.held_reply = Some(tx); return }
         self.print_new = None;
         let code = if self.cli_code != 0 { self.cli_code } else if err.is_empty() { 0 } else { 1 };
+        if std::mem::take(&mut self.wait_cli) && self.waiting_open() { self.waiting_reply = Some((tx, (out, err, code))); return }
         let _ = tx.send((out, err, code));
+    }
+
+    fn waiting_open(&self) -> bool { matches!(self.modal, Some(Modal::Menu(_)) | Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) }
+
+    /// The menu or prompt a shell's command opened has closed: the shell has its answer.
+    pub fn release_waiting(&mut self) {
+        if self.waiting_reply.is_some() && !self.waiting_open() {
+            if let Some((tx, reply)) = self.waiting_reply.take() { let _ = tx.send(reply); }
+        }
     }
 
     /// Data printed as it is (show-buffer): to a shell exactly, its last line without a newline
@@ -1730,6 +1748,39 @@ impl App {
         })).collect()
     }
 
+    /// The current window's panes as drawn (a zoomed window's one pane filling it), where their
+    /// contents are in the window: tmux's xoff/yoff/sx/sy for the mouse.
+    pub fn visible_geoms(&self) -> Vec<(u64, layout::Geom)> {
+        let body = self.body();
+        let tab = self.tab();
+        tab.panes().into_iter().filter_map(|id| self.rects.iter().find(|(p, _)| *p == id).map(|(_, r)| {
+            let c = self.content_of(tab, *r);
+            (id, layout::Geom { x: (c.x - body.x) as u32, y: (c.y.saturating_sub(body.y)) as u32, w: c.width as u32, h: c.height as u32 })
+        })).collect()
+    }
+
+    /// tmux's copy mode is a pane's: keys go to it while the active pane is in it, and to the pane
+    /// when it is not (whatever other pane is in copy mode).
+    pub fn sync_copy_modal(&mut self) {
+        if !matches!(self.modal, None | Some(Modal::Copy { .. })) { return }
+        let pane = self.focused().filter(|f| self.panes.get(f).map(|p| p.copy.is_some()).unwrap_or(false));
+        self.modal = pane.map(|pane| Modal::Copy { pane });
+    }
+
+    /// The current pane for a command: while a mouse key's commands run, the pane under the mouse
+    /// (cmd_find_from_mouse), else the active pane of the current window.
+    pub fn current(&self) -> Option<(usize, u64)> {
+        if let Some(found) = self.mouse_ev.as_ref().filter(|m| m.valid).and_then(|m| crate::mouse::mouse_pane(self, m)) { return Some(found) }
+        self.focused().map(|f| (self.active, f))
+    }
+
+    /// resize-pane -M's drag: the borders at (lx, ly) follow the mouse to (x, y).
+    pub fn drag_border(&mut self, w: usize, lx: u32, ly: u32, x: u32, y: u32) {
+        self.fit_panes_of(w);
+        let moved = self.tabs.get_mut(w).and_then(|t| t.root.as_mut()).map(|r| r.drag_border(lx, ly, x, y)).unwrap_or(false);
+        if moved { self.fit_panes() }
+    }
+
     /// The pane that way from `from`, as tmux's select-pane -L/-R/-U/-D finds it.
     pub fn pane_toward(&self, w: usize, from: u64, toward: Toward) -> Option<u64> {
         let tab = self.tabs.get(w)?;
@@ -2046,6 +2097,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        self.release_waiting();
         crate::dial::tick(self);
         if self.tick % 4 == 0 { self.check_silence() }
         // What the panes on screen run (vim? a build?) moves as you work: asked every two seconds.

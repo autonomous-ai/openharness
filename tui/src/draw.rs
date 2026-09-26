@@ -131,6 +131,12 @@ pub fn style_text(st: Style) -> String {
 }
 
 /// Whether tmux's style_parse takes a style (set-option's check of a *-style option).
+/// A style option's value over a base (style_parse; one that does not parse leaves the base).
+pub fn style_over(spec: &str, base: Style) -> Style {
+    let mut sy = Sy::new(base);
+    if style_parse(&mut sy, base, spec) { sy.gc } else { base }
+}
+
 pub fn valid_style(spec: &str) -> bool { let mut sy = Sy::new(Style::default()); style_parse(&mut sy, Style::default(), spec) }
 
 /// A section's cells: a character, its look, its width.
@@ -285,7 +291,38 @@ fn draw_list(out: &mut Out, avail: u16, s: &mut [Screen; 8], ranges: &[(usize, R
 
 /// format_draw: an expanded format as `avail` cells over `base` (the status line's style), and
 /// the ranges in it. A `#[…]` tmux would refuse is skipped; a `#[` never closed ends the drawing.
-pub fn format_draw(expanded: &str, base: Style, avail: u16) -> (Vec<(String, Style)>, Vec<Range>) {
+pub fn format_draw(expanded: &str, base: Style, avail: u16) -> (Vec<(String, Style)>, Vec<Range>) { format_draw_on(expanded, base, avail, " ") }
+
+/// format_draw onto what is there already: None where it writes nothing (the menu's title
+/// over its border).
+pub fn format_draw_over(expanded: &str, base: Style, avail: u16) -> Vec<Option<(String, Style)>> {
+    const GAP: &str = "\u{1}";
+    format_draw_on(expanded, base, avail, GAP).0.into_iter().map(|c| (c.0 != GAP).then_some(c)).collect()
+}
+
+/// format_width: the columns a format's text takes — its #[…] styles none, ## one.
+pub fn format_width(expanded: &str) -> usize {
+    let b: Vec<char> = expanded.chars().collect();
+    let (mut i, mut width) = (0, 0);
+    while i < b.len() {
+        if b[i] != '#' {
+            if (b[i] as u32) > 0x1f && b[i] != '\x7f' { width += unicode_width::UnicodeWidthChar::width(b[i]).unwrap_or(0) }
+            i += 1;
+            continue;
+        }
+        // format_leading_hashes: a run of #s, halved; an odd run before [ is a style.
+        let mut n = 0;
+        while b.get(i + n) == Some(&'#') { n += 1 }
+        if b.get(i + n) != Some(&'[') { width += if n % 2 == 0 { n / 2 } else { n / 2 + 1 }; i += n; continue }
+        width += n / 2;
+        if n % 2 == 0 { i += n; continue }
+        i += n - 1;
+        match b.get(i + 2..).and_then(|rest| rest.iter().position(|c| *c == ']')) { Some(p) => i += 2 + p + 1, None => return 0 }
+    }
+    width
+}
+
+fn format_draw_on(expanded: &str, base: Style, avail: u16, blank: &str) -> (Vec<(String, Style)>, Vec<Range>) {
     let mut s: [Screen; 8] = Default::default();
     let mut current_default = base;
     let mut sy = Sy::new(base);
@@ -375,7 +412,7 @@ pub fn format_draw(expanded: &str, base: Style, avail: u16) -> (Vec<(String, Sty
         }
         if open.is_none() && sy.range != RangeKind::None { open = Some((current, Range { kind: sy.range.clone(), start: width(&s[current]), end: 0 })) }
     }
-    let mut out = Out { line: vec![(" ".to_string(), base); avail as usize], ranges: Vec::new() };
+    let mut out = Out { line: vec![(blank.to_string(), base); avail as usize], ranges: Vec::new() };
     if broken { return (out.line, Vec::new()) }
     if let Some(f) = fill { for c in out.line.iter_mut() { *c = (" ".into(), Style::default().bg(f)) } }
     if list_align == Align::Default { draw_none(&mut out, avail, &s, &ranges) }

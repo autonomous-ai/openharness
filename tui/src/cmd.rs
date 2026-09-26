@@ -320,7 +320,7 @@ fn pane_in_window(app: &App, w: usize, pane: &str, f: &mut Found) -> bool {
     let Some(tab) = app.tabs.get(w) else { return false };
     let ids = tab.panes();
     if let Some(id) = pane.strip_prefix('%') {
-        let Some(p) = id.parse::<u64>().ok().filter(|p| ids.contains(p)) else { return false };
+        let Some(p) = crate::pane::from_tag(id).filter(|p| ids.contains(p)) else { return false };
         f.pane = Some(p);
         return true;
     }
@@ -357,8 +357,11 @@ fn pane_in_window(app: &App, w: usize, pane: &str, f: &mut Found) -> bool {
 /// cmd_find_target: a target string of a kind, as tmux resolves it, or tmux's error.
 pub fn resolve(app: &App, target: Option<&str>, spec: Spec) -> Result<Found, String> {
     let marked = app.marked.and_then(|m| app.tabs.iter().position(|t| t.panes().contains(&m)).map(|w| (w, m)));
-    let current = match (spec.default_marked, marked) {
-        (true, Some((w, p))) => Found { window: Some(w), idx: Some(app.win_num(w)), pane: Some(p) },
+    // The current state: the marked pane for the commands that default to it; the pane under
+    // the mouse while a mouse key's commands run (cmd_find_from_mouse); else the active pane.
+    let current = match (spec.default_marked, marked, app.current()) {
+        (true, Some((w, p)), _) => Found { window: Some(w), idx: Some(app.win_num(w)), pane: Some(p) },
+        (_, _, Some((w, p))) => Found { window: Some(w), idx: Some(app.win_num(w)), pane: Some(p) },
         _ => Found { window: Some(app.active), idx: Some(app.win_num(app.active)), pane: app.tabs.get(app.active).and_then(|t| t.focus) },
     };
     let target = target.unwrap_or("");
@@ -366,7 +369,17 @@ pub fn resolve(app: &App, target: Option<&str>, spec: Spec) -> Result<Found, Str
     if target == "~" || target == "{marked}" {
         return marked.map(|(w, p)| Found { window: Some(w), idx: Some(app.win_num(w)), pane: Some(p) }).ok_or_else(|| "no marked target".to_string());
     }
-    if target == "=" || target == "{mouse}" { return Err("no mouse target".into()) }
+    // `=` or {mouse}: the pane under the mouse — for a window, the window it was for (a status
+    // range's) at its active pane.
+    if target == "=" || target == "{mouse}" {
+        let m = app.mouse_ev.as_ref().filter(|m| m.valid);
+        let pane = if spec.kind == Kind::Pane { m.and_then(|m| crate::mouse::mouse_pane(app, m)) } else { None };
+        let found = pane.or_else(|| {
+            let w = m.and_then(|m| crate::mouse::mouse_window(app, m))?;
+            app.tabs[w].focus.map(|p| (w, p))
+        });
+        return found.map(|(w, p)| Found { window: Some(w), idx: Some(app.win_num(w)), pane: Some(p) }).ok_or_else(|| "no mouse target".to_string());
+    }
     // session:window.pane, as far as each part is there.
     let (mut session, mut window, mut pane) = (None, None, None);
     let (mut window_only, mut pane_only) = (false, false);
@@ -454,7 +467,7 @@ pub fn resolve(app: &App, target: Option<&str>, spec: Spec) -> Result<Found, Str
 /// a window by that name, its active pane.
 fn pane_anywhere(app: &App, pane: &str, only: bool) -> Option<Found> {
     if let Some(id) = pane.strip_prefix('%') {
-        let p = id.parse::<u64>().ok()?;
+        let p = crate::pane::from_tag(id)?;
         let w = app.tabs.iter().position(|t| t.panes().contains(&p))?;
         return Some(Found { window: Some(w), idx: Some(app.win_num(w)), pane: Some(p) });
     }

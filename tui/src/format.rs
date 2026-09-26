@@ -21,7 +21,10 @@ pub fn spans_for_pane(app: &App, fmt: &str, window: usize, pane: u64, base: Styl
 
 /// A format expanded with the time, as display-message prints it: `#[…]` left in.
 pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
-    expand(app, fmt, window.unwrap_or(app.active), None, true)
+    match window {
+        Some(w) => expand(app, fmt, w, None, true),
+        None => match app.current() { Some((w, p)) => expand(app, fmt, w, Some(p), true), None => expand(app, fmt, app.active, None, true) },
+    }
 }
 
 /// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
@@ -888,7 +891,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_active" => (focus == tab.and_then(|t| t.focus)).then_some("1").unwrap_or("0").into(),
         "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
         "pane_title" => focus.map(|f| pane_title(app, window, f)).unwrap_or_else(|| host.clone()),
-        "pane_id" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
+        "pane_id" => focus.map(crate::pane::tag).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
         // then where the harness started.
         "pane_current_path" => pane.and_then(|p| p.live_path.clone().or_else(|| p.cwd.clone())).or_else(|| agent.map(|a| a.cwd.clone())).unwrap_or_default(),
@@ -946,7 +949,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "copy_cursor_line" => pane.map(|p| p.copy_line()).unwrap_or_default(),
         "copy_cursor_word" => pane.map(|p| p.copy_word_under(&app.options.get("word-separators", "", None).unwrap_or_default())).unwrap_or_default(),
         "selection_present" => pane.and_then(|p| p.copy).map(|c| if c.selecting { "1" } else { "0" }.to_string()).unwrap_or_default(),
-        "scroll_position" => pane.map(|p| p.scrolled().to_string()).unwrap_or_default(),
+        // A copy-mode format (window_copy_formats): none outside the mode.
+        "scroll_position" => pane.filter(|p| p.copy.is_some()).map(|p| p.scrolled().to_string()).unwrap_or_default(),
         "pane_search_string" => app.last_search.clone().unwrap_or_default(),
         "client_prefix" => app.prefix.then_some("1").unwrap_or("0").into(),
         "host" => host,
@@ -1040,6 +1044,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let last = tab.map(|t| t.panes()).unwrap_or_default().iter().filter_map(|id| app.panes.get(id)).filter_map(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| (a.active_at / 1000) as i64).max();
             return Some(Val::Time(last.into_iter().chain(tab.map(|t| t.activity)).max().unwrap_or_else(|| started(app))));
         }
+        // The mouse event of the key being run (none from a shell).
+        "mouse_x" | "mouse_y" | "mouse_word" | "mouse_line" | "mouse_pane" | "mouse_status_line" | "mouse_status_range" | "mouse_hyperlink" => return crate::mouse::format(app, name).map(Val::Str),
         _ => return None,
     };
     Some(Val::Str(v))

@@ -40,10 +40,10 @@ never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same sizes, the same
-pane numbers and the same active pane after each. Three defaults differ, and your `.tmux.conf`
+pane numbers and the same active pane after each. Four defaults differ, and your `.tmux.conf`
 overrides each: `pane-border-status top` (each pane's title row names its harness),
-`allow-set-title off` (a pane's title is its harness's name, not what the program sets), and
-`history-limit 10000` (agents print a lot; tmux keeps 2000).
+`allow-set-title off` (a pane's title is its harness's name, not what the program sets),
+`history-limit 10000` (agents print a lot; tmux keeps 2000), and `mouse on`.
 
 | tmux keys | |
 |---|---|
@@ -94,11 +94,13 @@ hn send-message -t api 'run the tests'   # a message to a harness, as a turn (hn
 
 ## Mouse and clipboard
 
-Click a pane to focus it, a tab to switch, a launcher row to open it; drag a split's border or a
-pane's header to resize; double-click a tab to rename it, middle-click to close it. Drag over
-text to copy it (double-click a word, triple-click a line; hold `⇧` over programs that use the
-mouse). Copying uses OSC 52, so it lands on the clipboard of the computer you are sitting at,
-over SSH too.
+tmux's mouse: a click selects a pane or a window, a drag on a border (or a title row) resizes, a
+drag in a pane selects and copies, a double-click copies a word and a triple-click a line, the
+wheel scrolls back in copy mode, and the right button opens tmux's pane, window and session
+menus. Each is a key binding you can change, as in tmux (`bind -n WheelUpPane …`, `bind -T
+copy-mode-vi MouseDragEnd1Pane …`); a program that asks for the mouse gets it. Hold `⇧` to select
+with your terminal instead. Copying uses OSC 52, so it lands on the clipboard of the computer you
+are sitting at, over SSH too.
 
 ## Two windows, one harness
 
@@ -186,3 +188,4 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 | `modal.rs` / `picker.rs` | the launcher's rows and its fzf matching (nucleo) |
 | `ui.rs` | drawing |
 | `layout.rs` | the split tree |
+| `mouse.rs` | tmux's mouse: events as mouse keys, drags, what a program in a pane is sent |

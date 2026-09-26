@@ -44,6 +44,8 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
         m.insert("history-limit".into(), "10000".into());
         // A harness's name is its pane's title; a program's own (OSC 2) only if you say so.
         m.insert("allow-set-title".into(), "off".into());
+        // The mouse on: clicks choose panes and windows, the wheel scrolls (tmux's mouse keys).
+        m.insert("mouse".into(), "on".into());
         let editor = std::env::var("VISUAL").ok().filter(|s| !s.is_empty()).or_else(|| std::env::var("EDITOR").ok()).unwrap_or_default();
         let base = editor.rsplit('/').next().unwrap_or("");
         let keys = if base.contains("vi") { "vi" } else { "emacs" };
@@ -366,8 +368,9 @@ mod tests {
         assert_eq!(s.set("status-keys", Some("bogus"), &g, "w", 1), Err("unknown value: bogus".into()));
         assert_eq!(s.set("base-index", Some("x"), &g, "w", 1), Err("value is invalid: x".into()));
         assert_eq!(s.set("nosuch", Some("1"), &g, "w", 1), Err("invalid option: nosuch".into()));
-        assert_eq!(s.set("mouse", None, &g, "w", 1), Ok(Some("on".into())));
-        assert_eq!(s.format_value("mouse", "w", None).as_deref(), Some("1"));
+        // A flag with no value toggles (hn's mouse is on to begin with).
+        assert_eq!(s.set("mouse", None, &g, "w", 1), Ok(Some("off".into())));
+        assert_eq!(s.format_value("mouse", "w", None).as_deref(), Some("0"));
         assert_eq!(s.set("status", None, &g, "w", 1), Ok(Some("off".into())));
         s.set("@y", Some("a"), &g, "w", 1).unwrap();
         assert_eq!(s.set("@y", Some("z"), &SetFlags { only_if_unset: true, ..g.clone() }, "w", 1), Err("already set: @y".into()));
