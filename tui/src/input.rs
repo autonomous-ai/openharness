@@ -1253,6 +1253,10 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         KeyCode::Char('d') if ctrl => picker.delete_forward(),
         KeyCode::Char('u') if ctrl => picker.clear_query(),
         KeyCode::Char('w') if ctrl => picker.backspace(true),
+        // fzf's: shift-left/right by words; ctrl- and alt-left/right are not bound.
+        KeyCode::Left if shift => picker.qmove(-1, true),
+        KeyCode::Right if shift => picker.qmove(1, true),
+        KeyCode::Left | KeyCode::Right if ctrl || alt => {}
         KeyCode::Left => picker.qmove(-1, false),
         KeyCode::Right => picker.qmove(1, false),
         KeyCode::Char('b') if ctrl => picker.qmove(-1, false),

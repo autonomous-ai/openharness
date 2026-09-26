@@ -790,14 +790,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         fzf_row(buf, picker, vi, area.x, y, text_w, right_edge);
     }
     // Scrollbar on the right edge, like fzf's: only the thumb, in the border colour.
+    // fzf's getScrollbar: the thumb's length and its start from the prompt's side, both floored.
     if let (true, Some(bar)) = (n > list_h && list_h > 2, theme::fzf_opts().scrollbar.clone()) {
         let thumb = ((list_h * list_h) / n).max(1);
-        let from_top = picker.scroll.min(n - list_h) as f32 / (n - list_h) as f32;
-        let top_frac = if reverse { from_top } else { 1.0 - from_top };
-        let start = ((list_h - thumb) as f32 * top_frac).round() as usize;
+        let start = ((list_h - thumb) * picker.scroll.min(n - list_h) / (n - list_h)).min(list_h - thumb);
         for i in 0..thumb {
-            let y = list_top + (start + i) as u16;
-            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, theme::fzf().border_style()); }
+            let y = if reverse { list_top + (start + i) as u16 } else { list_bottom - 1 - (start + i) as u16 };
+            if y >= list_top && y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, theme::fzf().border_style()); }
         }
     }
     cursor
