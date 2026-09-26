@@ -616,8 +616,11 @@ fn fzf_border(buf: &mut Buffer, body: Rect) {
     let (x1, y1) = (body.x + body.width - 1, body.y + body.height - 1);
     if top { for x in body.x..=x1 { buf.set_string(x, body.y, top_c, st) } }
     if bottom { for x in body.x..=x1 { buf.set_string(x, y1, bottom_c, st) } }
-    if left { for y in body.y..=y1 { buf.set_string(body.x, y, left_c, st) } }
-    if right { for y in body.y..=y1 { buf.set_string(x1, y, right_c, st) } }
+    // A side's glyph and the column of margin inside it, both in the border's pair (the corners'
+    // rows have no margin).
+    let (y0, yn) = if top || bottom { (body.y + top as u16, y1 - bottom as u16) } else { (body.y, y1) };
+    if left { for y in body.y..=y1 { buf.set_string(body.x, y, left_c, st) } for y in y0..=yn { buf.set_string(body.x + 1, y, " ", st) } }
+    if right { for y in body.y..=y1 { buf.set_string(x1, y, right_c, st) } for y in y0..=yn { buf.set_string(x1 - 1, y, " ", st) } }
     if top && left { buf.set_string(body.x, body.y, tl, st) }
     if top && right { buf.set_string(x1, body.y, tr, st) }
     if bottom && left { buf.set_string(body.x, y1, bl, st) }
@@ -638,14 +641,20 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     fzf_border(buf, body);
     let body = fzf_inner(body);
     // --color=bg: under everything (the preview too); list-bg: under the list alone.
-    if let Some(bg) = theme::fzf_opts().bg { buf.set_style(body, Style::default().bg(bg)) }
+    let pal = theme::fzf().pal;
+    if let Some(bg) = pal.border.style().bg { buf.set_style(body, Style::default().bg(bg)) }
     let preview = picker_preview_area(body, picker);
     let area = match preview { Some(p) => Rect::new(body.x, body.y, p.x - body.x, body.height), None => body };
     // fzf's listStickToRight: with a border on the right and nothing between (no preview), the
     // list takes back the column of padding there, its scrollbar against the border.
     let right_border = matches!(theme::fzf_opts().border.as_deref(), Some(b) if !matches!(b, "none" | "horizontal" | "top" | "bottom" | "left"));
     let area = if right_border && preview.is_none() { Rect { width: area.width + 1, ..area } } else { area };
-    if let Some(bg) = theme::fzf_opts().list_bg { buf.set_style(area, Style::default().bg(bg)) }
+    if right_border && preview.is_none() {
+        // (The border's margin there is the list's column now, blank until the list draws on it.)
+        let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 }.style();
+        for y in area.y..area.y + area.height { buf.set_string(area.x + area.width - 1, y, " ", plain) }
+    }
+    if let Some(bg) = pal.normal.style().bg { buf.set_style(area, Style::default().bg(bg)) }
     let width = area.width as usize;
     let bottom = area.y + area.height;
     // Prompt, then info, then the header (the keys), then the list above — or, with
@@ -671,22 +680,23 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let prompt = theme::fzf().prompt_style();
     let prompt_text = theme::fzf().prompt_text.clone();
     let pw = prompt_text.width() as u16;
-    // The glyph bold in the prompt colour; its trailing space plain, as fzf draws it.
+    // The glyph in the prompt's pair (bold as fzf makes it, unless --no-bold or prompt:regular);
+    // its trailing space plain, as fzf draws it.
     let glyph = prompt_text.trim_end();
-    buf.set_string(area.x, prompt_y, glyph, prompt.add_modifier(Modifier::BOLD));
+    buf.set_string(area.x, prompt_y, glyph, prompt);
     let q_room = width.saturating_sub(pw as usize + 1);
     // A query longer than the line scrolls to keep the cursor in view, as fzf's does.
     let before: String = picker.query.chars().take(picker.qcursor).collect();
     let skip = before.width().saturating_sub(q_room);
     let shown: String = { let mut w = 0; picker.query.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
-    buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, Style::default().add_modifier(Modifier::BOLD));
+    buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, pal.input.style());
     let mut typed_w = shown.width().min(q_room) as u16;
     if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
         let mut text = String::new();
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
-        buf.set_stringn(area.x + pw, prompt_y, &text, q_room, Style::default().add_modifier(Modifier::DIM));
+        buf.set_stringn(area.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
     }
     let cursor = Position::new(area.x + pw + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
@@ -698,7 +708,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         if !o.separator || to <= from { return }
         let ch = o.separator_char.clone();
         let n = (to - from) as usize / ch.width().max(1);
-        buf.set_string(from, y, ch.repeat(n), theme::fzf().border_style());
+        buf.set_string(from, y, ch.repeat(n), theme::fzf().separator_style());
     };
     // fzf's printInfoImpl: the last column stays blank; a list still loading spins in the first.
     let end = (area.x + area.width).saturating_sub(1);
@@ -713,7 +723,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
             if x + 3 + count.width() as u16 <= area.x + area.width {
                 buf.set_string(x, info_y, " < ", prompt.add_modifier(Modifier::BOLD));
                 buf.set_string(x + 3, info_y, &count, info_style);
-                if let Some(sp) = spin { buf.set_string(x + 4 + count.width() as u16, info_y, sp, info_style) }
+                if let Some(sp) = spin { buf.set_string(x + 4 + count.width() as u16, info_y, sp, theme::fzf().spinner_style()) }
                 rule(buf, x + 4 + count.width() as u16 + if spin.is_some() { 2 } else { 0 }, end, info_y);
             }
         }
@@ -722,7 +732,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
             // rule has a line of its own, from the first column.
             let x = end.saturating_sub(count.width() as u16);
             if x > area.x + pw + typed_w + 2 {
-                if let Some(sp) = spin { buf.set_string(x - 2, prompt_y, sp, info_style) }
+                if let Some(sp) = spin { buf.set_string(x - 2, prompt_y, sp, theme::fzf().spinner_style()) }
                 buf.set_string(x, prompt_y, &count, info_style);
             }
             rule(buf, area.x, end, info_y);
@@ -731,12 +741,12 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
             // `──────── 3/6 (0) `: the rule from the first column, the count at the end.
             let x = end.saturating_sub(count.width() as u16);
             rule(buf, area.x, x.saturating_sub(if spin.is_some() { 3 } else { 1 }), info_y);
-            if let Some(sp) = spin { buf.set_string(x - 2, info_y, sp, info_style) }
+            if let Some(sp) = spin { buf.set_string(x - 2, info_y, sp, theme::fzf().spinner_style()) }
             buf.set_string(x, info_y, &count, info_style);
         }
         _ => {
             // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a space, the rule.
-            if let Some(sp) = spin { buf.set_string(area.x, info_y, sp, info_style) }
+            if let Some(sp) = spin { buf.set_string(area.x, info_y, sp, theme::fzf().spinner_style()) }
             buf.set_string(area.x + 2, info_y, &count, info_style);
             rule(buf, area.x + 3 + count.width() as u16, end, info_y);
         }
@@ -786,98 +796,100 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let start = ((list_h - thumb) * picker.scroll.min(n - list_h) / (n - list_h)).min(list_h - thumb);
         for i in 0..thumb {
             let y = if reverse { list_top + (start + i) as u16 } else { list_bottom - 1 - (start + i) as u16 };
-            if y >= list_top && y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, theme::fzf().border_style()); }
+            if y >= list_top && y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, theme::fzf().scrollbar_style()); }
         }
     }
     cursor
 }
 
-/// One fzf row: gutter, marker, then the text — matches lit, the current row on 236.
+/// One fzf row as printItem draws it: the pointer (or the gutter), the marker cell, then the
+/// text — the row's pair (normal, selected, or the current line's), matches in the match pair,
+/// the parts with colours of their own merged as fzf merges --ansi text (colorOffsets).
 fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w: usize, right_edge: usize) {
+    use theme::fzfcolor::{ansi, lit, own};
     let (ri, hits) = &picker.visible[vi];
     let row = &picker.rows[*ri];
     let current = vi == picker.cursor;
     let marked = picker.marked.contains(&row.id);
     let z = theme::fzf();
     let o = theme::fzf_opts();
-    // fzf --color=bw: the current line in reverse video, matches underlined.
-    let plus = if z.bw { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(z.bg_plus) };
-    if current {
-        buf.set_string(x, y, format!("{:<w$}", z.pointer_char, w = pointer_w()), if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD).add_modifier(z.attrs.pointer) });
-    } else {
-        buf.set_string(x, y, format!("{:<w$}", "▌", w = pointer_w()), z.gutter_style());
-    }
-    // The marker cell: the marker on a selected row (on selected-bg), bg+ on the current one — plain
-    // in bw, where fzf leaves an unselected marker cell alone.
+    let pal = z.pal;
+    let colored = pal.colored;
+    // The pointer on the current line; the gutter elsewhere.
+    let pw = pointer_w();
+    if current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
+    else { buf.set_string(x, y, format!("{:<pw$}", "▌"), pal.cursor_empty_char.style()) }
+    // The marker cell: the marker on a selected row, else blank (bg+ on the current line; plain,
+    // the default colour on the list's background, elsewhere).
     let mw = z.marker_char.width().max(1);
-    let marker_style = match (current, marked) {
-        (_, true) => { let st = if current && !z.bw { plus.fg(z.marker) } else { Style::default().fg(z.marker) }; o.selected_bg.filter(|_| !current).map(|bg| st.bg(bg)).unwrap_or(st) }
-        (true, false) if !z.bw => plus,
-        _ => Style::default(),
+    let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 };
+    let (mark, mark_style) = match (current, marked) {
+        (true, true) => (format!("{:<mw$}", z.marker_char), pal.current_marker.style()),
+        (true, false) => (" ".repeat(mw), pal.current_selected_empty.style()),
+        (false, true) => (format!("{:<mw$}", z.marker_char), pal.marker.style()),
+        (false, false) => (" ".repeat(mw), plain.style()),
     };
-    buf.set_string(x + pointer_w() as u16, y, if marked { format!("{:<mw$}", z.marker_char) } else { " ".repeat(mw) }, marker_style);
-    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD).add_modifier(z.attrs.fg_plus) } else { o.fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
-    let hit = match (current, z.bw) {
-        (_, true) => base.add_modifier(Modifier::UNDERLINED),
-        (true, false) => plus.fg(z.hl_plus).add_modifier(Modifier::BOLD).add_modifier(z.attrs.hl_plus),
-        (false, false) => Style::default().fg(z.hl).add_modifier(z.attrs.hl),
+    buf.set_string(x + pw as u16, y, mark, mark_style);
+    let (base, matched) = match (current, marked) {
+        (true, _) => (pal.current, pal.current_match),
+        (false, true) => (pal.selected, pal.selected_match),
+        (false, false) => (pal.normal, pal.matched),
     };
-    // The glyphs' colours follow the scheme: none in bw, the 16 in 16.
-    let tone = |st: Style| -> Style {
-        if z.bw { Style { fg: None, bg: None, ..st } }
-        else if z.sixteen { Style { fg: st.fg.map(theme::to16), ..st } }
-        else { st }
+    let base_style = base.style();
+    // Each cell of the line as fzf reads it (picker::line): the title in the row's pair, the
+    // detail and the glyphs in their own colours over it; whether the query lit it.
+    let cell = |part: Option<Style>, on: bool| -> Style {
+        match (part, on) {
+            (None, false) => base_style,
+            (Some(st), false) => ansi(own(st), base, colored).style(),
+            (part, true) => lit(base, matched, part.map(own), colored).style(),
+        }
     };
     let mut spans: Vec<Span> = Vec::new();
-    for s in &row.lead { spans.push(Span::styled(s.content.clone(), if current { tone(s.style).patch(plus) } else { tone(s.style) })) }
+    for s in &row.lead { spans.push(Span::styled(s.content.clone(), cell(Some(s.style), false))) }
     let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
-    // The line as fzf reads it (picker::line): the title, then the detail; each cell with its style
-    // and whether it matched. The right column is drawn at the list's own edge.
     let label_len = row.label.chars().count();
-    let mut cells: Vec<(char, Style, bool)> = row.label.chars().enumerate().map(|(i, c)| (c, base, hits.contains(&(i as u32)))).collect();
+    let mut cells: Vec<(char, Style, bool)> = row.label.chars().enumerate().map(|(i, c)| { let on = hits.contains(&(i as u32)); (c, cell(None, on), on) }).collect();
     let detail_len: usize = row.detail.iter().map(|s| s.content.chars().count()).sum();
     if detail_len > 0 {
-        cells.push((' ', base, false));
-        cells.push((' ', base, false));
+        cells.push((' ', base_style, false));
+        cells.push((' ', base_style, false));
         let mut at = label_len + 2;
         for s in &row.detail {
-            let st = tone(if current { s.style.patch(plus) } else { s.style });
-            for c in s.content.chars() { cells.push((c, st, hits.contains(&(at as u32)))); at += 1 }
+            for c in s.content.chars() { let on = hits.contains(&(at as u32)); cells.push((c, cell(Some(s.style), on), on)); at += 1 }
         }
     }
     let right_w = row.right.width();
     let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
-    let cells = hscroll(cells, avail, base, o);
-    // A hit is full intensity, in dim text too (fzf's hl is not dimmed).
-    let lit = hit.remove_modifier(Modifier::DIM);
+    let cells = hscroll(cells, avail, base_style, o);
     let mut run = String::new();
     let mut run_style = None::<Style>;
-    for (c, st, on) in &cells {
-        let st = if *on { lit } else { *st };
-        if run_style != Some(st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
-        run_style = Some(st);
+    for (c, st, _) in &cells {
+        if run_style != Some(*st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
+        run_style = Some(*st);
         run.push(*c);
     }
     if !run.is_empty() { spans.push(Span::styled(run, run_style.unwrap_or_default())) }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     // Past the text the current row keeps bg+ only as far as the line goes (fzf; --highlight-line
     // fills the row): to the end of the right column when there is one.
-    let fill = if current { plus } else { Style::default() };
+    let fill = if current { base_style } else { pal.normal.style() };
     if show_right {
         let end = right_edge.clamp(used + right_w + 2, text_w);
         spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
         let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
+        // The right column is dim text of the line's own.
+        let dim = Style::default().add_modifier(Modifier::DIM);
         for (i, c) in row.right.chars().enumerate() {
             let on = hits.contains(&((right_at + i) as u32));
-            spans.push(Span::styled(c.to_string(), if on { lit } else { fill.add_modifier(Modifier::DIM) }));
+            spans.push(Span::styled(c.to_string(), cell(Some(dim), on)));
         }
     }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
-    if current && o.highlight_line { spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), plus)) }
+    if current && o.highlight_line { spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), base_style)) }
+    else if marked && o.highlight_line { spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), pal.selected.style())) }
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
-    // --color=selected-bg: marked rows carry it (the current row keeps bg+).
-    if marked && !current { if let Some(bg) = o.selected_bg { buf.set_style(Rect::new(x + gutter_width(), y, used.min(text_w) as u16, 1), Style::default().bg(bg)) } }
 }
 
 /// fzf's hscroll (terminal.go, printHighlighted): a line wider than its room keeps its last match
@@ -1353,5 +1365,4 @@ fn card(buf: &mut Buffer, area: Rect, lines: &[(String, Style)]) {
         buf.set_stringn(x, y, text, area.width as usize, *style);
     }
 }
-
 
