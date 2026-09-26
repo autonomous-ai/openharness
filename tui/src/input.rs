@@ -1269,7 +1269,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('/' | '_' | '7') if ctrl => { picker.preview = !picker.preview; picker.preview_scroll = 0 }
             // fzf 0.67's alt-/: toggle-wrap (its ctrl-/ too; here C-/ stays the preview's, as fzf's
             // README binds it).
-            KeyCode::Char('/') if alt => picker.wrap = !picker.wrap,
+            KeyCode::Char('/') if alt => picker.toggle_wrap(),
             KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
             KeyCode::Char('p') if alt => { choose(app, kind, picker, Choice::Pause); return }
             KeyCode::Enter if alt => { choose(app, kind, picker, Choice::Here); return }
@@ -1414,7 +1414,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "select-all" => { if multi { picker.marked = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } }
             "deselect-all" => picker.marked.clear(),
             "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
-            "toggle-preview" => picker.preview = !picker.preview, "toggle-wrap" => picker.wrap = !picker.wrap,
+            "toggle-preview" => picker.preview = !picker.preview, "toggle-wrap" => picker.toggle_wrap(),
             "preview-up" => picker.preview_by(-1), "preview-down" => picker.preview_by(1),
             "clear-query" => picker.set_query(""),
             "backward-kill-word" => picker.kill_word(false), "kill-word" => picker.kill_word(true), "unix-line-discard" => picker.clear_query(),

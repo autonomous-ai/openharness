@@ -842,7 +842,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let bar_col = theme::fzf_opts().scrollbar.is_some() || right_border || preview.is_some();
     let text_w = width.saturating_sub(gutter_width() as usize + bar_col as usize);
     picker.row_at.clear();
-    if picker.wrap { fzf_wrapped(buf, picker, area, list_top, list_bottom, text_w, reverse); return cursor }
+    if picker.wrap || theme::fzf_opts().gap > 0 { fzf_wrapped(buf, picker, area, list_top, list_bottom, text_w, reverse); return cursor }
     // Scroll so the cursor row is in view (scroll = first visible index from the bottom), with
     // fzf's --scroll-off rows (3; at most half the list) kept on either side of it.
     let so = theme::fzf_opts().scroll_off.min(list_h / 2);
@@ -1040,12 +1040,27 @@ fn wrap_cells(cells: &[Cell], cols: usize, sign_w: usize, at_most: usize) -> (Ve
 /// fzf's numItemLines with --wrap: how many lines a row takes (no more than [at_most]), and
 /// whether it needs more.
 fn item_lines(p: &Picker, vi: usize, at_most: i64, text_w: usize) -> (usize, bool) {
-    if at_most <= 0 { return (0, true) }
+    // (With --gap, its blank lines after it count too.)
+    let gap = theme::fzf_opts().gap;
+    if !p.wrap { return (1 + gap, (1 + gap) as i64 > at_most) }
     let (ri, hits) = &p.visible[vi];
-    let row = &p.rows[*ri];
-    if fits_line(row, text_w) { return (1, false) }
-    let (l, over) = wrap_cells(&line_cells(row, hits), text_w.max(1), theme::fzf_opts().wrap_sign.width(), at_most as usize);
-    (l.len(), over)
+    {
+        let cache = p.line_cache.borrow();
+        if cache.0 == text_w { if let Some(&(room, n)) = cache.1.get(ri) { if room <= at_most { return (n, false) } } }
+    }
+    let (lines, over) = if at_most <= 0 { (0, true) } else {
+        let row = &p.rows[*ri];
+        if fits_line(row, text_w) { (1, false) } else {
+            let (l, over) = wrap_cells(&line_cells(row, hits), text_w.max(1), theme::fzf_opts().wrap_sign.width(), at_most as usize);
+            (l.len(), over)
+        }
+    };
+    if !over {
+        let mut cache = p.line_cache.borrow_mut();
+        if cache.0 != text_w { *cache = (text_w, Default::default()) }
+        cache.1.insert(*ri, (at_most, lines + gap));
+    }
+    (lines + gap, over || (lines + gap) as i64 > at_most)
 }
 
 /// fzf's page-up/-down and half-page-up/-down ([direction] as move_by's: toward the far end of the
@@ -1056,7 +1071,7 @@ pub fn page(p: &mut Picker, direction: i64, half: bool) {
     let max_items = p.page_rows.get().max(0) as usize;
     let lines_to_move = (if half { max_items / 2 } else { max_items.saturating_sub(1) }).max(1) as i64;
     let text_w = p.wrap_width.get();
-    if !p.wrap || text_w == 0 || p.visible.is_empty() { return p.vset(p.cursor as i64 + direction * lines_to_move, direction) }
+    if !(p.wrap || theme::fzf_opts().gap > 0) || text_w == 0 || p.visible.is_empty() { return p.vset(p.cursor as i64 + direction * lines_to_move, direction) }
     let n = p.visible.len();
     let (mut min_offset, mut max_offset, mut sum) = (0i64, 0i64, 0usize);
     if direction > 0 {
@@ -1156,13 +1171,23 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
     // a wrapped row on it: its cells, whether it goes on from the line before, its marker's place).
     let maxy = max_lines - 1;
     let mut placed: Vec<(usize, usize, Option<(Vec<Cell>, bool, usize)>)> = Vec::new();
+    // --gap's lines: (fzf's line, whether it is the one the gap line is drawn on).
+    let mut gaps: Vec<(usize, bool)> = Vec::new();
+    let gap = o.gap;
     let (mut line, mut k) = (0usize, 0usize);
     while line <= maxy && offset + k < n {
         let vi = offset + k;
         k += 1;
         let (ri, hits) = &p.visible[vi];
         let row = &p.rows[*ri];
-        if fits_line(row, text_w) { placed.push((vi, line, None)); line += 1; continue }
+        if !p.wrap || fits_line(row, text_w) {
+            placed.push((vi, line, None));
+            // printItem: the gap after the row, while there is room.
+            let mut last = line;
+            for i in 0..gap { if last >= maxy { break } last += 1; gaps.push((last, i == gap - 1)) }
+            line = last + 1;
+            continue;
+        }
         let cells = line_cells(row, hits);
         let at_most = maxy - line + 1;
         let (mut parts, overflow) = wrap_cells(&cells, cols, sign_w, at_most);
@@ -1183,10 +1208,12 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
             placed.push((vi, if reverse { line + a } else { line + count - 1 - a }, Some((part, idx > 0, class))));
             last = line + a;
         }
+        for i in 0..gap { if last >= maxy { break } last += 1; gaps.push((last, i == gap - 1)) }
         line = last + 1;
     }
-    // avgNumLines: the rows from the offset (or the last screenful), a screen's worth at most.
-    let per_line = {
+    // avgNumLines: the rows from the offset (or the last screenful), a screen's worth at most — 1
+    // without --wrap (--gap's lines are not counted).
+    let per_line = if !p.wrap { 1 } else {
         let from = (offset as i64).min(n as i64 - max_lines as i64 - 1).max(0) as usize;
         let counted: Vec<usize> = (from..n).take(max_lines).map(|vi| lines(vi, max_lines as i64).0).collect();
         if counted.is_empty() { 1 } else { counted.iter().sum::<usize>() / counted.len() }
@@ -1200,6 +1227,20 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
             None => fzf_row(buf, picker, vi, area.x, y, text_w, right_edge),
             Some((cells, signed, class)) => fzf_row_part(buf, picker, vi, area.x, y, text_w, &cells, signed, class),
         }
+    }
+    // renderGapLine: the gutter, a blank marker, and on a gap's last line the gap line across.
+    let z = theme::fzf();
+    let pal = z.pal;
+    let gap_line = o.gap_line.clone().unwrap_or_else(|| if z.unicode { "┈".into() } else { "-".into() });
+    let (pw, mw) = (pointer_w(), marker_w());
+    for (fline, draw) in gaps {
+        let y = if reverse { list_top + fline as u16 } else { list_bottom - 1 - fline as u16 };
+        if pw > 0 {
+            let (gutter, st) = match &o.gutter { Some(g) => (g.as_str(), pal.cursor_empty_char), None if o.unicode => ("▌", pal.cursor_empty_char), None => (" ", pal.cursor_empty) };
+            buf.set_string(area.x, y, format!("{:<pw$}", gutter), st.style());
+        }
+        let width = (area.width as usize).saturating_sub(pw + mw + 1);
+        if draw && !gap_line.is_empty() { buf.set_string(area.x + (pw + mw) as u16, y, repeat_to_fill(&gap_line, width), pal.list_border.style()); }
     }
     // getScrollbar(avgNumLines, …): the thumb and its start from the prompt's side.
     let (total, h) = (n * per_line.max(1), max_lines);

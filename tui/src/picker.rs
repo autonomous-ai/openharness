@@ -86,6 +86,10 @@ pub struct Picker {
     /// and the columns it was last wrapped at (0 before it is drawn so), for the page keys.
     pub wrap: bool,
     pub wrap_width: std::cell::Cell<usize>,
+    /// fzf's numLinesCache: a wrapped row's lines (with --gap's) by row, and the room they were
+    /// counted in, for the width they were counted at — kept until the width, --wrap or the rows
+    /// change, and trusted, as fzf trusts it, for any room at least as big.
+    pub line_cache: std::cell::RefCell<(usize, HashMap<usize, (i64, usize)>)>,
 }
 
 impl Picker {
@@ -116,6 +120,7 @@ impl Picker {
             preview_of: None,
             wrap: crate::theme::fzf_opts().wrap,
             wrap_width: Default::default(),
+            line_cache: Default::default(),
             preview_max: Default::default(),
             preview_lines: Default::default(),
             preview_rows: Default::default(),
@@ -132,7 +137,14 @@ impl Picker {
             rows.sort_by_key(|r| old.get(r.id.as_str()).copied().unwrap_or(usize::MAX));
         }
         self.rows = rows;
+        self.line_cache.borrow_mut().1.clear();
         self.refilter();
+    }
+
+    /// toggle-wrap (M-/): fzf's clearNumLinesCache with it.
+    pub fn toggle_wrap(&mut self) {
+        self.wrap = !self.wrap;
+        self.line_cache.borrow_mut().1.clear();
     }
 
     pub fn refilter(&mut self) {
