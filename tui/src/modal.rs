@@ -48,7 +48,8 @@ pub enum PickerKind {
     NewMachine,
     NewWhat { machine: String, cwd: Option<String> },
     NewFolder { machine: String, what: What },
-    Route { text: String },
+    /// A task routed to a harness; [voice]: the dial's spoken task it answers.
+    Route { text: String, voice: Option<String> },
     /// `show-messages`, `list-keys`, `choose-buffer`.
     Messages,
     Keys,

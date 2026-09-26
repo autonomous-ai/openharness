@@ -11,6 +11,7 @@ mod keys;
 mod preview;
 mod config;
 mod daemon;
+mod dial;
 mod event;
 mod fleet;
 mod format;

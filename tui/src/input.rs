@@ -24,10 +24,12 @@ pub fn handle(app: &mut App, event: CEvent) {
         CEvent::Paste(text) => on_paste(app, text),
         CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes() }
-        CEvent::FocusGained => app.terminal_focused = true,
-        CEvent::FocusLost => app.terminal_focused = false,
+        // The terminal in front: the dial follows its pane again (and hears it is in front).
+        CEvent::FocusGained => { app.terminal_focused = true; crate::dial::announce(app, false); app.announce_focus() }
+        CEvent::FocusLost => { app.terminal_focused = false; crate::dial::announce(app, false) }
         _ => {}
     }
+    crate::dial::settle_voice(app);
 }
 
 /// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
@@ -321,6 +323,56 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
         }
         _ => {}
     }
+}
+
+/// Scroll what is in front by [lines] (positive: up, toward older lines) — the dial's finger, the
+/// way the wheel does it: a list's rows, copy mode's view, the wheel of a program that asked for the
+/// mouse, a full-screen program's arrow keys, and a shell's history in copy mode, left again at the
+/// bottom as tmux's wheel leaves it.
+pub fn scroll_by(app: &mut App, lines: i32) {
+    if lines == 0 { return }
+    let up = lines > 0;
+    let n = lines.unsigned_abs() as usize;
+    match &mut app.modal {
+        Some(Modal::Picker { picker, .. }) => {
+            let r: i64 = if theme::fzf().reverse { -1 } else { 1 };
+            picker.move_by(if up { r } else { -r } * n as i64);
+            return;
+        }
+        Some(Modal::Copy { pane }) => {
+            let pane = *pane;
+            let mut done = false;
+            if let Some(p) = app.panes.get_mut(&pane) {
+                p.copy_scroll(lines);
+                if !up && p.scrolled() == 0 && p.copy_by_wheel { p.copy_end(); done = true }
+            }
+            if done { app.modal = None }
+            return;
+        }
+        Some(_) => return,
+        None => {}
+    }
+    let Some(id) = app.focused() else { return };
+    let Some(pane) = app.panes.get_mut(&id) else { return };
+    let mode = pane.mode();
+    let live = pane.stream.is_some() && !pane.read_only;
+    use alacritty_terminal::term::TermMode;
+    let bytes: Vec<u8> = if mode.intersects(TermMode::MOUSE_MODE) {
+        let kind = if up { MouseEventKind::ScrollUp } else { MouseEventKind::ScrollDown };
+        let (col, row) = (pane.cols / 2, pane.rows / 2);
+        (0..n).filter_map(|_| encode_mouse(kind, col, row, KeyModifiers::NONE, mode)).flatten().collect()
+    } else if mode.contains(TermMode::ALT_SCREEN) {
+        let key: &[u8] = match (up, mode.contains(TermMode::APP_CURSOR)) { (true, true) => b"\x1bOA", (true, false) => b"\x1b[A", (false, true) => b"\x1bOB", (false, false) => b"\x1b[B" };
+        key.repeat(n)
+    } else {
+        if up {
+            if pane.copy.is_none() { pane.copy_start(); pane.copy_by_wheel = true }
+            pane.copy_scroll(lines);
+            app.modal = Some(Modal::Copy { pane: id });
+        }
+        return;
+    };
+    if live && !bytes.is_empty() { app.send_input(id, &bytes) }
 }
 
 // ── home: the empty tab ─────────────────────────────────────────────────────
@@ -1765,8 +1817,9 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 }
             }
         }
-        PickerKind::Route { text } => {
+        PickerKind::Route { text, voice } => {
             let Some((machine, agent)) = id.as_deref().and_then(split_key) else { return keep(app, kind, picker) };
+            if let Some(voice) = voice { return crate::dial::send_spoken(app, &voice, &machine, &agent, &text) }
             if let Some(link) = app.link(&machine) {
                 link.send("message", json!({ "agentId": agent, "content": text }));
                 let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
@@ -1837,7 +1890,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                     picker.set_rows(rows);
                     picker.hints = vec![("enter", "send")];
                     app.toast = None;
-                    app.modal = Some(Modal::Picker { kind: PickerKind::Route { text: value }, picker });
+                    app.modal = Some(Modal::Picker { kind: PickerKind::Route { text: value, voice: None }, picker });
                 }
                 Err(e) => app.say(format!("Could not route it: {e}"), theme::DANGER),
             });

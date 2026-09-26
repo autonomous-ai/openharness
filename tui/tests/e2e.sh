@@ -29,7 +29,17 @@ sleep 0.5
 # Its own client socket, named: the test's shell calls must never reach a client of yours
 # (an unnamed hn takes "default", which is where `hn <command>` goes).
 client="e2e-$$"
-tmux_ new-session -d -s t -x 120 -y 32 "HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off $bin"
+# HN_DESKTOP=off: no desktop app here, so hn is the window the dial talks to.
+tmux_ new-session -d -s t -x 120 -y 32 "HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
+# The mock's dial: what hn told it (dial <js expression over d>), and a frame to push at hn.
+dial() { curl -s "http://127.0.0.1:$port/test/dial" | node -e "const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).data; console.log($1)"; }
+push() { curl -s -X POST --data "$1" "http://127.0.0.1:$port/test/dial" >/dev/null; }
+hn() { HOME=$home "$bin" -L "$client" "$@"; }
+wait_for() { # wait_for <what> <command…>: until it succeeds, 3s
+  local what="$1" waited=0; shift
+  until "$@" >/dev/null 2>&1; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 3000 ] && fail "$what"; done
+  echo "✓ $what"
+}
 
 expect "home lists the fleet" "Mock Claude"
 expect "status line, tmux-style" "0:home*"
@@ -63,6 +73,31 @@ info=$(HOME=$home "$bin" -L "$client" display -p -t 0 '#{pane_current_command} #
 [ "$info" = "zsh /home/demo/src" ] || fail "pane_current_* from the daemon's tmux: got '$info'"
 echo "✓ #{pane_current_command} and #{pane_current_path} come from the pane's tmux"
 
+
+# The dial (the Harness device): hn is the window, so it says what is on screen and does what the dial asks.
+wait_for "the dial's ring is this window's panes, in pane order" test "$(dial "d.said.app_panes?.agentIds?.length")" = 2
+codex=$(dial "d.said.app_panes.agentIds[0]")
+wait_for "the dial hears the windows" test "$(dial "d.said.app_swarms?.swarms?.length")" = 1
+push "{\"type\":\"dial_focus\",\"payload\":{\"machineId\":\"mock0000000000000000000000000001\",\"agentId\":\"$codex\"}}"
+wait_for "turning the dial selects that pane" test "$(hn display -p '#{pane_index}')" = 0
+wait_for "and the dial hears it back (app_focus)" test "$(dial "d.said.app_focus?.agentId")" = "$codex"
+push '{"type":"dial_scroll","payload":{"phase":"down","dy":0,"velocity":0}}'
+push '{"type":"dial_scroll","payload":{"phase":"move","dy":40,"velocity":0}}'
+push '{"type":"dial_scroll","payload":{"phase":"up","dy":0,"velocity":0}}'
+wait_for "a finger on the dial scrolls the pane into copy mode, as tmux's wheel does" test "$(hn display -p '#{pane_in_mode}')" = 1
+push '{"type":"dial_scroll","payload":{"phase":"move","dy":-40,"velocity":0}}'
+wait_for "and back down to the bottom leaves it" test "$(hn display -p '#{pane_in_mode}')" = 0
+push '{"type":"voice_route_request","payload":{"voiceId":"v1","text":"sure: run the tests"}}'
+wait_for "a spoken task the router is sure of is sent" test "$(dial "d.messages.at(-1)?.content")" = "sure: run the tests"
+wait_for "and answered taken, then sent" test "$(dial "d.replies.filter(r => r.voiceId === 'v1').map(r => r.state).join(',')")" = "taken,sent"
+push '{"type":"voice_route_request","payload":{"voiceId":"v2","text":"unsure: which one"}}'
+expect "one it is not sure of is put to you" "Send: unsure: which one"
+tmux_ send-keys -t t Escape
+wait_for "esc cancels it on the dial" test "$(dial "d.replies.filter(r => r.voiceId === 'v2').map(r => r.state).join(',')")" = "taken,cancelled"
+shell=$(dial "d.said.app_panes.agentIds[1]")
+push "{\"type\":\"dial_focus\",\"payload\":{\"machineId\":\"mock0000000000000000000000000002\",\"agentId\":\"$shell\"}}"
+wait_for "the dial reaches a pane on another machine too" test "$(hn display -p '#{pane_index}')" = 1
+
 tmux_ send-keys -t t C-b o
 tmux_ send-keys -t t C-b z
 expect "C-b z zooms (Z flag)" "*Z"
@@ -76,6 +111,11 @@ tmux_ send-keys -t t Escape
 tmux_ send-keys -t t C-b c
 tmux_ send-keys -t t Escape
 expect "C-b c: a new window" "1:"
+wait_for "the dial hears the new window" test "$(dial "d.said.app_swarms?.swarms?.length")" = 2
+first=$(dial "d.said.app_swarms.swarms[0].id")
+push "{\"type\":\"dial_swarm\",\"payload\":{\"swarmId\":\"$first\"}}"
+wait_for "picking a window on the dial selects it" test "$(hn display -p '#{window_index}')" = 0
+tmux_ send-keys -t t C-b 1
 tmux_ send-keys -t t C-b 0
 expect "C-b 0: back to window 0" "0:Mock Codex*"
 tmux_ send-keys -t t C-b w
