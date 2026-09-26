@@ -159,8 +159,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
     let settings = tmuxconf::load(&mut app.keymap);
     app.apply_settings(&settings);
-    // With a ~/.tmux.conf, tmux's default: no mouse unless it says `set -g mouse on`.
-    app.mouse = settings.mouse.unwrap_or(settings.path.is_none());
+    // Mouse on (Shift-drag is still the terminal's own selection) unless tmux.conf says off.
+    app.mouse = settings.mouse.unwrap_or(true);
     app.mouse_changed = true;
     if config.prefix_set { app.keymap.prefix = config.prefix }
     for (chord, command) in &config.keys {

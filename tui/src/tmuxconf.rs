@@ -117,6 +117,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "status-position" => s.status_top = Some(value == "top"),
                 "display-time" => s.display_ms = value.parse().ok(),
                 "display-panes-time" => s.display_panes_ms = value.parse().ok(),
+                "@hn-hint-time" => { if let Ok(ms) = value.parse::<u64>() { keymap.hint_ms = if ms == 0 { u64::MAX } else { ms } } }
                 "repeat-time" => { if let Ok(ms) = value.parse() { keymap.repeat_ms = ms } }
                 "status-style" => { let (fg, bg) = style(value); s.look.status_fg = fg.or(s.look.status_fg); s.look.status_bg = bg.or(s.look.status_bg) }
                 "status-bg" => s.look.status_bg = colour(value),
