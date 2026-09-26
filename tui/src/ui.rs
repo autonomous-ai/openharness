@@ -258,9 +258,10 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
             let state = app.fleet.state_of(agent);
             let (dot, _, color) = state_mark(state);
             let (mark, mark_color) = engine_mark(&agent.engine);
-            let right = format!("{}{}", if many { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(agent.recency()));
+            // Narrow: the machine goes before the title gives way (then the age).
+            let right = if width < 56 { String::new() } else { format!("{}{}", if many && width >= 70 { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(agent.recency())) };
             let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
-            let name_w = 28usize;
+            let name_w = if width < 56 { (width as usize).saturating_sub(10).min(28) } else { 28 };
             // Widths are display widths: a CJK or emoji title keeps the columns straight.
             let name = clip(&agent.name, name_w);
             let name = format!("{name}{}", " ".repeat(name_w.saturating_sub(name.width())));
@@ -491,7 +492,7 @@ fn local_time(offset: i64) -> (String, String) {
 // ── fzf ──────────────────────────────────────────────────────────────────────
 
 fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
-    (picker.preview && body.width >= 80 && body.height >= 8).then(|| {
+    (picker.preview && !picker.visible.is_empty() && body.width >= 80 && body.height >= 8).then(|| {
         let list_w = body.width / 2;
         Rect::new(body.x + list_w, body.y, body.width - list_w, body.height)
     })
@@ -568,7 +569,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if picker.cursor >= picker.scroll + list_h { picker.scroll = picker.cursor + 1 - list_h }
     picker.scroll = picker.scroll.min(n.saturating_sub(list_h.max(1)));
     picker.row_at.clear();
-    let text_w = width.saturating_sub(3);
+    // A column of air before the scrollbar, so right-aligned keys never touch it.
+    let text_w = width.saturating_sub(if n > list_h && list_h > 2 { 4 } else { 3 });
     for slot in 0..list_h.min(n - picker.scroll) {
         let vi = picker.scroll + slot;
         let y = list_bottom - 1 - slot as u16;
@@ -652,6 +654,26 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     buf.set_line(x + 2, y, &Line::from(spans), text_w as u16);
 }
 
+/// Break a styled line into lines no wider than `width`, at spaces where it can.
+fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 || line.width() <= width { return vec![line] }
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for span in line.spans {
+        let style = span.style;
+        for word in span.content.split_inclusive(' ') {
+            let w = word.width();
+            if used + w > width && used > 0 { out.push(Line::from(std::mem::take(&mut cur))); used = 0 }
+            let word = if w > width { clip(word, width) } else { word.to_string() };
+            used += word.width();
+            cur.push(Span::styled(word, style));
+        }
+    }
+    if !cur.is_empty() { out.push(Line::from(cur)) }
+    out
+}
+
 /// fzf's `--header`: the keys this list answers to, in the header colour.
 fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> {
     if picker.hints.is_empty() { return None }
@@ -699,7 +721,8 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area
             }
         }
     }
-    let lines = crate::preview::lines(app, kind, &id);
+    // Long lines wrap, as fzf's preview does (it is text, not a screen).
+    let lines: Vec<Line> = crate::preview::lines(app, kind, &id).into_iter().flat_map(|l| wrap_line(l, inner.width as usize)).collect();
     // A preview that fits does not scroll; one that does stops at its last line.
     let most = lines.len().saturating_sub(inner.height as usize) as u16;
     picker.preview_max.set(most);
