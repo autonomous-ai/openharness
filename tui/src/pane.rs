@@ -454,6 +454,58 @@ impl Pane {
         self.copy_set(Point::new(Line(if top { first } else { last_line }), Column(0)));
     }
 
+    /// Put the copy cursor on [point] (a search match).
+    pub fn copy_jump(&mut self, point: alacritty_terminal::index::Point) {
+        if self.copy.is_none() { self.copy_start() }
+        self.copy_set(point);
+    }
+
+    /// `e`: to the end of this word, or of the next one.
+    pub fn copy_word_end(&mut self) {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let Some(copy) = self.copy else { return };
+        let (_, bottom, last) = self.copy_bounds();
+        let blank = |c: char| c == ' ' || c == '\0';
+        let step = |p: Point| -> Option<Point> { if p.column.0 < last { Some(Point::new(p.line, Column(p.column.0 + 1))) } else if p.line.0 < bottom { Some(Point::new(Line(p.line.0 + 1), Column(0))) } else { None } };
+        let mut p = copy.point;
+        if let Some(n) = step(p) { p = n }
+        while blank(self.copy_char(p)) { match step(p) { Some(n) => p = n, None => break } }
+        while let Some(n) = step(p) { if blank(self.copy_char(n)) || n.line != p.line { break } p = n }
+        self.copy_set(p);
+    }
+
+    /// `^`: the first character on the line that is not blank.
+    pub fn copy_first_nonblank(&mut self) {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(copy) = self.copy else { return };
+        let (_, _, last) = self.copy_bounds();
+        let col = (0..=last).find(|c| { let ch = self.copy_char(Point::new(copy.point.line, Column(*c))); ch != ' ' && ch != '\0' }).unwrap_or(0);
+        self.copy_set(Point::new(copy.point.line, Column(col)));
+    }
+
+    /// `H` / `M` / `L`: the top, middle or bottom line of what is on screen.
+    pub fn copy_screen(&mut self, which: u8) {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let Some(copy) = self.copy else { return };
+        let offset = self.term.grid().display_offset() as i32;
+        let rows = self.term.grid().screen_lines() as i32;
+        let view = match which { 0 => 0, 1 => rows / 2, _ => rows - 1 };
+        self.copy_set(Point::new(Line(view - offset), Column(copy.point.column.0)));
+    }
+
+    /// `C-v`: a rectangle selection.
+    pub fn copy_toggle_block(&mut self) {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let Some(copy) = self.copy.as_mut() else { return };
+        copy.selecting = true;
+        let point = copy.point;
+        let mut selection = Selection::new(SelectionType::Block, point, Side::Left);
+        selection.update(point, Side::Right);
+        self.term.selection = Some(selection);
+        self.dirty = true;
+    }
+
     /// `v` (characters) or `V` (lines): start a selection at the copy cursor, or drop the one there is.
     pub fn copy_toggle(&mut self, lines: bool) {
         use alacritty_terminal::index::Side;

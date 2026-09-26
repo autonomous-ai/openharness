@@ -20,6 +20,28 @@ pub const SELECT: Color = Color::Rgb(0x26, 0x32, 0x4F);
 pub const SELECT_TEXT: Color = Color::Rgb(0x2F, 0x4A, 0x9E);
 pub const PANEL: Color = Color::Rgb(0x16, 0x17, 0x1A);
 
+// fzf's default dark256 colours (fzf 0.67, measured from its output).
+pub const FZF_GUTTER: Color = Color::Indexed(236);
+pub const FZF_BG_PLUS: Color = Color::Indexed(236);
+pub const FZF_FG_PLUS: Color = Color::Indexed(254);
+pub const FZF_HL: Color = Color::Indexed(108);
+pub const FZF_HL_PLUS: Color = Color::Indexed(151);
+pub const FZF_POINTER: Color = Color::Indexed(161);
+pub const FZF_MARKER: Color = Color::Indexed(168);
+pub const FZF_INFO: Color = Color::Indexed(144);
+pub const FZF_PROMPT: Color = Color::Indexed(110);
+pub const FZF_BORDER: Color = Color::Indexed(59);
+pub const FZF_HEADER: Color = Color::Indexed(109);
+
+// tmux's default colours.
+pub const TMUX_STATUS_BG: Color = Color::Green;
+pub const TMUX_STATUS_FG: Color = Color::Black;
+pub const TMUX_MESSAGE_BG: Color = Color::Yellow;
+pub const TMUX_MESSAGE_FG: Color = Color::Black;
+pub const TMUX_ACTIVE_BORDER: Color = Color::Green;
+pub const TMUX_DISPLAY_PANES: Color = Color::Blue;
+pub const TMUX_DISPLAY_PANES_ACTIVE: Color = Color::Red;
+
 pub fn fg(color: Color) -> Style { Style::default().fg(color) }
 pub fn bold(color: Color) -> Style { Style::default().fg(color).add_modifier(Modifier::BOLD) }
 

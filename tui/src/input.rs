@@ -1,16 +1,17 @@
-//! Keys and mouse: which go to Harness and which go to the harness in front of you.
-//!
-//! Harness takes ⌥+key (⌘ too, where the terminal speaks the kitty keyboard protocol and passes ⌘
-//! through) and anything after the prefix ^Space. Everything else is the focused pane's — encoded
-//! the way an xterm would, in the pane's own modes. ⌥ chords a shell's line editor lives on (⌥B ⌥F
-//! ⌥D ⌥. ⌥Y ⌥U ⌥C) are never taken; their commands are on the prefix and in ⌥P.
+//! Keys and mouse, the way tmux takes them: every key belongs to the pane in front of you, except
+//! the prefix (C-b) and what you press right after it — tmux's own key table (`C-b c`, `C-b %`,
+//! `C-b "`, `C-b o`, `C-b z`, `C-b [` …), read from `~/.tmux.conf` when there is one. Keys a
+//! binding marks `-r` repeat without the prefix for `repeat-time`. The root table (keys with no
+//! prefix) is empty unless you fill it, so no shell, editor or agent loses a key to Harness.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use serde_json::json;
 
 use crate::app::{App, Placement};
+use crate::commands;
+use crate::keys;
 use crate::layout::{self, Dir, Preset, Toward};
 use crate::modal::{self, Filter, Modal, PickerKind, Prompt, PromptKind, What};
 use crate::pane::{encode_key, encode_mouse, Phase};
@@ -21,7 +22,7 @@ pub fn handle(app: &mut App, event: CEvent) {
     match event {
         CEvent::Key(key) if key.kind != KeyEventKind::Release => on_key(app, key),
         CEvent::Paste(text) => on_paste(app, text),
-        CEvent::Mouse(mouse) => on_mouse(app, mouse),
+        CEvent::Mouse(mouse) => { if app.mouse { on_mouse(app, mouse) } }
         CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.fit_panes() }
         CEvent::FocusGained => app.terminal_focused = true,
         CEvent::FocusLost => app.terminal_focused = false,
@@ -29,148 +30,48 @@ pub fn handle(app: &mut App, event: CEvent) {
     }
 }
 
-/// The command a chord names, if Harness owns it.
-fn chord(key: &KeyEvent) -> Option<&'static str> {
-    Some(match key.code {
-        KeyCode::Char(c) => match c {
-            'p' => "open",
-            'P' => "palette",
-            'o' | 'O' => "projects",
-            'n' => "new",
-            'N' => "clone",
-            't' => "tab",
-            'T' => "terminal",
-            'i' => "models",
-            'I' => "inbox",
-            'm' | 'M' => "machines",
-            's' | 'S' => "store",
-            '/' | '?' => "help",
-            'E' => "restart",
-            'R' => "rename-tab",
-            'l' => "focus-right",
-            'h' => "focus-left",
-            'j' => "focus-down",
-            'k' => "focus-up",
-            'H' => "grow-left",
-            'J' => "grow-down",
-            'K' => "grow-up",
-            'L' => "layout",
-            'w' => "close-pane",
-            'W' => "close-tab",
-            '\\' | '|' => "split-right",
-            '-' | '_' => "split-down",
-            'z' | 'Z' => "zoom",
-            '{' => "prev-tab",
-            '}' => "next-tab",
-            '=' => "equalize",
-            'g' | 'G' => "send",
-            'F' => "find",
-            '[' | 'v' => "copy-mode",
-            'q' | 'Q' => "quit",
-            'a' | 'A' => "next-waiting",
-            '`' => "last-tab",
-            '<' => "tab-left",
-            '>' => "tab-right",
-            '1' => "tab-1", '2' => "tab-2", '3' => "tab-3", '4' => "tab-4", '5' => "tab-5",
-            '6' => "tab-6", '7' => "tab-7", '8' => "tab-8", '9' => "tab-9",
-            _ => return None,
-        },
-        // ⌥⏎ is a newline and ⌥←/→ a word jump in every prompt and shell: those stay the pane's.
-        // ⌘ (kitty protocol) and the prefix still reach them.
-        KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => "zoom",
-        KeyCode::Left if !key.modifiers.contains(KeyModifiers::ALT) => "focus-left",
-        KeyCode::Right if !key.modifiers.contains(KeyModifiers::ALT) => "focus-right",
-        KeyCode::Up if !key.modifiers.contains(KeyModifiers::ALT) => "focus-up",
-        KeyCode::Down if !key.modifiers.contains(KeyModifiers::ALT) => "focus-down",
-        _ => return None,
-    })
-}
-
-/// After the prefix, the same letters without ⌥ — plus the ones ⌥ leaves to the shell.
-fn prefixed(key: &KeyEvent) -> Option<&'static str> {
-    if let KeyCode::Char(c) = key.code {
-        match c {
-            'b' => return Some("send"),
-            'd' => return Some("quit"),
-            'x' => return Some("close-pane"),
-            'c' => return Some("tab"),
-            'r' => return Some("split-right"),
-            ' ' => return Some("next-tab"),
-            _ => {}
-        }
-    }
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(' ') { return Some("prefix-self") }
-    chord(key)
-}
-
-/// A Mac whose terminal sends ⌥ as a symbol (the default in Terminal.app, iTerm2, Ghostty): the
-/// US layout's ⌥+letter characters that nobody types on purpose stand for the chord. Dead keys
-/// (⌥I, ⌥N, ⌥E, ⌥U, ⌥`) produce nothing to catch; characters some layouts type directly (ß, £,
-/// ø, å, digits) are left alone.
-/// `HARNESS_TUI_MAC_OPTION=off` turns it off.
-fn mac_option(key: KeyEvent) -> KeyEvent {
-    let KeyCode::Char(c) = key.code else { return key };
-    if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() { return key }
-    let letter = match c {
-        // Not ø, å, æ: those are plain keys on Nordic layouts.
-        'π' => 'p', '∏' => 'P', 'µ' => 'm', 'Â' => 'M', '†' => 't', 'ˇ' => 'T',
-        '∑' => 'w', '„' => 'W', 'Ω' => 'z', '˙' => 'h', '∆' => 'j', '˚' => 'k', '¬' => 'l',
-        '√' => 'v', '©' => 'g', '÷' => '/', '¿' => '?', '«' => '\\', '≠' => '=', '”' => '{', '’' => '}',
-        _ => return key,
-    };
-    if std::env::var("HARNESS_TUI_MAC_OPTION").as_deref() == Ok("off") { return key }
-    KeyEvent::new(KeyCode::Char(letter), KeyModifiers::ALT | if letter.is_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE })
+/// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
+fn typing(app: &App) -> bool {
+    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }))
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
-    let key = mac_option(key);
-    let mods = key.modifiers;
-    // The prefix.
+    let chord = keys::of(&key);
+    // After the prefix: the prefix table.
     if app.prefix {
         app.prefix = false;
-        if key.code == KeyCode::Esc { return }
-        if let Some(command) = prefixed(&key) {
-            if command == "prefix-self" { send_to_focused(app, vec![0]); return }
-            run(app, command);
+        if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 {
+            // `send-prefix`: C-b C-b gives the pane a C-b.
+            if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| encode_key(&key, p.mode())) { send_to_focused(app, bytes) }
+            return;
+        }
+        if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
+            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. })) { app.modal = None }
+            app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
+            commands::execute(app, &binding.command);
         }
         return;
     }
-    let chord_now = crate::config::Chord::of(&key);
-    let default_prefix = crate::config::Config::default().prefix;
-    if chord_now == app.prefix_key || (app.prefix_key == default_prefix && mods.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('@')) {
-        app.prefix = true;
-        return;
-    }
-    // The person's own bindings first: a command, or `none` — the chord goes to the pane.
-    let mut released = false;
-    if let Some((_, bound)) = app.keys.iter().find(|(c, _)| *c == chord_now) {
-        match bound.clone() {
-            Some(command) => { run(app, &command); return }
-            None => released = true,
-        }
-    }
-    let command_mod = mods.contains(KeyModifiers::ALT) || mods.contains(KeyModifiers::SUPER);
-    if command_mod && !released && !mods.contains(KeyModifiers::CONTROL) {
-        if let Some(command) = chord(&key) {
-            // An open overlay answers ⌥1…9 itself (answer a question).
-            let digits_to_modal = app.modal.is_some() && matches!(key.code, KeyCode::Char('1'..='9'));
-            if !digits_to_modal {
-                if app.modal.is_some() && !matches!(command, "open" | "palette" | "inbox" | "machines" | "new" | "help" | "store" | "quit") { app.modal = None }
-                run(app, command);
+    // A repeatable key again, inside the repeat window: no prefix needed.
+    if let Some(until) = app.repeat_until {
+        if Instant::now() < until {
+            if let Some(binding) = app.keymap.prefix_command(&chord).filter(|b| b.repeat).cloned() {
+                app.repeat_until = Some(Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
+                commands::execute(app, &binding.command);
                 return;
             }
         }
+        app.repeat_until = None;
+    }
+    if !typing(app) && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
+        app.prefix = true;
+        return;
+    }
+    if !typing(app) {
+        if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }
     let Some(focus) = app.focused() else { home_key(app, key); return };
-    // Shift+PageUp/Down scroll the tile's own history, as in every terminal.
-    if mods.contains(KeyModifiers::SHIFT) && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
-        if let Some(pane) = app.panes.get_mut(&focus) {
-            let page = pane.rows as i32 - 2;
-            pane.scroll(if key.code == KeyCode::PageUp { page } else { -page });
-        }
-        return;
-    }
     let Some(pane) = app.panes.get(&focus) else { return };
     match &pane.phase {
         Phase::Card { title, .. } => {
@@ -188,6 +89,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
             if let Some(bytes) = encode_key(&key, pane.mode()) {
                 if let Some(p) = app.panes.get_mut(&focus) {
                     p.clear_selection();
+                    p.scroll_bottom();
                     // Local echo on a slow link: plain characters appear now, confirmed when the echo lands.
                     let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
                     if p.should_predict() && plain && matches!(p.phase, Phase::Live) {
@@ -369,6 +271,7 @@ pub fn home_agents(app: &App) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A window with no harness in it has no pane to take keys from, so plain letters work here.
 fn home_key(app: &mut App, key: KeyEvent) {
     let rows = home_agents(app);
     let open = |app: &mut App, index: usize| {
@@ -409,13 +312,13 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Open { filter, machine, project } => {
             picker.set_rows(modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref()));
             picker.status = modal::open_status(app, *filter);
-            picker.hints = vec![("enter", "open"), ("^t", "tab"), ("^v", "split right"), ("^s", "split down"), ("^r", "here"), ("tab", "filter"), ("^x", "pause/resume"), ("⌥1-9", "answer")];
-            picker.empty = if app.fleet.agents.is_empty() { "No harnesses yet — ⌥N makes one.".into() } else { "Nothing matches.".into() };
+            picker.hints = vec![("enter", "open"), ("C-t", "window"), ("C-v", "beside"), ("C-x", "below"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause"), ("M-1..9", "answer")];
+            picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { "Nothing matches.".into() };
         }
-        PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run")] }
+        PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
         PickerKind::Projects => {
             picker.set_rows(modal::project_rows(app));
-            picker.hints = vec![("enter", "its harnesses"), ("^n", "new harness there")];
+            picker.hints = vec![("enter", "its harnesses"), ("M-n", "new harness there")];
             picker.empty = "No projects yet.".into();
         }
         PickerKind::Models => {
@@ -429,7 +332,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
                     if let Some(at) = picker.visible.iter().position(|(i, _)| picker.rows[*i].id == current) { picker.cursor = at; picker.selected_id = Some(current) }
                 }
             }
-            picker.hints = vec![("enter", "use · start · get"), ("^s", "stop a local model")];
+            picker.hints = vec![("enter", "use · start · get"), ("C-x", "stop a local model")];
             picker.empty = if app.focused().is_none() { "Focus a harness to switch its model.".into() } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
@@ -437,23 +340,23 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.keep_order = true;
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
-            picker.hints = vec![("enter", "answer / jump"), ("^o", "open")];
+            picker.hints = vec![("enter", "answer / go"), ("C-o", "open"), ("M-1..9", "answer")];
             picker.empty = "Nobody is waiting on you.".into();
         }
         PickerKind::Machines => {
             picker.set_rows(modal::machine_rows(app));
             let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
             picker.status = format!("{up}/{} connected", app.fleet.machines.len());
-            picker.hints = vec![("enter", "its harnesses"), ("^n", "new there"), ("^t", "terminal there"), ("^l", "link")];
+            picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("C-l", "link")];
         }
         PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
-        PickerKind::Help => { picker.keep_order = true; picker.set_rows(modal::mode_rows()); picker.status = "⌥ = Option/Alt".into(); picker.hints = vec![("enter", "go")] }
+        PickerKind::Help => { picker.keep_order = true; picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
         PickerKind::Store => {
             let catalog = app.dsh.get(&app.fleet.local_id).cloned().unwrap_or_default();
             picker.set_rows(modal::store_rows(&catalog));
             let installed = picker.rows.iter().filter(|r| r.lead.first().map(|s| s.content.contains('●')).unwrap_or(false)).count();
             picker.status = format!("{installed} installed");
-            picker.hints = vec![("enter", "start one"), ("^i", "install")];
+            picker.hints = vec![("enter", "start one"), ("M-i", "install")];
             if catalog.is_empty() { picker.empty = "Loading the Store…".into() }
         }
         PickerKind::NewMachine => {
@@ -473,11 +376,61 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "choose")];
         }
         PickerKind::Route { .. } => {}
+        PickerKind::Messages => {
+            picker.keep_order = true;
+            let rows = app.messages.iter().enumerate().rev().map(|(i, (at, text))| {
+                let secs = at.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let hms = format!("{:02}:{:02}:{:02}", (secs / 3600 + local_offset_hours()) % 24, (secs / 60) % 60, secs % 60);
+                crate::picker::Row::new(i.to_string(), text.clone()).lead(vec![ratatui::text::Span::styled(format!("{hms} "), theme::fg(theme::MUTED))])
+            }).collect();
+            picker.set_rows(rows);
+            picker.empty = "no messages".into();
+            picker.hints = vec![];
+        }
+        PickerKind::Keys => {
+            picker.keep_order = true;
+            let prefix = keys::name(&app.keymap.prefix);
+            let mut rows: Vec<crate::picker::Row> = app.keymap.prefix_table.iter().map(|b| {
+                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), b.command.clone())
+                    .extra(b.note.clone())
+                    .lead(vec![ratatui::text::Span::styled(format!("{prefix} {:<8}", keys::name(&b.chord)), theme::fg(theme::FZF_HL))])
+                    .detail(vec![ratatui::text::Span::styled(b.note.clone(), theme::fg(theme::MUTED))])
+            }).collect();
+            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), b.command.clone())
+                .lead(vec![ratatui::text::Span::styled(format!("{:<12}", keys::name(&b.chord)), theme::fg(theme::FZF_HL))])));
+            picker.set_rows(rows);
+            picker.hints = vec![("enter", "run it")];
+        }
+        PickerKind::Buffers => {
+            picker.keep_order = true;
+            let rows = app.buffers.iter().enumerate().map(|(i, b)| {
+                let one: String = b.replace('\n', "⏎").chars().take(200).collect();
+                crate::picker::Row::new(i.to_string(), one).lead(vec![ratatui::text::Span::styled(format!("buffer{i}: {} bytes: ", b.len()), theme::fg(theme::MUTED))])
+            }).collect();
+            picker.set_rows(rows);
+            picker.empty = "no buffers".into();
+            picker.hints = vec![("enter", "paste")];
+        }
     }
 }
 
+/// The local timezone's offset, in hours (for message times), without a date crate.
+fn local_offset_hours() -> u64 {
+    let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let sign = if out.starts_with('-') { -1 } else { 1 };
+    let hours: i64 = out.get(1..3).and_then(|h| h.parse().ok()).unwrap_or(0);
+    ((24 + sign * hours) % 24) as u64
+}
+
+/// A status-line prompt, tmux's way: `(rename-window) name`. [label] becomes the hint shown dim
+/// at the right when the line has room.
 fn prompt(app: &mut App, kind: PromptKind, title: &str, label: &str, hint: &str, value: &str, secret: bool) {
-    app.modal = Some(Modal::Prompt(Prompt { kind, title: title.into(), label: label.into(), hint: hint.into(), value: value.into(), secret }));
+    let tag = format!("({}) ", title.to_lowercase().replace(' ', "-"));
+    let mut p = Prompt::status(kind, &tag, value);
+    p.title = title.into();
+    p.hint = if hint.is_empty() { label.to_string() } else { hint.to_string() };
+    p.secret = secret;
+    app.modal = Some(Modal::Prompt(p));
 }
 
 fn focused_agent(app: &App) -> Option<(String, String)> {
@@ -499,6 +452,7 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
     let mut picker = Picker::new(title, placeholder);
     picker.prefixed = true;
     picker.query = prefix.to_string();
+    picker.qcursor = prefix.chars().count();
     prepare(app, &kind);
     fill(app, &kind, &mut picker);
     app.modal = Some(Modal::Picker { kind, picker });
@@ -654,6 +608,37 @@ pub fn run(app: &mut App, command: &str) {
                 None => app.say("Nobody is waiting on you", theme::MUTED),
             }
         }
+        "prev-waiting" => {
+            let current = focused_agent(app);
+            let mut waiting: Vec<_> = app.fleet.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").map(|a| (a.question.as_ref().unwrap().since, a.machine_id.clone(), a.id.clone())).collect();
+            waiting.sort();
+            waiting.reverse();
+            match waiting.iter().find(|(_, m, a)| current.as_ref() != Some(&(m.clone(), a.clone()))).or(waiting.first()) {
+                Some((_, m, a)) => { let (m, a) = (m.clone(), a.clone()); app.open_agent(&m, &a, Placement::Tab) }
+                None => app.say("no alert", theme::MUTED),
+            }
+        }
+        "resume-focused" => { if let Some(f) = app.focused() { app.resume(f) } }
+        "last-harness" => {
+            match app.last_harness.clone() {
+                Some((m, a)) => app.open_agent(&m, &a, Placement::Auto(None)),
+                None => app.say("no last harness", theme::WARN),
+            }
+        }
+        "tree" => app.modal = Some(Modal::Tree { cursor: tree_cursor_now(app), collapsed: Vec::new() }),
+        "info" => {
+            // tmux `display-message` with its default format, harness-flavoured.
+            let text = match focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| (x.clone(), app.fleet.machine_name(&m)))) {
+                Some((a, machine)) => format!("[harness] {}:{}, current pane {} - ({}) \"{}\" {} {}{}", app.active + app.base_index, app.tab().name,
+                    app.focused().and_then(|f| app.tab().panes().iter().position(|x| *x == f)).unwrap_or(0) + app.pane_base_index,
+                    a.engine, a.name, machine, if a.cwd.is_empty() { String::new() } else { a.cwd.replace(&std::env::var("HOME").unwrap_or_default(), "~") }, if a.branch.is_empty() { String::new() } else { format!(" ({})", a.branch) }),
+                None => format!("[harness] {}:{} — empty window", app.active + app.base_index, app.tab().name),
+            };
+            app.say(text, theme::WARN);
+        }
+        "messages" => picker(app, PickerKind::Messages, "messages", ""),
+        "keys" => picker(app, PickerKind::Keys, "keys", ""),
+        "choose-buffer" => picker(app, PickerKind::Buffers, "buffers", ""),
         "quit" => app.quit = true,
         c if c.starts_with("tab-") => { if let Some(n) = c[4..].parse::<usize>().ok().and_then(|n| n.checked_sub(1)) { app.select_tab(n) } }
         _ => {}
@@ -661,7 +646,7 @@ pub fn run(app: &mut App, command: &str) {
 }
 
 thread_local! {
-    /// Which way the next harness picked in ⌥O goes, when ⌥O was opened by a split.
+    /// Which way the next harness picked goes, when the list was opened by split-window.
     static SPLIT: std::cell::Cell<Option<Dir>> = const { std::cell::Cell::new(None) };
 }
 
@@ -729,55 +714,36 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 fn modal_key(app: &mut App, key: KeyEvent) {
     let Some(modal) = app.modal.take() else { return };
     match modal {
-        Modal::Copy { pane } => {
-            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            let Some(p) = app.panes.get_mut(&pane) else { return };
-            let half = (p.rows as i32 / 2).max(1);
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => { p.copy_end(); return }
-                KeyCode::Char('c') if ctrl => { p.copy_end(); return }
-                KeyCode::Char('h') | KeyCode::Left => p.copy_move(-1, 0),
-                KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
-                KeyCode::Char('k') | KeyCode::Up => p.copy_move(0, -1),
-                KeyCode::Char('j') | KeyCode::Down => p.copy_move(0, 1),
-                KeyCode::Char('u') if ctrl => p.copy_move(0, -half),
-                KeyCode::Char('d') if ctrl => p.copy_move(0, half),
-                KeyCode::Char('b') if ctrl => p.copy_move(0, -2 * half),
-                KeyCode::Char('f') if ctrl => p.copy_move(0, 2 * half),
-                KeyCode::PageUp => p.copy_move(0, -2 * half),
-                KeyCode::PageDown => p.copy_move(0, 2 * half),
-                KeyCode::Char('w') => p.copy_word(true),
-                KeyCode::Char('b') => p.copy_word(false),
-                KeyCode::Char('0') | KeyCode::Home => p.copy_line_edge(false),
-                KeyCode::Char('$') | KeyCode::End => p.copy_line_edge(true),
-                KeyCode::Char('g') => p.copy_to(true),
-                KeyCode::Char('G') => p.copy_to(false),
-                KeyCode::Char('v') | KeyCode::Char(' ') => p.copy_toggle(false),
-                KeyCode::Char('V') => p.copy_toggle(true),
-                KeyCode::Char('y') | KeyCode::Enter => {
-                    let text = p.selection_text();
-                    p.copy_end();
-                    if let Some(text) = text {
-                        crate::clipboard::store(&text);
-                        let n = text.chars().count();
-                        app.say(format!("Copied {n} character{}", if n == 1 { "" } else { "s" }), theme::ONLINE);
-                    }
-                    return;
-                }
-                KeyCode::Char('/') | KeyCode::Char('?') => { p.copy_end(); app.modal = Some(Modal::Find { pane, query: String::new(), found: None }); return }
-                _ => {}
-            }
-            app.modal = Some(Modal::Copy { pane });
+        Modal::Confirm { command, .. } => {
+            // tmux: y runs it; any other key says no.
+            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) { commands::execute(app, &command) }
         }
+        Modal::DisplayPanes { .. } => {
+            if let KeyCode::Char(c @ '0'..='9') = key.code {
+                let n = (c as usize) - ('0' as usize);
+                app.select_pane_index(n.saturating_sub(app.pane_base_index));
+            }
+        }
+        Modal::Clock { .. } => {}
+        Modal::Tree { cursor, collapsed } => tree_key(app, key, cursor, collapsed),
+        Modal::Copy { pane } => copy_key(app, key, pane),
         Modal::Find { pane, mut query, mut found } => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let Some(p) = app.panes.get_mut(&pane) else { return };
             match key.code {
-                KeyCode::Esc => { p.end_find(); return }
+                KeyCode::Esc => { if p.copy.is_some() { app.modal = Some(Modal::Copy { pane }); return } p.end_find(); return }
                 KeyCode::Char('c' | 'g') if ctrl => { p.end_find(); return }
-                KeyCode::Enter | KeyCode::Up => { if !p.find(&query, true, false) { found = Some(false) } else { found = Some(true) } }
-                KeyCode::Char('p' | 'k') if ctrl => { found = Some(p.find(&query, true, false)) }
+                // Enter keeps the match and goes on in copy mode, as tmux's search does.
+                KeyCode::Enter => {
+                    app.last_search = Some(query.clone());
+                    if p.copy.is_none() { p.copy_start() }
+                    if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) }
+                    app.modal = Some(Modal::Copy { pane });
+                    return;
+                }
+                KeyCode::Up => { found = Some(p.find(&query, true, false)) }
                 KeyCode::Down => { found = Some(p.find(&query, false, false)) }
+                KeyCode::Char('p' | 'k') if ctrl => { found = Some(p.find(&query, true, false)) }
                 KeyCode::Char('n' | 'j') if ctrl => { found = Some(p.find(&query, false, false)) }
                 KeyCode::Backspace => { query.pop(); found = Some(p.find(&query, true, true)) }
                 KeyCode::Char('u') if ctrl => { query.clear(); p.end_find() }
@@ -786,77 +752,254 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             }
             app.modal = Some(Modal::Find { pane, query, found });
         }
-        Modal::Prompt(mut p) => {
-            match key.code {
-                KeyCode::Esc => return,
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return,
-                KeyCode::Enter => { submit_prompt(app, p); return }
-                KeyCode::Backspace => { if key.modifiers.contains(KeyModifiers::ALT) { let t = p.value.trim_end().to_string(); let cut = t.rfind(' ').map(|i| i + 1).unwrap_or(0); p.value.truncate(cut) } else { p.value.pop(); } }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => p.value.clear(),
-                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => { let t = p.value.trim_end().to_string(); let cut = t.rfind(' ').map(|i| i + 1).unwrap_or(0); p.value.truncate(cut) }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => p.value.push(c),
-                _ => {}
+        Modal::Prompt(p) => prompt_key(app, key, p),
+        Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
+    }
+}
+
+/// The status-line prompt: tmux's `status-keys emacs`, command history on Up/Down, Tab completes.
+fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let chars: Vec<char> = p.value.chars().collect();
+    let at = p.cursor.min(chars.len());
+    let set = |p: &mut Prompt, v: Vec<char>, c: usize| { p.value = v.into_iter().collect(); p.cursor = c; };
+    let word_left = |from: usize| { let mut i = from; while i > 0 && chars[i - 1] == ' ' { i -= 1 } while i > 0 && chars[i - 1] != ' ' { i -= 1 } i };
+    let word_right = |from: usize| { let mut i = from; while i < chars.len() && chars[i] == ' ' { i += 1 } while i < chars.len() && chars[i] != ' ' { i += 1 } i };
+    match key.code {
+        KeyCode::Esc => return,
+        KeyCode::Char('c' | 'g') if ctrl => return,
+        KeyCode::Enter => {
+            if matches!(p.kind, PromptKind::Command { template: None }) && !p.value.trim().is_empty() {
+                app.history.retain(|h| h != &p.value);
+                app.history.push(p.value.clone());
             }
-            app.modal = Some(Modal::Prompt(p));
+            submit_prompt(app, p);
+            return;
         }
-        Modal::Picker { kind, mut picker } => {
-            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            let alt = key.modifiers.contains(KeyModifiers::ALT);
-            // Inside a machine or a project, esc (or ⌫ on an empty query) steps back out to the list
-            // it was chosen from; anywhere else it closes.
-            let scoped = matches!(kind, PickerKind::Open { machine: Some(_), .. } | PickerKind::Open { project: Some(_), .. });
-            let back_key = key.code == KeyCode::Esc || (key.code == KeyCode::Backspace && picker.query.is_empty());
-            if scoped && back_key {
-                let prefix = if matches!(kind, PickerKind::Open { project: Some(_), .. }) { "#" } else { "@" };
-                app.modal = None;
-                launch(app, prefix, Filter::All);
+        KeyCode::Backspace | KeyCode::Char('h') if key.code == KeyCode::Backspace || ctrl => {
+            if alt { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
+            else if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1) }
+            else if p.value.is_empty() { return } // tmux: backspace on an empty prompt closes it
+        }
+        KeyCode::Delete => { if at < chars.len() { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at) } }
+        KeyCode::Char('d') if ctrl => { if at < chars.len() { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at) } }
+        KeyCode::Left => p.cursor = at.saturating_sub(1),
+        KeyCode::Char('b') if ctrl => p.cursor = at.saturating_sub(1),
+        KeyCode::Right => p.cursor = (at + 1).min(chars.len()),
+        KeyCode::Char('f') if ctrl => p.cursor = (at + 1).min(chars.len()),
+        KeyCode::Char('b') if alt => p.cursor = word_left(at),
+        KeyCode::Char('f') if alt => p.cursor = word_right(at),
+        KeyCode::Home => p.cursor = 0,
+        KeyCode::Char('a') if ctrl => p.cursor = 0,
+        KeyCode::End => p.cursor = chars.len(),
+        KeyCode::Char('e') if ctrl => p.cursor = chars.len(),
+        KeyCode::Char('k') if ctrl => { let v = chars[..at].to_vec(); set(&mut p, v, at) }
+        KeyCode::Char('u') if ctrl => { let v = chars[at..].to_vec(); set(&mut p, v, 0) }
+        KeyCode::Char('w') if ctrl => { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
+        KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None }) => {
+            let n = app.history.len();
+            if n > 0 {
+                let next = match (p.history_at, key.code) {
+                    (None, KeyCode::Up) => Some(n - 1),
+                    (Some(i), KeyCode::Up) => Some(i.saturating_sub(1)),
+                    (Some(i), KeyCode::Down) if i + 1 < n => Some(i + 1),
+                    _ => None,
+                };
+                p.history_at = next;
+                p.value = next.map(|i| app.history[i].clone()).unwrap_or_default();
+                p.cursor = p.value.chars().count();
+            }
+        }
+        KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None }) => {
+            // Complete the command name: the only match, or the part every match shares.
+            if !p.value.contains(' ') {
+                let typed = p.value.clone();
+                let matches: Vec<&str> = commands::COMMANDS.iter().map(|(n, _, _)| *n).filter(|n| n.starts_with(&typed)).collect();
+                if matches.len() == 1 { p.value = format!("{} ", matches[0]) }
+                else if !matches.is_empty() {
+                    let mut common = matches[0].to_string();
+                    for m in &matches[1..] { while !m.starts_with(&common) { common.pop(); } }
+                    p.value = common;
+                    p.hint = matches.join("  ");
+                }
+                p.cursor = p.value.chars().count();
+            }
+        }
+        KeyCode::Char(c) if !ctrl && !alt => { let mut v = chars.clone(); v.insert(at, c); set(&mut p, v, at + 1); p.hint.clear() }
+        _ => {}
+    }
+    app.modal = Some(Modal::Prompt(p));
+}
+
+/// fzf's keys: ↑ C-k C-p away from the prompt, ↓ C-j C-n toward it (the list reads bottom-up);
+/// Tab marks; C-t/C-x/C-v open in a new window / below / beside (fzf.vim); C-/ the preview.
+fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // Inside a machine or a project, esc (or ⌫ on an empty query) steps back out to the list
+    // it was chosen from; anywhere else it closes.
+    let scoped = matches!(kind, PickerKind::Open { machine: Some(_), .. } | PickerKind::Open { project: Some(_), .. });
+    let back_key = key.code == KeyCode::Esc || (key.code == KeyCode::Backspace && picker.query.is_empty());
+    if scoped && back_key {
+        let prefix = if matches!(kind, PickerKind::Open { project: Some(_), .. }) { "#" } else { "@" };
+        app.modal = None;
+        launch(app, prefix, Filter::All);
+        return;
+    }
+    let before = picker.query.clone();
+    let page = (app.size.1 as i64 - 6).max(1);
+    match key.code {
+        KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
+        KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
+        KeyCode::Up if shift => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
+        KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1),
+        KeyCode::Up => picker.move_by(1),
+        KeyCode::Down => picker.move_by(-1),
+        KeyCode::Char('k' | 'p') if ctrl => picker.move_by(1),
+        KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-1),
+        KeyCode::PageUp => picker.move_by(page),
+        KeyCode::PageDown => picker.move_by(-page),
+        KeyCode::Tab => { picker.toggle_mark(); picker.move_by(1) }
+        KeyCode::BackTab => { picker.toggle_mark(); picker.move_by(-1) }
+        KeyCode::Backspace => picker.backspace(alt),
+        KeyCode::Char('h') if ctrl => picker.backspace(false),
+        KeyCode::Delete => picker.delete_forward(),
+        KeyCode::Char('d') if ctrl => picker.delete_forward(),
+        KeyCode::Char('u') if ctrl => picker.clear_query(),
+        KeyCode::Char('w') if ctrl => picker.backspace(true),
+        KeyCode::Left => picker.qmove(-1, false),
+        KeyCode::Right => picker.qmove(1, false),
+        KeyCode::Char('b') if ctrl => picker.qmove(-1, false),
+        KeyCode::Char('f') if ctrl => picker.qmove(1, false),
+        KeyCode::Char('b') if alt => picker.qmove(-1, true),
+        KeyCode::Char('f') if alt => picker.qmove(1, true),
+        KeyCode::Char('a') if ctrl => picker.qhome(),
+        KeyCode::Char('e') if ctrl => picker.qend(),
+        KeyCode::Home => picker.qhome(),
+        KeyCode::End => picker.qend(),
+        KeyCode::Char('/' | '_' | '7') if ctrl => { picker.preview = !picker.preview; picker.preview_scroll = 0 }
+        KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
+        KeyCode::Char('p') if alt => { choose(app, kind, picker, Choice::Pause); return }
+        KeyCode::Enter if alt => { choose(app, kind, picker, Choice::Here); return }
+        KeyCode::Enter => { choose(app, kind, picker, Choice::Enter); return }
+        KeyCode::Char('t') if ctrl => { choose(app, kind, picker, Choice::Tab); return }
+        KeyCode::Char('v') if ctrl => { choose(app, kind, picker, Choice::SplitRight); return }
+        KeyCode::Char('x') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
+        KeyCode::Char('s') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
+        KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
+        KeyCode::Char('l') if ctrl => { choose(app, kind, picker, Choice::Link); return }
+        KeyCode::Char('n') if alt => { choose(app, kind, picker, Choice::New); return }
+        KeyCode::Char('i') if alt => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
+        KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
+        _ => {}
+    }
+    let mut kind = kind;
+    if picker.query != before {
+        let (next, changed) = remode(app, kind, &mut picker);
+        kind = next;
+        if changed { prepare(app, &kind); fill(app, &kind, &mut picker) }
+    }
+    if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { if let Some(id) = picker.current_id() { ensure_recent(app, &id) } }
+    app.modal = Some(Modal::Picker { kind, picker });
+}
+
+/// Copy mode, `mode-keys vi`: tmux's copy-mode-vi table.
+fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let Some(p) = app.panes.get_mut(&pane) else { return };
+    let rows = p.rows as i32;
+    let half = (rows / 2).max(1);
+    match key.code {
+        KeyCode::Char('q') => { p.copy_end(); return }
+        KeyCode::Char('c') if ctrl => { p.copy_end(); return }
+        // Escape clears the selection; a second one leaves (tmux: clear-selection, then cancel).
+        KeyCode::Esc => { if p.copy.map(|c| c.selecting).unwrap_or(false) { p.copy_toggle(false) } else { p.copy_end(); return } }
+        KeyCode::Char('h') | KeyCode::Left => p.copy_move(-1, 0),
+        KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
+        KeyCode::Char('k') | KeyCode::Up => p.copy_move(0, -1),
+        KeyCode::Char('j') | KeyCode::Down => p.copy_move(0, 1),
+        KeyCode::Char('u') if ctrl => p.copy_move(0, -half),
+        KeyCode::Char('d') if ctrl => p.copy_move(0, half),
+        KeyCode::Char('b') if ctrl => p.copy_move(0, -rows),
+        KeyCode::Char('f') if ctrl => p.copy_move(0, rows),
+        KeyCode::Char('y') if ctrl => p.copy_move(0, -1),
+        KeyCode::Char('e') if ctrl => p.copy_move(0, 1),
+        KeyCode::Char('v') if ctrl => p.copy_toggle_block(),
+        KeyCode::PageUp => p.copy_move(0, -rows),
+        KeyCode::PageDown => p.copy_move(0, rows),
+        KeyCode::Char('w') | KeyCode::Char('W') => p.copy_word(true),
+        KeyCode::Char('b') | KeyCode::Char('B') => p.copy_word(false),
+        KeyCode::Char('e') | KeyCode::Char('E') => p.copy_word_end(),
+        KeyCode::Char('0') | KeyCode::Home => p.copy_line_edge(false),
+        KeyCode::Char('^') => p.copy_first_nonblank(),
+        KeyCode::Char('$') | KeyCode::End => p.copy_line_edge(true),
+        KeyCode::Char('g') => p.copy_to(true),
+        KeyCode::Char('G') => p.copy_to(false),
+        KeyCode::Char('H') => p.copy_screen(0),
+        KeyCode::Char('M') => p.copy_screen(1),
+        KeyCode::Char('L') => p.copy_screen(2),
+        KeyCode::Char('v') | KeyCode::Char(' ') => p.copy_toggle(false),
+        KeyCode::Char('V') => p.copy_toggle(true),
+        KeyCode::Char('/') | KeyCode::Char('?') => { app.modal = Some(Modal::Find { pane, query: String::new(), found: None }); return }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            if let Some(q) = app.last_search.clone() {
+                let older = key.code == KeyCode::Char('n');
+                if p.find(&q, older, false) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } else { app.say(format!("Search {}: {q}", if older { "hit top" } else { "hit bottom" }), theme::WARN) }
+            }
+        }
+        KeyCode::Char('y') | KeyCode::Enter => {
+            let text = p.selection_text();
+            p.copy_end();
+            if let Some(text) = text {
+                crate::clipboard::store(&text);
+                app.buffers.insert(0, text);
+                app.buffers.truncate(50);
+            }
+            return;
+        }
+        _ => {}
+    }
+    app.modal = Some(Modal::Copy { pane });
+}
+
+/// choose-tree -w: j/k (or ↑/↓) move, Enter/l choose, h/← collapse, → expand, x kill, q/Esc leave.
+fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<String>) {
+    let rows = crate::ui::tree_rows(app, &collapsed);
+    let n = rows.len().max(1);
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => return,
+        KeyCode::Char('c' | 'g') if key.modifiers.contains(KeyModifiers::CONTROL) => return,
+        KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1) % n,
+        KeyCode::Char('k') | KeyCode::Up => cursor = (cursor + n - 1) % n,
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => cursor = (cursor + 1) % n,
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => cursor = (cursor + n - 1) % n,
+        KeyCode::Char('g') | KeyCode::Home => cursor = 0,
+        KeyCode::Char('G') | KeyCode::End => cursor = n - 1,
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('-') => {
+            if let Some(r) = rows.get(cursor) { let id = app.tabs[r.window].id.clone(); if !collapsed.contains(&id) { collapsed.push(id) } cursor = rows.iter().position(|x| x.window == r.window && x.pane.is_none()).unwrap_or(cursor) }
+        }
+        KeyCode::Right | KeyCode::Char('+') => { if let Some(r) = rows.get(cursor) { let id = app.tabs[r.window].id.clone(); collapsed.retain(|c| *c != id) } }
+        KeyCode::Enter | KeyCode::Char('l') => {
+            if let Some(r) = rows.get(cursor) {
+                match r.pane { Some(p) => app.focus_pane(r.window, p), None => app.select_tab(r.window) }
+            }
+            return;
+        }
+        KeyCode::Char('x') => {
+            if let Some(r) = rows.get(cursor) {
+                app.modal = Some(match r.pane {
+                    Some(p) => { let idx = app.tabs[r.window].panes().iter().position(|x| *x == p).unwrap_or(0) + app.pane_base_index; app.focus_pane(r.window, p); Modal::Confirm { prompt: format!("kill-pane {idx}? (y/n)"), command: "kill-pane".into() } }
+                    None => { app.select_tab(r.window); Modal::Confirm { prompt: format!("kill-window {}? (y/n)", app.tabs[r.window].name), command: "kill-window".into() } }
+                });
                 return;
             }
-            let before = picker.query.clone();
-            match key.code {
-                KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
-                KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
-                KeyCode::Up => picker.move_by(-1),
-                KeyCode::Down => picker.move_by(1),
-                KeyCode::Char('p' | 'k') if ctrl => picker.move_by(-1),
-                KeyCode::Char('n' | 'j') if ctrl && !matches!(kind, PickerKind::Machines) => picker.move_by(1),
-                KeyCode::PageUp => picker.move_by(-10),
-                KeyCode::PageDown => picker.move_by(10),
-                KeyCode::Backspace => picker.backspace(alt),
-                KeyCode::Char('u') if ctrl => picker.clear_query(),
-                KeyCode::Char('w') if ctrl => picker.backspace(true),
-                KeyCode::Tab | KeyCode::BackTab => {
-                    if let PickerKind::Open { filter, machine, project } = kind {
-                        let kind = PickerKind::Open { filter: filter.next(), machine, project };
-                        fill(app, &kind, &mut picker);
-                        app.modal = Some(Modal::Picker { kind, picker });
-                        return;
-                    }
-                    if let PickerKind::Store = kind { return store_install(app, kind, picker) }
-                }
-                KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
-                KeyCode::Enter => { choose(app, kind, picker, Choice::Enter); return }
-                KeyCode::Char('t') if ctrl => { choose(app, kind, picker, Choice::Tab); return }
-                KeyCode::Char('v') if ctrl => { choose(app, kind, picker, Choice::SplitRight); return }
-                KeyCode::Char('s') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
-                KeyCode::Char('r') if ctrl => { choose(app, kind, picker, Choice::Here); return }
-                KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
-                KeyCode::Char('x') if ctrl => { choose(app, kind, picker, Choice::Pause); return }
-                KeyCode::Char('n') if ctrl => { choose(app, kind, picker, Choice::New); return }
-                KeyCode::Char('l') if ctrl => { choose(app, kind, picker, Choice::Link); return }
-                KeyCode::Char('i') if ctrl => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
-                KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
-                _ => {}
-            }
-            let mut kind = kind;
-            if picker.query != before {
-                let (next, changed) = remode(app, kind, &mut picker);
-                kind = next;
-                if changed { prepare(app, &kind); fill(app, &kind, &mut picker) }
-            }
-            app.modal = Some(Modal::Picker { kind, picker });
         }
+        KeyCode::Char(c @ '0'..='9') => { if let Some(at) = rows.iter().position(|r| r.pane.is_none() && r.window + app.base_index == c as usize - '0' as usize) { cursor = at } }
+        _ => {}
     }
+    app.modal = Some(Modal::Tree { cursor: cursor.min(n - 1), collapsed });
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -925,7 +1068,15 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 _ => app.open_agent(&machine, &agent, Placement::Auto(None)),
             }
         }
-        PickerKind::Palette => { if let Some(id) = id { run(app, &id) } }
+        PickerKind::Palette => {
+            let Some(id) = id else { return };
+            // A command that needs words goes to the prompt with its name typed; the rest run.
+            if modal::NEEDS_ARGS.contains(&id.as_str()) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None }, ":", &format!("{id} ")))) }
+            else if is_command(&id) { run(app, &id) } else { commands::execute(app, &id) }
+        }
+        PickerKind::Messages => {}
+        PickerKind::Keys => { if let Some(id) = id { if let Some((_, command)) = id.split_once('\t') { commands::execute(app, command) } } }
+        PickerKind::Buffers => { if let Some(i) = id.and_then(|i| i.parse::<usize>().ok()) { paste_buffer(app, i) } }
         PickerKind::Help => {
             // A prefix row switches the box to that mode; a shortcut row is just a reminder.
             let Some(id) = id else { return keep(app, kind, picker) };
@@ -1093,6 +1244,14 @@ fn store_install(app: &mut App, kind: PickerKind, mut picker: Picker) {
 fn submit_prompt(app: &mut App, p: Prompt) {
     let value = p.value.trim().to_string();
     match p.kind {
+        PromptKind::Command { template } => {
+            match template {
+                // `%%` (or the end of the template) takes what was typed, as tmux's command-prompt does.
+                Some(t) if t.contains("%%") => commands::execute(app, &t.replace("%%", &value)),
+                Some(t) => { if !value.is_empty() { commands::execute(app, &format!("{t} {}", quote(&value))) } }
+                None => { if !value.is_empty() { commands::execute(app, &value) } }
+            }
+        }
         PromptKind::RenameTab => { if !value.is_empty() { app.rename_tab(&value) } }
         PromptKind::RenameHarness { machine, agent } => {
             if value.is_empty() { return }
@@ -1170,3 +1329,116 @@ fn submit_prompt(app: &mut App, p: Prompt) {
     }
 }
 
+
+
+// ── what the command layer calls ─────────────────────────────────────────────
+
+/// Quote a typed value so it survives the command-line split as one word.
+fn quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) }
+
+/// Command ids that `run` knows (so `:open` and old configs still work).
+pub fn is_command(id: &str) -> bool {
+    matches!(id, "open" | "palette" | "projects" | "models" | "inbox" | "machines" | "help" | "layout" | "store" | "new" | "terminal" | "send"
+        | "broadcast" | "clone" | "restart" | "pause" | "take" | "rename" | "tab" | "rename-tab" | "close-tab" | "next-tab" | "prev-tab"
+        | "split-right" | "split-down" | "close-pane" | "zoom" | "equalize" | "pane-tab" | "copy-mode" | "find" | "tab-left" | "tab-right"
+        | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "info" | "messages" | "keys"
+        | "choose-buffer" | "quit")
+}
+
+/// The focused pane's title: its harness's name (tmux `#T`).
+pub fn focused_title(app: &App) -> String {
+    focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.name.clone())).unwrap_or_default()
+}
+
+/// `split-window`: pick the harness that goes beside (-h) or below the active pane.
+pub fn split_pick(app: &mut App, dir: Dir) {
+    if app.tab().root.is_none() { launch(app, "", Filter::All); return }
+    app.modal = None;
+    launch(app, "", Filter::All);
+    if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
+        picker.title = if dir == Dir::Horizontal { "split-window -h".into() } else { "split-window".into() };
+    }
+    SPLIT.with(|s| s.set(Some(dir)));
+}
+
+/// `paste-buffer`: the buffer, pasted into the pane.
+pub fn paste_buffer(app: &mut App, index: usize) {
+    let Some(text) = app.buffers.get(index).cloned() else { app.say("no buffers", theme::WARN); return };
+    let Some(focus) = app.focused() else { return };
+    let live = app.panes.get(&focus).map(|p| p.stream.is_some() && !p.read_only).unwrap_or(false);
+    if live { app.send_paste(focus, &text) } else { send_to_focused(app, text.into_bytes()) }
+}
+
+/// `send-keys`: words are typed as text, key names (`Enter`, `C-c`, `Up`) as keys.
+pub fn send_keys(app: &mut App, words: &[String]) {
+    let literal = words.first().map(|w| w == "-l").unwrap_or(false);
+    let mode = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());
+    let mut bytes = Vec::new();
+    for word in words.iter().skip(usize::from(literal)) {
+        if word.starts_with('-') && !literal && word.len() == 2 { continue }
+        let key = if literal { None } else { keys::parse(word).ok().filter(|c| word.len() > 1 && (c.mods != KeyModifiers::NONE || !matches!(c.code, KeyCode::Char(_)))) };
+        match key {
+            Some(chord) => { if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { bytes.extend(b) } }
+            None => bytes.extend(word.as_bytes()),
+        }
+    }
+    if !bytes.is_empty() { send_to_focused(app, bytes) }
+}
+
+/// `new-harness claude @office ~/src/api`: the words `harness new` takes.
+pub fn new_harness_from(app: &mut App, args: &str) {
+    let mut engine = "claude".to_string();
+    let mut machine = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or(app.fleet.local_id.clone());
+    let mut cwd: Option<String> = None;
+    for word in args.split_whitespace() {
+        if let Some(m) = word.strip_prefix('@') {
+            match app.fleet.machines.iter().find(|x| x.name.to_lowercase().starts_with(&m.to_lowercase()) || x.id == m) { Some(x) => machine = x.id.clone(), None => { app.say(format!("no machine called {m}"), theme::WARN); return } }
+        } else if word.starts_with('/') || word.starts_with('~') || word.starts_with('.') {
+            let home = app.homes.get(&machine).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+            cwd = Some(if word == "~" { home } else if let Some(r) = word.strip_prefix("~/") { format!("{home}/{r}") } else { word.to_string() });
+        } else { engine = word.to_string() }
+    }
+    let label = theme::engine_label(&engine).to_string();
+    create(app, machine, What { engine, dsh: None, label }, cwd, None);
+}
+
+pub fn rename_focused(app: &mut App, name: &str) {
+    let Some((machine, agent)) = focused_agent(app) else { return };
+    let Some(link) = app.link(&machine) else { return };
+    let name = name.to_string();
+    app.spawn(async move { link.rpc("agent_update", json!({ "agentId": agent, "name": name }), Duration::from_secs(20)).await }, move |app, r| {
+        if let Err(e) = r { app.say(format!("{e}"), theme::DANGER) } else { app.relist(&machine) }
+    });
+}
+
+pub fn route_task(app: &mut App, text: String) {
+    submit_prompt(app, Prompt::status(PromptKind::Send, "", &text));
+}
+
+pub fn broadcast(app: &mut App, text: &str) {
+    submit_prompt(app, Prompt::status(PromptKind::Broadcast, "", text));
+}
+
+pub fn message_focused(app: &mut App, text: &str) {
+    if text.trim().is_empty() { return }
+    let Some((machine, agent)) = focused_agent(app) else { return };
+    if let Some(link) = app.link(&machine) { link.send("message", json!({ "agentId": agent, "content": text })); }
+}
+
+/// Fetch a harness's recent asks and recaps for the preview, once (then on each open of the list).
+pub fn ensure_recent(app: &mut App, id: &str) {
+    let key = id.split('#').next().unwrap_or(id);
+    let Some((machine, agent)) = key.split_once(':').map(|(m, a)| (m.to_string(), a.to_string())) else { return };
+    if app.recent.contains_key(&(machine.clone(), agent.clone())) { return }
+    let Some(link) = app.link(&machine) else { return };
+    app.recent.insert((machine.clone(), agent.clone()), serde_json::Value::Null);
+    app.spawn(async move { link.rpc("agent_recent", json!({ "agentId": agent, "n": 3 }), Duration::from_secs(15)).await.map(|r| (agent, r)) }, move |app, reply| {
+        if let Ok((agent, value)) = reply { app.recent.insert((machine, agent), value); }
+    });
+}
+
+/// Where choose-tree's cursor starts: on the active pane's row.
+fn tree_cursor_now(app: &App) -> usize {
+    let rows = crate::ui::tree_rows(app, &[]);
+    rows.iter().position(|r| r.window == app.active && r.pane == app.focused()).unwrap_or(0)
+}

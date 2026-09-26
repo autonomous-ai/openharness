@@ -1,5 +1,6 @@
-//! The overlays and what their rows are: ⌥O open, ⌥P palette, ⌥I needs input, ⌥N new (machine →
-//! agent → folder → first message), ⌥M machines, ⌥L layout, ⌥S store, ⌥B send, ⌥/ keys, and the
+//! The overlays and what their rows are: the fzf list's modes (harnesses, > commands, @ machines,
+//! # projects, : models, * store, ? help), needs input, new harness (machine → agent → folder →
+//! first message), layouts, and the
 //! one-line prompts (rename, first message, send, link password).
 
 use ratatui::style::Style;
@@ -47,6 +48,10 @@ pub enum PickerKind {
     NewWhat { machine: String, cwd: Option<String> },
     NewFolder { machine: String, what: What },
     Route { text: String },
+    /// `show-messages`, `list-keys`, `choose-buffer`.
+    Messages,
+    Keys,
+    Buffers,
 }
 
 #[derive(Clone, Debug)]
@@ -58,8 +63,12 @@ pub enum PromptKind {
     Send,
     Broadcast,
     LinkPassword { machine: String },
+    /// tmux `command-prompt`: with a template, the typed text fills it (`rename-window %%`);
+    /// without one, the typed text is the command.
+    Command { template: Option<String> },
 }
 
+/// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
 pub struct Prompt {
     pub kind: PromptKind,
     pub title: String,
@@ -67,14 +76,32 @@ pub struct Prompt {
     pub hint: String,
     pub value: String,
     pub secret: bool,
+    /// Cursor position in `value`, in chars (emacs keys move it, as in tmux's prompt).
+    pub cursor: usize,
+    /// Where Up/Down are in the command history.
+    pub history_at: Option<usize>,
+}
+
+impl Prompt {
+    pub fn status(kind: PromptKind, label: &str, initial: &str) -> Prompt {
+        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None }
+    }
 }
 
 pub enum Modal {
     Picker { kind: PickerKind, picker: Picker },
     Prompt(Prompt),
-    /// ⌥F: find in the focused pane's history. `found` is None before the first search.
+    /// tmux `confirm-before`: `kill-pane 0? (y/n)` in the status line.
+    Confirm { prompt: String, command: String },
+    /// tmux `display-panes` (C-b q): a big number on every pane; press one to go there.
+    DisplayPanes { until: std::time::Instant },
+    /// tmux `clock-mode` (C-b t).
+    Clock { pane: u64 },
+    /// tmux `choose-tree -w` (C-b w): windows and their panes, with a preview.
+    Tree { cursor: usize, collapsed: Vec<String> },
+    /// Search in the focused pane's history (copy mode's / and ?). `found` is None before the first search.
     Find { pane: u64, query: String, found: Option<bool> },
-    /// ⌥[: move a cursor over the pane's text and copy from it, vi-style.
+    /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.
     Copy { pane: u64 },
 }
 
@@ -294,10 +321,16 @@ pub fn local_model_rows(app: &App) -> Vec<Row> {
     rows.into_iter().map(|(_, r)| r).collect()
 }
 
-pub fn mode_rows() -> Vec<Row> {
-    let modes = [(">", "Commands", "Run anything by name", "⌥⇧P"), ("@", "Machines", "Choose a machine, then one of its harnesses", "⌥M"), ("#", "Projects", "Choose a project, then one of its harnesses", "⌥O"), (":", "Models", "Switch the focused harness's model and effort", "⌥I"), ("*", "Store", "Find a harness in the Store", "⌥S")];
-    let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p}  {t}")).group("Type a prefix").detail(vec![span(*d, fg(theme::MUTED))]).right(*k)).collect();
-    rows.extend(help_rows());
+/// `?`: what the box does, one prefix per line, then every key.
+pub fn mode_rows(app: &App) -> Vec<Row> {
+    let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
+    let modes = [(">", "commands", "every tmux command, by name", hint("command-prompt")), ("@", "machines", "a machine, then its harnesses", hint("choose-tree -m")),
+        ("#", "projects", "a project folder, then its harnesses", String::new()), (":", "models", "this harness's model; local models", hint("choose-tree -i")),
+        ("*", "store", "the Harness Store", hint("choose-tree -S"))];
+    let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p} {t}")).detail(vec![span(*d, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(k.clone())).collect();
+    let prefix = crate::keys::name(&app.keymap.prefix);
+    rows.extend(app.keymap.prefix_table.iter().filter(|b| !b.note.is_empty()).map(|b| Row::new(format!("key:{}", b.command), b.note.clone()).extra(b.command.clone())
+        .lead(vec![span(format!("{prefix} {:<7}", crate::keys::name(&b.chord)), Style::default().fg(theme::FZF_HL))])));
     rows
 }
 
@@ -320,16 +353,17 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
     rows
 }
 
+/// `>`: every tmux command there is, with the key that runs it.
 pub fn palette_rows(app: &App) -> Vec<Row> {
-    let pane_name = app.focused().and_then(|id| app.panes.get(&id)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone());
-    COMMANDS.iter().map(|(id, title, keys, hint, group)| {
-        let title = match (*id, &pane_name) {
-            ("clone" | "restart" | "pause" | "rename", Some(name)) => format!("{title} · {name}"),
-            _ => title.to_string(),
-        };
-        Row::new(*id, title).extra(format!("{hint} {group}")).group(*group).detail(vec![span(*hint, fg(theme::MUTED))]).right(*keys)
+    crate::commands::COMMANDS.iter().map(|(name, alias, about)| {
+        let key = app.keymap.prefix_table.iter().find(|b| b.command == *name || b.command.starts_with(&format!("{name} ")) || b.command.ends_with(&format!(" {name}")))
+            .map(|b| format!("{} {}", crate::keys::name(&app.keymap.prefix), crate::keys::name(&b.chord))).unwrap_or_default();
+        Row::new(*name, *name).extra(format!("{alias} {about}")).detail(vec![span(*about, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(key)
     }).collect()
 }
+
+/// Commands that mean nothing without words after them.
+pub const NEEDS_ARGS: &[&str] = &["select-window", "rename-window", "move-window", "select-pane", "resize-pane", "swap-pane", "select-layout", "send-keys", "command-prompt", "confirm-before", "display-message", "send-message", "rename-harness", "send-task", "broadcast"];
 
 pub fn machine_rows(app: &App) -> Vec<Row> {
     app.fleet.machines.iter().map(|m| {

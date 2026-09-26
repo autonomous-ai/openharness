@@ -62,6 +62,13 @@ pub struct Picker {
     pub row_at: Vec<(u16, usize)>,
     /// A row whose action needs a second Enter (a big download).
     pub armed: Option<String>,
+    /// The query's cursor, in chars (fzf edits the query like readline).
+    pub qcursor: usize,
+    /// Rows marked with Tab (fzf --multi), by id, in the order marked.
+    pub marked: Vec<String>,
+    /// The preview window, and how far it is scrolled.
+    pub preview: bool,
+    pub preview_scroll: u16,
     matcher: Matcher,
 }
 
@@ -86,6 +93,10 @@ impl Picker {
             prefixed: false,
             row_at: Vec::new(),
             armed: None,
+            qcursor: 0,
+            marked: Vec::new(),
+            preview: true,
+            preview_scroll: 0,
             matcher: Matcher::new(Config::DEFAULT),
         }
     }
@@ -144,31 +155,85 @@ impl Picker {
         self.skip_disabled(if delta >= 0 { 1 } else { -1 });
     }
 
+    fn changed(&mut self) {
+        self.cursor = 0;
+        self.selected_id = None;
+        self.preview_scroll = 0;
+        self.refilter();
+    }
+
+    fn byte_at(&self, chars: usize) -> usize { self.query.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.query.len()) }
+    fn qlen(&self) -> usize { self.query.chars().count() }
+
     pub fn type_char(&mut self, c: char) {
-        self.query.push(c);
-        self.cursor = 0;
-        self.selected_id = None;
-        self.refilter();
+        self.qcursor = self.qcursor.min(self.qlen());
+        let at = self.byte_at(self.qcursor);
+        self.query.insert(at, c);
+        self.qcursor += 1;
+        self.changed();
     }
 
+    /// Backspace (or, with [word], C-w / M-BS: the word before the cursor).
     pub fn backspace(&mut self, word: bool) {
+        self.qcursor = self.qcursor.min(self.qlen());
+        if self.qcursor == 0 { return }
+        let chars: Vec<char> = self.query.chars().collect();
+        let mut from = self.qcursor - 1;
         if word {
-            let trimmed = self.query.trim_end().to_string();
-            let cut = trimmed.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
-            self.query.truncate(cut);
-        } else {
-            self.query.pop();
+            while from > 0 && chars[from].is_whitespace() { from -= 1 }
+            while from > 0 && !chars[from - 1].is_whitespace() { from -= 1 }
         }
-        self.cursor = 0;
-        self.selected_id = None;
-        self.refilter();
+        self.query = chars[..from].iter().chain(chars[self.qcursor..].iter()).collect();
+        self.qcursor = from;
+        self.changed();
     }
 
+    /// Delete / C-d: the character under the cursor.
+    pub fn delete_forward(&mut self) {
+        let chars: Vec<char> = self.query.chars().collect();
+        if self.qcursor >= chars.len() { return }
+        self.query = chars[..self.qcursor].iter().chain(chars[self.qcursor + 1..].iter()).collect();
+        self.changed();
+    }
+
+    /// C-u: everything before the cursor.
     pub fn clear_query(&mut self) {
-        self.query.clear();
-        self.cursor = 0;
-        self.selected_id = None;
-        self.refilter();
+        let chars: Vec<char> = self.query.chars().collect();
+        self.query = chars[self.qcursor.min(chars.len())..].iter().collect();
+        self.qcursor = 0;
+        self.changed();
+    }
+
+    /// Move the query cursor: by chars, or (word) to the previous / next word boundary.
+    pub fn qmove(&mut self, by: i64, word: bool) {
+        let chars: Vec<char> = self.query.chars().collect();
+        let mut at = self.qcursor.min(chars.len()) as i64;
+        if word {
+            if by < 0 {
+                while at > 0 && chars[(at - 1) as usize].is_whitespace() { at -= 1 }
+                while at > 0 && !chars[(at - 1) as usize].is_whitespace() { at -= 1 }
+            } else {
+                let n = chars.len() as i64;
+                while at < n && chars[at as usize].is_whitespace() { at += 1 }
+                while at < n && !chars[at as usize].is_whitespace() { at += 1 }
+            }
+        } else { at = (at + by).clamp(0, chars.len() as i64) }
+        self.qcursor = at as usize;
+    }
+    pub fn qhome(&mut self) { self.qcursor = 0 }
+    pub fn qend(&mut self) { self.qcursor = self.qlen() }
+
+    /// Tab: mark or unmark the row under the cursor (fzf --multi).
+    pub fn toggle_mark(&mut self) {
+        let Some(id) = self.current_id() else { return };
+        if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); } else { self.marked.push(id) }
+    }
+
+    /// Replace the query outright (a mode switch, a history recall).
+    pub fn set_query(&mut self, text: &str) {
+        self.query = text.to_string();
+        self.qcursor = self.qlen();
+        self.changed();
     }
 
     pub fn current(&self) -> Option<&Row> {

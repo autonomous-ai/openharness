@@ -1,9 +1,12 @@
 //! harness-tui — all of Harness in a terminal. A client of the same local daemon the desktop app
 //! uses: every harness on every machine (relay + P2P live in the daemon), in tabs and panes that
-//! are the account's desk, with the desktop's keys (⌘ read as ⌥).
+//! are the account's desk, driven with tmux's keys.
 
 mod app;
 mod clipboard;
+mod commands;
+mod keys;
+mod preview;
 mod config;
 mod daemon;
 mod event;
@@ -54,8 +57,9 @@ pub fn bell() {
 fn usage() {
     println!("harness-tui — Harness in your terminal\n");
     println!("  harness tui [--port N]\n");
-    println!("  ⌥O open · ⌥P commands · ⌥N new · ⌥T tab · ⌥\\ ⌥- split · ⌥1-9 tabs · ⌥/ keys · ⌥Q quit");
-    println!("  ⌥ is Option/Alt (⌘ works in kitty/Ghostty/WezTerm); ^Space then the key works everywhere.");
+    println!("  tmux's keys: C-b s harnesses · C-b c window · C-b % \" split · C-b o next pane · C-b z zoom");
+    println!("  C-b [ copy · C-b w windows · C-b C new harness · C-b ? keys · C-b d detach");
+    println!("  ~/.tmux.conf is read: your prefix and binds work here too.");
     println!("\n  HARNESS_TUI_DESK=read   show the desk's tabs but never change them");
     println!("  HARNESS_TUI_DESK=off    keep tabs to this window");
 }
