@@ -15,6 +15,7 @@ mod dial;
 mod event;
 mod fleet;
 mod format;
+mod fzf;
 mod input;
 mod layout;
 mod modal;
