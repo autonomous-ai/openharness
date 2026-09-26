@@ -208,28 +208,30 @@ void main() {
     },
   );
 
-  testWidgets(
-    'close view and close swarm shortcuts keep shared sessions alive',
-    (tester) async {
-      final app = createApp();
-      app.machineStates['m']!.nodeOnline = true;
-      final session = terminal('a0', []);
-      app.adoptSessionForTest(session);
-      final original = app.activeSwarm;
-      app.newSwarm();
-      await app.addAgentToSwarm('m', 'a0');
-      await mount(tester, app);
-      await chord(tester, LogicalKeyboardKey.keyW, shift: true);
-      expect(app.swarms.length, 2);
-      expect(app.panes, isEmpty);
-      expect(original.panes.single.session, same(session));
-      await chord(tester, LogicalKeyboardKey.keyW);
-      expect(app.swarms.single, same(original));
-      expect(app.panes.single.session, same(session));
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    },
-  );
+  testWidgets('closing the final view or its tab keeps shared sessions alive', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.machineStates['m']!.nodeOnline = true;
+    final session = terminal('a0', []);
+    app.adoptSessionForTest(session);
+    final original = app.activeSwarm;
+    app.newSwarm();
+    await app.addAgentToSwarm('m', 'a0');
+    await mount(tester, app);
+    await chord(tester, LogicalKeyboardKey.keyW, shift: true);
+    expect(app.swarms, [original]);
+    expect(app.panes.single.session, same(session));
+    app.newSwarm();
+    await app.addAgentToSwarm('m', 'a0');
+    await tester.pumpAndSettle();
+    expect(app.swarms.length, 2);
+    await chord(tester, LogicalKeyboardKey.keyW);
+    expect(app.swarms.single, same(original));
+    expect(app.panes.single.session, same(session));
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
 
   testWidgets(
     'keyboard pane actions replace header controls and keep other views alive',

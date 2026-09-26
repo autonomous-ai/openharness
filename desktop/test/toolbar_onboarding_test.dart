@@ -12,6 +12,8 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/workspace_onboarding.dart';
+import 'package:harness/state/workspace_companion.dart';
+import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/onboarding_card.dart';
 
@@ -104,7 +106,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  void localHarness() {
+  Future<void> localHarness() async {
     app.stateOf('m')!.agents = const [
       Agent(
         id: 'work',
@@ -114,9 +116,272 @@ void main() {
       ),
     ];
     app.adoptSessionForTest(terminal('work', []));
+    await app.handleMachineEventForTest('m', {
+      'type': 'turn_ended',
+      'agentId': 'work',
+    });
   }
 
-  for (var completed = 0; completed <= 3; completed++) {
+  testWidgets('egg hint disappears and does not repeat on a new tab', (
+    tester,
+  ) async {
+    await mount(tester, storage: MemoryStore());
+    expect(
+      find.byKey(const ValueKey('companion-arrival-hint')),
+      findsOneWidget,
+    );
+    expect(journey.completedCount, 0);
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.byKey(const ValueKey('companion-arrival-hint')), findsNothing);
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('companion-arrival-hint')), findsNothing);
+    expect(journey.needsCompanionHint, isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'discovery notice keeps work feedback and hatches without taking focus',
+    (tester) async {
+      await mount(tester);
+      final messenger = ScaffoldMessenger.of(
+        tester.element(find.byType(SwarmScreen)),
+      );
+      messenger.showSnackBar(
+        const SnackBar(
+          duration: Duration(minutes: 1),
+          content: Text('Work needs your attention.'),
+        ),
+      );
+      final focus = FocusManager.instance.primaryFocus;
+      journey.sync(
+        scope: journey.scope!,
+        observed: WorkspaceOnboarding.hatchSteps.toSet(),
+        otherComputer: true,
+        modelsAvailable: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Work needs your attention.'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('companion-discovery-notice')),
+        findsOneWidget,
+      );
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      await tester.tap(find.text('[ hatch ]'));
+      await tester.pump();
+      expect(journey.companion, isNotNull);
+      expect(
+        find.byKey(const ValueKey('companion-discovery-notice')),
+        findsNothing,
+      );
+      expect(find.text('Hatch your companion'), findsNothing);
+      expect(find.text('Work needs your attention.'), findsOneWidget);
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'three discoveries hatch directly from the egg without moving focus or requiring a model',
+    (tester) async {
+      await mount(tester);
+      journey.sync(
+        scope: journey.scope!,
+        observed: WorkspaceOnboarding.hatchSteps.toSet(),
+        otherComputer: true,
+        modelsAvailable: false,
+      );
+      await tester.pumpAndSettle();
+      expect(journey.completed(OnboardingStep.models), isFalse);
+      final button = find.byKey(const ValueKey('companion-tab-button'));
+      final before = tester.getRect(button);
+      final focus = FocusManager.instance.primaryFocus;
+      await tester.tap(button);
+      await tester.pump();
+      expect(journey.companion, isNotNull);
+      expect(find.text('Hatch your companion'), findsNothing);
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      await tester.pump(const Duration(seconds: 3));
+      expect(tester.getRect(button), before);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'symbol opens onboarding at the far right and preserves shortcuts',
+    (tester) async {
+      await mount(tester);
+      final button = find.byKey(const ValueKey('companion-tab-button'));
+      expect(find.text(CompanionController.egg), findsOneWidget);
+      expect(find.text('Hatch a companion'), findsNothing);
+      expect(
+        tester.getRect(button).left,
+        greaterThanOrEqualTo(
+          tester
+              .getRect(find.byKey(const ValueKey('workspace-pane-context')))
+              .right,
+        ),
+      );
+      await tap(tester, button);
+      expect(find.text('Hatch your companion'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('Hatch your companion'), findsNothing);
+      await key(tester, LogicalKeyboardKey.keyP, cmd: true, shift: true);
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        '> Terminal companion',
+      );
+      await tester.pumpAndSettle();
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Hatch your companion'), findsOneWidget);
+      await key(tester, LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      await tap(tester, button);
+      await tap(tester, find.byKey(const ValueKey('companion-step-harnesses')));
+      expect(find.byType(NewHarnessForm), findsOneWidget);
+      expect(find.text('Hatch your companion'), findsNothing);
+      expect(journey.completedCount, 0);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'unlocks require completed work; agent and model switches are not new harnesses',
+    (tester) async {
+      app.inventory = const GridModels(
+        gridName: 'home',
+        models: [GridModel(id: 'qwen', node: 'm')],
+      );
+      await app.modelManager.refresh();
+      await mount(tester);
+      app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'work',
+          name: 'Work',
+          engine: 'codex',
+          terminalAvailable: true,
+        ),
+      ];
+      app.adoptSessionForTest(terminal('work', []));
+      app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(journey.completedCount, 0);
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_started',
+        'agentId': 'work',
+      });
+      await tester.pumpAndSettle();
+      expect(journey.completedCount, 0);
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'work',
+      });
+      await tester.pumpAndSettle();
+      expect(journey.completedCount, 1);
+      expect(find.text('1/4'), findsNothing);
+      app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'work',
+          name: 'Work',
+          engine: 'claude',
+          gridModel: 'qwen',
+          terminalAvailable: true,
+        ),
+      ];
+      app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(journey.completed(OnboardingStep.models), isFalse);
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'work',
+      });
+      await tester.pumpAndSettle();
+      expect(journey.completed(OnboardingStep.models), isTrue);
+      expect(journey.completed(OnboardingStep.store), isFalse);
+      app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'work',
+          name: 'Work',
+          engine: 'claude',
+          dsh: 'autonomous/kicad',
+          terminalAvailable: true,
+        ),
+      ];
+      for (final extra in [
+        {'subagent': true},
+        {
+          'payload': {'error': 'failed'},
+        },
+      ]) {
+        await app.handleMachineEventForTest('m', {
+          'type': 'turn_ended',
+          'agentId': 'work',
+          ...extra,
+        });
+        await tester.pumpAndSettle();
+        expect(journey.completed(OnboardingStep.store), isFalse);
+      }
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'work',
+      });
+      await tester.pumpAndSettle();
+      expect(journey.completed(OnboardingStep.store), isTrue);
+      expect(journey.completedCount, 2);
+      expect(find.text('2/3'), findsNothing);
+      // A real remote turn earns the remaining milestone.
+      const remote = Machine(
+        machineId: 'r',
+        name: 'Remote',
+        authMode: MachineAuthMode.remote,
+      );
+      app.machineStates['r'] = MachineState(remote)
+        ..agents = const [
+          Agent(id: 'remote', name: 'Remote work', engine: 'codex'),
+        ];
+      final remoteSession = TerminalSession(
+        machineId: 'r',
+        agentId: 'remote',
+        agentName: 'Remote work',
+        engineId: 'codex',
+        send: (_, _) async => true,
+        sendBinary: (_) async => true,
+      );
+      app.adoptSessionForTest(remoteSession);
+      await app.handleMachineEventForTest('r', {
+        'type': 'turn_ended',
+        'agentId': 'remote',
+      });
+      await tester.pumpAndSettle();
+      expect(journey.complete, isTrue);
+      expect(find.byKey(const ValueKey('onboarding-progress')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('onboarding-harnesses-complete')),
+        findsNothing,
+      );
+      expect(find.text('Your companion is ready.'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('workspace-status-bar')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('companion-tab-button')),
+        findsOneWidget,
+      );
+      await tap(tester, find.text('[ hatch ]'));
+      expect(journey.companion, isNotNull);
+      expect(find.text('Hatch your companion'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (var completed = 0; completed <= 4; completed++) {
     testWidgets(
       'welcome has the same working actions with $completed saved steps',
       (tester) async {
@@ -282,6 +547,7 @@ void main() {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
     await mount(tester, keymap: map);
+    expect(find.byTooltip('Models'), findsNothing);
     expect(find.byTooltip('Models ⌘I'), findsNothing);
     map.apply('''{"bindings":[
       {"keys":"cmd+i","command":null},
@@ -363,10 +629,6 @@ void main() {
       await openWorkspaceTool(tester, 'harnesses');
       expect(find.text('New Harness'), findsNothing);
       expect(journey.completed(OnboardingStep.harnesses), isFalse);
-      expect(
-        find.byKey(const ValueKey('onboarding-harnesses-dot')),
-        findsNothing,
-      );
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       await openWorkspaceTool(tester, 'harnesses');
@@ -382,7 +644,7 @@ void main() {
     testWidgets(
       'Machines guides access to existing work (password=$hasPassword)',
       (tester) async {
-        localHarness();
+        await localHarness();
         if (hasPassword) app.password = '123456';
         await mount(tester);
         expect(journey.next, OnboardingStep.machines);
@@ -458,6 +720,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.connections, ['source']);
       expect(resourceScope('@'), findsOneWidget);
+      expect(resourceSearch(tester).selected!.machineId, 'source');
+      expect(field, findsNothing);
+      expect(app.stateOf('source')!.needsLink, isFalse);
+      expect(app.stateOf('source')!.connectionStatus, ConnectionStatus.connected);
+      expect(app.allPanes, isEmpty);
       await key(tester, LogicalKeyboardKey.enter);
       expect(resourceScope('@'), findsOneWidget);
       expect(app.panes, isEmpty);
@@ -467,7 +734,8 @@ void main() {
       expect(find.text('Work on this computer'), findsNothing);
       await key(tester, LogicalKeyboardKey.enter);
       expect(app.panes.single.agentId, 'existing');
-      expect(journey.completed(OnboardingStep.machines), isFalse);
+      expect(journey.completed(OnboardingStep.machines), isTrue);
+      expect(journey.completed(OnboardingStep.harnesses), isFalse);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -506,15 +774,15 @@ void main() {
   );
 
   testWidgets(
-    'skipping Machines offers Models; explore selects Local without starting a download',
+    'skipping Machines offers Store; local models remain available without a download',
     (tester) async {
-      localHarness();
+      await localHarness();
       await app.modelManager.refresh();
       await mount(tester);
       await openWorkspaceTool(tester, 'machines');
       journey.dismiss(OnboardingStep.machines);
       await tester.pump();
-      expect(journey.next, OnboardingStep.models);
+      expect(journey.next, OnboardingStep.store);
       expect(find.byKey(const ValueKey('onboarding-models-dot')), findsNothing);
       await openWorkspaceTool(tester, 'models');
       expect(resourceScope(':'), findsOneWidget);

@@ -226,6 +226,22 @@ picker; focused context links keep their scope.
 Leave a window drag area between tabs and context and prevent overlap in
 narrow windows. Native menus and commands remain available.
 
+The companion sits at the far right, directly after the focused context and PR.
+Its one-cell inner gutters provide separation; add no extra gap or divider.
+Before hatching, show the ASCII egg `\_O_/` in
+warm terminal colors. Each discovery reveals a little more life, ending in
+`\_o.o_/` when ready. Brief gestures react to discoveries, completed turns,
+returning after a break, or direct interaction; no repeating animation loop.
+After hatching, show only the
+one-line ASCII creature. Its name and progress belong in the tooltip and companion panel, never
+beside the symbol. Use the same 13 pt workspace font as the status line, and
+reserve eight character cells plus one-cell gutters from egg through creature
+so expressions do not move nearby text. Clicking a ready egg hatches it directly; otherwise it opens the compact
+onboarding or companion panel. A brief first-arrival hint explains the egg without
+taking focus, and hover retains its meaning and progress. Escape returns
+focus to the workspace. Mood updates repaint only the companion control.
+The complete lifecycle and interaction rules are in [Terminal companion](terminal-companion.md).
+
 Data rules live in `lib/state/workspace_status.dart`; prompt formatting lives in
 `lib/shared/theme/status_line_style.dart`. Flutter draws the fallback bar in
 `SwarmScreen`; macOS draws `SwarmTabStrip` in `macos/Runner/SwarmTitlebar.swift`.

@@ -218,6 +218,88 @@ private extension SwarmTabButton {
 }
 
 private extension SwarmTabStrip {
+  func checkCompanion() throws {
+    let originalSize = frame.size
+    let originalEmit = emit
+    defer { setFrameSize(originalSize); emit = originalEmit }
+    var events: [String] = []
+    emit = { method, _ in events.append(method) }
+    var symbol: [String: Any] = ["visible": true, "glyph": "\\_O_/", "columns": 8,
+      "foreground": 0xffdfc38b, "opacity": 0.95, "label": "Hatch your companion", "detail": "2 of 3 discoveries complete",
+      "tooltip": "A companion is inside. Click to explore.\n2 of 3 discoveries complete"]
+    var state: [String: Any] = ["enabled": true, "activeId": "pet-11",
+      "tabs": (0..<12).map { ["id": "pet-\($0)", "name": "Pet \($0)", "label": "\($0 + 1):code"] },
+      "focusedContext": ["text": "Codex  M2:project  (main)", "canSelectModel": true],
+      "pullRequest": ["text": "PR #298 · Merged", "url": "https://github.com/acme/repo/pull/298"],
+      "companion": symbol]
+    update(state)
+    try checkTitlebar(companionButton.title.isEmpty && companionButton.glyph == "\\_O_/",
+      "Before hatch the ASCII egg is drawn without a text label")
+    try checkTitlebar(companionButton.toolTip?.contains("A companion is inside") == true && companionButton.toolTip?.contains("2 of 3") == true,
+      "Progress remains available in the tooltip")
+    try checkTitlebar(companionButton.foreground == statusColor(0xffdfc38b, fallback: .clear),
+      "Native egg colors come from the same terminal palette as Flutter")
+    companionButton.performClick(nil)
+    try checkTitlebar(events == ["companion"], "The symbol opens its panel exactly once")
+    for size in [13.0, 22.0] {
+      state["barStyle"] = ["family": "Menlo", "size": size]
+      for glyph in ["\\_O_/", "~\\_O_/~", "\\_.._/", "\\_o.o_/", "=^o.o^="] {
+        symbol["glyph"] = glyph
+        state["companion"] = symbol
+        for width in [CGFloat(320), CGFloat(640), CGFloat(900), CGFloat(1280)] {
+          setFrameSize(NSSize(width: width, height: originalSize.height))
+          update(state)
+          try checkTitlebar(companionButton.font == tabs[0].labelFont,
+            "The symbol shares the workspace bar font at \(size)pt")
+          try checkTitlebar(companionButton.frame.maxX <= bounds.width &&
+            companionButton.frame.minX >= pullRequestButton.frame.maxX &&
+            contextButton.frame.maxX <= pullRequestButton.frame.minX &&
+            newButton.frame.maxX < contextButton.frame.minX,
+            "Companion, PR, context, and tabs do not overlap at \(width)px / \(size)pt")
+          try checkActiveVisible()
+        }
+      }
+    }
+    let tab = tabs[0]
+    try checkTitlebar(pullRequestButton.frame.maxX == companionButton.frame.minX &&
+      companionButton.frame.height == newButton.frame.height &&
+      companionButton.frame.midY == newButton.frame.midY,
+      "The companion follows the focused context and shares the controls' height and inner gutters")
+    scroll.contentView.scroll(to: .zero)
+    let scrollFrame = scroll.frame, visible = scroll.documentVisibleRect
+    let documentFrame = document.frame, companionFrame = companionButton.frame
+    for glyph in ["\\_O_/", " ~\\_O_/~", "\\_.._/", "\\_--_/", "\\_o.o_/", "\\_-.-_/", "=^o.o^="] {
+      symbol["glyph"] = glyph
+      updateCompanion(symbol)
+      try checkTitlebar(companionButton.frame == companionFrame && scroll.frame == scrollFrame,
+        "Wobbling and hatching keep the same eight-cell slot")
+    }
+    symbol["hatching"] = true
+    updateCompanion(symbol)
+    try checkTitlebar(!companionButton.isEnabled && companionButton.animating,
+      "Hatching stays bright while repeated activation is disabled")
+    symbol["hatching"] = false
+    symbol["glyph"] = "=^z.z^="
+    symbol["label"] = "Miso"
+    symbol["open"] = true
+    updateCompanion(symbol)
+    try checkTitlebar(tabs[0] === tab && scroll.frame == scrollFrame &&
+      scroll.documentVisibleRect == visible && document.frame == documentFrame &&
+      companionButton.frame == companionFrame,
+      "A mood change does not rebuild tabs, scroll them, or move status text")
+    try checkTitlebar(companionButton.title.isEmpty && companionButton.accessibilityLabel() == "Miso",
+      "The companion name is available to accessibility without appearing in the bar")
+    state["enabled"] = false
+    update(state)
+    events.removeAll()
+    companionButton.performClick(nil)
+    try checkTitlebar(events.isEmpty && !companionButton.isEnabled,
+      "A modal disables the companion action")
+    update([:])
+    try checkTitlebar(companionButton.isHidden && !companionButton.isEnabled,
+      "Workspace teardown hides the companion")
+  }
+
   func checkAgentIdentity() throws {
     func show(_ count: Int, engine: String? = nil) {
       var row: [String: Any] = ["id": "agent-tab", "name": "Login flow", "agentCount": count]
@@ -444,7 +526,7 @@ private extension SwarmTabStrip {
       newButton.frame.maxX < contextButton.frame.minX, "Tabs are left of the right-aligned focused context")
     try checkTitlebar(tabs[0].frame.width < 120 && tabs[0].displayLabel == "1:code",
       "Short numbered labels use text-sized widths")
-    try checkTitlebar(subviews.count == 5 && pullRequestButton.isHidden && focusedModelButton.isHidden,
+    try checkTitlebar(subviews.count == 6 && pullRequestButton.isHidden && focusedModelButton.isHidden && companionButton.isHidden,
       "Context links fill the bar; standalone search and management controls are absent")
     let controls = [newButton]
     for (control, symbol) in zip(controls, ["+"]) {
@@ -577,6 +659,15 @@ private extension SwarmTabStrip {
     messenger.finishNextReply()
     try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "new",
       "New swarm returns keyboard ownership to the workspace")
+    updateCompanion(["visible": true, "glyph": "\\_O_/", "columns": 8])
+    try checkTitlebar(window.makeFirstResponder(companionButton), "The companion accepts keyboard focus")
+    companionButton.performClick(nil)
+    try checkTitlebar(window.firstResponder === companionButton,
+      "Companion activation waits for the Flutter panel before releasing keyboard focus")
+    messenger.finishNextReply()
+    try checkTitlebar(window.firstResponder === window.contentInput && messenger.calls.last?.method == "companion",
+      "The companion panel receives the next keystroke")
+    updateCompanion([:])
     let current = tabs[0].accessibilityChildren()!.first as! NSButton
     window.makeFirstResponder(current)
     current.performClick(nil)
@@ -1294,6 +1385,7 @@ do {
   try strip.checkAgentIdentity()
   try strip.checkSharedTypography()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
+  try strip.checkCompanion()
   try checkTitlebar(titlebarCheckApp.windows.isEmpty, "Checks never open an application window")
   if CommandLine.arguments.contains("--window-layout") {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 700),

@@ -886,7 +886,7 @@ void main() {
         final rect = tester.getRect(find.byWidget(control));
         expect(
           rect.height,
-          control.selected == null ? 28 : tester.getSize(bar).height,
+          control.selectedBackground == null ? 28 : tester.getSize(bar).height,
         );
         if (control.selected == true) {
           final fill = find.descendant(
@@ -928,7 +928,14 @@ void main() {
           tester.view.physicalSize = Size(width, 800);
           await tester.pump(const Duration(milliseconds: 100));
           expect(tester.takeException(), isNull);
-          expect(tester.getRect(context).right, lessThan(width));
+          final companion = tester.getRect(
+            find.byKey(const ValueKey('companion-tab-button')),
+          );
+          expect(
+            tester.getRect(context).right,
+            lessThanOrEqualTo(companion.left),
+          );
+          expect(companion.right, lessThan(width));
         }
       }
       await captureControls(tester, 'unified-search-toolbar', height: 100);
