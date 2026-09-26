@@ -18,6 +18,7 @@ mod format;
 mod input;
 mod layout;
 mod modal;
+mod options;
 mod pane;
 mod picker;
 mod proto;
@@ -76,8 +77,11 @@ impl Drop for Restore {
 }
 
 fn main() -> io::Result<()> {
-    // Before any thread exists: the file may set environment switches.
+    // Before any thread exists: the file may set environment switches; and dates are written in
+    // your locale's words, as tmux's are (it sets LC_TIME from the environment too).
     let config = config::load();
+    // SAFETY: once, before any other thread, with a valid C string.
+    unsafe { libc::setlocale(libc::LC_TIME, c"".as_ptr()); }
     tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(run(config))
 }
 

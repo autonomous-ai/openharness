@@ -36,6 +36,10 @@ pub struct Keymap {
     /// `bind -T copy-mode-vi` / `-T copy-mode`: over copy mode's own keys.
     pub copy_vi: Vec<Binding>,
     pub copy_emacs: Vec<Binding>,
+    /// Tables of your own (`bind -T resize …`, `switch-client -T resize`).
+    pub named: std::collections::BTreeMap<String, Vec<Binding>>,
+    /// Copy-mode keys unbound (`unbind -T copy-mode-vi v`).
+    pub copy_unbound: Vec<(Table, Chord)>,
     /// tmux `repeat-time`.
     pub repeat_ms: u64,
     /// How long after the prefix before the key hint shows (`set -g @hn-hint-time`; 0: never).
@@ -151,7 +155,37 @@ impl Keymap {
         // `/` is list-keys -1N in tmux (describe a key); here it is the far more used search. The
         // describe variant stays reachable through `?`.
         t.retain(|x| !(x.chord == ch('/') && x.command == "list-keys"));
-        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), copy_vi: Vec::new(), copy_emacs: Vec::new(), repeat_ms: 500, hint_ms: 600 }
+        // tmux's own keys run tmux's own commands, word for word (tests/fixtures, from tmux 3.5a
+        // itself), with tmux's own words for them (list-keys -N, C-b ?, C-b /).
+        let notes = tmux_notes();
+        for line in include_str!("../tests/fixtures/tmux-3.5a-prefix.txt").lines() {
+            let Some(fb) = fixture_binding(line) else { continue };
+            match t.iter_mut().find(|b| b.chord == fb.chord) {
+                Some(b) => { b.command = fb.command; b.repeat = fb.repeat }
+                None => t.push(fb),
+            }
+        }
+        for b in t.iter_mut() { if let Some(n) = notes.get(&name(&b.chord)) { b.note = n.clone() } }
+        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), copy_vi: Vec::new(), copy_emacs: Vec::new(), named: Default::default(), copy_unbound: Vec::new(), repeat_ms: 500, hint_ms: 600 }
+    }
+
+    /// Every key table, as `list-keys` walks them: by name, each by key code. The copy-mode tables
+    /// are tmux's defaults (tests/fixtures), with what was bound over them and without what was
+    /// unbound.
+    pub fn tables(&self) -> Vec<(String, Vec<Binding>)> {
+        let mut out: Vec<(String, Vec<Binding>)> = Vec::new();
+        for (name, own, defaults, table) in [("copy-mode", &self.copy_emacs, include_str!("../tests/fixtures/tmux-3.5a-copy-mode.txt"), Table::CopyEmacs), ("copy-mode-vi", &self.copy_vi, include_str!("../tests/fixtures/tmux-3.5a-copy-mode-vi.txt"), Table::CopyVi)] {
+            let mut list: Vec<Binding> = defaults.lines().filter_map(fixture_binding)
+                .filter(|b| !own.iter().any(|o| o.chord == b.chord) && !self.copy_unbound.contains(&(table, b.chord))).collect();
+            list.extend(own.iter().cloned());
+            out.push((name.to_string(), list));
+        }
+        out.push(("prefix".into(), self.prefix_table.clone()));
+        out.push(("root".into(), self.root_table.clone()));
+        for (n, list) in &self.named { out.push((n.clone(), list.clone())) }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, list) in out.iter_mut() { list.sort_by_key(|b| order(&b.chord)) }
+        out
     }
 
     pub fn prefix_command(&self, chord: &Chord) -> Option<&Binding> { self.prefix_table.iter().rev().find(|b| &b.chord == chord) }
@@ -162,11 +196,15 @@ impl Keymap {
         match table { Table::Prefix => &mut self.prefix_table, Table::Root => &mut self.root_table, Table::CopyVi => &mut self.copy_vi, Table::CopyEmacs => &mut self.copy_emacs }
     }
     pub fn bind(&mut self, table: Table, chord: Chord, command: String, repeat: bool) {
+        self.copy_unbound.retain(|(t, c)| !(*t == table && *c == chord));
         let list = self.table_mut(table);
         list.retain(|b| b.chord != chord);
         list.push(Binding { chord, command, repeat, note: String::new() });
     }
-    pub fn unbind(&mut self, table: Table, chord: &Chord) { self.table_mut(table).retain(|b| &b.chord != chord) }
+    pub fn unbind(&mut self, table: Table, chord: &Chord) {
+        self.table_mut(table).retain(|b| &b.chord != chord);
+        if matches!(table, Table::CopyVi | Table::CopyEmacs) && !self.copy_unbound.contains(&(table, *chord)) { self.copy_unbound.push((table, *chord)) }
+    }
 
     /// The first key that runs [command] (for hints: "C-b s").
     /// The key for a command by name: its exact binding, else one that runs it with arguments
@@ -187,11 +225,53 @@ impl Keymap {
 fn name_of(chord: &Chord) -> String { name(chord) }
 
 /// A `-T` table name.
+/// Where tmux's key tables put a key: by its key code — the character, or the special key's place
+/// in tmux's list — with M-, C- and S- as higher bits.
+pub fn order(chord: &Chord) -> (u8, u32) {
+    let shifted_letter = matches!(chord.code, KeyCode::Char(c) if c.is_alphabetic()) && chord.mods.contains(KeyModifiers::SHIFT);
+    let mut m = 0u8;
+    if chord.mods.contains(KeyModifiers::ALT) { m |= 1 }
+    if chord.mods.contains(KeyModifiers::CONTROL) { m |= 2 }
+    if chord.mods.contains(KeyModifiers::SHIFT) && !shifted_letter { m |= 4 }
+    const SPECIAL: u32 = 0x10e000;
+    let base = match chord.code {
+        KeyCode::Char(c) if shifted_letter => c.to_ascii_uppercase() as u32,
+        KeyCode::Char(c) => c as u32,
+        KeyCode::Enter => 0x0d, KeyCode::Tab => 0x09, KeyCode::Esc => 0x1b,
+        KeyCode::Backspace => SPECIAL + 200,
+        KeyCode::F(n) => SPECIAL + 200 + n as u32,
+        KeyCode::Insert => SPECIAL + 213, KeyCode::Delete => SPECIAL + 214, KeyCode::Home => SPECIAL + 215, KeyCode::End => SPECIAL + 216,
+        KeyCode::PageDown => SPECIAL + 217, KeyCode::PageUp => SPECIAL + 218, KeyCode::BackTab => SPECIAL + 219,
+        KeyCode::Up => SPECIAL + 220, KeyCode::Down => SPECIAL + 221, KeyCode::Left => SPECIAL + 222, KeyCode::Right => SPECIAL + 223,
+        _ => SPECIAL + 400,
+    };
+    (m, base)
+}
+
+/// A line of `tmux list-keys` as a binding (the fixtures).
+fn fixture_binding(line: &str) -> Option<Binding> {
+    let words = crate::tmuxconf::split_marked(line).into_iter().next()?;
+    let at = words.iter().position(|w| w == "-T")? + 2;
+    let repeat = words.iter().any(|w| w == "-r");
+    let chord = parse(words.get(at)?).ok()?;
+    let command = words[at + 1..].iter().map(|w| crate::tmuxconf::quote_word(w)).collect::<Vec<_>>().join(" ");
+    Some(Binding { chord, command, repeat, note: String::new() })
+}
+
+/// tmux's notes for its prefix keys (`tmux list-keys -N`), by key name.
+fn tmux_notes() -> std::collections::HashMap<String, String> {
+    include_str!("../tests/fixtures/tmux-3.5a-notes.txt").lines().filter_map(|l| {
+        let rest = l.strip_prefix("C-b ")?;
+        let (key, note) = rest.split_once(' ')?;
+        Some((key.to_string(), note.trim_start().to_string()))
+    }).collect()
+}
+
 pub fn table_named(name: &str) -> Option<Table> {
     match name { "root" => Some(Table::Root), "prefix" => Some(Table::Prefix), "copy-mode-vi" => Some(Table::CopyVi), "copy-mode" => Some(Table::CopyEmacs), _ => None }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Table { Prefix, Root, CopyVi, CopyEmacs }
 
 /// A key in tmux's spelling: `C-b`, `M-o`, `S-Up`, `%`, `Space`, `PPage`.

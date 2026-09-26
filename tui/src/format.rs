@@ -1,38 +1,814 @@
-//! tmux's formats: `#S`, `#{window_name}`, `#{?window_zoomed_flag,Z,}`, `#{=21:pane_title}`,
-//! `#[fg=colour136,bold]`, `##`, and strftime's `%H:%M %d-%b-%y` — what `status-left`,
-//! `status-right`, `window-status-format` and `display-message` are written in.
+//! tmux's formats, ported from tmux 3.5a's format.c: `#{…}` and its modifiers (`l: a: c: b: d: n:
+//! w: q: E: T: S: W: P: L: N: C: t: m: s/// =N p e| == != < > <= >= && ||`), `#{?cond,a,b}`, `#()`
+//! shell commands, `#S #W #I #P #D #F #H #T #h`, `##`, `#,`, `#}`; options, then variables, then the
+//! environment, as tmux finds a name; strftime first for the formats tmux expands with the time
+//! (the status line, display-message); then, when drawn, `#[…]` styles.
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::App;
 use crate::tmuxconf::colour;
 
-thread_local! {
-    /// The pane a pane-border-format is being expanded for (else the window's active pane).
-    static PANE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+/// Expand a format for a window (else the active one), with the time, and draw its styles.
+pub fn spans(app: &App, fmt: &str, window: Option<usize>, base: Style) -> Vec<Span<'static>> {
+    draw(&expand(app, fmt, window.unwrap_or(app.active), None, true), base)
 }
 
-/// Expand a format for one pane (pane-border-format).
+/// The same for one pane (pane-border-format, list-panes -F).
 pub fn spans_for_pane(app: &App, fmt: &str, window: usize, pane: u64, base: Style) -> Vec<Span<'static>> {
-    PANE.with(|p| p.set(Some(pane)));
-    let out = spans(app, fmt, Some(window), base);
-    PANE.with(|p| p.set(None));
+    draw(&expand(app, fmt, window, Some(pane), true), base)
+}
+
+/// A format expanded with the time, as display-message prints it: `#[…]` left in.
+pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
+    expand(app, fmt, window.unwrap_or(app.active), None, true)
+}
+
+/// tmux's format_expand ([time]: format_expand_time) for a window and a pane.
+pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool) -> String {
+    let mut es = Es { app, window, pane, time, nojobs: false, depth: 0, now: now_secs() };
+    expand1(&mut es, fmt)
+}
+
+/// tmux's FORMAT_LOOP_LIMIT: formats that expand into themselves stop here.
+const LOOP_LIMIT: u32 = 100;
+
+struct Es<'a> {
+    app: &'a App,
+    window: usize,
+    pane: Option<u64>,
+    /// FORMAT_EXPAND_TIME: strftime first.
+    time: bool,
+    /// FORMAT_EXPAND_NOJOBS: `#()` expands to nothing (inside a `#()` command, and its output).
+    nojobs: bool,
+    depth: u32,
+    now: i64,
+}
+
+impl<'a> Es<'a> {
+    fn at(&self, window: usize, pane: Option<u64>) -> Es<'a> {
+        Es { app: self.app, window, pane, time: self.time, nojobs: self.nojobs, depth: self.depth, now: self.now }
+    }
+}
+
+// ── #() ─────────────────────────────────────────────────────────────────────
+
+/// A `#()` command: its last output, and the run in flight (tmux's format_job).
+#[derive(Default)]
+pub struct Job { expanded: String, out: Option<String>, running: bool, started: i64, last: i64, generation: u64 }
+
+/// The output of `cmd` (first line), running it if it is due: the first time, when its expanded
+/// text changes, and every status-interval after the last run — tmux reruns a job each time the
+/// status line is redrawn, which its timer does every status-interval.
+fn job_get(es: &mut Es, cmd: &str) -> String {
+    let app = es.app;
+    let (saved_time, saved_jobs) = (es.time, es.nojobs);
+    es.time = false;
+    es.nojobs = true;
+    let expanded = expand1(es, cmd);
+    let interval: i64 = app.options.get("status-interval", "", None).and_then(|v| v.parse().ok()).unwrap_or(15);
+    let now = es.now;
+    let (run, out, generation) = {
+        let mut jobs = app.jobs.borrow_mut();
+        let job = jobs.entry(cmd.to_string()).or_default();
+        let force = job.expanded != expanded;
+        let due = !job.running && job.last != now && (job.generation == 0 || (interval > 0 && now - job.last >= interval));
+        let run = force || due;
+        if run {
+            job.expanded = expanded.clone();
+            job.running = true;
+            job.started = now;
+            job.last = now;
+            job.generation += 1;
+        } else if job.running && now - job.started > 1 && job.out.is_none() {
+            job.out = Some(format!("<'{cmd}' not ready>"));
+        }
+        (run, job.out.clone(), job.generation)
+    };
+    if run {
+        let key = cmd.to_string();
+        let socket = crate::ipc::here().unwrap_or_default();
+        app.spawn(async move {
+            // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder; HN_SOCKET names
+            // this client, so an `hn` inside the command talks to it.
+            tokio::process::Command::new("/bin/sh").arg("-c").arg(&expanded).env("HN_SOCKET", socket)
+                .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+                .output().await.map(|o| o.stdout).unwrap_or_default()
+        }, move |app, stdout| {
+            let text = String::from_utf8_lossy(&stdout);
+            // The first line (tmux's evbuffer_readline), else all of it.
+            let line = text.split(['\n', '\r']).next().unwrap_or("").to_string();
+            let line = if text.contains(['\n', '\r']) { line } else { text.to_string() };
+            if let Some(job) = app.jobs.borrow_mut().get_mut(&key) {
+                if job.generation != generation { return }
+                job.running = false;
+                if !line.is_empty() || job.out.as_deref().map(|o| o.starts_with("<'")).unwrap_or(true) { job.out = Some(line) }
+            }
+        });
+    }
+    // The output is itself a format (a script may print `#[fg=red]`), without jobs or the time.
+    let result = out.map(|o| expand1(es, &o)).unwrap_or_default();
+    es.time = saved_time;
+    es.nojobs = saved_jobs;
+    result
+}
+
+// ── expansion (format_expand1) ─────────────────────────────────────────────
+
+/// Where `end` (any of its bytes) first stands outside `#{…}`, skipping `#,` `##` `#{` `#}` `#:`
+/// escapes (format_skip). None when it never does.
+fn skip(s: &[u8], end: &[u8]) -> Option<usize> {
+    let mut brackets = 0i32;
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] == b'#' && s.get(i + 1) == Some(&b'{') { brackets += 1 }
+        if s[i] == b'#' && i + 1 < s.len() && b",#{}:".contains(&s[i + 1]) { i += 2; continue }
+        if s[i] == b'}' { brackets -= 1 }
+        if end.contains(&s[i]) && brackets == 0 { return Some(i) }
+        i += 1;
+    }
+    None
+}
+
+/// The single-letter aliases (#S #W …).
+fn alias(c: u8) -> Option<&'static str> {
+    Some(match c {
+        b'D' => "pane_id", b'F' => "window_flags", b'H' => "host", b'I' => "window_index", b'P' => "pane_index",
+        b'S' => "session_name", b'T' => "pane_title", b'W' => "window_name", b'h' => "host_short",
+        _ => return None,
+    })
+}
+
+fn expand1(es: &mut Es, fmt: &str) -> String {
+    if fmt.is_empty() || es.depth >= LOOP_LIMIT { return String::new() }
+    es.depth += 1;
+    let timed;
+    let fmt = if es.time && fmt.contains('%') { timed = strftime(es.app, fmt, es.now); timed.as_str() } else { fmt };
+    let b = fmt.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut style_end: Option<usize> = None;
+    while i < b.len() {
+        if b[i] != b'#' {
+            let len = utf8_len(b[i]);
+            out.push_str(&fmt[i..(i + len).min(b.len())]);
+            i += len;
+            continue;
+        }
+        let Some(&ch) = b.get(i + 1) else { out.push('#'); break };
+        let hash = i;
+        i += 2;
+        match ch {
+            b'(' => {
+                let mut depth = 1;
+                let mut j = i;
+                while j < b.len() {
+                    if b[j] == b'(' { depth += 1 }
+                    if b[j] == b')' { depth -= 1; if depth == 0 { break } }
+                    j += 1;
+                }
+                if j >= b.len() { break }
+                let name = &fmt[i..j];
+                let value = if es.nojobs { String::new() } else { job_get(es, name) };
+                out.push_str(&value);
+                i = j + 1;
+            }
+            b'{' => {
+                let Some(k) = skip(&b[hash..], b"}") else { break };
+                let end = hash + k;
+                match replace(es, &fmt[i..end]) { Some(v) => out.push_str(&v), None => break }
+                i = end + 1;
+            }
+            b'[' | b'#' => {
+                // `#[` and `##[` (and more #s): a style, left for drawing; ## alone is a #.
+                let mut ptr = if ch == b'[' { i - 1 } else { i };
+                let mut n = if ch == b'[' { 1 } else { 2 };
+                while ptr < b.len() && b[ptr] == b'#' { ptr += 1; n += 1 }
+                if ptr < b.len() && b[ptr] == b'[' {
+                    style_end = skip(&b[hash..], b"]").map(|k| hash + k);
+                    out.push_str(&fmt[hash..hash + n + 1]);
+                    i = ptr + 1;
+                } else {
+                    out.push(ch as char);
+                }
+            }
+            b'}' | b',' => out.push(ch as char),
+            _ => {
+                let name = if style_end.map(|e| i > e).unwrap_or(true) { alias(ch) } else { None };
+                match name {
+                    Some(name) => match replace(es, name) { Some(v) => out.push_str(&v), None => break },
+                    None => {
+                        out.push('#');
+                        // Not an ASCII letter: the character goes out whole, from its first byte.
+                        if ch < 0x80 { out.push(ch as char) } else { i -= 1 }
+                    }
+                }
+            }
+        }
+    }
+    es.depth -= 1;
     out
 }
 
-/// A variable's value; `window` is the window a window-status format is for.
-fn var(app: &App, name: &str, window: usize) -> String {
+fn utf8_len(b: u8) -> usize { match b { 0x00..=0x7f => 1, 0xc0..=0xdf => 2, 0xe0..=0xef => 3, 0xf0..=0xf7 => 4, _ => 1 } }
+
+// ── modifiers (format_build_modifiers, format_replace) ──────────────────────
+
+struct Mod { m: String, argv: Vec<String> }
+
+fn is_end(c: Option<&u8>) -> bool { matches!(c, Some(b';') | Some(b':')) }
+
+/// The `mod;mod:` list at the front of a `#{…}` body, and where the rest starts. None when the
+/// body has no modifiers.
+fn build_modifiers(es: &mut Es, s: &str) -> Option<(Vec<Mod>, usize)> {
+    let b = s.as_bytes();
+    let mut cp = 0;
+    let mut list = Vec::new();
+    while cp < b.len() && b[cp] != b':' {
+        if b[cp] == b';' { cp += 1 }
+        let Some(&c0) = b.get(cp) else { break };
+        let c1 = b.get(cp + 1);
+        if b"labcdnwETSWPL<>".contains(&c0) && is_end(c1) {
+            list.push(Mod { m: (c0 as char).to_string(), argv: vec![] });
+            cp += 1;
+            continue;
+        }
+        if cp + 2 <= b.len() && matches!(&b[cp..cp + 2], b"||" | b"&&" | b"!=" | b"==" | b"<=" | b">=") && is_end(b.get(cp + 2)) {
+            list.push(Mod { m: s[cp..cp + 2].to_string(), argv: vec![] });
+            cp += 2;
+            continue;
+        }
+        if !b"mCNst=peq".contains(&c0) { break }
+        if is_end(c1) {
+            list.push(Mod { m: (c0 as char).to_string(), argv: vec![] });
+            cp += 1;
+            continue;
+        }
+        let Some(&c1) = c1 else { break };
+        if !c1.is_ascii_punctuation() || c1 == b'-' {
+            // One argument, no wrapper: `=21`, `p-8`.
+            let Some(end) = skip(&b[cp + 1..], b":;").map(|k| cp + 1 + k) else { break };
+            let arg = expand1(es, &s[cp + 1..end]);
+            list.push(Mod { m: (c0 as char).to_string(), argv: vec![arg] });
+            cp = end;
+            continue;
+        }
+        // Several, wrapped: `s/a/b/`, `=/5/…/`, `e|+|f|2|`.
+        let last = [c1, b';', b':'];
+        cp += 1;
+        let mut argv = Vec::new();
+        loop {
+            if b.get(cp) == Some(&c1) && is_end(b.get(cp + 1)) { cp += 1; break }
+            let Some(end) = skip(&b[cp + 1..], &last).map(|k| cp + 1 + k) else { break };
+            cp += 1;
+            argv.push(expand1(es, &s[cp..end]));
+            cp = end;
+            if is_end(b.get(cp)) { break }
+        }
+        list.push(Mod { m: (c0 as char).to_string(), argv });
+    }
+    if b.get(cp) != Some(&b':') { return None }
+    Some((list, cp + 1))
+}
+
+#[derive(Default)]
+struct Flags { literal: bool, character: bool, colour: bool, basename: bool, dirname: bool, length: bool, width: bool, timestring: bool, pretty: bool, quote_shell: bool, quote_style: bool, expand: bool, expandtime: bool, window_name: bool, session_name: bool, sessions: bool, windows: bool, panes: bool, clients: bool }
+
+/// One `#{…}` body; None when it fails (tmux then stops the whole expansion there).
+fn replace(es: &mut Es, key: &str) -> Option<String> {
+    let (list, off) = build_modifiers(es, key).unwrap_or_default();
+    let copy = &key[off..];
+    let mut f = Flags::default();
+    let (mut cmp, mut search, mut subs, mut mexp): (Option<&Mod>, Option<&Mod>, Vec<&Mod>, Option<&Mod>) = (None, None, Vec::new(), None);
+    let (mut limit, mut marker, mut width, mut time_format) = (0i64, None::<String>, 0i64, None::<String>);
+    for fm in &list {
+        match fm.m.as_str() {
+            "m" | "<" | ">" => cmp = Some(fm),
+            "C" => search = Some(fm),
+            "s" => { if fm.argv.len() >= 2 { subs.push(fm) } }
+            "=" => { if let Some(a) = fm.argv.first() { limit = a.trim().parse().unwrap_or(0); marker = fm.argv.get(1).cloned() } }
+            "p" => { if let Some(a) = fm.argv.first() { width = a.trim().parse().unwrap_or(0) } }
+            "w" => f.width = true,
+            "e" => { if (1..=3).contains(&fm.argv.len()) { mexp = Some(fm) } }
+            "l" => f.literal = true,
+            "a" => f.character = true,
+            "b" => f.basename = true,
+            "c" => f.colour = true,
+            "d" => f.dirname = true,
+            "n" => f.length = true,
+            "t" => {
+                f.timestring = true;
+                if let Some(a) = fm.argv.first() {
+                    if a.contains('p') { f.pretty = true } else if fm.argv.len() >= 2 && a.contains('f') { time_format = Some(strip(&fm.argv[1])) }
+                }
+            }
+            "q" => { if fm.argv.is_empty() { f.quote_shell = true } else if fm.argv[0].contains('e') || fm.argv[0].contains('h') { f.quote_style = true } }
+            "E" => f.expand = true,
+            "T" => f.expandtime = true,
+            "N" => { if fm.argv.is_empty() || fm.argv[0].contains('w') { f.window_name = true } else if fm.argv[0].contains('s') { f.session_name = true } }
+            "S" => f.sessions = true,
+            "W" => f.windows = true,
+            "P" => f.panes = true,
+            "L" => f.clients = true,
+            "||" | "&&" | "==" | "!=" | ">=" | "<=" => cmp = Some(fm),
+            _ => {}
+        }
+    }
+    let mut value = if f.literal {
+        unescape(copy)
+    } else if f.character {
+        let n = expand1(es, copy);
+        n.trim_start().parse::<i64>().ok().filter(|c| (32..=126).contains(c)).map(|c| (c as u8 as char).to_string()).unwrap_or_default()
+    } else if f.colour {
+        let n = expand1(es, copy);
+        colour_hex(&n).unwrap_or_default()
+    } else if f.sessions || f.clients {
+        // One session, one client (this one).
+        let mut next = es.at(es.app.active, None);
+        let v = expand1(&mut next, copy);
+        v
+    } else if f.windows {
+        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let mut v = String::new();
+        for w in 0..es.app.tabs.len() {
+            let use_ = if w == es.app.active { active.as_deref().unwrap_or(&all) } else { &all };
+            let mut next = es.at(w, None);
+            v.push_str(&expand1(&mut next, use_));
+        }
+        v
+    } else if f.panes {
+        let (all, active) = match choose(es, copy, false) { Some((a, b)) => (a, Some(b)), None => (copy.to_string(), None) };
+        let tab = es.app.tabs.get(es.window);
+        let focus = tab.and_then(|t| t.focus);
+        let mut v = String::new();
+        for p in tab.map(|t| t.panes()).unwrap_or_default() {
+            let use_ = if Some(p) == focus { active.as_deref().unwrap_or(&all) } else { &all };
+            let mut next = es.at(es.window, Some(p));
+            v.push_str(&expand1(&mut next, use_));
+        }
+        v
+    } else if f.window_name {
+        let name = expand1(es, copy);
+        if es.app.tabs.iter().any(|t| t.name == name) { "1".into() } else { "0".into() }
+    } else if f.session_name {
+        let name = expand1(es, copy);
+        if es.app.session_name() == name { "1".into() } else { "0".into() }
+    } else if let Some(fm) = search {
+        let term = expand1(es, copy);
+        search_pane(es, fm, &term)
+    } else if let Some(fm) = cmp {
+        let (left, right) = choose(es, copy, true)?;
+        let t = |b: bool| if b { "1".to_string() } else { "0".to_string() };
+        match fm.m.as_str() {
+            "||" => t(truthy(&left) || truthy(&right)),
+            "&&" => t(truthy(&left) && truthy(&right)),
+            "==" => t(left == right),
+            "!=" => t(left != right),
+            "<" => t(left < right),
+            ">" => t(left > right),
+            "<=" => t(left <= right),
+            ">=" => t(left >= right),
+            _ => matches(fm, &left, &right),
+        }
+    } else if let Some(rest) = copy.strip_prefix('?') {
+        let k = skip(rest.as_bytes(), b",")?;
+        let condition = &rest[..k];
+        let found = match find(es, condition, &f, time_format.as_deref()) {
+            Some(v) => v,
+            // Not a name: expanded; if that changes nothing, false.
+            None => { let v = expand1(es, condition); if v == condition { String::new() } else { v } }
+        };
+        let (left, right) = choose(es, &rest[k + 1..], false)?;
+        if truthy(&found) { expand1(es, &left) } else { expand1(es, &right) }
+    } else if let Some(fm) = mexp {
+        expression(es, fm, copy).unwrap_or_default()
+    } else if copy.contains("#{") {
+        expand1(es, copy)
+    } else {
+        find(es, copy, &f, time_format.as_deref()).unwrap_or_default()
+    };
+    if f.expand { value = expand1(es, &value) }
+    else if f.expandtime { let saved = es.time; es.time = true; value = expand1(es, &value); es.time = saved }
+    for fm in subs {
+        let (pat, with) = (expand1(es, &fm.argv[0]), expand1(es, &fm.argv[1]));
+        let icase = fm.argv.get(2).map(|a| a.contains('i')).unwrap_or(false);
+        if let Some(v) = regsub(&pat, &with, &value, icase) { value = v }
+    }
+    if limit > 0 {
+        let new = trim_left(&value, limit as usize);
+        value = match &marker { Some(m) if new != value => format!("{new}{m}"), _ => new };
+    } else if limit < 0 {
+        let new = trim_right(&value, limit.unsigned_abs() as usize);
+        value = match &marker { Some(m) if new != value => format!("{m}{new}"), _ => new };
+    }
+    if width > 0 { value = pad(&value, width as usize, false) } else if width < 0 { value = pad(&value, width.unsigned_abs() as usize, true) }
+    if f.length { value = value.len().to_string() }
+    if f.width { value = format_width(&value).to_string() }
+    Some(value)
+}
+
+/// `a,b`: the two sides at the first comma outside `#{…}`, expanded when asked (format_choose).
+fn choose(es: &mut Es, s: &str, expand: bool) -> Option<(String, String)> {
+    let k = skip(s.as_bytes(), b",")?;
+    let (l, r) = (&s[..k], &s[k + 1..]);
+    Some(if expand { (expand1(es, l), expand1(es, r)) } else { (l.to_string(), r.to_string()) })
+}
+
+fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
+
+/// A name's value: an option, a variable, else the environment (format_find), with b: d: q: t:.
+fn find(es: &mut Es, key: &str, f: &Flags, time_format: Option<&str>) -> Option<String> {
+    let app = es.app;
+    let window_id = app.tabs.get(es.window).map(|t| t.id.clone()).unwrap_or_default();
+    let mut found = app.options.format_value(key, &window_id, es.pane);
+    let mut t: i64 = 0;
+    if found.is_none() {
+        match table(app, key, es.window, es.pane) {
+            Some(Val::Time(v)) => t = v,
+            Some(Val::Str(v)) => found = Some(v),
+            None => {
+                if !f.timestring { found = app.env.get(key).cloned().or_else(|| std::env::var(key).ok()) }
+                found.as_ref()?;
+            }
+        }
+    }
+    if f.timestring {
+        if t == 0 { t = found.as_deref().and_then(|v| v.trim().parse().ok()).unwrap_or(0) }
+        if t == 0 { return None }
+        return Some(if f.pretty { pretty_time(app, t, es.now) } else if let Some(tf) = time_format { strftime(app, tf, t) } else { strftime(app, "%a %b %e %H:%M:%S %Y", t) });
+    }
+    let mut v = if t != 0 { t.to_string() } else { found? };
+    if f.basename { v = basename(&v) }
+    if f.dirname { v = dirname(&v) }
+    if f.quote_shell { v = v.chars().map(|c| if "|&;<>()$`\\\"'*?[# =%".contains(c) { format!("\\{c}") } else { c.to_string() }).collect() }
+    if f.quote_style { v = v.replace('#', "##") }
+    Some(v)
+}
+
+fn basename(p: &str) -> String {
+    if p.is_empty() { return ".".into() }
+    let t = p.trim_end_matches('/');
+    if t.is_empty() { return "/".into() }
+    t.rsplit('/').next().unwrap_or(t).to_string()
+}
+
+fn dirname(p: &str) -> String {
+    let t = p.trim_end_matches('/');
+    if t.is_empty() { return if p.starts_with('/') { "/".into() } else { ".".into() } }
+    match t.rfind('/') {
+        None => ".".into(),
+        Some(i) => { let d = t[..i].trim_end_matches('/'); if d.is_empty() { "/".into() } else { d.to_string() } }
+    }
+}
+
+/// `#{l:…}`: the text as written, its `#,` `##` `#{` `#}` `#:` escapes undone outside `#{…}`.
+fn unescape(s: &str) -> String {
+    let b: Vec<char> = s.chars().collect();
+    let (mut out, mut brackets, mut i) = (String::new(), 0i32, 0);
+    while i < b.len() {
+        if b[i] == '#' && b.get(i + 1) == Some(&'{') { brackets += 1 }
+        if brackets == 0 && b[i] == '#' && b.get(i + 1).map(|c| ",#{}:".contains(*c)).unwrap_or(false) { out.push(b[i + 1]); i += 2; continue }
+        if b[i] == '}' { brackets -= 1 }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+/// The escapes of a time format taken out (format_strip).
+fn strip(s: &str) -> String {
+    let b: Vec<char> = s.chars().collect();
+    let (mut out, mut brackets, mut i) = (String::new(), 0i32, 0);
+    while i < b.len() {
+        if b[i] == '#' && b.get(i + 1) == Some(&'{') { brackets += 1 }
+        if b[i] == '#' && b.get(i + 1).map(|c| ",#{}:".contains(*c)).unwrap_or(false) { if brackets != 0 { out.push('#') } i += 1; continue }
+        if b[i] == '}' { brackets -= 1 }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+/// `#{m:pattern,text}`: fnmatch, or with /r a regular expression; /i ignores case.
+fn matches(fm: &Mod, pattern: &str, text: &str) -> String {
+    let flags = fm.argv.first().map(String::as_str).unwrap_or("");
+    let icase = flags.contains('i');
+    let hit = if flags.contains('r') {
+        regex::RegexBuilder::new(pattern).case_insensitive(icase).build().map(|r| r.is_match(text)).unwrap_or(false)
+    } else if icase { glob(&pattern.to_lowercase(), &text.to_lowercase()) } else { glob(pattern, text) };
+    if hit { "1".into() } else { "0".into() }
+}
+
+/// fnmatch(3): `*`, `?`, `[…]` (and `[!…]`), `\` quoting.
+fn glob(pat: &str, s: &str) -> bool {
+    fn m(p: &[char], t: &[char]) -> bool {
+        match p.first() {
+            None => t.is_empty(),
+            Some('*') => (0..=t.len()).any(|i| m(&p[1..], &t[i..])),
+            Some('?') => !t.is_empty() && m(&p[1..], &t[1..]),
+            Some('[') => {
+                let Some(close) = p.iter().skip(2).position(|c| *c == ']').map(|k| k + 2) else { return t.first() == Some(&'[') && m(&p[1..], &t[1..]) };
+                let Some(&c) = t.first() else { return false };
+                let set = &p[1..close];
+                let (neg, set) = if matches!(set.first(), Some('!' | '^')) { (true, &set[1..]) } else { (false, set) };
+                let mut hit = false;
+                let mut i = 0;
+                while i < set.len() {
+                    if i + 2 < set.len() && set[i + 1] == '-' { if set[i] <= c && c <= set[i + 2] { hit = true } i += 3 } else { if set[i] == c { hit = true } i += 1 }
+                }
+                hit != neg && m(&p[close + 1..], &t[1..])
+            }
+            Some('\\') if p.len() > 1 => t.first() == Some(&p[1]) && m(&p[2..], &t[1..]),
+            Some(c) => t.first() == Some(c) && m(&p[1..], &t[1..]),
+        }
+    }
+    let (p, t): (Vec<char>, Vec<char>) = (pat.chars().collect(), s.chars().collect());
+    m(&p, &t)
+}
+
+/// `#{C:text}`: the line of the pane's screen it is on, from 1; 0 when it is not there.
+fn search_pane(es: &Es, fm: &Mod, term: &str) -> String {
+    let flags = fm.argv.first().map(String::as_str).unwrap_or("");
+    let tab = es.app.tabs.get(es.window);
+    let Some(pane) = es.pane.or_else(|| tab.and_then(|t| t.focus)).and_then(|p| es.app.panes.get(&p)) else { return "0".into() };
+    let icase = flags.contains('i');
+    let re = if flags.contains('r') { regex::RegexBuilder::new(term).case_insensitive(icase).build().ok() } else { None };
+    for (i, line) in pane.text_range(Some(0), None).lines().enumerate() {
+        let hit = match &re { Some(r) => r.is_match(line), None => if icase { glob(&format!("*{}*", term.to_lowercase()), &line.to_lowercase()) } else { glob(&format!("*{term}*"), line) } };
+        if hit { return (i + 1).to_string() }
+    }
+    "0".into()
+}
+
+/// `#{e|op|f|prec:a,b}`: arithmetic and comparisons, whole numbers unless `f`.
+fn expression(es: &mut Es, fm: &Mod, copy: &str) -> Option<String> {
+    let op = fm.argv.first()?.as_str();
+    if !["+", "-", "*", "/", "%", "m", "==", "!=", ">", "<", ">=", "<="].contains(&op) { return None }
+    let fp = fm.argv.get(1).map(|a| a.contains('f')).unwrap_or(false);
+    let mut prec: usize = if fp { 2 } else { 0 };
+    if let Some(p) = fm.argv.get(2) { prec = p.trim().parse().ok()? }
+    let (l, r) = choose(es, copy, true)?;
+    let num = |s: &str| -> Option<f64> { if s.is_empty() { Some(0.0) } else { s.trim_start().parse::<f64>().ok() } };
+    let (mut a, mut b) = (num(&l)?, num(&r)?);
+    if !fp { a = a.trunc(); b = b.trunc() }
+    let t = |x: bool| if x { 1.0 } else { 0.0 };
+    let v = match op {
+        "+" => a + b, "-" => a - b, "*" => a * b, "/" => a / b, "%" | "m" => a % b,
+        "==" => t((a - b).abs() < 1e-9), "!=" => t((a - b).abs() > 1e-9),
+        ">" => t(a > b), "<" => t(a < b), ">=" => t(a >= b), _ => t(a <= b),
+    };
+    Some(if fp { format!("{v:.prec$}") } else { format!("{:.prec$}", v.trunc()) })
+}
+
+/// tmux's regsub: every match replaced; `\0`–`\9` in the replacement are the groups.
+fn regsub(pattern: &str, with: &str, text: &str, icase: bool) -> Option<String> {
+    if text.is_empty() { return Some(String::new()) }
+    let re = regex::RegexBuilder::new(pattern).case_insensitive(icase).build().ok()?;
+    let (mut start, mut last, end) = (0usize, 0usize, text.len());
+    let mut empty = false;
+    let mut buf = String::new();
+    while start <= end {
+        let Some(caps) = re.captures(&text[start..]) else { buf.push_str(&text[start..end]); break };
+        let m0 = caps.get(0)?;
+        let (so, eo) = (m0.start(), m0.end());
+        buf.push_str(&text[last..start + so]);
+        if empty || start + so != last || so != eo {
+            let mut it = with.chars().peekable();
+            while let Some(c) = it.next() {
+                if c == '\\' {
+                    match it.next() {
+                        Some(d) if d.is_ascii_digit() => {
+                            let g = d.to_digit(10).unwrap_or(0) as usize;
+                            match caps.get(g) { Some(m) if !m.as_str().is_empty() => buf.push_str(m.as_str()), _ => buf.push(d) }
+                        }
+                        Some(o) => buf.push(o),
+                        None => {}
+                    }
+                } else { buf.push(c) }
+            }
+            last = start + eo;
+            start += eo;
+            empty = false;
+        } else {
+            last = start + eo;
+            // One character on, whole.
+            start += eo + text[start + eo..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            empty = true;
+        }
+        if pattern.starts_with('^') { if start < end { buf.push_str(&text[start..end]) } break }
+    }
+    Some(buf)
+}
+
+// ── widths: `#[…]` takes no room, `##` is one # (format-draw.c) ──────────────
+
+/// How many #s lead here, the cells they take, and whether a style follows.
+fn hashes(b: &[char], i: usize) -> (usize, usize, bool) {
+    let mut n = 0;
+    while b.get(i + n) == Some(&'#') { n += 1 }
+    if b.get(i + n) != Some(&'[') { return (n, n.div_ceil(2), false) }
+    (n, n / 2, n % 2 == 1)
+}
+
+fn format_width(s: &str) -> usize {
+    let b: Vec<char> = s.chars().collect();
+    let (mut i, mut w) = (0, 0);
+    while i < b.len() {
+        if b[i] == '#' {
+            let (n, cells, style) = hashes(&b, i);
+            w += cells;
+            i += n;
+            if style { i -= 1; i = style_close(&b, i) }
+        } else {
+            let c = b[i];
+            if (c as u32) >= 0x20 { w += c.width().unwrap_or(0) }
+            i += 1;
+        }
+    }
+    w
+}
+
+/// Past the `]` of the style whose `#` is at `i`.
+fn style_close(b: &[char], i: usize) -> usize {
+    let s: String = b[i..].iter().collect();
+    match skip(s.as_bytes(), b"]") { Some(k) => i + s[..k].chars().count() + 1, None => b.len() }
+}
+
+/// The first `limit` cells, styles kept (format_trim_left).
+fn trim_left(s: &str, limit: usize) -> String {
+    let b: Vec<char> = s.chars().collect();
+    let (mut i, mut w, mut out) = (0, 0, String::new());
+    while i < b.len() && w < limit {
+        if b[i] == '#' {
+            let (n, cells, style) = hashes(&b, i);
+            let take = cells.min(limit - w);
+            if take > 0 { if n == 1 { out.push('#') } else { out.push_str(&"#".repeat(2 * take)) } w += take }
+            i += n;
+            if style { i -= 1; let e = style_close(&b, i); out.extend(&b[i..e]); i = e }
+        } else {
+            let c = b[i];
+            let cw = if (c as u32) >= 0x20 { c.width().unwrap_or(0) } else { 0 };
+            if w + cw <= limit { out.push(c) }
+            w += cw;
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The last `limit` cells, styles kept (format_trim_right).
+fn trim_right(s: &str, limit: usize) -> String {
+    let total = format_width(s);
+    if total <= limit { return s.to_string() }
+    let skip_cells = total - limit;
+    let b: Vec<char> = s.chars().collect();
+    let (mut i, mut w, mut out) = (0, 0, String::new());
+    while i < b.len() {
+        if b[i] == '#' {
+            let (n, cells, style) = hashes(&b, i);
+            let mut copy = cells;
+            if w <= skip_cells { copy = if skip_cells - w >= copy { 0 } else { copy - (skip_cells - w) } }
+            if copy > 0 { if n == 1 { out.push('#') } else { out.push_str(&"#".repeat(2 * copy)) } }
+            w += cells;
+            i += n;
+            if style { i -= 1; let e = style_close(&b, i); out.extend(&b[i..e]); i = e }
+        } else {
+            let c = b[i];
+            let cw = if (c as u32) >= 0x20 { c.width().unwrap_or(0) } else { 0 };
+            if w >= skip_cells { out.push(c) }
+            w += cw;
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Padded to `width` cells with spaces: after the text, or before it ([left]).
+fn pad(s: &str, width: usize, left: bool) -> String {
+    let w: usize = s.chars().map(|c| c.width().unwrap_or(0)).sum();
+    if w >= width { return s.to_string() }
+    let fill = " ".repeat(width - w);
+    if left { format!("{fill}{s}") } else { format!("{s}{fill}") }
+}
+
+/// `#{c:red}`: the colour as six hex digits (tmux's 256-colour palette for the numbered ones).
+fn colour_hex(name: &str) -> Option<String> {
+    use ratatui::style::Color;
+    let n: u8 = match colour(name)? {
+        Color::Rgb(r, g, b) => return Some(format!("{r:02x}{g:02x}{b:02x}")),
+        Color::Indexed(i) => i,
+        Color::Black => 0, Color::Red => 1, Color::Green => 2, Color::Yellow => 3, Color::Blue => 4, Color::Magenta => 5, Color::Cyan => 6, Color::Gray => 7,
+        Color::DarkGray => 8, Color::LightRed => 9, Color::LightGreen => 10, Color::LightYellow => 11, Color::LightBlue => 12, Color::LightMagenta => 13, Color::LightCyan => 14, Color::White => 15,
+        Color::Reset => return None,
+    };
+    const BASE: [u32; 16] = [0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xc0c0c0, 0x808080, 0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff, 0xffffff];
+    let rgb = if n < 16 { BASE[n as usize] } else if n < 232 {
+        let i = n as u32 - 16;
+        let step = |v: u32| if v == 0 { 0 } else { 55 + v * 40 };
+        (step(i / 36) << 16) | (step((i / 6) % 6) << 8) | step(i % 6)
+    } else { let g = 8 + (n as u32 - 232) * 10; (g << 16) | (g << 8) | g };
+    Some(format!("{rgb:06x}"))
+}
+
+// ── drawing: `#[…]` styles, `##` (format_draw) ─────────────────────────────
+
+/// An expanded format as styled spans: `#[…]` changes the style, `##` is a #.
+pub fn draw(s: &str, base: Style) -> Vec<Span<'static>> {
+    let b: Vec<char> = s.chars().collect();
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut style = base;
+    let mut ignore = false;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == '#' && b.get(i + 1) != Some(&'[') && i + 1 < b.len() {
+            let mut n = 1;
+            while b.get(i + n) == Some(&'#') { n += 1 }
+            let even = n % 2 == 0;
+            if b.get(i + n) != Some(&'[') {
+                run.push_str(&"#".repeat(if even { n / 2 } else { n / 2 + 1 }));
+                i += n;
+                continue;
+            }
+            run.push_str(&"#".repeat(n / 2));
+            if even { run.push('['); i += n + 1 } else { i += n - 1 }
+            continue;
+        }
+        if b[i] == '#' && b.get(i + 1) == Some(&'[') {
+            let e = style_close(&b, i);
+            let spec: String = b[(i + 2).min(e)..e.saturating_sub(1).max(i + 2)].iter().collect();
+            if !run.is_empty() { out.push(Span::styled(std::mem::take(&mut run), style)) }
+            for part in spec.split([',', ' ']) { match part { "ignore" => ignore = true, "noignore" => ignore = false, _ => {} } }
+            style = restyle(style, base, &spec);
+            i = e;
+            continue;
+        }
+        if !ignore && (b[i] as u32) >= 0x20 && b[i] != '\u{7f}' { run.push(b[i]) }
+        i += 1;
+    }
+    if !run.is_empty() { out.push(Span::styled(run, style)) }
+    out
+}
+
+// ── time ────────────────────────────────────────────────────────────────────
+
+pub fn now_secs() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) }
+
+/// When this client started, in seconds since the epoch.
+fn started(app: &App) -> i64 { now_secs() - app.started.elapsed().as_secs() as i64 }
+
+/// localtime(3): a time's parts in this computer's zone, for the date the time is on (its DST).
+fn local_tm(t: i64) -> libc::tm {
+    // SAFETY: localtime_r only writes the struct it is given.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let tt = t as libc::time_t;
+    unsafe { libc::localtime_r(&tt, &mut tm) };
+    tm
+}
+
+/// strftime(3) itself, over a whole format, as tmux runs it first (its 8192-byte buffer: a longer
+/// result, or an empty one, is nothing).
+fn strftime(_app: &App, fmt: &str, t: i64) -> String {
+    let tm = local_tm(t);
+    let Ok(cfmt) = std::ffi::CString::new(fmt) else { return fmt.to_string() };
+    let mut buf = vec![0u8; 8192];
+    // SAFETY: the buffer's length is passed, and strftime writes at most that.
+    let n = unsafe { libc::strftime(buf.as_mut_ptr() as *mut libc::c_char, buf.len(), cfmt.as_ptr(), &tm) };
+    buf.truncate(n);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// `#{t/p:…}`: tmux's short form — the time today, the day this month, the date this year.
+fn pretty_time(app: &App, t: i64, now: i64) -> String {
+    let now = now.max(t);
+    let age = now - t;
+    let (n, w) = (local_tm(now), local_tm(t));
+    let (ny, nm, y, m) = (n.tm_year, n.tm_mon, w.tm_year, w.tm_mon);
+    if age < 24 * 3600 { return strftime(app, "%H:%M", t) }
+    if (y == ny && m == nm) || age < 28 * 24 * 3600 { return strftime(app, "%a%d", t) }
+    if (y == ny && m < nm) || (y == ny - 1 && m > nm) { return strftime(app, "%d%b", t) }
+    strftime(app, "%h%y", t)
+}
+
+enum Val { Str(String), Time(i64) }
+
+/// tmux's format table: a variable's value for a window (and a pane: else the window's active
+/// one), or None when there is no such variable. Times are seconds since the epoch.
+fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
-    let focus = PANE.with(|p| p.get()).or_else(|| tab.and_then(|t| t.focus));
+    let focus = pane_id.or_else(|| tab.and_then(|t| t.focus));
     let pane = focus.and_then(|f| app.panes.get(&f));
     let agent = pane.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let host = crate::app::hostname();
-    match name {
-        "session_name" | "S" => app.session_name(),
-        "window_index" | "I" => app.win_num(window).to_string(),
-        "window_name" | "W" => tab.map(|t| t.name.clone()).unwrap_or_default(),
-        "window_flags" | "F" => flags(app, window),
+    let v: String = match name {
+        "session_name" => app.session_name(),
+        "window_index" => app.win_num(window).to_string(),
+        "window_name" => tab.map(|t| t.name.clone()).unwrap_or_default(),
+        "window_flags" => flags(app, window),
         "window_raw_flags" => flags(app, window),
         "window_active" => (window == app.active).then_some("1").unwrap_or("0").into(),
         "window_last_flag" => (tab.map(|t| app.last_tab.as_ref() == Some(&t.id)).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
@@ -40,9 +816,9 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "window_panes" => tab.map(|t| t.panes().len().to_string()).unwrap_or_default(),
         "window_bell_flag" => flags(app, window).contains('!').then_some("1").unwrap_or("0").into(),
         "pane_active" => (focus == tab.and_then(|t| t.focus)).then_some("1").unwrap_or("0").into(),
-        "pane_index" | "P" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
-        "pane_title" | "T" => agent.map(|a| a.name.clone()).unwrap_or_else(|| host.clone()),
-        "pane_id" | "D" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
+        "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
+        "pane_title" => agent.map(|a| a.name.clone()).unwrap_or_else(|| host.clone()),
+        "pane_id" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
         // then where the harness started.
         "pane_current_path" => pane.and_then(|p| p.live_path.clone().or_else(|| p.cwd.clone())).or_else(|| agent.map(|a| a.cwd.clone())).unwrap_or_default(),
@@ -79,14 +855,11 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
         "window_id" => format!("@{}", app.win_num(window)),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
-        // Switches read as tmux's formats do: 1 or 0.
-        "status" => (app.opts.status != Some(false)).then_some("1").unwrap_or("0").into(),
-        "mouse" => app.mouse.then_some("1").unwrap_or("0").into(),
         // The tmux level hn speaks (version-gated configs ask); hn's own is #{hn_version}.
         "version" => crate::tmuxconf::TMUX_VERSION.into(),
         "hn_version" => env!("CARGO_PKG_VERSION").into(),
         "pid" => std::process::id().to_string(),
-        "socket_path" => crate::ipc::dir().join(format!("{}.sock", std::env::var("HN_SOCKET_NAME").unwrap_or_else(|_| std::process::id().to_string()))).display().to_string(),
+        "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
         "client_session" | "client_name" => app.session_name(),
         "client_tty" => std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_default(),
         "pane_mode" => pane.filter(|p| p.copy.is_some()).map(|_| "copy-mode").unwrap_or("").into(),
@@ -94,18 +867,43 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "copy_cursor_y" => pane.and_then(|p| p.copy).map(|c| c.point.line.0.to_string()).unwrap_or_default(),
         "scroll_position" => pane.map(|p| p.scrolled().to_string()).unwrap_or_default(),
         "pane_search_string" => app.last_search.clone().unwrap_or_default(),
-        n if n.starts_with('@') => app.opts.user.get(n).cloned().unwrap_or_default(),
         "client_prefix" => app.prefix.then_some("1").unwrap_or("0").into(),
-        "host" | "H" => host,
-        "host_short" | "h" => host.split('.').next().unwrap_or("").to_string(),
+        "host" => host,
+        "host_short" => host.split('.').next().unwrap_or("").to_string(),
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),
         // tim's face, for a status-right of your own: "#{tim} %H:%M".
         "tim" => crate::tim::face(app).map(|(f, _)| f).unwrap_or_default(),
-        _ => String::new(),
-    }
+        "session_id" => "$0".into(),
+        "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
+        "session_group" | "client_last_session" | "pane_dead_status" | "pane_start_command" => String::new(),
+        "session_grouped" | "session_many_attached" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
+        | "window_activity_flag" | "window_silence_flag" | "client_readonly" | "pane_input_off" | "pane_pipe" => "0".into(),
+        "server_sessions" | "session_attached_list" | "client_utf8" => "1".into(),
+        "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
+        "window_end_flag" => (window + 1 == app.tabs.len()).then_some("1").unwrap_or("0").into(),
+        "client_termname" => std::env::var("TERM").unwrap_or_default(),
+        "client_pid" => std::process::id().to_string(),
+        "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { "root".into() }),
+        "client_flags" => if app.terminal_focused { "attached,focused,UTF-8".into() } else { "attached,UTF-8".into() },
+        "pane_last" => (focus.is_some() && focus == tab.and_then(|t| t.last_focus)).then_some("1").unwrap_or("0").into(),
+        "pane_dead" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "pane_start_path" => agent.map(|a| a.cwd.clone()).unwrap_or_default(),
+        "alternate_on" => pane.map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "cursor_x" | "cursor_y" => pane.map(|p| { let c = p.term.grid().cursor.point; if name == "cursor_x" { c.column.0.to_string() } else { c.line.0.to_string() } }).unwrap_or_default(),
+        // Times: when this client started, and when a window last had something happen.
+        "session_created" | "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),
+        "session_activity" | "client_activity" => return Some(Val::Time(now_secs())),
+        "window_activity" => {
+            let last = tab.map(|t| t.panes()).unwrap_or_default().iter().filter_map(|id| app.panes.get(id)).filter_map(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| (a.active_at / 1000) as i64).max();
+            return Some(Val::Time(last.filter(|t| *t > 0).unwrap_or_else(|| started(app))));
+        }
+        _ => return None,
+    };
+    Some(Val::Str(v))
 }
+
 
 /// `#{window_flags}`: `*` current, `-` last, `!` waiting on you, `#` finished, `Z` zoomed.
 pub fn flags(app: &App, window: usize) -> String {
@@ -124,278 +922,6 @@ pub fn flags(app: &App, window: usize) -> String {
     out
 }
 
-/// Take a `{…}` body starting after the `{`, balanced; returns it and the rest.
-fn braced(s: &str) -> (&str, &str) {
-    let mut depth = 1;
-    for (i, c) in s.char_indices() {
-        match c { '{' => depth += 1, '}' => { depth -= 1; if depth == 0 { return (&s[..i], &s[i + 1..]) } } _ => {} }
-    }
-    (s, "")
-}
-
-/// Split `a,b,c` at top-level commas (not inside `#{…}`).
-fn commas(s: &str) -> Vec<&str> {
-    let (mut out, mut depth, mut start) = (Vec::new(), 0, 0);
-    let bytes = s.as_bytes();
-    for (i, c) in s.char_indices() {
-        match c {
-            '{' if i > 0 && bytes[i - 1] == b'#' => depth += 1,
-            '}' if depth > 0 => depth -= 1,
-            ',' if depth == 0 => { out.push(&s[start..i]); start = i + 1 }
-            _ => {}
-        }
-    }
-    out.push(&s[start..]);
-    out
-}
-
-/// fnmatch-style: * ? and literal text.
-fn glob(pat: &str, s: &str) -> bool {
-    let (p, t): (Vec<char>, Vec<char>) = (pat.chars().collect(), s.chars().collect());
-    fn m(p: &[char], t: &[char]) -> bool {
-        match p.first() {
-            None => t.is_empty(),
-            Some('*') => (0..=t.len()).any(|i| m(&p[1..], &t[i..])),
-            Some('?') => !t.is_empty() && m(&p[1..], &t[1..]),
-            Some(c) => t.first() == Some(c) && m(&p[1..], &t[1..]),
-        }
-    }
-    m(&p, &t)
-}
-
-fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
-
-/// One `#{…}` body: a variable, `?cond,a,b`, `=N:var`, `==:a,b` and friends.
-fn braces(app: &App, body: &str, window: usize) -> String {
-    if let Some(rest) = body.strip_prefix('?') {
-        let parts = commas(rest);
-        let cond = parts.first().copied().unwrap_or("");
-        let value = if cond.contains("#{") || cond.contains('#') { text(app, cond, Some(window)) } else { var(app, cond, window) };
-        let pick = if truthy(&value) { parts.get(1) } else { parts.get(2) };
-        return pick.map(|p| text(app, p, Some(window))).unwrap_or_default();
-    }
-    if let Some(rest) = body.strip_prefix("==:").or_else(|| body.strip_prefix("!=:")) {
-        let parts = commas(rest);
-        let same = parts.len() == 2 && text(app, parts[0], Some(window)) == text(app, parts[1], Some(window));
-        return if same == body.starts_with("==") { "1".into() } else { "0".into() };
-    }
-    // Comparisons and logic: == != < > <= >= && ||.
-    for (op, f) in [("<=:", 2), (">=:", 3), ("<:", 4), (">:", 5), ("&&:", 6), ("||:", 7)] {
-        if let Some(rest) = body.strip_prefix(op) {
-            let parts = commas(rest);
-            let (x, y) = (text(app, parts.first().copied().unwrap_or(""), Some(window)), text(app, parts.get(1).copied().unwrap_or(""), Some(window)));
-            use std::cmp::Ordering::*;
-            let c = crate::tmuxconf::compare(&x, &y);
-            let v = match f { 2 => c != Greater, 3 => c != Less, 4 => c == Less, 5 => c == Greater, 6 => truthy(&x) && truthy(&y), _ => truthy(&x) || truthy(&y) };
-            return if v { "1".into() } else { "0".into() };
-        }
-    }
-    // Loops: #{W:fmt}, #{W:fmt,current-fmt}, #{P:…}; #{S:…} (one session here).
-    for (tag, what) in [("W:", 'W'), ("P:", 'P'), ("S:", 'S')] {
-        if let Some(rest) = body.strip_prefix(tag) {
-            let parts = commas(rest);
-            let (fmt, cur) = (parts.first().copied().unwrap_or(""), parts.get(1).copied());
-            return match what {
-                'W' => (0..app.tabs.len()).map(|w| text(app, if w == app.active { cur.unwrap_or(fmt) } else { fmt }, Some(w))).collect(),
-                'P' => {
-                    let panes = app.tabs.get(window).map(|t| t.panes()).unwrap_or_default();
-                    let focus = app.tabs.get(window).and_then(|t| t.focus);
-                    panes.into_iter().map(|p| { let f = if Some(p) == focus { cur.unwrap_or(fmt) } else { fmt }; spans_for_pane(app, f, window, p, Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>() }).collect()
-                }
-                _ => text(app, cur.unwrap_or(fmt), Some(window)),
-            };
-        }
-    }
-    // One-word modifiers on a value: b: basename, d: dirname, n: length, q: shell-quoted,
-    // a: a character from its number, E:/T: expanded again (T: with strftime), m:pattern,value.
-    for tag in ["b:", "d:", "n:", "q:", "a:", "E:", "T:"] {
-        if let Some(rest) = body.strip_prefix(tag) {
-            let v = if tag == "E:" || tag == "T:" { text(app, &braces(app, rest, window), Some(window)) } else { braces(app, rest, window) };
-            return match tag {
-                "b:" => v.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string(),
-                "d:" => { let t = v.trim_end_matches('/'); match t.rfind('/') { Some(0) => "/".into(), Some(i) => t[..i].to_string(), None => ".".into() } }
-                "n:" => v.chars().count().to_string(),
-                "q:" => v.chars().map(|c| if " \t\"'\\$`!*?[]{}()|&;<>#~".contains(c) { format!("\\{c}") } else { c.to_string() }).collect(),
-                "a:" => v.trim().parse::<u32>().ok().and_then(char::from_u32).map(|c| c.to_string()).unwrap_or_default(),
-                _ => v,
-            };
-        }
-    }
-    // m:pattern,value (fnmatch), m/r: (a regular expression), m/i or m/ri (ignoring case).
-    for (tag, re, icase) in [("m:", false, false), ("m/i:", false, true), ("m/r:", true, false), ("m/ri:", true, true), ("m/ir:", true, true)] {
-        if let Some(rest) = body.strip_prefix(tag) {
-            let parts = commas(rest);
-            let (pat, val) = (text(app, parts.first().copied().unwrap_or(""), Some(window)), text(app, parts.get(1).copied().unwrap_or(""), Some(window)));
-            let hit = if re { regex::RegexBuilder::new(&pat).case_insensitive(icase).build().map(|r| r.is_match(&val)).unwrap_or(false) }
-                else if icase { glob(&pat.to_lowercase(), &val.to_lowercase()) } else { glob(&pat, &val) };
-            return if hit { "1".into() } else { "0".into() };
-        }
-    }
-    // p<N>: pad to N (negative: pad on the left).
-    if let Some(rest) = body.strip_prefix('p') {
-        if let Some((n, name)) = rest.split_once(':') {
-            if let Ok(n) = n.parse::<i64>() {
-                let v = braces(app, name, window);
-                let w = n.unsigned_abs() as usize;
-                return if n >= 0 { format!("{v:<w$}") } else { format!("{v:>w$}") };
-            }
-        }
-    }
-    // #{e|+:1,2}: arithmetic (+ - * / %, `f` for floats is read as integers here).
-    if let Some(rest) = body.strip_prefix("e|") {
-        if let Some((op, args)) = rest.split_once(':') {
-            let parts = commas(args);
-            // e|*|f|2: floats (and a precision) when asked for, else whole numbers.
-            let mut bits = op.split('|');
-            let o = bits.next().unwrap_or("");
-            if bits.next() == Some("f") {
-                let prec: usize = bits.next().and_then(|p| p.parse().ok()).unwrap_or(2);
-                let f = |p: &str| text(app, p, Some(window)).trim().parse::<f64>().unwrap_or(0.0);
-                if parts.len() == 2 {
-                    let (a, b) = (f(parts[0]), f(parts[1]));
-                    let v = match o { "+" => a + b, "-" => a - b, "*" => a * b, "/" if b != 0.0 => a / b, "%" if b != 0.0 => a % b, _ => 0.0 };
-                    return format!("{v:.prec$}");
-                }
-            }
-            let num = |p: &str| text(app, p, Some(window)).trim().parse::<i64>().unwrap_or(0);
-            if parts.len() == 2 {
-                let (a, b) = (num(parts[0]), num(parts[1]));
-                let op = o;
-                return match op { "+" => a + b, "-" => a - b, "*" => a * b, "/" if b != 0 => a / b, "%" if b != 0 => a % b, "==" => (a == b) as i64, "!=" => (a != b) as i64, "<" => (a < b) as i64, ">" => (a > b) as i64, "<=" => (a <= b) as i64, ">=" => (a >= b) as i64, _ => 0 }.to_string();
-            }
-        }
-    }
-    // #{s/from/to/:var}: a substitution (literal).
-    if let Some(rest) = body.strip_prefix("s/") {
-        if let Some((spec, name)) = rest.rsplit_once(":") {
-            let mut it = spec.splitn(3, '/');
-            if let (Some(from), Some(to)) = (it.next(), it.next()) {
-                let v = braces(app, name, window);
-                return if from.is_empty() { v } else { v.replace(from, to) };
-            }
-        }
-    }
-    // #{=/N/suffix:var}: cut to N, the suffix marking the cut.
-    if let Some(rest) = body.strip_prefix("=/") {
-        if let Some((spec, name)) = rest.split_once(':') {
-            let (n, suffix) = spec.split_once('/').unwrap_or((spec, ""));
-            if let Ok(n) = n.parse::<i64>() {
-                let v = braces(app, name, window);
-                let chars: Vec<char> = v.chars().collect();
-                let k = n.unsigned_abs() as usize;
-                if chars.len() <= k { return v }
-                return if n >= 0 { format!("{}{suffix}", chars[..k].iter().collect::<String>()) } else { format!("{suffix}{}", chars[chars.len() - k..].iter().collect::<String>()) };
-            }
-        }
-    }
-    if let Some(rest) = body.strip_prefix('=') {
-        // #{=21:pane_title} (from the left), #{=-21:…} (from the right).
-        if let Some((n, name)) = rest.split_once(':') {
-            let n: i64 = n.parse().unwrap_or(0);
-            let v = braces(app, name, window);
-            let chars: Vec<char> = v.chars().collect();
-            let k = n.unsigned_abs() as usize;
-            return if chars.len() <= k { v } else if n >= 0 { chars[..k].iter().collect() } else { chars[chars.len() - k..].iter().collect() };
-        }
-    }
-    if let Some((_, name)) = body.split_once(':').filter(|(m, _)| matches!(*m, "t" | "b" | "d" | "l" | "q")) {
-        if body.starts_with("l:") { return name.to_string() }
-        return var(app, name, window);
-    }
-    var(app, body, window)
-}
-
-/// strftime, the parts tmux status lines use.
-fn strftime(app: &App, c: char) -> Option<String> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) + app.utc_offset_secs;
-    let (days, secs) = (now.div_euclid(86_400), now.rem_euclid(86_400));
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-    let (h, mi, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
-    Some(match c {
-        'H' => format!("{h:02}"), 'M' => format!("{mi:02}"), 'S' => format!("{s:02}"),
-        'I' => format!("{:02}", if h % 12 == 0 { 12 } else { h % 12 }), 'p' => (if h < 12 { "AM" } else { "PM" }).into(),
-        'd' => format!("{d:02}"), 'e' => format!("{d:2}"), 'm' => format!("{m:02}"), 'b' | 'h' => MONTHS[(m - 1) as usize].into(),
-        'y' => format!("{:02}", y % 100), 'Y' => y.to_string(), 'a' => DAYS[days.rem_euclid(7) as usize].into(),
-        'R' => format!("{h:02}:{mi:02}"), 'T' => format!("{h:02}:{mi:02}:{s:02}"), 'F' => format!("{y}-{m:02}-{d:02}"), '%' => "%".into(),
-        _ => return None,
-    })
-}
-
-/// Expand a format to plain text (styles dropped).
-pub fn text(app: &App, fmt: &str, window: Option<usize>) -> String {
-    spans(app, fmt, window, Style::default()).into_iter().map(|s| s.content.into_owned()).collect()
-}
-
-/// Expand a format to styled spans, `#[…]` applied over `base`.
-pub fn spans(app: &App, fmt: &str, window: Option<usize>, base: Style) -> Vec<Span<'static>> {
-    let window = window.unwrap_or(app.active);
-    let mut out = Vec::new();
-    let mut style = base;
-    render(app, fmt, window, base, &mut style, &mut out, 0);
-    out
-}
-
-/// The branch a `#{?cond,a,b}` takes, unexpanded (so its `#[…]` styles survive).
-fn branch<'a>(app: &App, body: &'a str, window: usize) -> &'a str {
-    let rest = &body[1..];
-    let parts = commas(rest);
-    let cond = parts.first().copied().unwrap_or("");
-    let value = if cond.contains('#') { text(app, cond, Some(window)) } else { var(app, cond, window) };
-    if truthy(&value) { parts.get(1).copied().unwrap_or("") } else { parts.get(2).copied().unwrap_or("") }
-}
-
-fn render(app: &App, fmt: &str, window: usize, base: Style, style: &mut Style, out: &mut Vec<Span<'static>>, depth: u8) {
-    let mut run = String::new();
-    let mut rest = fmt;
-    macro_rules! flush { () => { if !run.is_empty() { out.push(Span::styled(std::mem::take(&mut run), *style)) } } }
-    while let Some(c) = rest.chars().next() {
-        rest = &rest[c.len_utf8()..];
-        match c {
-            '#' => {
-                let Some(n) = rest.chars().next() else { run.push('#'); break };
-                rest = &rest[n.len_utf8()..];
-                match n {
-                    '#' => run.push('#'),
-                    ',' => run.push(','),
-                    '}' => run.push('}'),
-                    '{' => {
-                        let (body, after) = braced(rest);
-                        rest = after;
-                        if body.starts_with('?') && depth < 8 {
-                            flush!();
-                            render(app, branch(app, body, window), window, base, style, out, depth + 1);
-                        } else { run.push_str(&braces(app, body, window)) }
-                    }
-                    '[' => {
-                        let end = rest.find(']').unwrap_or(rest.len());
-                        let spec = &rest[..end];
-                        rest = rest.get(end + 1..).unwrap_or("");
-                        flush!();
-                        *style = restyle(*style, base, spec);
-                    }
-                    c if c.is_ascii_alphabetic() => run.push_str(&var(app, &c.to_string(), window)),
-                    other => { run.push('#'); run.push(other) }
-                }
-            }
-            '%' => {
-                let Some(n) = rest.chars().next() else { run.push('%'); break };
-                match strftime(app, n) { Some(v) => { rest = &rest[n.len_utf8()..]; run.push_str(&v) } None => run.push('%') }
-            }
-            c => run.push(c),
-        }
-    }
-    flush!();
-}
 
 /// `#[fg=colour136,bg=default,bold,nobold,reverse,default]`.
 fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
@@ -413,6 +939,13 @@ fn restyle(mut style: Style, base: Style, spec: &str) -> Style {
             "reverse" => style = style.add_modifier(Modifier::REVERSED),
             "noreverse" => style = style.remove_modifier(Modifier::REVERSED),
             "blink" => style = style.add_modifier(Modifier::SLOW_BLINK),
+            "noblink" => style = style.remove_modifier(Modifier::SLOW_BLINK),
+            "hidden" => style = style.add_modifier(Modifier::HIDDEN),
+            "nohidden" => style = style.remove_modifier(Modifier::HIDDEN),
+            "strikethrough" => style = style.add_modifier(Modifier::CROSSED_OUT),
+            "nostrikethrough" => style = style.remove_modifier(Modifier::CROSSED_OUT),
+            "double-underscore" | "curly-underscore" | "dotted-underscore" | "dashed-underscore" => style = style.add_modifier(Modifier::UNDERLINED),
+            "none" => style = Style { add_modifier: Modifier::empty(), sub_modifier: Modifier::all(), ..style },
             p => {
                 if let Some(c) = p.strip_prefix("fg=") { style = match c { "default" => style.fg(base.fg.unwrap_or(ratatui::style::Color::Reset)), c => colour(c).map(|c| style.fg(c)).unwrap_or(style) } }
                 if let Some(c) = p.strip_prefix("bg=") { style = match c { "default" => style.bg(base.bg.unwrap_or(ratatui::style::Color::Reset)), c => colour(c).map(|c| style.bg(c)).unwrap_or(style) } }

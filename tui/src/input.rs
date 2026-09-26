@@ -42,6 +42,16 @@ fn on_key(app: &mut App, key: KeyEvent) {
     // A message goes on the next key, as tmux's does; and tim notices you are back.
     app.toast = None;
     app.tim.touched = std::time::Instant::now();
+    // A table of your own (switch-client -T): its key runs, and the client goes back to root
+    // (a -r key keeps the table); the prefix, or a key it does not have, goes on as from root.
+    if let Some(table) = app.key_table.take() {
+        if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 { app.prefix = true; app.prefix_at = Some(std::time::Instant::now()); return }
+        if let Some(b) = app.keymap.named.get(&table).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
+            if b.repeat { app.key_table = Some(table) }
+            commands::execute(app, &b.command);
+            return;
+        }
+    }
     // After the prefix: the prefix table.
     if app.prefix {
         app.prefix = false;
