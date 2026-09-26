@@ -869,6 +869,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         (false, true) => (pal.selected, pal.selected_match),
         (false, false) => (pal.normal, pal.matched),
     };
+    // --color=alt-bg: every other row counted from the first one shown (fzf's itemCount) on it,
+    // unless the row is marked on a selected-bg of its own; the current row keeps bg+.
+    let alt = !(marked && pal.selected.bg != pal.normal.bg) && pal.alt_bg.col != theme::fzfcolor::Col::Undef && vi.saturating_sub(picker.scroll) % 2 == 1;
+    let (base, matched) = if alt && !current { (base.with_bg(pal.alt_bg), matched.with_bg(pal.alt_bg)) } else { (base, matched) };
     let base_style = base.style();
     // Each cell of the line as fzf reads it (picker::line): the title in the row's pair, the
     // detail and the glyphs in their own colours over it; whether the query lit it.
@@ -921,8 +925,11 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         }
     }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
-    if current && o.highlight_line { spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), base_style)) }
-    else if marked && o.highlight_line { spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), pal.selected.style())) }
+    // --highlight-line fills the rest of the current, a marked or a striped row (postTask).
+    if o.highlight_line && (current || marked || alt) {
+        let fill = if current { base_style } else if alt { pal.selected.with_bg(pal.alt_bg).style() } else { pal.selected.style() };
+        spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
+    }
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
 }
 
