@@ -270,7 +270,7 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "display-panes" => app.modal = Some(Modal::DisplayPanes { until: std::time::Instant::now() + std::time::Duration::from_millis(app.display_panes_ms) }),
         "copy-mode" => { input::run(app, "copy-mode"); if flag(words, "-u") { if let Some(f) = app.focused() { if let Some(p) = app.panes.get_mut(&f) { let half = p.rows as i32 - 2; p.copy_move(0, -half) } } } }
-        "search-backward" | "search-forward" => { if let Some(pane) = app.focused() { app.modal = Some(Modal::Find { pane, query: String::new(), found: None }) } }
+        "search-backward" | "search-forward" => { if let Some(pane) = app.focused() { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: command == "search-backward" }) } }
         "paste-buffer" => input::paste_buffer(app, 0),
         "list-buffers" | "choose-buffer" => input::run(app, "choose-buffer"),
         "delete-buffer" => { if !app.buffers.is_empty() { app.buffers.remove(0); } }

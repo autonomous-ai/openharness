@@ -389,8 +389,8 @@ impl Pane {
         }
         let found = self.term.search_next(&mut regex, origin, if older { Direction::Left } else { Direction::Right }, if older { Side::Right } else { Side::Left }, None);
         let Some(found) = found else { return false };
-        // A search that wrapped around past where it started is not "more".
-        if let Some(m) = &current { if (older && found.start() >= m.start()) || (!older && found.start() <= m.start()) { return false } }
+        // tmux's wrap-search is on: past the top comes the bottom. Only the same match is "no more".
+        if let Some(m) = &current { if found.start() == m.start() && found.end() == m.end() && self.find_at.is_some() { self.dirty = true; return true } }
         self.term.scroll_to_point(*found.start());
         let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
         selection.update(*found.end(), Side::Right);

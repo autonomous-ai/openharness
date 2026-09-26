@@ -276,7 +276,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
             Some((p.label.clone(), shown, p.cursor, p.hint.clone()))
         }
         Some(Modal::Confirm { prompt, .. }) => Some((format!("{prompt} "), String::new(), 0, String::new())),
-        Some(Modal::Find { query, found, .. }) => Some(("(search up) ".into(), query.clone(), query.chars().count(), if *found == Some(false) && !query.is_empty() { "no match".into() } else { String::new() })),
+        Some(Modal::Find { query, found, up, .. }) => Some((if *up { "(search up) ".into() } else { "(search down) ".into() }, query.clone(), query.chars().count(), if *found == Some(false) && !query.is_empty() { "no match".into() } else { String::new() })),
         _ => None,
     };
     if let Some((label, value, cursor, hint)) = prompt_like {
@@ -656,6 +656,9 @@ fn preview_grid(buf: &mut Buffer, pane: &Pane, area: Rect, scroll: u16) {
         if cell.flags.contains(Flags::BOLD) { style = style.add_modifier(Modifier::BOLD) }
         if cell.flags.contains(Flags::DIM) || dim { style = style.add_modifier(Modifier::DIM) }
         if cell.flags.contains(Flags::INVERSE) { style = style.add_modifier(Modifier::REVERSED) }
+        if cell.flags.contains(Flags::ITALIC) { style = style.add_modifier(Modifier::ITALIC) }
+        if cell.flags.intersects(Flags::ALL_UNDERLINES) { style = style.add_modifier(Modifier::UNDERLINED) }
+        if cell.flags.contains(Flags::STRIKEOUT) { style = style.add_modifier(Modifier::CROSSED_OUT) }
         if let Some(t) = buf.cell_mut((area.x + col, area.y + row as u16)) { t.set_char(if cell.c == '\0' { ' ' } else { cell.c }).set_style(style); }
     }
 }
@@ -867,6 +870,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     let mode = content.mode;
     let cursor_point = content.cursor.point;
     let selection = content.selection;
+    let find = pane.find_at.clone();
     for indexed in content.display_iter {
         let row = indexed.point.line.0 + offset;
         let Some(col) = (indexed.point.column.0 as u16).checked_sub(hshift) else { continue };
@@ -884,17 +888,14 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         if cell.flags.intersects(Flags::ALL_UNDERLINES) { mods |= Modifier::UNDERLINED }
         if cell.flags.contains(Flags::DIM) || dim_fg { mods |= Modifier::DIM }
         if cell.flags.contains(Flags::STRIKEOUT) { mods |= Modifier::CROSSED_OUT }
-        if cell.flags.contains(Flags::INVERSE) {
-            std::mem::swap(&mut fg_color, &mut bg_color);
-            if fg_color == Color::Reset && bg_color == Color::Reset { mods |= Modifier::REVERSED }
-            else {
-                if fg_color == Color::Reset { fg_color = Color::Black }
-                if bg_color == Color::Reset { bg_color = Color::White }
-            }
-        }
+        // Reverse video stays reverse video: the terminal swaps in its own default colours, light
+        // theme or dark.
+        if cell.flags.contains(Flags::INVERSE) { mods |= Modifier::REVERSED }
         style = style.fg(fg_color).bg(bg_color).add_modifier(mods);
-        // tmux mode-style: selections are yellow on black.
-        if selection.map(|r| r.contains(indexed.point)).unwrap_or(false) { style = style.bg(Color::Yellow).fg(Color::Black) }
+        // tmux mode-style: selections are yellow on black; the search match is
+        // copy-mode-current-match-style, magenta on black.
+        if find.as_ref().map(|m| m.contains(&indexed.point)).unwrap_or(false) { style = style.bg(Color::Magenta).fg(Color::Black) }
+        else if selection.map(|r| r.contains(indexed.point)).unwrap_or(false) { style = style.bg(Color::Yellow).fg(Color::Black) }
         let target = buf.cell_mut((area.x + col, area.y + row as u16));
         let Some(target) = target else { continue };
         if cell.flags.contains(Flags::HIDDEN) || cell.c == '\0' {

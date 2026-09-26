@@ -143,6 +143,8 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// Which way the last copy-mode search went (? up, / down).
+    pub last_search_up: bool,
     /// The home list's order while it is on screen (see `home_agents`).
     pub home_order: std::cell::RefCell<Vec<(String, String)>>,
     pub mouse_changed: bool,
@@ -176,6 +178,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            last_search_up: true,
             home_order: Default::default(),
             mouse_changed: false,
             pane_base_index: 0,

@@ -102,7 +102,7 @@ pub enum Modal {
     /// tmux `choose-tree -w` (C-b w): windows and their panes, with a preview.
     Tree { cursor: usize, collapsed: Vec<String> },
     /// Search in the focused pane's history (copy mode's / and ?). `found` is None before the first search.
-    Find { pane: u64, query: String, found: Option<bool> },
+    Find { pane: u64, query: String, found: Option<bool>, up: bool },
     /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.
     Copy { pane: u64 },
 }
