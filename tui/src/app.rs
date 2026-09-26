@@ -28,8 +28,13 @@ pub struct Tab {
     pub root: Option<Node>,
     pub focus: Option<u64>,
     pub zoomed: bool,
-    /// The pane that was active before this one (`;`).
-    pub last_focus: Option<u64>,
+    /// tmux's w->last_panes: the panes that were active before this one, the latest first (`;`).
+    pub last: Vec<u64>,
+    /// tmux's w->panes: the order the panes are numbered in, which a layout does not change
+    /// (main-horizontal-mirrored draws pane 0 at the bottom).
+    pub order: Vec<u64>,
+    /// tmux's active_point: when each pane last became the active one (higher is later).
+    pub points: HashMap<u64, u64>,
     /// Where `next-layout` (Space) is in its cycle.
     pub layout_at: usize,
     /// Whether the desk knows this tab yet (a new, empty tab is local until its first harness).
@@ -43,9 +48,56 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(name: &str) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last_focus: None, layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
     }
-    pub fn panes(&self) -> Vec<u64> { self.root.as_ref().map(Node::leaves).unwrap_or_default() }
+    /// The panes in tmux's order (pane_index); one the list has not placed yet comes last.
+    pub fn panes(&self) -> Vec<u64> {
+        let leaves = self.root.as_ref().map(Node::leaves).unwrap_or_default();
+        let mut out: Vec<u64> = self.order.iter().copied().filter(|p| leaves.contains(p)).collect();
+        out.extend(leaves.into_iter().filter(|p| !self.order.contains(p)));
+        out
+    }
+    /// The pane `;` goes back to.
+    pub fn last_focus(&self) -> Option<u64> { self.last.first().copied() }
+    /// tmux's window_set_active_pane: the pane left goes on top of the last-panes stack.
+    pub fn set_active(&mut self, pane: u64) {
+        if self.focus == Some(pane) { return }
+        self.last.retain(|p| *p != pane);
+        if let Some(old) = self.focus { self.last.retain(|p| *p != old); self.last.insert(0, old) }
+        self.focus = Some(pane);
+        static POINT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        self.points.insert(pane, POINT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    }
+    /// tmux's window_add_pane: after `other` (the active pane), before it with -b; -f at the
+    /// end of the list (-bf the start).
+    pub fn add_pane(&mut self, pane: u64, other: Option<u64>, before: bool, full: bool) {
+        let mut order = self.panes();
+        order.retain(|p| *p != pane);
+        let other = other.or(self.focus).and_then(|o| order.iter().position(|p| *p == o));
+        let at = match (full, other) {
+            _ if order.is_empty() => 0,
+            (true, _) => if before { 0 } else { order.len() },
+            (false, Some(i)) => if before { i } else { i + 1 },
+            (false, None) => order.len(),
+        };
+        order.insert(at, pane);
+        self.order = order;
+    }
+    /// tmux's window_lost_pane: a pane leaves; if it was the active one, the last pane takes
+    /// over, else the one before it in the list, else the one after. (Before it leaves the layout.)
+    pub fn lose(&mut self, pane: u64) {
+        let order = self.panes();
+        self.last.retain(|p| *p != pane);
+        if self.focus == Some(pane) {
+            let at = order.iter().position(|p| *p == pane);
+            let next = self.last.first().copied()
+                .or_else(|| at.and_then(|i| i.checked_sub(1)).map(|i| order[i]))
+                .or_else(|| at.and_then(|i| order.get(i + 1).copied()));
+            if let Some(n) = next { self.last.retain(|p| *p != n) }
+            self.focus = next;
+        }
+        self.order = order.into_iter().filter(|p| *p != pane).collect();
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -770,7 +822,8 @@ impl App {
     pub fn send_input(&mut self, pane_id: u64, bytes: &[u8]) {
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         let Some(stream) = pane.stream else { return };
-        if pane.read_only { return }
+        // select-pane -d: input to this pane is off until select-pane -e.
+        if pane.read_only || pane.input_off { return }
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
         pane.scroll_bottom();
         if pane.input_at.is_none() { pane.input_at = Some(Instant::now()) }
@@ -783,12 +836,23 @@ impl App {
     pub fn send_paste(&mut self, pane_id: u64, text: &str) {
         let Some(pane) = self.panes.get(&pane_id) else { return };
         let Some(stream) = pane.stream else { return };
+        if pane.input_off { return }
         let Some(link) = self.links.get(&pane.machine_id).and_then(|s| s.link.clone()) else { return };
         link.send_binary(proto::encode(Kind::Paste, stream, 0, text.as_bytes()));
     }
 
     /// Resize every visible pane's far terminal to its tile. Called after any layout change.
     pub fn fit_panes(&mut self) {
+        // Every window's cells follow the client's size (tmux resizes its windows to it), with the
+        // title rows counted when the window shows them.
+        let body = self.body();
+        for i in 0..self.tabs.len() {
+            let status = if self.tab_header_rows(&self.tabs[i]) > 0 { layout::Status::Top } else { layout::Status::Off };
+            if let Some(root) = self.tabs[i].root.as_mut() {
+                root.status = status;
+                if root.size() != (body.width, body.height) { root.resize(body.width, body.height) }
+            }
+        }
         self.rects = self.compute_rects();
         let visible: Vec<(u64, Rect)> = self.rects.clone();
         // A tile comes on screen without a stream (a desk tab never visited): open it as a watcher —
@@ -937,12 +1001,20 @@ impl App {
         self.fleet.machine(&self.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(hostname)
     }
 
-    /// The layout's main pane to the other side (the -mirrored layouts).
-    pub fn mirror_layout(&mut self) {
-        if let Some(layout::Node::Split { ratio, a, b, .. }) = self.tab_mut().root.as_mut() {
-            std::mem::swap(a, b);
-            *ratio = 1.0 - *ratio;
-        }
+    /// tmux's named layout (layout-set.c) on a window: main-pane-* and other-pane-* as set,
+    /// remembered for next-layout.
+    pub fn arrange_tab(&mut self, index: usize, named: layout::Named) {
+        let body = self.body();
+        let Some(tab) = self.tabs.get(index) else { return };
+        let tab_id = tab.id.clone();
+        let get = |n: &str| self.options.get(n, &tab_id, None).unwrap_or_default();
+        let (mw, mh, ow, oh) = (get("main-pane-width"), get("main-pane-height"), get("other-pane-width"), get("other-pane-height"));
+        let status = if tab.panes().len() > 1 && self.opts.border_titles != Some(false) { layout::Status::Top } else { layout::Status::Off };
+        let ids = tab.panes();
+        let tab = &mut self.tabs[index];
+        tab.root = layout::arrange(named, &ids, body.width, body.height, status, (&mw, &mh), (&ow, &oh));
+        tab.zoomed = false;
+        tab.layout_at = layout::Named::ALL.iter().position(|n| *n == named).unwrap_or(0);
         self.fit_panes();
     }
 
@@ -1067,14 +1139,13 @@ impl App {
     }
 
     pub fn focus_pane(&mut self, tab: usize, pane: u64) {
-        if tab == self.active && self.tabs[tab].focus != Some(pane) { self.tabs[tab].last_focus = self.tabs[tab].focus }
         if let Some(prev) = self.focused().and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) {
             if self.panes.get(&pane).map(|p| (p.machine_id.clone(), p.agent_id.clone())) != Some(prev.clone()) { self.last_harness = Some(prev) }
         }
         if tab != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
         self.active = tab;
         if self.tabs[tab].zoomed && self.tabs[tab].focus != Some(pane) { self.tabs[tab].zoomed = false }
-        self.tabs[tab].focus = Some(pane);
+        self.tabs[tab].set_active(pane);
         self.seen(pane);
         self.sync_titles();
         self.fit_panes();
@@ -1118,23 +1189,13 @@ impl App {
         let id = self.new_pane(machine_id, agent_id);
         if let Placement::At(at) = &placement {
             let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { self.drop_pane(id); return };
-            // The room the new pane takes: -l cells (or %) of the target's (-f: the window's).
-            let body = self.body();
-            let mut rects = Vec::new();
-            if let Some(root) = self.tabs[t].root.as_ref() { root.rects(body, &mut rects) }
-            let room = if at.full { body } else { at.pane.and_then(|p| rects.iter().find(|(x, _)| *x == p)).map(|(_, r)| *r).unwrap_or(body) };
-            let extent = if at.dir == Dir::Horizontal { room.width.saturating_sub(1) } else { room.height }.max(2) as f32;
-            let share = match at.size { Some((n, true)) => n as f32 / 100.0, Some((n, false)) => n as f32 / extent, None => 0.5 };
+            if !self.split_at(t, id, at) { self.drop_pane(id); self.say("no space for new pane", theme::WARN); return }
             let tab = &mut self.tabs[t];
-            match (tab.root.take(), at.pane) {
-                (None, _) => tab.root = Some(Node::Leaf(id)),
-                (Some(root), _) if at.full => tab.root = Some(root.wrap(id, at.dir, at.before, share)),
-                (Some(mut root), Some(p)) => { if !root.split_at(p, id, at.dir, at.before, share) { root = root.wrap(id, at.dir, at.before, share) } tab.root = Some(root) }
-                (Some(root), None) => tab.root = Some(root.wrap(id, at.dir, at.before, share)),
-            }
-            // tmux takes a zoomed window out of zoom; the new pane is its active one unless -d.
-            tab.zoomed = false;
-            if !at.detached { if tab.focus != Some(id) { tab.last_focus = tab.focus } tab.focus = Some(id) }
+            tab.add_pane(id, at.pane, at.before, at.full);
+            // tmux takes a zoomed window out of zoom (-Z: zooms its active pane after); the new
+            // pane is its active one unless -d.
+            if !at.detached || tab.focus.is_none() { tab.set_active(id) }
+            tab.zoomed = at.zoom && tab.panes().len() > 1;
             let tab_id = tab.id.clone();
             self.open_stream(id, true);
             self.fit_panes();
@@ -1146,7 +1207,7 @@ impl App {
             (Placement::Tab, false) => {
                 let name = self.fleet.agent(machine_id, agent_id).map(|a| a.name.clone()).unwrap_or_else(|| "tab".into());
                 let mut tab = Tab::new(&name);
-                tab.root = Some(Node::Leaf(id));
+                tab.root = Some(Node::new(id, self.size.0, self.size.1.saturating_sub(1)));
                 tab.focus = Some(id);
                 // As new-window: the first free index, in its place in the order.
                 self.renumber();
@@ -1158,8 +1219,9 @@ impl App {
                 self.active = at;
             }
             (_, true) => {
+                let body = self.body();
                 let tab = self.tab_mut();
-                tab.root = Some(Node::Leaf(id));
+                tab.root = Some(Node::new(id, body.width, body.height));
                 tab.focus = Some(id);
             }
             (Placement::Replace, false) => {
@@ -1170,14 +1232,16 @@ impl App {
                     if self.tab().on_desk { self.desk_op(op) }
                 }
                 if let Some(root) = self.tab_mut().root.as_mut() { root.replace(old, id); }
-                self.tab_mut().focus = Some(id);
+                let tab = self.tab_mut();
+                for p in tab.order.iter_mut().chain(tab.last.iter_mut()) { if *p == old { *p = id } }
+                tab.focus = Some(id);
                 self.drop_pane(old);
             }
             (Placement::At(_), _) => {}
-            (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => self.split_focused(id, dir),
+            (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => { if !self.split_focused(id, dir) { self.drop_pane(id); self.say("no space for new pane", theme::WARN); return } }
             (Placement::Auto(None), false) => {
                 let dir = self.smart_dir();
-                self.split_focused(id, dir);
+                if !self.split_focused(id, dir) { self.drop_pane(id); self.say("no space for new pane", theme::WARN); return }
             }
         }
         self.tab_mut().zoomed = false;
@@ -1191,14 +1255,125 @@ impl App {
         self.desk_pane_added(&tab_id, machine_id, agent_id);
     }
 
-    fn split_focused(&mut self, id: u64, dir: Dir) {
-        let focus = self.focused();
-        let tab = self.tab_mut();
-        match (tab.root.as_mut(), focus) {
-            (Some(root), Some(focus)) => { root.split(focus, id, dir); }
-            _ => tab.root = Some(Node::Leaf(id)),
+    /// split-window's (and join-pane's) split: `id` gets a cell beside `at.pane` (-b before it,
+    /// -f across the window) of `at.size`; false, and nothing changed, when there is no room.
+    fn split_at(&mut self, t: usize, id: u64, at: &At) -> bool {
+        let body = self.body();
+        // -l n%: of the target pane's width or height (-f: the window's), measured as tmux
+        // measures it — before a zoomed window is unzoomed.
+        let cur = if at.full {
+            let (w, h) = self.tabs[t].root.as_ref().map(|r| r.size()).unwrap_or((body.width, body.height));
+            if at.dir == Dir::Horizontal { w } else { h }
+        } else {
+            at.pane.and_then(|p| crate::format::content_rect(self, t, p)).map(|r| if at.dir == Dir::Horizontal { r.width } else { r.height }).unwrap_or(0)
+        };
+        let size = at.size.map(|(n, pct)| if pct { cur as u32 * n as u32 / 100 } else { n as u32 });
+        self.fit_panes_of(t);
+        let tab = &mut self.tabs[t];
+        tab.zoomed = false;
+        match tab.root.as_mut() {
+            None => { tab.root = Some(Node::new(id, body.width, body.height)); true }
+            Some(root) => root.split_with(at.pane, id, at.dir, size, at.before, at.full || at.pane.is_none()),
         }
-        tab.focus = Some(id);
+    }
+
+    /// A pane leaves its window but not the screen (join-pane, break-pane): its harness and
+    /// stream go on, its id with it; a window left empty closes.
+    fn unhook_pane(&mut self, id: u64) {
+        let Some(index) = self.tabs.iter().position(|t| t.panes().contains(&id)) else { return };
+        let tab = &mut self.tabs[index];
+        tab.lose(id);
+        tab.root = tab.root.take().and_then(|root| root.remove(id));
+        tab.zoomed = false;
+        let tab_id = tab.id.clone();
+        if let Some(p) = self.panes.get(&id) { let op = json!({ "op": "pane.remove", "tabId": tab_id, "machineId": p.machine_id, "agentId": p.agent_id }); self.desk_op(op) }
+        if self.tabs[index].root.is_none() && self.tabs.len() > 1 { self.close_tab(index) }
+        else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "home".into() }
+    }
+
+    /// tmux's join-pane / move-pane: `src` splits `at.pane` where `at` says, keeping its id; in
+    /// the list it goes after the target (before it with -b), -f or not. Not -d: its window
+    /// becomes the current one with it active.
+    pub fn join_pane(&mut self, src: u64, at: At) -> Result<(), String> {
+        let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { return Err("can't find window".into()) };
+        let Some(dst) = at.pane else { return Err("can't find pane".into()) };
+        if src == dst { return Err("source and target panes must be different".into()) }
+        // The room is made first: no room, and nothing moves.
+        const SLOT: u64 = u64::MAX;
+        if !self.split_at(t, SLOT, &at) { return Err("create pane failed: pane too small".into()) }
+        let point = self.tabs.iter().find_map(|x| x.points.get(&src).copied());
+        let from = self.tabs.iter().position(|x| x.panes().contains(&src) && x.id != at.tab);
+        match from {
+            Some(_) => self.unhook_pane(src),
+            None => {
+                // Within the window: its old cell closes, the list forgets it.
+                let tab = &mut self.tabs[t];
+                tab.lose(src);
+                tab.root = tab.root.take().and_then(|root| root.remove(src));
+            }
+        }
+        let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { return Ok(()) };
+        let tab = &mut self.tabs[t];
+        if let Some(root) = tab.root.as_mut() { root.replace(SLOT, src); }
+        tab.add_pane(src, Some(dst), at.before, false);
+        if let Some(p) = point { tab.points.insert(src, p); }
+        tab.zoomed = false;
+        let (machine, agent) = self.panes.get(&src).map(|p| (p.machine_id.clone(), p.agent_id.clone())).unwrap_or_default();
+        if !at.detached { self.tabs[t].set_active(src); self.focus_pane(t, src) }
+        let tab_id = self.tabs[t].id.clone();
+        self.desk_pane_added(&tab_id, &machine, &agent);
+        self.sync_titles();
+        self.fit_panes();
+        Ok(())
+    }
+
+    /// tmux's break-pane: the pane becomes a window of its own (keeping its id), at the first
+    /// free index or `num`; -d: not gone to.
+    pub fn break_pane(&mut self, src: u64, name: Option<String>, num: Option<usize>, detached: bool) -> Result<(), String> {
+        let Some(from) = self.tabs.iter().position(|t| t.panes().contains(&src)) else { return Err("can't find pane".into()) };
+        if self.tabs[from].panes().len() < 2 { return Err("can't break with only one pane".into()) }
+        self.renumber();
+        let n = match num { Some(n) => { if self.tab_by_num(n).is_some() { return Err(format!("index in use: {n}")) } n } None => self.free_num() };
+        let back = self.tabs[self.active].id.clone();
+        let point = self.tabs[from].points.get(&src).copied();
+        self.unhook_pane(src);
+        let label = name.clone().or_else(|| self.panes.get(&src).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone())).unwrap_or_else(|| "tab".into());
+        let mut tab = Tab::new(&label);
+        tab.named = name.is_some();
+        tab.root = Some(Node::new(src, self.size.0, self.size.1.saturating_sub(1)));
+        tab.order = vec![src];
+        tab.focus = Some(src);
+        if let Some(p) = point { tab.points.insert(src, p); }
+        let tab_id = tab.id.clone();
+        self.nums.insert(tab_id.clone(), n);
+        let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
+        self.tabs.insert(at, tab);
+        if detached {
+            if let Some(i) = self.tabs.iter().position(|t| t.id == back) { self.active = i }
+        } else {
+            let prev = self.tabs.iter().position(|t| t.id == back);
+            if let Some(i) = prev { self.active = i }
+            self.select_tab(at);
+        }
+        let (machine, agent) = self.panes.get(&src).map(|p| (p.machine_id.clone(), p.agent_id.clone())).unwrap_or_default();
+        self.desk_pane_added(&tab_id, &machine, &agent);
+        self.sync_titles();
+        self.fit_panes();
+        Ok(())
+    }
+
+    fn split_focused(&mut self, id: u64, dir: Dir) -> bool {
+        let focus = self.focused();
+        let body = self.body();
+        let active = self.active;
+        self.fit_panes_of(active);
+        let tab = self.tab_mut();
+        let placed = match (tab.root.as_mut(), focus) {
+            (Some(root), Some(focus)) => root.split(focus, id, dir),
+            _ => { tab.root = Some(Node::new(id, body.width, body.height)); true }
+        };
+        if placed { tab.add_pane(id, focus, false, false); tab.set_active(id) }
+        placed
     }
 
     /// Wide tiles split left|right, tall ones top/bottom — the way a tiling window manager does.
@@ -1257,13 +1432,9 @@ impl App {
             }
         }
         let tab = &mut self.tabs[index];
-        let leaves = tab.panes();
-        let at = leaves.iter().position(|x| *x == id).unwrap_or(0);
+        tab.lose(id);
         tab.root = tab.root.take().and_then(|root| root.remove(id));
         tab.zoomed = false;
-        let rest = tab.panes();
-        // The pane you were in before goes on, as tmux's kill-pane does; else a neighbour.
-        tab.focus = tab.last_focus.filter(|l| rest.contains(l)).or_else(|| rest.get(at.min(rest.len().saturating_sub(1))).copied());
         let tab_id = tab.id.clone();
         self.drop_pane(id);
         if let Some((machine, agent)) = agent { self.desk_op(json!({ "op": "pane.remove", "tabId": tab_id, "machineId": machine, "agentId": agent })) }
@@ -1334,114 +1505,175 @@ impl App {
 
     // ── tmux pane moves ──────────────────────────────────────────────────────
 
-    pub fn focus_toward(&mut self, toward: layout::Toward) {
-        let Some(focus) = self.focused() else { return };
-        if self.tab().zoomed { return }
-        // tmux 3.1+: of the panes that way, the one you were last in wins.
-        let last = self.tab().last_focus.filter(|l| {
-            let pair: Vec<(u64, Rect)> = self.rects.iter().filter(|(id, _)| *id == focus || id == l).copied().collect();
-            let near = layout::neighbour(&self.rects, focus, toward).and_then(|n| self.rects.iter().find(|(id, _)| *id == n).map(|(_, r)| *r));
-            let lr = self.rects.iter().find(|(id, _)| id == l).map(|(_, r)| *r);
-            let same_edge = match (near, lr) { (Some(a), Some(b)) => match toward { Toward::Left => a.x + a.width == b.x + b.width, Toward::Right => a.x == b.x, Toward::Up => a.y + a.height == b.y + b.height, Toward::Down => a.y == b.y }, _ => false };
-            layout::neighbour(&pair, focus, toward) == Some(*l) && same_edge
-        });
-        if let Some(next) = last.or_else(|| layout::neighbour(&self.rects, focus, toward)) { let tab = self.active; self.focus_pane(tab, next) }
+    /// The panes of a window where tmux keeps them (zoom aside), in its list order.
+    pub fn pane_geoms(&self, w: usize) -> Vec<(u64, layout::Geom)> {
+        let Some(tab) = self.tabs.get(w) else { return Vec::new() };
+        let body = self.body();
+        let header = self.tab_header_rows(tab);
+        let mut out = Vec::new();
+        if let Some(root) = tab.root.as_ref() { root.rects(body, &mut out) }
+        tab.panes().into_iter().filter_map(|id| out.iter().find(|(p, _)| *p == id).map(|(_, r)| (id, layout::Geom {
+            x: (r.x - body.x) as u32, y: (r.y - body.y + header) as u32, w: r.width as u32, h: r.height.saturating_sub(header) as u32,
+        }))).collect()
     }
 
-    /// `select-pane -t :.+` — the next pane in order, wrapping.
-    pub fn cycle_pane(&mut self, by: i64) {
-        let ids = self.tab().panes();
-        if ids.len() < 2 { return }
-        let at = self.focused().and_then(|f| ids.iter().position(|x| *x == f)).unwrap_or(0) as i64;
-        let next = ids[(at + by).rem_euclid(ids.len() as i64) as usize];
-        let tab = self.active;
-        self.tab_mut().zoomed = false;
-        self.focus_pane(tab, next);
+    /// The pane that way from `from`, as tmux's select-pane -L/-R/-U/-D finds it.
+    pub fn pane_toward(&self, w: usize, from: u64, toward: Toward) -> Option<u64> {
+        let tab = self.tabs.get(w)?;
+        let body = self.body();
+        let size = tab.root.as_ref().map(|r| r.size()).unwrap_or((body.width, body.height));
+        let titles = self.tab_header_rows(tab) > 0;
+        layout::find_toward(&self.pane_geoms(w), from, toward, (size.0 as u32, size.1 as u32), titles, &|p| tab.points.get(&p).copied().unwrap_or(0))
+    }
+
+    /// select-pane -L/-R/-U/-D: the pane that way becomes the active one; a zoomed window is
+    /// unzoomed (-Z: the new pane is zoomed instead).
+    pub fn select_toward(&mut self, toward: layout::Toward, keep_zoom: bool) {
+        let Some(focus) = self.focused() else { return };
+        let w = self.active;
+        let Some(next) = self.pane_toward(w, focus, toward) else { return };
+        if next == focus { return }
+        let zoomed = self.tabs[w].zoomed;
+        self.focus_pane(w, next);
+        self.tabs[w].zoomed = zoomed && keep_zoom;
+        self.fit_panes();
     }
 
     pub fn select_pane_index(&mut self, index: usize) {
         if let Some(id) = self.tab().panes().get(index).copied() { let tab = self.active; self.focus_pane(tab, id) }
     }
 
-    pub fn last_pane(&mut self) {
-        let Some(last) = self.tab().last_focus else { self.say("no last pane", theme::WARN); return };
-        if !self.tab().panes().contains(&last) { return }
-        let tab = self.active;
-        self.focus_pane(tab, last);
+    /// last-pane (select-pane -l): the pane active before this one — with no such pane in a
+    /// window of two, the other one, as tmux has it; -Z keeps a zoomed window zoomed.
+    pub fn select_last(&mut self, w: usize, keep_zoom: bool) {
+        let Some(tab) = self.tabs.get(w) else { return };
+        let ids = tab.panes();
+        let other = || if ids.len() == 2 { ids.iter().copied().find(|p| Some(*p) != tab.focus) } else { None };
+        let Some(last) = tab.last_focus().filter(|l| ids.contains(l)).or_else(other) else { self.say("no last pane", theme::WARN); return };
+        let zoomed = tab.zoomed;
+        if w == self.active { self.focus_pane(w, last) } else { self.tabs[w].set_active(last) }
+        self.tabs[w].zoomed = zoomed && keep_zoom;
+        self.fit_panes();
     }
 
     /// `resize-pane -L/-R/-U/-D n`: n cells, the way tmux counts them.
     /// resize-pane -L/-R/-U/-D: the pane's nearest border in that direction moves `cells`.
     pub fn resize_pane(&mut self, tab: usize, pane: u64, dir: Dir, cells: i32) {
-        let body = self.body();
-        if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.nudge(pane, dir, cells, body); }
+        self.fit_panes_of(tab);
+        if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.resize_pane(pane, dir, cells, true); }
         self.fit_panes();
+    }
+
+    /// A window's cells at the client's size before they are moved.
+    fn fit_panes_of(&mut self, tab: usize) -> bool {
+        let body = self.body();
+        let status = self.tabs.get(tab).map(|t| if self.tab_header_rows(t) > 0 { layout::Status::Top } else { layout::Status::Off }).unwrap_or_default();
+        match self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) {
+            Some(root) => { root.status = status; if root.size() != (body.width, body.height) { root.resize(body.width, body.height) } true }
+            None => false,
+        }
     }
 
     /// resize-pane -x/-y: the pane made that many cells wide or lines tall (its title row, when
     /// the window shows them, on top).
     pub fn size_pane(&mut self, tab: usize, pane: u64, dir: Dir, cells: u16) {
+        self.fit_panes_of(tab);
+        // tmux: -y counts the top pane's title row too (pane-border-status top).
+        let mut out = Vec::new();
         let body = self.body();
-        let header = if dir == Dir::Vertical { self.tabs.get(tab).map(|t| self.tab_header_rows(t)).unwrap_or(0) } else { 0 };
-        if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.set_extent(pane, dir, cells + header, body); }
+        if let Some(root) = self.tabs.get(tab).and_then(|t| t.root.as_ref()) { root.rects(body, &mut out) }
+        let top = out.iter().find(|(id, _)| *id == pane).map(|(_, r)| r.y == body.y).unwrap_or(false);
+        let header = self.tabs.get(tab).map(|t| self.tab_header_rows(t)).unwrap_or(0);
+        let cells = if dir == Dir::Vertical && header > 0 && top { cells + 1 } else { cells };
+        if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.resize_pane_to(pane, dir, cells as u32); }
         self.fit_panes();
     }
 
-    /// `swap-pane -U/-D`: trade places with the previous / next pane.
-    pub fn swap_pane(&mut self, by: i64) {
-        let ids = self.tab().panes();
-        let Some(focus) = self.focused() else { return };
-        if ids.len() < 2 { return }
-        let at = ids.iter().position(|x| *x == focus).unwrap_or(0) as i64;
-        let other = ids[(at + by).rem_euclid(ids.len() as i64) as usize];
-        if let Some(root) = self.tab_mut().root.as_mut() { root.swap(focus, other) }
+    /// tmux's swap-pane in one window: the two trade cells and places in the list; the target
+    /// (`dst`) is the active pane after, or with -d the active place stays where it was.
+    /// Zoom goes unless -Z.
+    pub fn swap_panes(&mut self, w: usize, src: u64, dst: u64, detached: bool, keep_zoom: bool) {
+        let Some(tab) = self.tabs.get_mut(w) else { return };
+        let mut order = tab.panes();
+        let (Some(i), Some(j)) = (order.iter().position(|p| *p == src), order.iter().position(|p| *p == dst)) else { return };
+        if src == dst { return }
+        order.swap(i, j);
+        tab.order = order;
+        if let Some(root) = tab.root.as_mut() { root.swap(src, dst) }
+        if !detached { tab.set_active(dst) }
+        else if tab.focus == Some(src) { tab.set_active(dst) }
+        else if tab.focus == Some(dst) { tab.set_active(src) }
+        tab.zoomed &= keep_zoom;
         self.sync_titles();
         self.fit_panes();
     }
 
-    /// `rotate-window`: every pane moves one place along (-1 the other way).
-    pub fn rotate(&mut self, by: i64) {
-        let ids = self.tab().panes();
-        if ids.len() < 2 { return }
-        let n = ids.len() as i64;
-        // tmux's rotate-window (C-o) moves panes up: each position takes the pane after it.
-        let rotated: Vec<u64> = (0..n).map(|i| ids[((i + by).rem_euclid(n)) as usize]).collect();
-        if let Some(root) = self.tab_mut().root.as_mut() {
-            // Relabel leaves in order: position i now holds rotated[i].
-            let mut i = 0;
-            root.relabel(&mut |_| { let id = rotated[i]; i += 1; id });
+    /// swap-pane across two windows: each pane takes the other's cell and place in its list;
+    /// each window's active pane is the one that came in (-d: only where the active one left).
+    pub fn swap_across(&mut self, src: (usize, u64), dst: (usize, u64), detached: bool, keep_zoom: bool) {
+        let ((sw, sp), (dw, dp)) = (src, dst);
+        if sw == dw || sw >= self.tabs.len() || dw >= self.tabs.len() { return }
+        let (spoint, dpoint) = (self.tabs[sw].points.remove(&sp), self.tabs[dw].points.remove(&dp));
+        if let Some(p) = spoint { self.tabs[dw].points.insert(sp, p); }
+        if let Some(p) = dpoint { self.tabs[sw].points.insert(dp, p); }
+        for (w, from, to) in [(sw, sp, dp), (dw, dp, sp)] {
+            let tab = &mut self.tabs[w];
+            let mut order = tab.panes();
+            for p in order.iter_mut() { if *p == from { *p = to } }
+            tab.order = order;
+            if let Some(root) = tab.root.as_mut() { root.replace(from, to); }
+            tab.last.retain(|p| *p != from);
+            if tab.focus == Some(from) { tab.focus = Some(to) } else if !detached { tab.set_active(to) }
+            tab.zoomed &= keep_zoom;
+        }
+        // The desk: each harness leaves its window for the other's.
+        let (st, dt) = (self.tabs[sw].id.clone(), self.tabs[dw].id.clone());
+        for (tab, pane, gone) in [(&dt, sp, &st), (&st, dp, &dt)] {
+            if let Some((m, a)) = self.panes.get(&pane).map(|x| (x.machine_id.clone(), x.agent_id.clone())) {
+                self.desk_op(json!({ "op": "pane.remove", "tabId": gone, "machineId": m, "agentId": a }));
+                self.desk_pane_added(tab, &m, &a);
+            }
         }
         self.sync_titles();
         self.fit_panes();
     }
 
+    /// `rotate-window` (C-o): the list turns (the first pane to the end; -D the last to the
+    /// start) and each pane takes the cell of the one now before it; the active place stays.
+    pub fn rotate(&mut self, w: usize, by: i64, keep_zoom: bool) {
+        let Some(tab) = self.tabs.get_mut(w) else { return };
+        let ids = tab.panes();
+        let n = ids.len();
+        if n < 2 { return }
+        let turned: Vec<u64> = (0..n).map(|i| ids[(i as i64 + by).rem_euclid(n as i64) as usize]).collect();
+        if let Some(root) = tab.root.as_mut() {
+            root.relabel(&mut |old| ids.iter().position(|p| *p == old).map(|i| turned[i]).unwrap_or(old));
+        }
+        let at = tab.focus.and_then(|f| ids.iter().position(|p| *p == f));
+        tab.order = turned.clone();
+        if let Some(i) = at { tab.set_active(turned[i]) }
+        tab.zoomed &= keep_zoom;
+        self.sync_titles();
+        self.fit_panes();
+    }
+
     /// `next-layout` (C-b Space): even-horizontal → even-vertical → main-horizontal → main-vertical → tiled.
-    pub fn next_layout(&mut self) {
-        const CYCLE: [(Preset, &str); 5] = [(Preset::Columns, "even-horizontal"), (Preset::Rows, "even-vertical"), (Preset::MainRow, "main-horizontal"), (Preset::MainStack, "main-vertical"), (Preset::Grid, "tiled")];
-        let at = (self.tab().layout_at + 1) % CYCLE.len();
-        self.tab_mut().layout_at = at;
-        self.apply_preset(CYCLE[at].0);
+    /// next-layout / previous-layout: tmux's seven named layouts in its order.
+    pub fn next_layout(&mut self) { self.step_layout(1) }
+    pub fn step_layout(&mut self, by: i64) {
+        let n = layout::Named::ALL.len() as i64;
+        let at = (self.tab().layout_at as i64 + by).rem_euclid(n) as usize;
+        let i = self.active;
+        self.arrange_tab(i, layout::Named::ALL[at]);
     }
 
     pub fn apply_preset(&mut self, preset: Preset) { let i = self.active; self.apply_preset_at(i, preset) }
 
     /// select-layout -t: that window's panes in that shape.
     pub fn apply_preset_at(&mut self, index: usize, preset: Preset) {
-        let body = self.body();
-        let (main_w, main_h) = (self.opts.main_pane_width, self.opts.main_pane_height);
-        let size = |v: u16, total: u16| -> f32 { if v >= 1000 { total as f32 * (v - 1000) as f32 / 100.0 } else { v as f32 } };
+        self.arrange_tab(index, layout::Named::of(preset));
         let Some(tab) = self.tabs.get_mut(index) else { return };
         let ids = tab.panes();
-        tab.root = layout::build(&ids, preset);
-        // tmux's main-pane-width 80 / main-pane-height 24, where the window has room for them.
-        if let Some(layout::Node::Split { ratio, .. }) = tab.root.as_mut() {
-            match preset {
-                Preset::MainStack if body.width > 100 => *ratio = (size(main_w.unwrap_or(80), body.width) / body.width.saturating_sub(1) as f32).clamp(0.1, 0.9),
-                Preset::MainRow if body.height > 34 => *ratio = (size(main_h.unwrap_or(24), body.height) / body.height as f32).clamp(0.1, 0.9),
-                _ => {}
-            }
-        }
-        tab.zoomed = false;
         // The same shape on every window: the desk's layout keys presets by pane count.
         if tab.on_desk && !ids.is_empty() {
             if !tab.layout.is_object() { tab.layout = json!({}) }
@@ -1497,7 +1729,8 @@ impl App {
                     tab.layout = layout_doc;
                     if relayout && missing_is_empty(&tab.panes(), &panes, &self.panes) {
                         let ids = tab.panes();
-                        tab.root = layout::build(&ids, preset);
+                        let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
+                        tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, ("80", "24"), ("0", "0"));
                         continue;
                     }
                     let have: Vec<(u64, (String, String))> = tab.panes().into_iter().filter_map(|pid| self.panes.get(&pid).map(|p| (pid, (p.machine_id.clone(), p.agent_id.clone())))).collect();
@@ -1514,7 +1747,8 @@ impl App {
                     let tab = &mut self.tabs[index];
                     let mut ids = tab.panes();
                     ids.extend(new_ids.iter().copied());
-                    tab.root = layout::build(&ids, preset);
+                    let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
+                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, ("80", "24"), ("0", "0"));
                     if tab.focus.map(|f| !ids.contains(&f)).unwrap_or(true) { tab.focus = ids.first().copied() }
                 }
                 None => {
@@ -1524,7 +1758,8 @@ impl App {
                     tab.named = named;
                     tab.on_desk = true;
                     tab.layout = layout_doc;
-                    tab.root = layout::build(&ids, preset);
+                    let (w, h) = (self.size.0, self.size.1.saturating_sub(2));
+                    tab.root = layout::arrange(layout::Named::of(preset), &ids, w, h, layout::Status::Top, ("80", "24"), ("0", "0"));
                     tab.focus = ids.first().copied();
                     let at = rows.iter().position(|r| r.get("id").and_then(Value::as_str) == Some(tab.id.as_str())).unwrap_or(self.tabs.len()).min(self.tabs.len());
                     self.tabs.insert(at, tab);
@@ -1662,7 +1897,7 @@ fn missing_is_empty(have: &[u64], want: &[(String, String)], panes: &HashMap<u64
 /// split-window's: where the new pane goes — beside a pane of a window (-t), before it (-b), across
 /// the whole window (-f), its size (-l: cells, or a percentage), and whether it is gone to (-d).
 #[derive(Clone, PartialEq, Debug)]
-pub struct At { pub tab: String, pub pane: Option<u64>, pub dir: Dir, pub before: bool, pub full: bool, pub size: Option<(u16, bool)>, pub detached: bool }
+pub struct At { pub tab: String, pub pane: Option<u64>, pub dir: Dir, pub before: bool, pub full: bool, pub size: Option<(u16, bool)>, pub detached: bool, pub zoom: bool }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Placement {

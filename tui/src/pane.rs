@@ -83,7 +83,12 @@ pub struct Pane {
     pub resize_seq: u64,
     pub last_seq: Option<u64>,
     pub ack_due: bool,
+    /// select-pane -T's title.
     pub title: String,
+    /// The title the program set (OSC 0/2): the pane's title when allow-set-title is on.
+    pub osc_title: String,
+    /// select-pane -d: keys for this pane are dropped until select-pane -e.
+    pub input_off: bool,
     pub opening: bool,
     pub read_only: bool,
     pub last_alive: Instant,
@@ -185,6 +190,8 @@ impl Pane {
             last_seq: None,
             ack_due: false,
             title: String::new(),
+            osc_title: String::new(),
+            input_off: false,
             opening: false,
             read_only: false,
             last_alive: Instant::now(),
@@ -254,8 +261,8 @@ impl Pane {
         let events: Vec<AlacEvent> = std::mem::take(&mut *self.listener.0.lock().unwrap());
         for event in events {
             match event {
-                AlacEvent::Title(title) => self.title = title,
-                AlacEvent::ResetTitle => self.title.clear(),
+                AlacEvent::Title(title) => self.osc_title = title,
+                AlacEvent::ResetTitle => self.osc_title.clear(),
                 AlacEvent::Bell => self.bell = true,
                 AlacEvent::ClipboardStore(_, text) => crate::clipboard::store(&text),
                 _ => {}

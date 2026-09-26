@@ -243,8 +243,7 @@ fn border_line(buf: &mut Buffer, app: &App, id: u64, index: usize, rect: Rect, a
         buf.set_line(rect.x + 1, rect.y, &line, rect.width.saturating_sub(1));
         return;
     }
-    let agent = app.fleet.agent(&pane.machine_id, &pane.agent_id);
-    let title = agent.map(|a| a.name.clone()).unwrap_or_else(|| pane.agent_id.chars().take(8).collect());
+    let title = crate::format::pane_title(app, app.active, id);
     let mut spans: Vec<Span> = vec![Span::styled("─", style), Span::styled(index.to_string(), if active { style.add_modifier(Modifier::REVERSED) } else { style }), Span::styled(format!(" \"{title}\""), style)];
     if let Some(word) = pane_state_word(app, pane) { spans.push(Span::raw(" ")); spans.push(word) }
     spans.push(Span::styled(" ", style));

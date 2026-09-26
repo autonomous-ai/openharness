@@ -4,7 +4,7 @@
 
 use crate::app::{App, Placement};
 use crate::input;
-use crate::layout::{Dir, Preset, Toward};
+use crate::layout::{Dir, Toward};
 use crate::modal::{Filter, Modal, Prompt, PromptKind};
 use crate::theme;
 
@@ -203,6 +203,15 @@ fn is_vim_command(cmd: &str) -> bool {
     c == "vi" || c == "vim"
 }
 
+/// split-window's and join-pane's -l (cells, or n%) and -p (a percentage).
+fn split_size(words: &[String]) -> Result<Option<(u16, bool)>, String> {
+    let Some(l) = opt(words, "-l").or_else(|| opt(words, "-p").map(|p| format!("{p}%"))) else { return Ok(None) };
+    match l.strip_suffix('%') {
+        Some(n) => match n.parse::<u16>() { Ok(n) if n <= 100 => Ok(Some((n, true))), _ => Err(format!("size {l}")) },
+        None => match l.parse::<u16>() { Ok(n) => Ok(Some((n, false))), Err(_) => Err(format!("size {l}")) },
+    }
+}
+
 /// `40` or `30%` of `total`.
 fn size_arg(v: &str, total: u16) -> Option<u16> {
     match v.strip_suffix('%') { Some(p) => p.parse::<u32>().ok().map(|p| (total as u32 * p / 100) as u16), None => v.parse().ok() }
@@ -215,11 +224,11 @@ pub fn pane_target(app: &App, target: &str) -> Option<(usize, u64)> {
     if let Some(id) = target.strip_prefix('%').and_then(|n| n.parse::<u64>().ok()) {
         return app.tabs.iter().position(|t| t.panes().contains(&id)).map(|w| (w, id));
     }
-    if target == "!" || target == "{last}" { return app.tab().last_focus.map(|p| (app.active, p)) }
+    if target == "!" || target == "{last}" { return app.tab().last_focus().map(|p| (app.active, p)) }
     if target == "{marked}" { return app.marked.and_then(|m| app.tabs.iter().position(|t| t.panes().contains(&m)).map(|w| (w, m))) }
     // {up-of} {down-of} {left-of} {right-of}: the pane that way from this one.
     for (name, toward) in [("{up-of}", Toward::Up), ("{down-of}", Toward::Down), ("{left-of}", Toward::Left), ("{right-of}", Toward::Right)] {
-        if target == name { return app.focused().and_then(|f| crate::layout::neighbour(&app.rects, f, toward)).map(|p| (app.active, p)) }
+        if target == name { return app.focused().and_then(|f| app.pane_toward(app.active, f, toward)).map(|p| (app.active, p)) }
     }
     // {top} {bottom} {left} {right} and their corners: the pane at that edge of this window.
     if target.starts_with('{') && target.ends_with('}') {
@@ -238,8 +247,12 @@ pub fn pane_target(app: &App, target: &str) -> Option<(usize, u64)> {
     let panes = app.tabs[window].panes();
     let pane = match p {
         "" => app.tabs[window].focus?,
-        "+" => { let at = panes.iter().position(|x| Some(*x) == app.tabs[window].focus)?; panes[(at + 1) % panes.len()] }
-        "-" => { let at = panes.iter().position(|x| Some(*x) == app.tabs[window].focus)?; panes[(at + panes.len() - 1) % panes.len()] }
+        // +N / -N: that many along the list from the active pane, round the end.
+        _ if p.starts_with('+') || p.starts_with('-') => {
+            let n: i64 = if p.len() == 1 { 1 } else { p[1..].parse().ok()? };
+            let at = panes.iter().position(|x| Some(*x) == app.tabs[window].focus)? as i64;
+            panes[(at + if p.starts_with('+') { n } else { -n }).rem_euclid(panes.len() as i64) as usize]
+        }
         n => *panes.get(n.parse::<usize>().ok()?.checked_sub(app.pane_base_index)?)?,
     };
     Some((window, pane))
@@ -561,19 +574,13 @@ fn run_words(app: &mut App, words: &[String]) {
                 Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
                 None => (app.active, app.focused().unwrap_or(0)),
             };
-            let size = match opt(words, "-l").or_else(|| opt(words, "-p").map(|p| format!("{p}%"))) {
-                Some(l) => match l.strip_suffix('%') {
-                    Some(n) => match n.parse::<u16>() { Ok(n) if n <= 100 => Some((n, true)), _ => return app.say(format!("percentage {l}"), theme::WARN) },
-                    None => match l.parse::<u16>() { Ok(n) => Some((n, false)), Err(_) => return app.say(format!("size {l}"), theme::WARN) },
-                },
-                None => None,
-            };
+            let size = match split_size(words) { Ok(s) => s, Err(e) => return app.say(e, theme::WARN) };
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let command = shell_command(words);
             let from = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone()));
             let pane = app.tabs[w].panes().contains(&p).then_some(p);
-            let at = crate::app::At { tab: app.tabs[w].id.clone(), pane, dir, before: flag(words, "-b"), full: flag(words, "-f"), size, detached: flag(words, "-d") };
+            let at = crate::app::At { tab: app.tabs[w].id.clone(), pane, dir, before: flag(words, "-b"), full: flag(words, "-f"), size, detached: flag(words, "-d"), zoom: flag(words, "-Z") };
             input::new_shell_from(app, from, Placement::At(at), cwd, command);
         }
         "kill-pane" => {
@@ -619,36 +626,43 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "select-pane" => {
-            // -m marks this pane (again: unmarks), -M clears the mark; join-pane and swap-pane
-            // take the marked pane as their source, as tmux's do.
+            // tmux's select-pane [-DdeLlMmRUZ] [-T title] [-t target-pane]. -M clears the mark,
+            // -m marks the pane (again: unmarks); -l the last pane; -L/-R/-U/-D the pane that
+            // way (round the far side); -d/-e input off/on; -T the title. Else the pane becomes
+            // its window's active one — the window does not become the current one. A zoomed
+            // window is unzoomed unless -Z.
             if flag(words, "-M") { app.marked = None; return }
-            // -t: the pane the flags are about (else this one).
-            let about = match opt(words, "-t") { Some(t) => pane_target(app, &t).map(|(_, p)| p), None => app.focused() };
-            if flag(words, "-m") { app.marked = if app.marked == about { None } else { about }; return }
-            if let Some(title) = opt(words, "-T") {
-                if let Some(p) = about.and_then(|f| app.panes.get_mut(&f)) { p.title = title }
-                app.sync_titles();
-                if opt(words, "-t").is_none() { return }
-            }
+            let (w, p) = match opt(words, "-t") {
+                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
+                None => match app.focused() { Some(f) => (app.active, f), None => return },
+            };
+            let keep_zoom = flag(words, "-Z");
+            if flag(words, "-m") { app.marked = if app.marked == Some(p) { None } else { Some(p) }; return }
+            if flag(words, "-l") { return app.select_last(w, keep_zoom) }
             let toward = if flag(words, "-L") { Some(Toward::Left) } else if flag(words, "-R") { Some(Toward::Right) } else if flag(words, "-U") { Some(Toward::Up) } else if flag(words, "-D") { Some(Toward::Down) } else { None };
-            match toward {
-                Some(t) => app.focus_toward(t),
-                None if flag(words, "-l") => app.last_pane(),
-                None => {
-                    let target = opt(words, "-t").unwrap_or_default();
-                    if target.is_empty() { return }
-                    if target.ends_with(".+") || target == "+" { app.cycle_pane(1) }
-                    else if target.ends_with(".-") || target == "-" { app.cycle_pane(-1) }
-                    else {
-                        match pane_target(app, &target) {
-                            Some((w, p)) => app.focus_pane(w, p),
-                            None => app.say(format!("can't find pane: {target}"), theme::WARN),
-                        }
-                    }
-                }
+            let p = match toward { Some(t) => match app.pane_toward(w, p, t) { Some(x) => x, None => return }, None => p };
+            if flag(words, "-e") || flag(words, "-d") { if let Some(x) = app.panes.get_mut(&p) { x.input_off = flag(words, "-d") } return }
+            if let Some(title) = opt(words, "-T") {
+                let title = expand(app, &title);
+                if let Some(x) = app.panes.get_mut(&p) { x.title = title; x.osc_title.clear() }
+                app.sync_titles();
+                return;
             }
+            if app.tabs[w].focus == Some(p) { return }
+            let zoomed = app.tabs[w].zoomed;
+            if w == app.active { app.focus_pane(w, p) } else { app.tabs[w].set_active(p) }
+            app.tabs[w].zoomed = zoomed && keep_zoom;
+            app.fit_panes();
         }
-        "last-pane" => app.last_pane(),
+        "last-pane" => {
+            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
+            if flag(words, "-e") || flag(words, "-d") {
+                let last = app.tabs[w].last_focus();
+                if let Some(x) = last.and_then(|l| app.panes.get_mut(&l)) { x.input_off = flag(words, "-d") }
+                return;
+            }
+            app.select_last(w, flag(words, "-Z"))
+        }
         "resize-pane" => {
             // resize-pane [-DLMRTUZ] [-t target-pane] [-x width] [-y height] [adjustment]
             let (w, p) = match opt(words, "-t") {
@@ -669,61 +683,65 @@ fn run_words(app: &mut App, words: &[String]) {
             app.resize_pane(w, p, dir, sign * n);
         }
         "swap-pane" => {
-            // -s/-t name the two (in this window); else -U/-D, the previous / next.
-            let src = opt(words, "-s").and_then(|t| pane_target(app, &t)).map(|(_, p)| p).or(app.focused());
-            // No target: the marked pane and this one trade places (tmux's swap-pane with a mark).
-            let dst = opt(words, "-t").and_then(|t| pane_target(app, &t)).map(|(_, p)| p)
-                .or_else(|| if !flag(words, "-U") && !flag(words, "-D") && opt(words, "-s").is_none() { app.marked.filter(|m| Some(*m) != app.focused()) } else { None });
-            match (src, dst) {
-                (Some(a), Some(b)) if a != b && app.tab().panes().contains(&a) && app.tab().panes().contains(&b) => {
-                    if let Some(root) = app.tab_mut().root.as_mut() { root.swap(a, b) }
-                    app.sync_titles();
-                    app.fit_panes();
-                }
-                (_, Some(_)) => app.say("swap-pane: both panes in this window", theme::WARN),
-                _ => app.swap_pane(if flag(words, "-U") { -1 } else { 1 }),
+            // tmux's swap-pane [-dDUZ] [-s src] [-t dst]: the target (the current pane) and the
+            // source (the marked pane, else the current one) trade places — in one window or
+            // across two; -U/-D the source is the previous / next pane in the target's list.
+            let dst = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) }, None => match app.focused() { Some(f) => (app.active, f), None => return } };
+            let src = match opt(words, "-s") {
+                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
+                None => pane_target(app, "{marked}").unwrap_or(dst),
+            };
+            let (detached, keep_zoom) = (flag(words, "-d"), flag(words, "-Z"));
+            if flag(words, "-U") || flag(words, "-D") {
+                let ids = app.tabs[dst.0].panes();
+                let Some(at) = ids.iter().position(|p| *p == dst.1) else { return };
+                let by = if flag(words, "-D") { 1 } else { -1 };
+                let other = ids[(at as i64 + by).rem_euclid(ids.len() as i64) as usize];
+                return app.swap_panes(dst.0, other, dst.1, detached, keep_zoom);
             }
+            if src.0 == dst.0 { app.swap_panes(dst.0, src.1, dst.1, detached, keep_zoom) } else { app.swap_across(src, dst, detached, keep_zoom) }
         }
         "break-pane" => {
-            // -s names the pane (any window); it becomes a window of its own.
-            let back = app.tab().id.clone();
-            if let Some((w, p)) = opt(words, "-s").and_then(|t| pane_target(app, &t)) { if w != app.active || app.focused() != Some(p) { app.focus_pane(w, p) } }
-            if app.tab().panes().len() < 2 { app.say("can't break with only one pane", theme::WARN); return }
-            input::run(app, "pane-tab");
-            // -d: the new window is made, not gone to.
-            if flag(words, "-d") { if let Some(i) = app.tabs.iter().position(|t| t.id == back) { let new = app.tab().id.clone(); app.select_tab(i); app.last_tab = Some(new) } }
+            // tmux's break-pane [-d] [-n name] [-s src] [-t dst-window]: the pane (this one, or
+            // -s's) becomes a window of its own, keeping its id — at the first free index, or -t's.
+            let src = match opt(words, "-s") { Some(t) => match pane_target(app, &t) { Some((_, p)) => p, None => return app.say(format!("can't find pane: {t}"), theme::WARN) }, None => match app.focused() { Some(f) => f, None => return } };
+            let num = match opt(words, "-t") { Some(t) => match t.trim_start_matches(':').trim_start_matches('=').parse::<usize>() { Ok(n) => Some(n), Err(_) => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => None };
+            if let Err(e) = app.break_pane(src, opt(words, "-n"), num, flag(words, "-d")) { app.say(e, theme::WARN) }
         }
-        "rotate-window" => app.rotate(if flag(words, "-D") { -1 } else { 1 }),
+        "rotate-window" => {
+            // -t: that window; -D the other way; -Z keeps a zoomed window zoomed.
+            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
+            app.rotate(w, if flag(words, "-D") { -1 } else { 1 }, flag(words, "-Z"))
+        }
         "next-layout" => app.next_layout(),
         "select-layout" => {
             // -t: that window (else this one).
+            // select-layout [-Enop] [-t target-window] [layout-name]: tmux's seven by name (or the
+            // one a prefix names), -n/-p the next/previous, -E spread out, or a layout string.
             let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
-            if target != app.active {
-                let name = positional(words).join(" ");
-                let preset = match name.as_str() { "even-horizontal" => Preset::Columns, "even-vertical" => Preset::Rows, "main-horizontal" => Preset::MainRow, "main-vertical" => Preset::MainStack, "tiled" => Preset::Grid, other => return app.say(format!("unknown layout: {other}"), theme::WARN) };
-                return app.apply_preset_at(target, preset);
+            if flag(words, "-n") || flag(words, "-p") {
+                if target != app.active { app.select_tab(target) }
+                return app.step_layout(if flag(words, "-p") { -1 } else { 1 });
             }
-            if flag(words, "-E") { input::run(app, "equalize"); return }
-            let preset = match positional(words).join(" ").trim() {
-                "even-horizontal" => Preset::Columns, "even-vertical" => Preset::Rows,
-                "main-horizontal" => Preset::MainRow, "main-vertical" => Preset::MainStack,
-                // The main pane on the other side (tmux 3.5's M-6 / M-7).
-                "main-horizontal-mirrored" => { app.apply_preset(Preset::MainRow); app.mirror_layout(); return }
-                "main-vertical-mirrored" => { app.apply_preset(Preset::MainStack); app.mirror_layout(); return }
-                "tiled" => Preset::Grid,
-                "" => { input::run(app, "layout"); return }
-                // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
-                other if other.contains('x') && other.contains(',') => {
-                    let ids = app.tab().panes();
-                    match crate::layout::Node::from_tmux(other, &ids) {
-                        Some(root) => { let tab = app.tab_mut(); tab.root = Some(root); tab.zoomed = false; app.fit_panes() }
-                        None => app.say(format!("invalid layout: {other}"), theme::WARN),
-                    }
-                    return;
+            if flag(words, "-E") {
+                if let Some(f) = app.tabs[target].focus { if let Some(root) = app.tabs[target].root.as_mut() { root.spread_out(f) } }
+                return app.fit_panes();
+            }
+            let name = positional(words).join(" ");
+            let name = name.trim();
+            if name.is_empty() { if target == app.active { input::run(app, "layout") } return }
+            if let Some(named) = crate::layout::Named::lookup(name) { return app.arrange_tab(target, named) }
+            // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
+            if name.contains('x') && name.contains(',') {
+                let ids = app.tabs[target].panes();
+                let body = app.body();
+                match crate::layout::Node::from_tmux(name, &ids, body.width, body.height) {
+                    Some(root) => { let tab = &mut app.tabs[target]; tab.root = Some(root); tab.zoomed = false; app.fit_panes() }
+                    None => app.say(format!("invalid layout: {name}"), theme::WARN),
                 }
-                other => { app.say(format!("unknown layout: {other}"), theme::WARN); return }
-            };
-            app.apply_preset(preset);
+                return;
+            }
+            app.say(format!("unknown layout: {name}"), theme::WARN);
         }
         "display-panes" => app.modal = Some(Modal::DisplayPanes { until: std::time::Instant::now() + std::time::Duration::from_millis(app.display_panes_ms) }),
         "copy-mode" => {
@@ -974,22 +992,17 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "join-pane" | "move-pane" => {
-            // -s names the pane to move (default: this one), -t the pane to split beside (default:
-            // the current one of that window); -h side by side, else above/below.
+            // tmux's join-pane [-bdfhv] [-l size] [-s src] [-t dst]: the source (the marked pane,
+            // else this one) leaves its window, keeping its id, and splits the target (this
+            // window's active pane): -h beside it, -b before it, -f across the window, -l its
+            // size, -d not gone to.
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
             let src = match opt(words, "-s") { Some(t) => pane_target(app, &t), None => pane_target(app, "{marked}").or_else(|| app.focused().map(|f| (app.active, f))) };
             let dst = match opt(words, "-t") { Some(t) => pane_target(app, &t), None => app.tabs[app.active].focus.map(|f| (app.active, f)) };
-            let (Some((_, sp)), Some((dw, dp))) = (src, dst) else { app.say("join-pane: can't find pane", theme::WARN); return };
-            if sp == dp { return }
-            let Some((machine, agent)) = app.panes.get(&sp).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };
-            let dst_tab = app.tabs[dw].id.clone();
-            let key = (machine.clone(), agent.clone());
-            let shell = app.shells.remove(&key);
-            app.close_pane(sp);
-            if shell { app.shells.insert(key); }
-            let Some(di) = app.tabs.iter().position(|t| t.id == dst_tab) else { return };
-            if app.tabs[di].panes().contains(&dp) { app.focus_pane(di, dp) } else { app.select_tab(di) }
-            app.open_agent(&machine, &agent, Placement::Split(dir));
+            let (Some((_, sp)), Some((dw, dp))) = (src, dst) else { return app.say("can't find pane", theme::WARN) };
+            let size = match split_size(words) { Ok(s) => s, Err(e) => return app.say(e, theme::WARN) };
+            let at = crate::app::At { tab: app.tabs[dw].id.clone(), pane: Some(dp), dir, before: flag(words, "-b"), full: flag(words, "-f"), size, detached: flag(words, "-d"), zoom: false };
+            if let Err(e) = app.join_pane(sp, at) { app.say(e, theme::WARN) }
         }
         "clear-history" => { if let Some(p) = app.focused().and_then(|f| app.panes.get_mut(&f)) { p.clear_history() } }
         "capture-pane" => {

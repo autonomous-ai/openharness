@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::app::{App, Placement};
 use crate::commands;
 use crate::keys;
-use crate::layout::{self, Dir, Preset, Toward};
+use crate::layout::{Dir, Preset, Toward};
 use crate::modal::{self, Filter, Modal, PickerKind, Prompt, PromptKind, What};
 use crate::pane::{encode_key, encode_mouse, Phase};
 use crate::picker::Picker;
@@ -241,12 +241,11 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     if let Some((pane, last_x, last_y)) = app.mouse_drag {
         match mouse.kind {
             MouseEventKind::Drag(MouseButton::Left) => {
-                let body = app.body();
-                let (dx, dy) = (x as f32 - last_x as f32, y as f32 - last_y as f32);
-                if let Some(root) = app.tab_mut().root.as_mut() {
-                    if dx != 0.0 { root.resize(pane, Dir::Horizontal, dx / body.width.max(1) as f32); }
-                    if dy != 0.0 { root.resize(pane, Dir::Vertical, dy / body.height.max(1) as f32); }
-                }
+                // The border follows the mouse, a cell at a time (tmux's border drag).
+                let (dx, dy) = (x as i32 - last_x as i32, y as i32 - last_y as i32);
+                let tab = app.active;
+                if dx != 0 { app.resize_pane(tab, pane, Dir::Horizontal, dx) }
+                if dy != 0 { app.resize_pane(tab, pane, Dir::Vertical, dy) }
                 app.mouse_drag = Some((pane, x, y));
                 app.fit_panes();
                 return;
@@ -705,28 +704,21 @@ pub fn run(app: &mut App, command: &str) {
         }
         "close-pane" => { if let Some(f) = app.focused() { app.close_pane(f) } else if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
         "zoom" => { let tab = app.tab_mut(); if tab.panes().len() > 1 { tab.zoomed = !tab.zoomed } app.fit_panes() }
-        "equalize" => { if let Some(root) = app.tab_mut().root.as_mut() { root.equalize() } app.fit_panes() }
+        "equalize" => { if let Some(f) = app.focused() { if let Some(root) = app.tab_mut().root.as_mut() { root.spread_out(f) } } app.fit_panes() }
         "pane-tab" => {
-            let Some((machine, agent)) = focused_agent(app) else { return };
+            let Some(f) = app.focused() else { return };
             if app.tab().panes().len() < 2 { return }
-            // Moving a shell is not closing it.
-            let key = (machine.clone(), agent.clone());
-            let shell = app.shells.remove(&key);
-            if let Some(f) = app.focused() { app.close_pane(f) }
-            if shell { app.shells.insert(key); }
-            app.open_agent(&machine, &agent, Placement::Tab);
+            let _ = app.break_pane(f, None, None, false);
         }
         "focus-left" | "focus-right" | "focus-up" | "focus-down" => {
             let toward = match command { "focus-left" => Toward::Left, "focus-right" => Toward::Right, "focus-up" => Toward::Up, _ => Toward::Down };
-            let Some(focus) = app.focused() else { return };
-            if app.tab().zoomed { return }
-            if let Some(next) = layout::neighbour(&app.rects, focus, toward) { let tab = app.active; app.focus_pane(tab, next) }
+            app.select_toward(toward, false);
         }
         "grow-left" | "grow-right" | "grow-up" | "grow-down" => {
             let Some(focus) = app.focused() else { return };
-            let (dir, delta) = match command { "grow-left" => (Dir::Horizontal, -0.05), "grow-right" => (Dir::Horizontal, 0.05), "grow-up" => (Dir::Vertical, -0.05), _ => (Dir::Vertical, 0.05) };
-            if let Some(root) = app.tab_mut().root.as_mut() { root.resize(focus, dir, delta); }
-            app.fit_panes();
+            let (dir, delta) = match command { "grow-left" => (Dir::Horizontal, -5), "grow-right" => (Dir::Horizontal, 5), "grow-up" => (Dir::Vertical, -5), _ => (Dir::Vertical, 5) };
+            let tab = app.active;
+            app.resize_pane(tab, focus, dir, delta);
         }
         "copy-mode" => {
             let Some(pane) = app.focused() else { return };
