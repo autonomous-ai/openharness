@@ -20,6 +20,7 @@ mod pane;
 mod picker;
 mod proto;
 mod theme;
+mod tim;
 mod tmuxconf;
 mod ui;
 

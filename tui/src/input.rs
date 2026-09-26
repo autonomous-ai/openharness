@@ -37,8 +37,9 @@ fn typing(app: &App) -> bool {
 
 fn on_key(app: &mut App, key: KeyEvent) {
     let chord = keys::of(&key);
-    // A message goes on the next key, as tmux's does.
+    // A message goes on the next key, as tmux's does; and tim notices you are back.
     app.toast = None;
+    app.tim.touched = std::time::Instant::now();
     // After the prefix: the prefix table.
     if app.prefix {
         app.prefix = false;

@@ -2,6 +2,7 @@
 //!
 //!   hn ls                          every harness on every machine
 //!   hn send -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
+//!   hn tim                         tim, the creature
 //!
 //! Anything else starts the client.
 
@@ -19,6 +20,7 @@ pub async fn run(args: &[String], port: u16) -> Option<i32> {
     match cmd {
         "ls" | "list-sessions" | "list" => Some(ls(port).await),
         "send" | "send-message" => Some(send(port, &args[1..]).await),
+        "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         _ => None,
     }
 }

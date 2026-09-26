@@ -57,6 +57,8 @@ fn var(app: &App, name: &str, window: usize) -> String {
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),
+        // tim's face, for a status-right of your own: "#{tim} %H:%M".
+        "tim" => crate::tim::face(app).map(|(f, _)| f).unwrap_or_default(),
         _ => String::new(),
     }
 }
