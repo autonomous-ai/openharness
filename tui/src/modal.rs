@@ -52,6 +52,8 @@ pub enum PickerKind {
     Messages,
     Keys,
     Buffers,
+    /// What `list-windows`, `list-panes`, `show-options`… print, in a view (tmux's view mode).
+    Output { title: String, lines: Vec<String> },
 }
 
 #[derive(Clone, Debug)]

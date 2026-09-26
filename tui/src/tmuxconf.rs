@@ -102,7 +102,7 @@ pub fn apply(text: &str, keymap: &mut Keymap, settings: &mut Settings) {
     }
 }
 
-fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Result<(), String> {
+pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Result<(), String> {
     let Some(cmd) = words.first() else { return Ok(()) };
     match cmd.as_str() {
         "set" | "set-option" | "setw" | "set-window-option" => {
