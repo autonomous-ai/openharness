@@ -255,6 +255,12 @@ pub struct App {
     /// Copy mode reading a key as copy-mode-vi's, whatever mode-keys is (a `send -X` action run
     /// as the vi key that does it).
     pub copy_as_vi: bool,
+    /// #{command_list_name} #{command_list_alias} #{command_list_usage} (list-commands -F).
+    pub format_command: Option<(String, String, String)>,
+    /// The config files read at start (#{config_files}).
+    pub config_files: Vec<String>,
+    /// #{line}: the row a list-* command is printing.
+    pub format_line: Option<usize>,
     /// The paste buffer a format is expanded for (list-buffers -F).
     pub format_buffer: Option<String>,
     /// What the shell running the command piped in (load-buffer -, source-file -).
@@ -339,6 +345,9 @@ impl App {
             copy_as_vi: false,
             origin: None,
             format_buffer: None,
+            format_line: None,
+            config_files: Vec::new(),
+            format_command: None,
             cli_stdin: None,
             insert_next: std::collections::VecDeque::new(),
 
