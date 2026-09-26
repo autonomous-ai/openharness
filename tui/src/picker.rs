@@ -82,6 +82,8 @@ pub struct Picker {
     pub preview: bool,
     pub preview_scroll: u16,
     preview_of: Option<String>,
+    /// fzf's --wrap, toggled by toggle-wrap (M-/): a long row goes on over the lines below it.
+    pub wrap: bool,
 }
 
 impl Picker {
@@ -110,6 +112,7 @@ impl Picker {
             preview: true,
             preview_scroll: 0,
             preview_of: None,
+            wrap: crate::theme::fzf_opts().wrap,
             preview_max: Default::default(),
             preview_lines: Default::default(),
             preview_rows: Default::default(),

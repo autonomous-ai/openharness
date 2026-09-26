@@ -694,17 +694,18 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         picker.row_at.clear();
         return cursor;
     }
+    // fzf's maxWidth: the window less the pointer and marker, and less barCol() — a column for the
+    // scrollbar whenever there is one (shown or not), or for whatever is on the right edge.
+    let bar_col = theme::fzf_opts().scrollbar.is_some() || right_border || preview.is_some();
+    let text_w = width.saturating_sub(gutter_width() as usize + bar_col as usize);
+    picker.row_at.clear();
+    if picker.wrap { fzf_wrapped(buf, picker, area, list_top, list_bottom, text_w, reverse); return cursor }
     // Scroll so the cursor row is in view (scroll = first visible index from the bottom), with
     // fzf's --scroll-off rows (3; at most half the list) kept on either side of it.
     let so = theme::fzf_opts().scroll_off.min(list_h / 2);
     if picker.cursor < picker.scroll + so { picker.scroll = picker.cursor.saturating_sub(so) }
     if picker.cursor + so >= picker.scroll + list_h { picker.scroll = (picker.cursor + so + 1).saturating_sub(list_h) }
     picker.scroll = picker.scroll.min(n.saturating_sub(list_h.max(1)));
-    picker.row_at.clear();
-    // fzf's maxWidth: the window less the pointer and marker, and less barCol() — a column for the
-    // scrollbar whenever there is one (shown or not), or for whatever is on the right edge.
-    let bar_col = theme::fzf_opts().scrollbar.is_some() || right_border || preview.is_some();
-    let text_w = width.saturating_sub(gutter_width() as usize + bar_col as usize);
     // The right column lines up down the list: one edge for every row on screen, after the widest
     // line, within the list.
     let shown = picker.scroll..(picker.scroll + list_h.min(n - picker.scroll));
@@ -732,49 +733,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
 /// text — the row's pair (normal, selected, or the current line's), matches in the match pair,
 /// the parts with colours of their own merged as fzf merges --ansi text (colorOffsets).
 fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w: usize, right_edge: usize) {
-    use theme::fzfcolor::{ansi, lit, own};
     let (ri, hits) = &picker.visible[vi];
     let row = &picker.rows[*ri];
-    let current = vi == picker.cursor;
-    let marked = picker.marked.contains(&row.id);
-    let z = theme::fzf();
     let o = theme::fzf_opts();
-    let pal = z.pal;
-    let colored = pal.colored;
-    // The pointer on the current line; the gutter elsewhere (no column at all for --pointer='').
-    let pw = pointer_w();
-    if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
-    else if pw > 0 { buf.set_string(x, y, format!("{:<pw$}", "▌"), pal.cursor_empty_char.style()) }
-    // The marker cell: the marker on a selected row, else blank (bg+ on the current line; plain,
-    // the default colour on the list's background, elsewhere) — none for --marker=''.
-    let mw = marker_w();
-    let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 };
-    let (mark, mark_style) = match (current, marked) {
-        (true, true) => (format!("{:<mw$}", z.marker_char), pal.current_marker.style()),
-        (true, false) => (" ".repeat(mw), pal.current_selected_empty.style()),
-        (false, true) => (format!("{:<mw$}", z.marker_char), pal.marker.style()),
-        (false, false) => (" ".repeat(mw), plain.style()),
-    };
-    buf.set_string(x + pw as u16, y, mark, mark_style);
-    let (base, matched) = match (current, marked) {
-        (true, _) => (pal.current, pal.current_match),
-        (false, true) => (pal.selected, pal.selected_match),
-        (false, false) => (pal.normal, pal.matched),
-    };
-    // --color=alt-bg: every other row counted from the first one shown (fzf's itemCount) on it,
-    // unless the row is marked on a selected-bg of its own; the current row keeps bg+.
-    let alt = !(marked && pal.selected.bg != pal.normal.bg) && pal.alt_bg.col != theme::fzfcolor::Col::Undef && vi.saturating_sub(picker.scroll) % 2 == 1;
-    let (base, matched) = if alt && !current { (base.with_bg(pal.alt_bg), matched.with_bg(pal.alt_bg)) } else { (base, matched) };
+    let pal = theme::fzf().pal;
+    let (base, matched, current, marked, alt) = row_gutter(buf, picker, vi, x, y, None);
     let base_style = base.style();
-    // Each cell of the line as fzf reads it (picker::line): the title in the row's pair, the
-    // detail and the glyphs in their own colours over it; whether the query lit it.
-    let cell = |part: Option<Style>, on: bool| -> Style {
-        match (part, on) {
-            (None, false) => base_style,
-            (Some(st), false) => ansi(own(st), base, colored).style(),
-            (part, true) => lit(base, matched, part.map(own), colored).style(),
-        }
-    };
+    let cell = |part: Option<Style>, on: bool| paint(base, matched, part, on);
     let mut spans: Vec<Span> = Vec::new();
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), cell(Some(s.style), false))) }
     let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
@@ -820,6 +785,266 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     // --highlight-line fills the rest of the current, a marked or a striped row (postTask).
     if o.highlight_line && (current || marked || alt) {
         let fill = if current { base_style } else if alt { pal.selected.with_bg(pal.alt_bg).style() } else { pal.selected.style() };
+        spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
+    }
+    buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
+}
+
+/// printItem's preTask and pairs for a row: the pointer on the current line, the gutter elsewhere
+/// (no column at all for --pointer=''); the marker cell — the marker on a selected row ([marker]
+/// instead on a line of a row of several), else blank (bg+ on the current line; plain, the default
+/// colour on the list's background, elsewhere; none for --marker=''); and the row's pairs, the
+/// current line's, a selected row's or the normal ones — on --color=alt-bg every other row counted
+/// from the first one shown (fzf's itemCount), unless it is marked on a selected-bg of its own; the
+/// current row keeps bg+. Returns (base, matched, current, marked, alt).
+fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, marker: Option<&str>) -> (theme::fzfcolor::P, theme::fzfcolor::P, bool, bool, bool) {
+    let row = &picker.rows[picker.visible[vi].0];
+    let current = vi == picker.cursor;
+    let marked = picker.marked.contains(&row.id);
+    let z = theme::fzf();
+    let pal = z.pal;
+    let pw = pointer_w();
+    if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
+    else if pw > 0 { buf.set_string(x, y, format!("{:<pw$}", "▌"), pal.cursor_empty_char.style()) }
+    let mw = marker_w();
+    let marker = marker.unwrap_or(&z.marker_char);
+    let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 };
+    let (mark, mark_style) = match (current, marked) {
+        (true, true) => (format!("{:<mw$}", marker), pal.current_marker.style()),
+        (true, false) => (" ".repeat(mw), pal.current_selected_empty.style()),
+        (false, true) => (format!("{:<mw$}", marker), pal.marker.style()),
+        (false, false) => (" ".repeat(mw), plain.style()),
+    };
+    buf.set_string(x + pw as u16, y, mark, mark_style);
+    let (base, matched) = match (current, marked) {
+        (true, _) => (pal.current, pal.current_match),
+        (false, true) => (pal.selected, pal.selected_match),
+        (false, false) => (pal.normal, pal.matched),
+    };
+    let alt = !(marked && pal.selected.bg != pal.normal.bg) && pal.alt_bg.col != theme::fzfcolor::Col::Undef && vi.saturating_sub(picker.scroll) % 2 == 1;
+    let (base, matched) = if alt && !current { (base.with_bg(pal.alt_bg), matched.with_bg(pal.alt_bg)) } else { (base, matched) };
+    (base, matched, current, marked, alt)
+}
+
+/// A cell of a row's line as fzf reads it (picker::line): the title in the row's pair, the detail
+/// and the glyphs in their own colours over it; the match pair where the query lit it.
+fn paint(base: theme::fzfcolor::P, matched: theme::fzfcolor::P, part: Option<Style>, on: bool) -> Style {
+    use theme::fzfcolor::{ansi, lit, own};
+    let colored = theme::fzf().pal.colored;
+    match (part, on) {
+        (None, false) => base.style(),
+        (Some(st), false) => ansi(own(st), base, colored).style(),
+        (part, true) => lit(base, matched, part.map(own), colored).style(),
+    }
+}
+
+/// Whether a row's line fits hn's one-line layout at [text_w] (fzf_row: its title and detail in
+/// the room its lead and right column leave, the right column shown when there is one).
+fn fits_line(row: &crate::picker::Row, text_w: usize) -> bool {
+    let cw = |c: char| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+    let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
+    let right_w = row.right.width();
+    let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
+    let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
+    let detail: usize = row.detail.iter().flat_map(|s| s.content.chars()).map(cw).sum();
+    let has_detail = row.detail.iter().any(|s| !s.content.is_empty());
+    row.label.chars().map(cw).sum::<usize>() + if has_detail { 2 + detail } else { 0 } <= avail && (row.right.is_empty() || show_right)
+}
+
+/// A row's whole line as cells, for --wrap: the lead's glyphs, the title and the detail (lit where
+/// the query matched them) and the right column, dim — picker::line after the lead.
+fn line_cells(row: &crate::picker::Row, hits: &[u32]) -> Vec<Cell> {
+    let mut cells: Vec<Cell> = row.lead.iter().flat_map(|s| s.content.chars().map(move |c| (c, Some(s.style), false))).collect();
+    cells.extend(row.label.chars().enumerate().map(|(i, c)| (c, None, hits.contains(&(i as u32)))));
+    let mut at = row.label.chars().count();
+    if row.detail.iter().any(|s| !s.content.is_empty()) {
+        cells.extend([(' ', None, false), (' ', None, false)]);
+        at += 2;
+        for s in &row.detail { for c in s.content.chars() { cells.push((c, Some(s.style), hits.contains(&(at as u32)))); at += 1 } }
+    }
+    if !row.right.is_empty() {
+        let dim = Style::default().add_modifier(Modifier::DIM);
+        cells.extend([(' ', None, false), (' ', None, false)]);
+        at += 2;
+        for c in row.right.chars() { cells.push((c, Some(dim), hits.contains(&(at as u32)))); at += 1 }
+    }
+    cells
+}
+
+/// fzf's Chars.Lines for one line: cut where it runs past [cols] columns (a line after the first
+/// [sign_w] fewer, for the wrap sign; at least one character a line), no more than [at_most] lines
+/// — and whether there was more.
+fn wrap_cells(cells: &[Cell], cols: usize, sign_w: usize, at_most: usize) -> (Vec<Vec<Cell>>, bool) {
+    let cw = |c: char| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as i64;
+    let (mut out, mut rest, mut signed) = (Vec::new(), cells, false);
+    loop {
+        let limit = cols as i64 - if signed { sign_w as i64 } else { 0 };
+        let mut w = 0;
+        let over = rest.iter().position(|c| { w += cw(c.0); w > limit });
+        if out.len() >= at_most { return (out, true) }
+        match over {
+            Some(i) => { let i = i.max(1); out.push(rest[..i].to_vec()); rest = &rest[i..]; signed = true }
+            None => { out.push(rest.to_vec()); return (out, false) }
+        }
+    }
+}
+
+/// fzf's constrain() with rows of more than one line: the offset (the first row on the prompt's
+/// side) that fits the current row, then keeps --scroll-off lines on either side of it.
+fn constrain_wrapped(p: &Picker, max_lines: usize, lines: &dyn Fn(usize, i64) -> (usize, bool)) -> usize {
+    let count = p.visible.len();
+    let cy = p.cursor.min(count.saturating_sub(1));
+    let mut offset = p.scroll.min(count);
+    for _ in 0..max_lines {
+        // How many rows fit on screen with the current one.
+        let (mut found, mut sum) = (0usize, 0usize);
+        let add = |i: usize, found: &mut usize, sum: &mut usize| -> bool {
+            let (l, overflow) = lines(i, (max_lines - *sum) as i64);
+            *sum += l;
+            if *sum >= max_lines { if *found == 0 || !overflow { *found += 1 } return false }
+            *found += 1;
+            true
+        };
+        for i in offset..count { if !add(i, &mut found, &mut sum) { break } }
+        if sum < max_lines { for i in (0..offset).rev() { if !add(i, &mut found, &mut sum) { break } } }
+        let num_items = found;
+        let min_offset = (cy + 1).saturating_sub(num_items);
+        let max_offset = count.saturating_sub(num_items).min(cy);
+        let prev = offset;
+        offset = offset.min(max_offset).max(min_offset);
+        let scroll_off = theme::fzf_opts().scroll_off;
+        if scroll_off > 0 {
+            let so = scroll_off.min(max_lines / 2) as i64;
+            let mut next = offset;
+            for phase in 0..2 {
+                loop {
+                    let before_move = next;
+                    let item_lines = lines(cy, max_lines as i64).0 as i64;
+                    let mut before = 0i64;
+                    for i in next..cy { before += lines(i, max_lines as i64 - before - item_lines).0 as i64 }
+                    let after = max_lines as i64 - (before + item_lines);
+                    if before < so && after < so { break }
+                    if phase == 0 && before < so { next = next.saturating_sub(1).max(min_offset) }
+                    else if phase == 1 && after < so { next = (next + 1).min(max_offset) }
+                    if next == before_move { break }
+                }
+                offset = next;
+            }
+        }
+        if offset == prev { break }
+    }
+    offset
+}
+
+/// fzf --wrap (toggle-wrap, M-/): a row too long for its line goes on over the next ones, each
+/// after the wrap sign (`↳ `, in the row's colours, dim), the pointer and the marker on every one
+/// of them (a marked row's ╻ ┃ ╹). constrain() keeps the current row on screen with --scroll-off
+/// lines around it, the rows stack from the prompt, a row cut at the far end shows the part nearest
+/// the prompt in the default layout (its first lines otherwise), and the scrollbar counts
+/// avgNumLines — as fzf 0.67 draws it. A row that fits keeps hn's layout, its right column lined up.
+fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16, list_bottom: u16, text_w: usize, reverse: bool) {
+    let o = theme::fzf_opts();
+    let max_lines = list_bottom.saturating_sub(list_top) as usize;
+    let n = picker.visible.len();
+    if max_lines == 0 || n == 0 { return }
+    let (cols, sign_w) = (text_w.max(1), o.wrap_sign.width());
+    let p: &Picker = picker;
+    let lines = |vi: usize, at_most: i64| -> (usize, bool) {
+        if at_most <= 0 { return (0, true) }
+        let (ri, hits) = &p.visible[vi];
+        let row = &p.rows[*ri];
+        if fits_line(row, text_w) { return (1, false) }
+        let (l, over) = wrap_cells(&line_cells(row, hits), cols, sign_w, at_most as usize);
+        (l.len(), over)
+    };
+    let offset = constrain_wrapped(p, max_lines, &lines);
+    // The rows from the prompt: (visible index, fzf's line — 0 nearest the prompt — and the part of
+    // a wrapped row on it: its cells, whether it goes on from the line before, its marker's place).
+    let maxy = max_lines - 1;
+    let mut placed: Vec<(usize, usize, Option<(Vec<Cell>, bool, usize)>)> = Vec::new();
+    let (mut line, mut k) = (0usize, 0usize);
+    while line <= maxy && offset + k < n {
+        let vi = offset + k;
+        k += 1;
+        let (ri, hits) = &p.visible[vi];
+        let row = &p.rows[*ri];
+        if fits_line(row, text_w) { placed.push((vi, line, None)); line += 1; continue }
+        let cells = line_cells(row, hits);
+        let at_most = maxy - line + 1;
+        let (mut parts, overflow) = wrap_cells(&cells, cols, sign_w, at_most);
+        let count = parts.len();
+        // In the default layout a row that is not the current one and runs past the top shows its
+        // last lines.
+        let top_cut = !reverse && vi != p.cursor && count == at_most && overflow;
+        let skip = if top_cut { parts = wrap_cells(&cells, cols, sign_w, usize::MAX).0; parts.len() - at_most } else { 0 };
+        let mut last = line;
+        for (idx, part) in parts.into_iter().enumerate().skip(skip) {
+            let a = idx - skip;
+            if line + a > maxy { break }
+            // markerSingle (0), markerTop (1), markerMiddle (2), markerBottom (3)
+            let class = if count == 1 { if !overflow { 0 } else if top_cut { 3 } else { 1 } }
+                else if a == 0 { if top_cut { 2 } else { 1 } }
+                else if a == count - 1 { if top_cut || !overflow { 3 } else { 2 } }
+                else { 2 };
+            placed.push((vi, if reverse { line + a } else { line + count - 1 - a }, Some((part, idx > 0, class))));
+            last = line + a;
+        }
+        line = last + 1;
+    }
+    // avgNumLines: the rows from the offset (or the last screenful), a screen's worth at most.
+    let per_line = {
+        let from = (offset as i64).min(n as i64 - max_lines as i64 - 1).max(0) as usize;
+        let counted: Vec<usize> = (from..n).take(max_lines).map(|vi| lines(vi, max_lines as i64).0).collect();
+        if counted.is_empty() { 1 } else { counted.iter().sum::<usize>() / counted.len() }
+    };
+    let right_edge = placed.iter().filter(|x| x.2.is_none()).map(|x| { let r = &p.rows[p.visible[x.0].0]; r.lead.iter().map(|s| s.content.width()).sum::<usize>() + crate::picker::line(r).width() }).max().unwrap_or(0).min(text_w);
+    picker.scroll = offset;
+    for (vi, fline, part) in placed {
+        let y = if reverse { list_top + fline as u16 } else { list_bottom - 1 - fline as u16 };
+        picker.row_at.push((y, vi));
+        match part {
+            None => fzf_row(buf, picker, vi, area.x, y, text_w, right_edge),
+            Some((cells, signed, class)) => fzf_row_part(buf, picker, vi, area.x, y, text_w, &cells, signed, class),
+        }
+    }
+    // getScrollbar(avgNumLines, …): the thumb and its start from the prompt's side.
+    let (total, h) = (n * per_line.max(1), max_lines);
+    if let (true, Some(bar)) = (total > h && h > 2, o.scrollbar.clone()) {
+        let thumb = (h * h / total).max(1);
+        let start = if n == h { 0 } else { ((h * per_line - thumb) * offset / (total - h)).min(h - thumb) };
+        for i in 0..thumb {
+            let y = if reverse { list_top + (start + i) as u16 } else { list_bottom - 1 - (start + i) as u16 };
+            if y >= list_top && y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, theme::fzf().scrollbar_style()); }
+        }
+    }
+}
+
+/// A line of a wrapped row (printHighlighted with --wrap): the pointer and the marker for its
+/// place in the row, the wrap sign when it goes on from the line before, then its cells.
+#[allow(clippy::too_many_arguments)]
+fn fzf_row_part(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w: usize, cells: &[Cell], signed: bool, class: usize) {
+    let z = theme::fzf();
+    let marker = (class > 0).then(|| z.marker_multi[class - 1].as_str());
+    let (base, matched, current, marked, alt) = row_gutter(buf, picker, vi, x, y, marker);
+    let mut spans: Vec<Span> = Vec::new();
+    if signed {
+        let mut w = 0;
+        let sign: String = theme::fzf_opts().wrap_sign.chars().take_while(|c| { w += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); w <= text_w }).collect();
+        spans.push(Span::styled(sign, base.style().add_modifier(Modifier::DIM)));
+    }
+    let (mut run, mut run_style) = (String::new(), None::<Style>);
+    for (c, part, on) in cells {
+        let st = paint(base, matched, *part, *on);
+        if run_style != Some(st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
+        run_style = Some(st);
+        run.push(*c);
+    }
+    if !run.is_empty() { spans.push(Span::styled(run, run_style.unwrap_or_default())) }
+    // --highlight-line fills the rest of the current, a marked or a striped row's line.
+    if theme::fzf_opts().highlight_line && (current || marked || alt) {
+        let pal = z.pal;
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let fill = if current { base.style() } else if alt { pal.selected.with_bg(pal.alt_bg).style() } else { pal.selected.style() };
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);

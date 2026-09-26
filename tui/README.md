@@ -77,9 +77,12 @@ Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux d
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
 In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
-`S-↑/↓` scrolls it, `C-a C-e C-w C-u` edit the query, `enter` opens, `C-t` in a new window,
-`C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works (`'exact ^prefix suffix$ !not a | b`),
-and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`, `16`, `bw`).
+`S-↑/↓` scrolls it, `M-/` wraps long rows (`--wrap`), `C-a C-e C-w C-u` edit the query, `enter`
+opens, `C-t` in a new window, `C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works
+(`'exact ^prefix suffix$ !not a | b`), and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`,
+`16`, `bw`). One key differs on purpose: fzf 0.67 binds `ctrl-/` to toggle-wrap as well as `alt-/`,
+but hn keeps `C-/` for the preview, as fzf's own README binds `ctrl-/` in its preview examples and
+most people's fingers already know it.
 
 Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
 
