@@ -2,7 +2,7 @@
 //! drawing, which is `ui.rs`. One owner, one loop: machine frames, terminal bytes, keys and the
 //! results of background requests all arrive as `Event`s and are applied here in order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
@@ -137,6 +137,8 @@ pub struct App {
     desk_stale: bool,
     /// The tab before this one, by id — ⌥` goes back to it.
     pub last_tab: Option<String>,
+    /// tmux's window indexes, by tab id: given once, kept until the window closes (a gap stays).
+    pub nums: HashMap<String, usize>,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
     pub fleet_marked: bool,
@@ -164,6 +166,7 @@ impl App {
             display_ms: 1500,
             display_panes_ms: 1000,
             base_index: 0,
+            nums: HashMap::new(),
             pane_base_index: 0,
             messages: Vec::new(),
             buffers: Vec::new(),
@@ -734,6 +737,46 @@ impl App {
     // ── tabs & panes ─────────────────────────────────────────────────────────
 
     pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
+
+    /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
+    pub fn session_name(&self) -> String {
+        self.fleet.machine(&self.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(hostname)
+    }
+
+    /// Give every window without an index the first free one; forget closed windows'.
+    pub fn renumber(&mut self) {
+        let ids: HashSet<String> = self.tabs.iter().map(|t| t.id.clone()).collect();
+        self.nums.retain(|id, _| ids.contains(id));
+        for i in 0..self.tabs.len() {
+            if self.nums.contains_key(&self.tabs[i].id) { continue }
+            let n = self.free_num();
+            self.nums.insert(self.tabs[i].id.clone(), n);
+        }
+    }
+
+    fn free_num(&self) -> usize {
+        let used: HashSet<usize> = self.nums.values().copied().collect();
+        (self.base_index..).find(|n| !used.contains(n)).unwrap_or(self.base_index)
+    }
+
+    /// The window index tmux would show for the tab at `index`.
+    pub fn win_num(&self, index: usize) -> usize {
+        self.tabs.get(index).and_then(|t| self.nums.get(&t.id).copied()).unwrap_or(index + self.base_index)
+    }
+
+    pub fn tab_by_num(&self, n: usize) -> Option<usize> { (0..self.tabs.len()).find(|i| self.win_num(*i) == n) }
+
+    /// move-window -t N: the window takes index N (if free) and its place in the order.
+    pub fn move_tab_to(&mut self, n: usize) -> Result<(), String> {
+        self.renumber();
+        if self.tab_by_num(n).map(|i| i != self.active).unwrap_or(false) { return Err(format!("index in use: {n}")) }
+        let id = self.tab().id.clone();
+        self.nums.insert(id, n);
+        let to = (0..self.tabs.len()).filter(|i| *i != self.active && self.win_num(*i) < n).count();
+        while self.active > to { self.move_tab(-1) }
+        while self.active < to { self.move_tab(1) }
+        Ok(())
+    }
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
     pub fn focused(&self) -> Option<u64> { self.tab().focus }
 
@@ -935,10 +978,15 @@ impl App {
     }
 
     pub fn new_tab(&mut self) {
-        // tmux's new-window: the next index, at the end — the others keep their numbers.
+        // tmux's new-window: the first free index; the others keep their numbers.
+        self.renumber();
         self.last_tab = Some(self.tabs[self.active].id.clone());
-        self.tabs.push(Tab::new("home"));
-        self.active = self.tabs.len() - 1;
+        let tab = Tab::new("home");
+        let n = self.free_num();
+        self.nums.insert(tab.id.clone(), n);
+        let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
+        self.tabs.insert(at, tab);
+        self.active = at;
         self.home_cursor = 0;
         self.fit_panes();
     }
@@ -1277,6 +1325,9 @@ pub fn utc_offset() -> i64 {
 }
 
 pub fn hostname() -> String {
-    let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
-    if raw.is_empty() { "this computer".into() } else { raw }
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| {
+        let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        if raw.is_empty() { "this computer".into() } else { raw }
+    }).clone()
 }

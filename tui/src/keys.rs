@@ -49,7 +49,7 @@ impl Keymap {
         b(ch('%'), "split-window -h", false, "Split window horizontally (a harness beside)");
         b(ch('&'), "confirm-before -p \"kill-window #W? (y/n)\" kill-window", false, "Kill current window (harnesses keep running)");
         b(ch('\''), "command-prompt -p index select-window", false, "Prompt for window index to select");
-        b(ch(','), "command-prompt -I #W -p (rename-window) rename-window", false, "Rename current window");
+        b(ch(','), "command-prompt -I \"#W\" -p (rename-window) rename-window", false, "Rename current window");
         b(ch('-'), "delete-buffer", false, "Delete the most recent paste buffer");
         b(ch('.'), "command-prompt -p (move-window) move-window", false, "Move the current window");
         b(ch('/'), "list-keys", false, "Describe key binding");

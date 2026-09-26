@@ -629,10 +629,10 @@ pub fn run(app: &mut App, command: &str) {
         "info" => {
             // tmux `display-message` with its default format, harness-flavoured.
             let text = match focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| (x.clone(), app.fleet.machine_name(&m)))) {
-                Some((a, machine)) => format!("[harness] {}:{}, current pane {} - ({}) \"{}\" {} {}{}", app.active + app.base_index, app.tab().name,
+                Some((a, machine)) => format!("[{}] {}:{}, current pane {} - ({}) \"{}\" {} {}{}", app.session_name(), app.win_num(app.active), app.tab().name,
                     app.focused().and_then(|f| app.tab().panes().iter().position(|x| *x == f)).unwrap_or(0) + app.pane_base_index,
                     a.engine, a.name, machine, if a.cwd.is_empty() { String::new() } else { a.cwd.replace(&std::env::var("HOME").unwrap_or_default(), "~") }, if a.branch.is_empty() { String::new() } else { format!(" ({})", a.branch) }),
-                None => format!("[harness] {}:{} — empty window", app.active + app.base_index, app.tab().name),
+                None => format!("[{}] {}:{} — empty window", app.session_name(), app.win_num(app.active), app.tab().name),
             };
             app.say(text, theme::WARN);
         }
@@ -996,7 +996,7 @@ fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<
                 return;
             }
         }
-        KeyCode::Char(c @ '0'..='9') => { if let Some(at) = rows.iter().position(|r| r.pane.is_none() && r.window + app.base_index == c as usize - '0' as usize) { cursor = at } }
+        KeyCode::Char(c @ '0'..='9') => { if let Some(at) = rows.iter().position(|r| r.pane.is_none() && app.win_num(r.window) == c as usize - '0' as usize) { cursor = at } }
         _ => {}
     }
     app.modal = Some(Modal::Tree { cursor: cursor.min(n - 1), collapsed });
