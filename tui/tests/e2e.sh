@@ -61,7 +61,7 @@ expect "C-b c: a new window" "1:"
 tmux_ send-keys -t t C-b 0
 expect "C-b 0: back to window 0" "0:Mock Codex*"
 tmux_ send-keys -t t C-b w
-expect "C-b w: choose-tree" "(0) -"
+expect "C-b w: choose-tree" "windows (attached)"
 tmux_ send-keys -t t q
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
