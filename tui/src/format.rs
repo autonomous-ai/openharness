@@ -804,8 +804,18 @@ fn tab_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect
     out.into_iter().find(|(id, _)| *id == pane).map(|(_, r)| r)
 }
 
+/// tmux's #{pane_title}: what select-pane -T set, or the program (OSC 0/2) when allow-set-title
+/// is on (hn's default is off: a harness's name is its title), else the harness's name.
+pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
+    let Some(p) = app.panes.get(&pane) else { return crate::app::hostname() };
+    let tab_id = app.tabs.get(window).map(|t| t.id.clone()).unwrap_or_default();
+    if !p.osc_title.is_empty() && app.options.get("allow-set-title", &tab_id, Some(pane)).as_deref() == Some("on") { return p.osc_title.clone() }
+    if !p.title.is_empty() { return p.title.clone() }
+    app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.name.clone()).unwrap_or_else(|| p.agent_id.chars().take(8).collect())
+}
+
 /// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.
-fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
+pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     let r = tab_rect(app, window, pane)?;
     let body = app.body();
     let header = app.tabs.get(window).map(|t| app.tab_header_rows(t)).unwrap_or(0);
@@ -833,7 +843,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_bell_flag" => flags(app, window).contains('!').then_some("1").unwrap_or("0").into(),
         "pane_active" => (focus == tab.and_then(|t| t.focus)).then_some("1").unwrap_or("0").into(),
         "pane_index" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
-        "pane_title" => agent.map(|a| a.name.clone()).unwrap_or_else(|| host.clone()),
+        "pane_title" => focus.map(|f| pane_title(app, window, f)).unwrap_or_else(|| host.clone()),
         "pane_id" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
         // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
         // then where the harness started.
@@ -861,7 +871,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             r.map(|r| match name { "pane_at_top" => r.y <= body.y, "pane_at_bottom" => r.y + r.height >= body.y + body.height, "pane_at_left" => r.x <= body.x, _ => r.x + r.width >= body.x + body.width })
                 .map(|b| if b { "1" } else { "0" }.to_string()).unwrap_or_default()
         }
-        "window_layout" | "window_visible_layout" => tab.and_then(|t| t.root.as_ref()).map(|r| r.to_tmux(app.body())).unwrap_or_default(),
+        "window_layout" | "window_visible_layout" => tab.and_then(|t| t.root.as_ref()).map(|r| r.to_tmux()).unwrap_or_default(),
         "history_size" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().history_size().to_string() }).unwrap_or_default(),
         "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
         "pane_marked" => (focus.is_some() && app.marked == focus).then_some("1").unwrap_or("0").into(),
@@ -891,8 +901,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_id" => "$0".into(),
         "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
         "session_group" | "client_last_session" | "pane_dead_status" | "pane_start_command" => String::new(),
+        "pane_input_off" => pane.map(|p| p.input_off).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "session_grouped" | "session_many_attached" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
-        | "window_activity_flag" | "window_silence_flag" | "client_readonly" | "pane_input_off" | "pane_pipe" => "0".into(),
+        | "window_activity_flag" | "window_silence_flag" | "client_readonly" | "pane_pipe" => "0".into(),
         "server_sessions" | "session_attached_list" | "client_utf8" => "1".into(),
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
         "window_end_flag" => (window + 1 == app.tabs.len()).then_some("1").unwrap_or("0").into(),
@@ -900,7 +911,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_pid" => std::process::id().to_string(),
         "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { "root".into() }),
         "client_flags" => if app.terminal_focused { "attached,focused,UTF-8".into() } else { "attached,UTF-8".into() },
-        "pane_last" => (focus.is_some() && focus == tab.and_then(|t| t.last_focus)).then_some("1").unwrap_or("0").into(),
+        "pane_last" => (focus.is_some() && focus == tab.and_then(|t| t.last_focus())).then_some("1").unwrap_or("0").into(),
         "pane_dead" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_start_path" => agent.map(|a| a.cwd.clone()).unwrap_or_default(),
         "alternate_on" => pane.map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
