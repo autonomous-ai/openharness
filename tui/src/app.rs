@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::daemon::{http_json, Link, RpcError};
 use crate::event::{Event, MachineEvent};
 use crate::fleet::{self, Fleet, Machine, Reach};
-use crate::layout::{self, Dir, Node, Preset};
+use crate::layout::{self, Dir, Node, Preset, Toward};
 use crate::modal::Modal;
 use crate::pane::{self, Pane, Phase};
 use crate::proto::{self, Kind};
@@ -152,6 +152,8 @@ pub struct App {
     /// -P [-F fmt] on split-window / new-window: print the new pane once it is there; the
     /// shell that asked waits for it (the reply is held here).
     pub print_new: Option<String>,
+    /// copy-pipe's command, for the copy about to happen.
+    pub copy_pipe: Option<String>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
     pub return_to: Option<(String, Option<String>)>,
     pub held_reply: Option<tokio::sync::oneshot::Sender<(Vec<String>, Vec<String>)>>,
@@ -209,6 +211,7 @@ impl App {
             suspend: false,
             capture: None,
             print_new: None,
+            copy_pipe: None,
             return_to: None,
             held_reply: None,
             named_buffers: Default::default(),
@@ -854,7 +857,7 @@ impl App {
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
         if let Some(off) = s.options.tim_off { self.tim.off = off }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
-            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height);
+            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height, copy_command);
         self.fit_panes();
         self.redraw_all = true;
     }
@@ -1199,7 +1202,15 @@ impl App {
     pub fn focus_toward(&mut self, toward: layout::Toward) {
         let Some(focus) = self.focused() else { return };
         if self.tab().zoomed { return }
-        if let Some(next) = layout::neighbour(&self.rects, focus, toward) { let tab = self.active; self.focus_pane(tab, next) }
+        // tmux 3.1+: of the panes that way, the one you were last in wins.
+        let last = self.tab().last_focus.filter(|l| {
+            let pair: Vec<(u64, Rect)> = self.rects.iter().filter(|(id, _)| *id == focus || id == l).copied().collect();
+            let near = layout::neighbour(&self.rects, focus, toward).and_then(|n| self.rects.iter().find(|(id, _)| *id == n).map(|(_, r)| *r));
+            let lr = self.rects.iter().find(|(id, _)| id == l).map(|(_, r)| *r);
+            let same_edge = match (near, lr) { (Some(a), Some(b)) => match toward { Toward::Left => a.x + a.width == b.x + b.width, Toward::Right => a.x == b.x, Toward::Up => a.y + a.height == b.y + b.height, Toward::Down => a.y == b.y }, _ => false };
+            layout::neighbour(&pair, focus, toward) == Some(*l) && same_edge
+        });
+        if let Some(next) = last.or_else(|| layout::neighbour(&self.rects, focus, toward)) { let tab = self.active; self.focus_pane(tab, next) }
     }
 
     /// `select-pane -t :.+` — the next pane in order, wrapping.

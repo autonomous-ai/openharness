@@ -101,7 +101,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if matches!(args.first().map(|a| a.as_str()), Some("-h" | "--help")) { usage(); return Ok(()) }
-    if matches!(args.first().map(|a| a.as_str()), Some("--version" | "-V")) { println!("hn {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
+    if matches!(args.first().map(|a| a.as_str()), Some("--version" | "-V")) { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), tmuxconf::TMUX_VERSION); return Ok(()) }
     if args.iter().any(|a| a == "--keys") {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);

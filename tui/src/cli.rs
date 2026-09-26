@@ -26,6 +26,7 @@ pub async fn run(args: &[String], port: u16) -> Option<i32> {
     if args.is_empty() { if let Some(n) = &name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } } return None }
     let cmd = args.first()?.as_str();
     match cmd {
+        "-V" | "--version" => { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), crate::tmuxconf::TMUX_VERSION); Some(0) }
         "ls" | "list-sessions" | "list" => Some(ls(port).await),
         "send" | "send-message" => Some(send(port, &args[1..]).await),
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }

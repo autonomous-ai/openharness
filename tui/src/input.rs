@@ -1183,6 +1183,12 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             let is_send = matches!(words.first(), Some(&"send" | &"send-keys")) && words.contains(&"-X");
             if is_send {
                 let action = words.iter().skip_while(|w| **w != "-X").nth(1).copied().unwrap_or("");
+                // copy-pipe[-and-cancel] "cmd": the copied text goes to that command too.
+                if action.starts_with("copy-pipe") {
+                    let parts = crate::commands::split(&b.command).into_iter().next().unwrap_or_default();
+                    let cmd = parts.iter().skip_while(|w| *w != "-X").nth(2).cloned();
+                    app.copy_pipe = cmd.filter(|c| !c.is_empty());
+                }
                 if let Some(k) = copy_action_key(action) {
                     // Run it as the vi key it is (no second lookup: the table is not asked again).
                     let saved = std::mem::take(&mut app.keymap.copy_vi);
@@ -1291,6 +1297,14 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             p.copy_end();
             if let Some(text) = text {
                 crate::clipboard::store(&text);
+                // copy-pipe's command, or tmux's copy-command, gets the text on its stdin.
+                if let Some(cmd) = app.copy_pipe.take().or_else(|| app.opts.copy_command.clone()) {
+                    use std::io::Write;
+                    if let Ok(mut child) = std::process::Command::new("sh").arg("-c").arg(&cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+                        if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(text.as_bytes()); }
+                        std::thread::spawn(move || { let _ = child.wait(); });
+                    }
+                }
                 app.buffers.insert(0, text);
                 app.buffers.truncate(50);
             }

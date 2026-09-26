@@ -26,7 +26,10 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)); }
     // Named with -L (as tmux's), else by this client's pid. Sockets of clients gone are swept.
     sweep(&dir);
-    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| std::process::id().to_string());
+    // tmux's way: the first client is `default` (where unpinned commands go); more get their pid.
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| {
+        if dir.join("default.sock").exists() { std::process::id().to_string() } else { "default".into() }
+    });
     let path = dir.join(format!("{name}.sock"));
     let _ = std::fs::remove_file(&path);
     let listener = tokio::net::UnixListener::bind(&path).ok()?;
@@ -71,6 +74,8 @@ fn sweep(dir: &std::path::Path) {
 fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = socket.map(str::to_string).or_else(|| std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty())) { return Some(PathBuf::from(p)) }
     if let Some(n) = name { return Some(dir().join(format!("{n}.sock"))) }
+    let default = dir().join("default.sock");
+    if default.exists() { return Some(default) }
     newest()
 }
 
@@ -96,9 +101,13 @@ pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) ->
                 let mut line = String::new();
                 let _ = BufReader::new(read).read_line(&mut line).await;
                 let reply: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
-                for l in reply.get("out").and_then(Value::as_array).cloned().unwrap_or_default() { println!("{}", l.as_str().unwrap_or("")) }
+                // Written quietly: `hn … | head` closing the pipe is not an error.
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
+                for l in reply.get("out").and_then(Value::as_array).cloned().unwrap_or_default() { if writeln!(out, "{}", l.as_str().unwrap_or("")).is_err() { break } }
                 let err: Vec<Value> = reply.get("err").and_then(Value::as_array).cloned().unwrap_or_default();
-                for l in &err { eprintln!("{}", l.as_str().unwrap_or("")) }
+                let mut e = std::io::stderr().lock();
+                for l in &err { let _ = writeln!(e, "{}", l.as_str().unwrap_or("")); }
                 return if err.is_empty() { 0 } else { 1 };
             }
             // A socket left by a client that died: gone, try the next.
