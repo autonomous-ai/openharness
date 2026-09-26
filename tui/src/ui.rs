@@ -833,6 +833,12 @@ fn display_panes(buf: &mut Buffer, app: &App) {
         let n = ids.iter().position(|p| p == id).unwrap_or(0) + app.pane_base_index;
         let color = if Some(*id) == focus { theme::TMUX_DISPLAY_PANES_ACTIVE } else { theme::TMUX_DISPLAY_PANES };
         big(buf, &n.to_string(), *rect, color);
+        // tmux also prints each pane's size in its top-right corner.
+        if let Some(p) = app.panes.get(id) {
+            let size = format!("{}x{}", p.cols, p.rows);
+            let x = (rect.x + rect.width).saturating_sub(size.width() as u16);
+            buf.set_string(x, rect.y, &size, Style::default().fg(color));
+        }
     }
 }
 
@@ -916,7 +922,7 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
             let mut lines = vec![(title.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
             for row in detail.lines() { lines.push((row.to_string(), Style::default())) }
             lines.push((String::new(), Style::default()));
-            lines.push((keys.iter().map(|(k, w)| format!("{k}: {w}")).collect::<Vec<_>>().join("   "), Style::default().add_modifier(Modifier::DIM)));
+            lines.push((keys.iter().map(|(k, w)| format!("{k} {w}")).collect::<Vec<_>>().join(" · "), Style::default().add_modifier(Modifier::DIM)));
             card(buf, area, &lines);
             return None;
         }

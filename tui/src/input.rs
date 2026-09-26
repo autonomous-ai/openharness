@@ -433,8 +433,8 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Buffers => {
             picker.keep_order = true;
             let rows = app.buffers.iter().enumerate().map(|(i, b)| {
-                let one: String = b.replace('\n', "⏎").chars().take(200).collect();
-                crate::picker::Row::new(i.to_string(), one).lead(vec![ratatui::text::Span::styled(format!("buffer{i}: {} bytes: ", b.len()), theme::fg(theme::MUTED))])
+                let one: String = b.replace('\n', "\\n").chars().take(200).collect();
+                crate::picker::Row::new(i.to_string(), format!("\"{one}\"")).lead(vec![ratatui::text::Span::styled(format!("buffer{i}: {} bytes: ", b.len()), theme::fg(theme::MUTED))])
             }).collect();
             picker.set_rows(rows);
             picker.empty = "no buffers".into();
