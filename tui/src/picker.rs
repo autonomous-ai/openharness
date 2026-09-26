@@ -177,11 +177,19 @@ impl Picker {
                 let sensitive = o.case.unwrap_or(w != w.to_lowercase());
                 (if sensitive { w.to_string() } else { w.to_lowercase() }, sensitive)
             }).collect();
+            // `!word` (and `!'word`): not only a row whose line says it, but one whose keywords do.
+            let negated: Vec<(String, bool)> = words.iter().filter_map(|(w, s)| w.strip_prefix('!').map(|r| (r.trim_start_matches(['\'', '^']).trim_end_matches('$').to_string(), *s))).filter(|(w, _)| !w.is_empty()).collect();
+            let words: Vec<(String, bool)> = words.into_iter().filter(|(w, _)| !w.starts_with('!')).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled { continue }
+                let keywords = format!("{} {}", row.label, row.extra);
+                if negated.iter().any(|(w, s)| w.chars().count() >= 3 && names_word(&keywords, w, *s)) { continue }
                 let chars: Vec<char> = line(row).chars().collect();
+                // (A keyword hit still has to keep out of what the query excludes from the line.)
+                let seen = if negated.is_empty() { String::new() } else { line(row) };
+                let clear = |w: &str, sensitive: bool| if sensitive { !seen.contains(w) } else { !seen.to_lowercase().contains(w) };
                 match q.matches(&chars) {
                     Some(hit) => {
                         let mut rank = crate::fzf::rank(&hit, &chars, &o.tiebreak);
@@ -191,7 +199,7 @@ impl Picker {
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.
-                    None if !words.is_empty() && words.iter().all(|(w, sensitive)| w.chars().count() >= 3 && names_word(&format!("{} {}", row.label, row.extra), w, *sensitive)) => hidden.push(index),
+                    None if !words.is_empty() && words.iter().all(|(w, sensitive)| w.chars().count() >= 3 && names_word(&keywords, w, *sensitive)) && negated.iter().all(|(w, s)| clear(w, *s)) => hidden.push(index),
                     None => {}
                 }
             }
@@ -432,6 +440,20 @@ fn names_word(hidden: &str, word: &str, case_sensitive: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A keyword behind a row (its engine) finds it, and `!keyword` leaves it out.
+    #[test]
+    fn negated_keywords_leave_rows_out() {
+        let mut p = Picker::new("t", "");
+        p.set_rows(vec![Row::new("a", "Add rate limiting").extra("codex studio"), Row::new("b", "Fix flaky test").extra("claude studio")]);
+        let ids = |p: &Picker| p.visible.iter().map(|(i, _)| p.rows[*i].id.clone()).collect::<Vec<_>>();
+        p.set_query("codex");
+        assert_eq!(ids(&p), ["a"]);
+        p.set_query("!codex");
+        assert_eq!(ids(&p), ["b"]);
+        p.set_query("studio !flaky");
+        assert_eq!(ids(&p), ["a"]);
+    }
 
     #[test]
     fn fuzzy_and_sticky_cursor() {
