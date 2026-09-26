@@ -332,7 +332,7 @@ pub fn mode_rows(app: &App) -> Vec<Row> {
     let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p} {t}")).detail(vec![span(*d, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(k.clone())).collect();
     let prefix = crate::keys::name(&app.keymap.prefix);
     rows.extend(app.keymap.prefix_table.iter().filter(|b| !b.note.is_empty()).map(|b| Row::new(format!("key:{}", b.command), b.note.clone()).extra(b.command.clone())
-        .lead(vec![span(format!("{prefix} {:<7}", crate::keys::name(&b.chord)), Style::default().fg(theme::FZF_HL))])));
+        .lead(vec![span(format!("{prefix} {:<7}", crate::keys::name(&b.chord)), Style::default().fg(theme::fzf().hl))])));
     rows
 }
 

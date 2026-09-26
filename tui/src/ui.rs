@@ -221,26 +221,30 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
             let right = format!("{}{}", if many { format!("{}  ", app.fleet.machine_name(m)) } else { String::new() }, ago(agent.recency()));
             let detail = agent.question.as_ref().map(|q| (q.prompt.clone(), theme::ATTENTION)).unwrap_or((if agent.project.is_empty() { agent.cwd.clone() } else { agent.project.clone() }, theme::MUTED));
             let name_w = 28usize;
-            let name: String = if agent.name.width() > name_w { agent.name.chars().take(name_w - 1).collect::<String>() + "…" } else { agent.name.clone() };
+            // Widths are display widths: a CJK or emoji title keeps the columns straight.
+            let name = clip(&agent.name, name_w);
+            let name = format!("{name}{}", " ".repeat(name_w.saturating_sub(name.width())));
             let detail_room = (width as usize).saturating_sub(name_w + right.width() + 12);
-            let detail_text: String = if detail.0.width() > detail_room { detail.0.chars().take(detail_room.saturating_sub(1)).collect::<String>() + "…" } else { detail.0 };
+            let detail_text = clip(&detail.0, detail_room);
             let used = 2 + 2 + 2 + name_w + 2 + detail_text.width();
             let pad = (width as usize).saturating_sub(used + right.width());
             let selected = index == app.home_cursor;
-            let bg = if selected { Style::default().bg(theme::SELECT) } else { Style::default() };
+            // The chosen row as fzf draws its current line (reverse video where there is no colour).
+            let bg = match (selected, theme::fzf().bw) { (true, true) => Style::default().add_modifier(Modifier::REVERSED), (true, false) => Style::default().bg(theme::fzf().bg_plus), _ => Style::default() };
+            let tint = |c: Color| if c == theme::MUTED || c == theme::SOFT { bg.add_modifier(Modifier::DIM) } else { bg.fg(c) };
             lines.push(Line::from(vec![
-                Span::styled(format!("{} ", index + 1), bg.fg(theme::ACCENT)),
-                Span::styled(format!("{dot} "), bg.fg(color)),
-                Span::styled(format!("{mark} "), bg.fg(mark_color)),
-                Span::styled(format!("{name:<name_w$}  "), bg.fg(if selected { theme::TEXT } else { Color::Reset }).add_modifier(Modifier::BOLD)),
-                Span::styled(detail_text, bg.fg(detail.1)),
+                Span::styled(format!("{} ", index + 1), tint(theme::ACCENT)),
+                Span::styled(format!("{dot} "), tint(color)),
+                Span::styled(format!("{mark} "), tint(mark_color)),
+                Span::styled(format!("{name}  "), bg.add_modifier(Modifier::BOLD)),
+                Span::styled(detail_text, tint(detail.1)),
                 Span::styled(" ".repeat(pad), bg),
-                Span::styled(right, bg.fg(theme::MUTED)),
+                Span::styled(right, tint(theme::MUTED)),
             ]));
         }
     }
     lines.push(Line::raw(""));
-    let keys = [("↵", "open"), ("p", "harnesses"), ("o", "projects"), ("n", "new"), ("t", "terminal"), ("i", "models"), ("I", "needs input"), ("m", "machines"), ("s", "store"), (">", "commands"), ("?", "help")];
+    let keys = [("enter", "open"), ("p", "harnesses"), ("o", "projects"), ("n", "new"), ("t", "terminal"), ("i", "models"), ("I", "needs input"), ("m", "machines"), ("s", "store"), (">", "commands"), ("?", "help")];
     let mut row: Vec<Span> = Vec::new();
     let mut row_w = 0;
     for (k, w) in keys {
@@ -467,7 +471,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind) } else { None };
     let header_y = if header.is_some() { info_y.saturating_sub(1) } else { info_y };
-    let prompt = Style::default().fg(theme::FZF_PROMPT);
+    let prompt = Style::default().fg(theme::fzf().prompt);
     buf.set_string(area.x, prompt_y, ">", prompt.add_modifier(Modifier::BOLD));
     buf.set_string(area.x + 1, prompt_y, " ", prompt);
     let q_room = width.saturating_sub(3);
@@ -481,14 +485,14 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut info = format!("  {}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { info.push_str(&format!(" ({})", picker.marked.len())) }
-    buf.set_string(area.x, info_y, &info, Style::default().fg(theme::FZF_INFO));
+    buf.set_string(area.x, info_y, &info, Style::default().fg(theme::fzf().info));
     let mut x = area.x + info.width() as u16;
     let label = picker.busy.clone().or_else(|| (!picker.title.is_empty()).then(|| picker.title.clone()));
     if let Some(label) = label {
         let text = format!(" {label} ");
         if (x as usize) + text.width() + 4 < (area.x as usize + width) {
             buf.set_string(x, info_y, " ", Style::default());
-            buf.set_string(x + 1, info_y, &text, Style::default().fg(theme::FZF_HEADER));
+            buf.set_string(x + 1, info_y, &text, Style::default().fg(theme::fzf().header));
             x += text.width() as u16 + 1;
         }
     }
@@ -496,7 +500,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         buf.set_string(x, info_y, " ", Style::default());
         let gap = if preview.is_some() { 2 } else { 1 };
         let sep = "─".repeat((area.x + area.width).saturating_sub(x + gap) as usize);
-        buf.set_string(x + 1, info_y, &sep, Style::default().fg(theme::FZF_BORDER));
+        buf.set_string(x + 1, info_y, &sep, Style::default().fg(theme::fzf().border));
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
         let text = format!(" {flash} ");
@@ -532,7 +536,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let start = ((list_h - thumb) as f32 * top_frac).round() as usize;
         for i in 0..thumb {
             let y = area.y + (start + i) as u16;
-            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, "│", Style::default().fg(theme::FZF_BORDER)); }
+            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, "│", Style::default().fg(theme::fzf().border)); }
         }
     }
     cursor
@@ -544,16 +548,16 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let row = &picker.rows[*ri];
     let current = vi == picker.cursor;
     let marked = picker.marked.contains(&row.id);
-    let plus = Style::default().bg(theme::FZF_BG_PLUS);
+    let plus = Style::default().bg(theme::fzf().bg_plus);
     if current {
-        buf.set_string(x, y, "▌", Style::default().fg(theme::FZF_POINTER).bg(theme::FZF_BG_PLUS).add_modifier(Modifier::BOLD));
+        buf.set_string(x, y, "▌", Style::default().fg(theme::fzf().pointer).bg(theme::fzf().bg_plus).add_modifier(Modifier::BOLD));
     } else {
-        buf.set_string(x, y, "▌", Style::default().fg(theme::FZF_GUTTER));
+        buf.set_string(x, y, "▌", Style::default().fg(theme::fzf().gutter));
     }
-    let marker_style = if current { plus.fg(theme::FZF_MARKER) } else { Style::default().fg(theme::FZF_MARKER) };
+    let marker_style = if current { plus.fg(theme::fzf().marker) } else { Style::default().fg(theme::fzf().marker) };
     buf.set_string(x + 1, y, if marked { "┃" } else { " " }, marker_style);
-    let base = if current { plus.fg(theme::FZF_FG_PLUS).add_modifier(Modifier::BOLD) } else { Style::default() };
-    let hit = if current { plus.fg(theme::FZF_HL_PLUS).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::FZF_HL) };
+    let base = if current { plus.fg(theme::fzf().fg_plus).add_modifier(Modifier::BOLD) } else { Style::default() };
+    let hit = if current { plus.fg(theme::fzf().hl_plus).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::fzf().hl) };
     let mut spans: Vec<Span> = Vec::new();
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), if current { s.style.patch(plus) } else { s.style })) }
     let mut run = String::new();
@@ -592,16 +596,16 @@ fn header_line(picker: &Picker, _: &PickerKind) -> Option<Line<'static>> {
     if picker.hints.is_empty() { return None }
     let mut spans = vec![Span::raw("  ")];
     for (i, (k, w)) in picker.hints.iter().enumerate() {
-        if i > 0 { spans.push(Span::styled(" · ", Style::default().fg(theme::FZF_BORDER))) }
-        spans.push(Span::styled(k.to_string(), Style::default().fg(theme::FZF_HEADER).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(format!(" {w}"), Style::default().fg(theme::FZF_HEADER)));
+        if i > 0 { spans.push(Span::styled(" · ", Style::default().fg(theme::fzf().border))) }
+        spans.push(Span::styled(k.to_string(), Style::default().fg(theme::fzf().header).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(format!(" {w}"), Style::default().fg(theme::fzf().header)));
     }
     Some(Line::from(spans))
 }
 
 /// The preview window: fzf's rounded border in 59, a label at the top, the content inside.
 fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area: Rect) {
-    let border = Style::default().fg(theme::FZF_BORDER);
+    let border = Style::default().fg(theme::fzf().border);
     let w = area.width;
     let h = area.height;
     for y in area.y..area.y + h {

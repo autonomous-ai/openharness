@@ -749,7 +749,8 @@ mod tests {
         pane.feed(text.as_bytes());
         assert!(pane.find("needle", true, true));
         assert!(pane.scrolled() > 0);
-        assert!(!pane.find("needle", true, false));
+        // wrap-search: the only match, found again.
+        assert!(pane.find("needle", true, false));
         assert!(pane.find("line-5", true, true));
     }
 
