@@ -6958,9 +6958,9 @@ async function logsExportCommand(json: boolean): Promise<void> {
 import { orchestratorCommand } from './orchestrator/command.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
-// `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
+// `hn` and `tim` (tmux improved) are the terminal client's short names (like tmux, fzf): the same CLI, entered at `tui`. A call
 // back into this CLI from `hn` (login, start) is marked and runs as plain `harness`.
-if (/^hn(\.js)?$/.test(process.argv[1]?.split(/[\\/]/).pop() ?? '') && process.env.HARNESS_SELF !== '1') process.argv.splice(2, 0, 'tui')
+if (/^(hn|tim)(\.js)?$/.test(process.argv[1]?.split(/[\\/]/).pop() ?? '') && process.env.HARNESS_SELF !== '1') process.argv.splice(2, 0, 'tui')
 const [, , cmd, ...rest] = process.argv
 const flags = rest.filter((a) => a.startsWith('-'))
 const args = rest.filter((a) => !a.startsWith('-'))
