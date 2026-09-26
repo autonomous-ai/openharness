@@ -119,6 +119,15 @@ harness remote-password set
 harness start
 ```
 
+**In a terminal:** the same line installs `hn` — tmux's keys and your `~/.tmux.conf`, with every
+harness on every machine ([hn](tui/README.md)). The first time, `hn` signs in and connects the
+computer:
+
+```bash
+curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
+hn
+```
+
 <details>
 <summary><b>Build from source</b></summary>
 

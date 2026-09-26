@@ -4,7 +4,8 @@ All of Harness in a terminal — every harness on every machine, in tabs and pan
 terminal you can type into: a laptop, a server over SSH, a tablet's SSH app.
 
 ```bash
-hn            # or: harness tui
+curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash    # installs harness and hn
+hn                                                                 # or: harness tui
 ```
 
 vim is vi improved: every vi key works, and more. hn is that for tmux — every tmux key and

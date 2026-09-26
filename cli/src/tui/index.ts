@@ -72,6 +72,29 @@ export async function installTui(log: (line: string) => void): Promise<string> {
   return target
 }
 
+/**
+ * Whether these arguments open hn (a client, which needs this computer signed in and its daemon up),
+ * rather than run a command in the hn already open (`hn list-panes`, `hn send-keys …`: tmux's command
+ * line, which needs neither) or only print something (--help, --version, --keys). Read as hn reads
+ * its own arguments (tui/src/cli.rs): -f, -L and -S take a value, the first other word is a command.
+ */
+export function opensClient(argv: string[]): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--') return i + 1 >= argv.length
+    if (!a.startsWith('-') || a === '-') return false
+    if (a === '--help' || a === '--version' || a === '--keys') return false
+    if (a === '--port') { i++; continue }
+    if (a.startsWith('--')) return true
+    const flags = a.slice(1)
+    for (let j = 0; j < flags.length; j++) {
+      if (flags[j] === 'h' || flags[j] === 'V') return false
+      if ('fLS'.includes(flags[j])) { if (j + 1 === flags.length) i++; break }
+    }
+  }
+  return true
+}
+
 async function daemonUp(port: number): Promise<boolean> {
   try { return (await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(2_000) })).ok } catch { return false }
 }
@@ -108,8 +131,7 @@ export async function tuiCommand(argv: string[], opts: { port: number; signedIn?
     try { await installTui((line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }
   if (argv[0] === '--where') { console.log(findTuiBinary() ?? '(not installed)'); return 0 }
-  const informational = argv.some((arg) => ['-h', '--help', '-V', '--version'].includes(arg))
-  if (!informational && opts.signedIn && !(await ensureDaemon(opts.port, opts.signedIn))) return 1
+  if (opensClient(argv) && opts.signedIn && !(await ensureDaemon(opts.port, opts.signedIn))) return 1
   let binary = findTuiBinary()
   if (!binary) {
     try { binary = await installTui((line) => console.log(line)) } catch (error) {
