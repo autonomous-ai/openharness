@@ -92,7 +92,7 @@ impl Picker {
             keep_order: false,
             busy: None,
             flash: None,
-            empty: "Nothing matches.".into(),
+            empty: String::new(),
             scroll: 0,
             prefixed: false,
             row_at: Vec::new(),
@@ -387,8 +387,19 @@ impl Term {
                 let n = l.chars().count() as u32;
                 let k = t.chars().count() as u32;
                 let hit = match (prefix, suffix) { (true, true) => l == t, (true, false) => l.starts_with(&t), _ => l.ends_with(&t) };
-                // suffix$ also ends a column of the line (the detail): "main$" finds `webapp · main`.
-                let column_end = if *suffix && !*prefix && !hit && haystack != label {
+                // suffix$ also ends a column of the line (the detail): "main$" finds `webapp · main`;
+                // ^prefix likewise starts one.
+                let column_start = if *prefix && !*suffix && !hit && haystack != label {
+                    let h = if smart { haystack.to_string() } else { haystack.to_lowercase() };
+                    let mut at = 0u32;
+                    let mut found = None;
+                    for part in h.split("  ") {
+                        if found.is_none() && !part.is_empty() && part.starts_with(&t) { found = Some(at) }
+                        at += part.chars().count() as u32 + 2;
+                    }
+                    found
+                } else { None };
+                let column_end = if let Some(f) = column_start { Some(f) } else if *suffix && !*prefix && !hit && haystack != label {
                     let h = if smart { haystack.to_string() } else { haystack.to_lowercase() };
                     let mut at = 0u32;
                     let mut found = None;
