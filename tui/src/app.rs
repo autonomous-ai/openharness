@@ -28,6 +28,10 @@ pub struct Tab {
     pub root: Option<Node>,
     pub focus: Option<u64>,
     pub zoomed: bool,
+    /// The pane that was active before this one (`;`).
+    pub last_focus: Option<u64>,
+    /// Where `next-layout` (Space) is in its cycle.
+    pub layout_at: usize,
     /// Whether the desk knows this tab yet (a new, empty tab is local until its first harness).
     pub on_desk: bool,
     /// The desk's layout document for this tab, kept whole: a preset chosen here updates its entry
@@ -37,7 +41,7 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(name: &str) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, on_desk: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last_focus: None, layout_at: 0, on_desk: false, layout: json!({}) }
     }
     pub fn panes(&self) -> Vec<u64> { self.root.as_ref().map(Node::leaves).unwrap_or_default() }
 }
@@ -64,6 +68,34 @@ pub struct App {
     next_pane: u64,
     pub modal: Option<Modal>,
     pub toast: Option<(String, Color, Instant)>,
+    /// tmux `display-time`: how long a message holds the status line.
+    pub display_ms: u64,
+    pub display_panes_ms: u64,
+    /// tmux `base-index` / `pane-base-index`.
+    pub base_index: usize,
+    pub pane_base_index: usize,
+    /// Everything said in the status line, for `show-messages` (C-b ~).
+    pub messages: Vec<(std::time::SystemTime, String)>,
+    /// Paste buffers, newest first (copy mode's `y`, and `paste-buffer`).
+    pub buffers: Vec<String>,
+    pub keymap: crate::keys::Keymap,
+    /// Until when a `-r` key may be pressed again without the prefix.
+    pub repeat_until: Option<Instant>,
+    /// Redraw everything next frame (refresh-client).
+    pub redraw_all: bool,
+    /// tmux `status-position`.
+    pub status_top: bool,
+    pub mouse: bool,
+    /// The harness focused before this one, anywhere (switch-client -l).
+    pub last_harness: Option<(String, String)>,
+    /// `agent_recent` answers (asks and recaps), for the preview window.
+    pub recent: HashMap<(String, String), Value>,
+    /// Seconds east of UTC (for the status line's clock).
+    pub utc_offset_secs: i64,
+    /// `:` command history (Up/Down in the prompt).
+    pub history: Vec<String>,
+    /// The last copy-mode search (n / N).
+    pub last_search: Option<String>,
     pub size: (u16, u16),
     /// Each visible pane's full rect (header row included), from the last layout.
     pub rects: Vec<(u64, Rect)>,
@@ -130,6 +162,22 @@ impl App {
             next_pane: 1,
             modal: None,
             toast: None,
+            display_ms: 1500,
+            display_panes_ms: 1000,
+            base_index: 0,
+            pane_base_index: 0,
+            messages: Vec::new(),
+            buffers: Vec::new(),
+            keymap: crate::keys::Keymap::tmux_defaults(),
+            repeat_until: None,
+            redraw_all: false,
+            status_top: false,
+            mouse: true,
+            last_harness: None,
+            history: Vec::new(),
+            recent: HashMap::new(),
+            utc_offset_secs: utc_offset(),
+            last_search: None,
             size,
             rects: Vec::new(),
             quit: false,
@@ -179,8 +227,12 @@ impl App {
         });
     }
 
+    /// A message in the status line (tmux `display-message`), kept for `show-messages`.
     pub fn say(&mut self, text: impl Into<String>, color: Color) {
-        self.toast = Some((text.into(), color, Instant::now()));
+        let text = text.into();
+        self.messages.push((std::time::SystemTime::now(), text.clone()));
+        if self.messages.len() > 200 { self.messages.remove(0); }
+        self.toast = Some((text, color, Instant::now()));
     }
 
     pub fn link(&self, machine_id: &str) -> Option<Link> {
@@ -302,7 +354,7 @@ impl App {
                     pane.open_token += 1;
                     if !matches!(pane.phase, Phase::Card { .. }) {
                         pane.phase = if needs_link {
-                            Phase::Card { title: "This machine is not linked here".into(), detail: format!("Link it once with its remote password (⌥M, then ^L), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), ("⌥M".into(), "machines".into())] }
+                            Phase::Card { title: "This machine is not linked here".into(), detail: format!("Link it once with its remote password (machines, then C-l), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("choose-tree -m").unwrap_or_default(), "machines".into())] }
                         } else {
                             Phase::Connecting(format!("Reconnecting to {}…", self.fleet.machines.iter().find(|m| m.id == machine_id).map(|m| m.name.clone()).unwrap_or_default()))
                         };
@@ -383,7 +435,7 @@ impl App {
                     let mine = opened.contains(&agent.key());
                     if mine && !visible.contains(&agent.key()) {
                         agent.unread = true;
-                        self.say(format!("● {name} finished"), theme::ONLINE);
+                        self.say(format!("{name} finished"), theme::ONLINE);
                     }
                     if mine && !self.terminal_focused { crate::notify("Harness", &format!("{name} finished")) }
                 }
@@ -397,7 +449,7 @@ impl App {
                     let name = agent.name.clone();
                     let prompt = agent.question.as_ref().map(|q| q.prompt.clone()).unwrap_or_default();
                     if fresh && !visible.contains(&agent.key()) {
-                        self.say(format!("◆ {name} needs input — ⌥⇧I"), theme::ATTENTION);
+                        { let k = self.keymap.hint("choose-tree -a").unwrap_or_default(); self.say(format!("{name} is waiting on you — {k}"), theme::ATTENTION); }
                         crate::bell();
                     }
                     if fresh && !self.terminal_focused { crate::notify(&format!("{name} needs input"), &prompt) }
@@ -502,7 +554,7 @@ impl App {
         };
         let (cols, rows) = content.unwrap_or((pane.cols, pane.rows));
         if cols < pane::MIN_COLS || rows < pane::MIN_ROWS {
-            pane.phase = Phase::Card { title: "Pane too small".into(), detail: format!("A terminal needs {}×{}; this one is {cols}×{rows}.", pane::MIN_COLS, pane::MIN_ROWS), keys: vec![("⌥Z".into(), "zoom".into())] };
+            pane.phase = Phase::Card { title: "Pane too small".into(), detail: format!("A terminal needs {}×{}; this one is {cols}×{rows}.", pane::MIN_COLS, pane::MIN_ROWS), keys: vec![(self.keymap.hint("resize-pane -Z").unwrap_or_default(), "zoom".into())] };
             pane.dirty = true;
             return;
         }
@@ -577,11 +629,11 @@ impl App {
                 if code == "TERMINAL_AGENT_NOT_FOUND" || code == "TERMINAL_RUNTIME_UNAVAILABLE" {
                     self.after_end(pane_id, code);
                 } else {
-                    pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: code, keys: vec![("enter".into(), "retry".into()), ("⌥W".into(), "close pane".into())] };
+                    pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: code, keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] };
                 }
             }
             Err(error) => {
-                pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: error.to_string(), keys: vec![("enter".into(), "retry".into()), ("⌥W".into(), "close pane".into())] };
+                pane.phase = Phase::Card { title: "Could not open the terminal".into(), detail: error.to_string(), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] };
             }
         }
         if let Some(pane) = self.panes.get_mut(&pane_id) { pane.dirty = true }
@@ -593,10 +645,10 @@ impl App {
         let agent = self.fleet.agent(&pane.machine_id, &pane.agent_id);
         pane.stream = None;
         pane.phase = match agent.map(|a| a.status.as_str()) {
-            Some("stopped") => Phase::Card { title: "Paused".into(), detail: "The conversation is saved.".into(), keys: vec![("enter".into(), "resume".into()), ("⌥O".into(), "open another".into()), ("⌥W".into(), "close pane".into())] },
-            None => Phase::Card { title: "This harness is gone".into(), detail: "It is no longer on its machine.".into(), keys: vec![("⌥O".into(), "open another".into()), ("⌥W".into(), "close pane".into())] },
+            Some("stopped") => Phase::Card { title: "Paused".into(), detail: "The conversation is saved.".into(), keys: vec![("enter".into(), "resume".into()), (self.keymap.hint("choose-tree -s").unwrap_or_default(), "open another".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
+            None => Phase::Card { title: "This harness is gone".into(), detail: "It is no longer on its machine.".into(), keys: vec![(self.keymap.hint("choose-tree -s").unwrap_or_default(), "open another".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
             _ if agent.map(|a| a.launch == "starting").unwrap_or(false) => Phase::Connecting("Starting…".into()),
-            _ => Phase::Card { title: "The terminal closed".into(), detail: reason, keys: vec![("enter".into(), "reopen".into()), ("⌥⇧E".into(), "restart".into()), ("⌥W".into(), "close pane".into())] },
+            _ => Phase::Card { title: "The terminal closed".into(), detail: reason, keys: vec![("enter".into(), "reopen".into()), (self.keymap.hint("confirm-before -p \"restart #T? (y/n)\" restart-harness").unwrap_or_else(|| "C-b R".into()), "restart".into()), (self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into()), "close pane".into())] },
         };
         pane.dirty = true;
         // A harness that is still starting will have a terminal in a moment.
@@ -615,11 +667,12 @@ impl App {
         pane.phase = Phase::Connecting("Resuming the conversation…".into());
         let agent_id = pane.agent_id.clone();
         let machine_id = pane.machine_id.clone();
+        let close_key = self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into());
         self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| match reply {
             Ok(_) => { app.relist(&machine_id); app.open_stream(pane_id, true) }
             Err(error) => {
                 if let Some(pane) = app.panes.get_mut(&pane_id) {
-                    pane.phase = Phase::Card { title: "Could not resume".into(), detail: error.to_string(), keys: vec![("enter".into(), "try again".into()), ("⌥W".into(), "close pane".into())] };
+                    pane.phase = Phase::Card { title: "Could not resume".into(), detail: error.to_string(), keys: vec![("enter".into(), "try again".into()), (close_key, "close pane".into())] };
                 }
             }
         });
@@ -653,7 +706,7 @@ impl App {
         // whoever has the keyboard elsewhere keeps it until someone types here.
         let idle: Vec<u64> = visible.iter().map(|(id, _)| *id).filter(|id| self.panes.get(id).map(|p| p.stream.is_none() && !p.opening && matches!(p.phase, Phase::Connecting(_))).unwrap_or(false)).collect();
         for (id, rect) in visible {
-            let content = (rect.width, rect.height.saturating_sub(1));
+            let content = (rect.width, rect.height.saturating_sub(self.header_rows()));
             let Some(pane) = self.panes.get_mut(&id) else { continue };
             pane.dirty = true;
             let want = pane::stream_size(content.0, content.1);
@@ -696,7 +749,17 @@ impl App {
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
     pub fn focused(&self) -> Option<u64> { self.tab().focus }
 
-    pub fn body(&self) -> Rect { Rect::new(0, 1, self.size.0, self.size.1.saturating_sub(1)) }
+    /// Everything but the status line (tmux `status-position`, bottom by default).
+    pub fn body(&self) -> Rect { Rect::new(0, if self.status_top { 1 } else { 0 }, self.size.0, self.size.1.saturating_sub(1)) }
+
+    /// A pane's own border line: tmux draws none for a lone pane, and with `pane-border-status top`
+    /// a titled line above each pane when a window holds several.
+    pub fn header_rows(&self) -> u16 {
+        let tab = self.tab();
+        if tab.zoomed || tab.panes().len() < 2 { 0 } else { 1 }
+    }
+
+    pub fn tab_header_rows(tab: &Tab) -> u16 { if tab.zoomed || tab.panes().len() < 2 { 0 } else { 1 } }
 
     fn compute_rects(&self) -> Vec<(u64, Rect)> {
         let tab = self.tab();
@@ -711,14 +774,14 @@ impl App {
 
     fn content_size(&self, pane_id: u64) -> Option<(u16, u16)> {
         let rects = self.compute_rects();
-        if let Some((_, r)) = rects.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(1))) }
+        if let Some((_, r)) = rects.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(self.header_rows()))) }
         // A pane in a background tab: size it as if its tab were showing.
         for (index, tab) in self.tabs.iter().enumerate() {
             if index == self.active { continue }
             if let Some(root) = &tab.root {
                 let mut out = Vec::new();
                 root.rects(self.body(), &mut out);
-                if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(1))) }
+                if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(App::tab_header_rows(tab)))) }
             }
         }
         None
@@ -734,6 +797,10 @@ impl App {
     }
 
     pub fn focus_pane(&mut self, tab: usize, pane: u64) {
+        if tab == self.active && self.tabs[tab].focus != Some(pane) { self.tabs[tab].last_focus = self.tabs[tab].focus }
+        if let Some(prev) = self.focused().and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) {
+            if self.panes.get(&pane).map(|p| (p.machine_id.clone(), p.agent_id.clone())) != Some(prev.clone()) { self.last_harness = Some(prev) }
+        }
         self.active = tab;
         if self.tabs[tab].zoomed && self.tabs[tab].focus != Some(pane) { self.tabs[tab].zoomed = false }
         self.tabs[tab].focus = Some(pane);
@@ -912,6 +979,78 @@ impl App {
         tab.named = true;
         let (id, on_desk) = (tab.id.clone(), tab.on_desk);
         if on_desk { self.desk_op(json!({ "op": "tab.rename", "id": id, "name": name, "nameIsCustom": true })) }
+    }
+
+    // ── tmux pane moves ──────────────────────────────────────────────────────
+
+    pub fn focus_toward(&mut self, toward: layout::Toward) {
+        let Some(focus) = self.focused() else { return };
+        if self.tab().zoomed { return }
+        if let Some(next) = layout::neighbour(&self.rects, focus, toward) { let tab = self.active; self.focus_pane(tab, next) }
+    }
+
+    /// `select-pane -t :.+` — the next pane in order, wrapping.
+    pub fn cycle_pane(&mut self, by: i64) {
+        let ids = self.tab().panes();
+        if ids.len() < 2 { return }
+        let at = self.focused().and_then(|f| ids.iter().position(|x| *x == f)).unwrap_or(0) as i64;
+        let next = ids[(at + by).rem_euclid(ids.len() as i64) as usize];
+        let tab = self.active;
+        self.tab_mut().zoomed = false;
+        self.focus_pane(tab, next);
+    }
+
+    pub fn select_pane_index(&mut self, index: usize) {
+        if let Some(id) = self.tab().panes().get(index).copied() { let tab = self.active; self.focus_pane(tab, id) }
+    }
+
+    pub fn last_pane(&mut self) {
+        let Some(last) = self.tab().last_focus else { self.say("no last pane", theme::WARN); return };
+        if !self.tab().panes().contains(&last) { return }
+        let tab = self.active;
+        self.focus_pane(tab, last);
+    }
+
+    /// `resize-pane -L/-R/-U/-D n`: n cells, the way tmux counts them.
+    pub fn resize_focused(&mut self, dir: Dir, cells: f32) {
+        let Some(focus) = self.focused() else { return };
+        let body = self.body();
+        let span = if dir == Dir::Horizontal { body.width } else { body.height }.max(1) as f32;
+        if let Some(root) = self.tab_mut().root.as_mut() { root.resize(focus, dir, cells / span); }
+        self.fit_panes();
+    }
+
+    /// `swap-pane -U/-D`: trade places with the previous / next pane.
+    pub fn swap_pane(&mut self, by: i64) {
+        let ids = self.tab().panes();
+        let Some(focus) = self.focused() else { return };
+        if ids.len() < 2 { return }
+        let at = ids.iter().position(|x| *x == focus).unwrap_or(0) as i64;
+        let other = ids[(at + by).rem_euclid(ids.len() as i64) as usize];
+        if let Some(root) = self.tab_mut().root.as_mut() { root.swap(focus, other) }
+        self.fit_panes();
+    }
+
+    /// `rotate-window`: every pane moves one place along (-1 the other way).
+    pub fn rotate(&mut self, by: i64) {
+        let ids = self.tab().panes();
+        if ids.len() < 2 { return }
+        let n = ids.len() as i64;
+        let rotated: Vec<u64> = (0..n).map(|i| ids[((i - by).rem_euclid(n)) as usize]).collect();
+        if let Some(root) = self.tab_mut().root.as_mut() {
+            // Relabel leaves in order: position i now holds rotated[i].
+            let mut i = 0;
+            root.relabel(&mut |_| { let id = rotated[i]; i += 1; id });
+        }
+        self.fit_panes();
+    }
+
+    /// `next-layout` (C-b Space): even-horizontal → even-vertical → main-horizontal → main-vertical → tiled.
+    pub fn next_layout(&mut self) {
+        const CYCLE: [(Preset, &str); 5] = [(Preset::Columns, "even-horizontal"), (Preset::Rows, "even-vertical"), (Preset::MainRow, "main-horizontal"), (Preset::MainStack, "main-vertical"), (Preset::Grid, "tiled")];
+        let at = (self.tab().layout_at + 1) % CYCLE.len();
+        self.tab_mut().layout_at = at;
+        self.apply_preset(CYCLE[at].0);
     }
 
     pub fn apply_preset(&mut self, preset: Preset) {
@@ -1133,6 +1272,18 @@ pub enum Placement {
     Split(Dir),
     Tab,
     Replace,
+}
+
+/// This computer's offset from UTC, in seconds (`date +%z`), read once.
+pub fn utc_offset() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        let sign = if out.starts_with('-') { -1 } else { 1 };
+        let h: i64 = out.get(1..3).and_then(|x| x.parse().ok()).unwrap_or(0);
+        let m: i64 = out.get(3..5).and_then(|x| x.parse().ok()).unwrap_or(0);
+        sign * (h * 3600 + m * 60)
+    })
 }
 
 pub fn hostname() -> String {

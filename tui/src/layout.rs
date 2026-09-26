@@ -97,6 +97,21 @@ impl Node {
     }
 
 
+    pub fn swap(&mut self, x: u64, y: u64) {
+        match self {
+            Node::Leaf(id) => { if *id == x { *id = y } else if *id == y { *id = x } }
+            Node::Split { a, b, .. } => { a.swap(x, y); b.swap(x, y) }
+        }
+    }
+
+    /// Give every leaf, in order, the id [next] returns.
+    pub fn relabel(&mut self, next: &mut dyn FnMut(u64) -> u64) {
+        match self {
+            Node::Leaf(id) => *id = next(*id),
+            Node::Split { a, b, .. } => { a.relabel(next); b.relabel(next) }
+        }
+    }
+
     /// Grow [target] toward [toward] by [delta] of its parent split (the nearest split in that axis).
     pub fn resize(&mut self, target: u64, dir: Dir, delta: f32) -> bool {
         match self {
