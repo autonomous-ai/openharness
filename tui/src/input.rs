@@ -415,16 +415,17 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![];
         }
         PickerKind::Keys => {
-            picker.keep_order = true;
+            // The key is part of what is searched (`q` finds display-panes); the prefix is not.
             let prefix = keys::name(&app.keymap.prefix);
             let mut rows: Vec<crate::picker::Row> = app.keymap.prefix_table.iter().map(|b| {
-                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), b.command.clone())
+                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{:<9} {}", keys::name(&b.chord), b.command))
                     .extra(b.note.clone())
-                    .lead(vec![ratatui::text::Span::styled(format!("{prefix} {:<8}", keys::name(&b.chord)), theme::fg(theme::FZF_HL))])
-                    .detail(vec![ratatui::text::Span::styled(b.note.clone(), theme::fg(theme::MUTED))])
+                    .lead(vec![ratatui::text::Span::styled(format!("{prefix} "), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))])
+                    .detail(vec![ratatui::text::Span::styled(b.note.clone(), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))])
             }).collect();
-            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), b.command.clone())
-                .lead(vec![ratatui::text::Span::styled(format!("{:<12}", keys::name(&b.chord)), theme::fg(theme::FZF_HL))])));
+            let pad = " ".repeat(prefix.chars().count() + 1);
+            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{:<9} {}", keys::name(&b.chord), b.command))
+                .lead(vec![ratatui::text::Span::raw(pad.clone())])));
             picker.set_rows(rows);
             picker.hints = vec![("enter", "run it")];
         }
@@ -616,7 +617,7 @@ pub fn run(app: &mut App, command: &str) {
         }
         "find" => {
             let Some(pane) = app.focused() else { return };
-            app.modal = Some(Modal::Find { pane, query: String::new(), found: None });
+            app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: true });
         }
         "tab-left" => app.move_tab(-1),
         "tab-right" => app.move_tab(1),
@@ -754,7 +755,7 @@ fn modal_key(app: &mut App, key: KeyEvent) {
         Modal::Clock { .. } => {}
         Modal::Tree { cursor, collapsed } => tree_key(app, key, cursor, collapsed),
         Modal::Copy { pane } => copy_key(app, key, pane),
-        Modal::Find { pane, mut query, mut found } => {
+        Modal::Find { pane, mut query, mut found, up } => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let Some(p) = app.panes.get_mut(&pane) else { return };
             match key.code {
@@ -763,6 +764,7 @@ fn modal_key(app: &mut App, key: KeyEvent) {
                 // Enter keeps the match and goes on in copy mode, as tmux's search does.
                 KeyCode::Enter => {
                     app.last_search = Some(query.clone());
+                    app.last_search_up = up;
                     if p.copy.is_none() { p.copy_start() }
                     if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) }
                     app.modal = Some(Modal::Copy { pane });
@@ -772,12 +774,12 @@ fn modal_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Down => { found = Some(p.find(&query, false, false)) }
                 KeyCode::Char('p' | 'k') if ctrl => { found = Some(p.find(&query, true, false)) }
                 KeyCode::Char('n' | 'j') if ctrl => { found = Some(p.find(&query, false, false)) }
-                KeyCode::Backspace => { query.pop(); found = Some(p.find(&query, true, true)) }
+                KeyCode::Backspace => { query.pop(); found = Some(p.find(&query, up, true)) }
                 KeyCode::Char('u') if ctrl => { query.clear(); p.end_find() }
-                KeyCode::Char(c) if !ctrl => { query.push(c); found = Some(p.find(&query, true, true)) }
+                KeyCode::Char(c) if !ctrl => { query.push(c); found = Some(p.find(&query, up, true)) }
                 _ => {}
             }
-            app.modal = Some(Modal::Find { pane, query, found });
+            app.modal = Some(Modal::Find { pane, query, found, up });
         }
         Modal::Prompt(p) => prompt_key(app, key, p),
         Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
@@ -980,11 +982,12 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         KeyCode::Char('L') => p.copy_screen(2),
         KeyCode::Char('v') | KeyCode::Char(' ') => p.copy_toggle(false),
         KeyCode::Char('V') => p.copy_toggle(true),
-        KeyCode::Char('/') | KeyCode::Char('?') => { app.modal = Some(Modal::Find { pane, query: String::new(), found: None }); return }
+        // copy-mode-vi: / searches down, ? up; n goes on the same way, N back (wrapping, as tmux).
+        KeyCode::Char('/') | KeyCode::Char('?') => { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: key.code == KeyCode::Char('?') }); return }
         KeyCode::Char('n') | KeyCode::Char('N') => {
             if let Some(q) = app.last_search.clone() {
-                let older = key.code == KeyCode::Char('n');
-                if p.find(&q, older, false) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } else { app.say(format!("Search {}: {q}", if older { "hit top" } else { "hit bottom" }), theme::WARN) }
+                let up = app.last_search_up == (key.code == KeyCode::Char('n'));
+                if p.find(&q, up, false) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } else { app.say(format!("No match: {q}"), theme::WARN) }
             }
         }
         KeyCode::Char('y') | KeyCode::Enter => {
