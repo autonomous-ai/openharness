@@ -15,18 +15,57 @@ use crate::daemon::{http_json, Link};
 use crate::fleet::agent_from;
 
 /// Run a CLI subcommand; None when `args` is not one (the client should start).
-pub async fn run(args: &[String], port: u16) -> Option<i32> {
-    // -S path / -L name choose the client (as tmux's server); -L alone names the one starting.
-    let (mut socket, mut name, mut i) = (None, None, 0);
-    while i + 1 < args.len() && matches!(args[i].as_str(), "-S" | "-L") {
-        if args[i] == "-S" { socket = Some(args[i + 1].clone()) } else { name = Some(args[i + 1].clone()) }
-        i += 2;
+/// tmux's usage line, hn's flags.
+pub const USAGE: &str = "usage: hn [-hV] [-f file] [-L socket-name] [-S socket-path] [--port port]\n          [command [flags]]";
+
+/// The command line, read as tmux reads its own: flags, then a command.
+#[derive(Default, Debug)]
+pub struct Flags { pub help: bool, pub long_help: bool, pub version: bool, pub keys: bool, pub config: Option<String>, pub socket: Option<String>, pub name: Option<String>, pub port: Option<u16>, pub rest: Vec<String> }
+
+pub fn flags(args: &[String]) -> Result<Flags, String> {
+    let mut f = Flags::default();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--" { i += 1; break }
+        if !a.starts_with('-') || a == "-" { break }
+        match a {
+            "--help" => f.long_help = true,
+            "--version" => f.version = true,
+            "--keys" => f.keys = true,
+            "--port" => { i += 1; f.port = Some(args.get(i).and_then(|p| p.parse().ok()).ok_or("--port needs a port")?) }
+            _ if a.starts_with("--") => return Err(format!("unknown option -- {}", &a[2..])),
+            _ => {
+                // Short flags, bundled as getopt allows (-hV); -f -L -S take the rest or the next word.
+                let chars: Vec<char> = a[1..].chars().collect();
+                let mut j = 0;
+                while j < chars.len() {
+                    match chars[j] {
+                        'h' => f.help = true,
+                        'V' => f.version = true,
+                        c @ ('f' | 'L' | 'S') => {
+                            let value: String = if j + 1 < chars.len() { chars[j + 1..].iter().collect() } else { i += 1; args.get(i).cloned().ok_or(format!("option requires an argument -- {c}"))? };
+                            match c { 'f' => f.config = Some(value), 'L' => f.name = Some(value), _ => f.socket = Some(value) }
+                            break;
+                        }
+                        c => return Err(format!("unknown option -- {c}")),
+                    }
+                    j += 1;
+                }
+            }
+        }
+        i += 1;
     }
-    let args = &args[i..];
-    if args.is_empty() { if let Some(n) = &name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } } return None }
+    f.rest = args[i.min(args.len())..].to_vec();
+    Ok(f)
+}
+
+/// Run a command given on the command line; None when there is none (the client starts).
+pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<&str>) -> Option<i32> {
+    let socket = socket.map(str::to_string);
+    let name = name.map(str::to_string);
     let cmd = args.first()?.as_str();
     match cmd {
-        "-V" | "--version" => { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), crate::tmuxconf::TMUX_VERSION); Some(0) }
         // hn's ls: every harness on every machine (tmux's list-sessions runs in the client).
         "ls" | "list" => Some(ls(port).await),
         "send" | "send-message" => Some(send(port, &args[1..]).await),
