@@ -130,6 +130,9 @@ pub fn style_text(st: Style) -> String {
     parts.join(",")
 }
 
+/// Whether tmux's style_parse takes a style (set-option's check of a *-style option).
+pub fn valid_style(spec: &str) -> bool { let mut sy = Sy::new(Style::default()); style_parse(&mut sy, Style::default(), spec) }
+
 /// A section's cells: a character, its look, its width.
 type Screen = Vec<(String, Style, u16)>;
 

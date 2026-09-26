@@ -1391,6 +1391,11 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             return;
         }
     }
+    // A key unbound from the copy-mode table (or the table removed) does nothing, as in tmux.
+    if app.copy_pending.is_none() && !app.copy_as_vi {
+        let table = if emacs { keys::Table::CopyEmacs } else { keys::Table::CopyVi };
+        if !app.keymap.copy_key_bound(table, &keys::of(&key)) { app.modal = Some(Modal::Copy { pane }); return }
+    }
     let key = if emacs { match emacs_copy(key) { Some(k) => k, None => { app.modal = Some(Modal::Copy { pane }); return } } } else { key };
     // f/F/t/T wait for their character.
     if let Some(kind) = app.copy_pending.take() {

@@ -40,6 +40,9 @@ pub struct Keymap {
     pub named: std::collections::BTreeMap<String, Vec<Binding>>,
     /// Copy-mode keys unbound (`unbind -T copy-mode-vi v`).
     pub copy_unbound: Vec<(Table, Chord)>,
+    /// Tables `unbind -a` removed (tmux's key_bindings_remove_table): their defaults gone, and
+    /// the table itself until something is bound in it again.
+    pub removed: Vec<Table>,
     /// tmux `repeat-time`.
     pub repeat_ms: u64,
     /// How long after the prefix before the key hint shows (`set -g @hn-hint-time`; 0: never).
@@ -166,7 +169,7 @@ impl Keymap {
             }
         }
         for b in t.iter_mut() { if let Some(n) = notes.get(&name(&b.chord)) { b.note = n.clone() } }
-        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), copy_vi: Vec::new(), copy_emacs: Vec::new(), named: Default::default(), copy_unbound: Vec::new(), repeat_ms: 500, hint_ms: 600 }
+        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), copy_vi: Vec::new(), copy_emacs: Vec::new(), named: Default::default(), copy_unbound: Vec::new(), removed: Vec::new(), repeat_ms: 500, hint_ms: 600 }
     }
 
     /// Every key table, as `list-keys` walks them: by name, each by key code. The copy-mode tables
@@ -175,13 +178,14 @@ impl Keymap {
     pub fn tables(&self) -> Vec<(String, Vec<Binding>)> {
         let mut out: Vec<(String, Vec<Binding>)> = Vec::new();
         for (name, own, defaults, table) in [("copy-mode", &self.copy_emacs, include_str!("../tests/fixtures/tmux-3.5a-copy-mode.txt"), Table::CopyEmacs), ("copy-mode-vi", &self.copy_vi, include_str!("../tests/fixtures/tmux-3.5a-copy-mode-vi.txt"), Table::CopyVi)] {
-            let mut list: Vec<Binding> = defaults.lines().filter_map(fixture_binding)
-                .filter(|b| !own.iter().any(|o| o.chord == b.chord) && !self.copy_unbound.contains(&(table, b.chord))).collect();
+            let gone = self.removed.contains(&table);
+            let mut list: Vec<Binding> = if gone { Vec::new() } else { defaults.lines().filter_map(fixture_binding)
+                .filter(|b| !own.iter().any(|o| o.chord == b.chord) && !self.copy_unbound.contains(&(table, b.chord))).collect() };
             list.extend(own.iter().cloned());
-            out.push((name.to_string(), list));
+            if !(gone && list.is_empty()) { out.push((name.to_string(), list)) }
         }
-        out.push(("prefix".into(), self.prefix_table.clone()));
-        out.push(("root".into(), self.root_table.clone()));
+        if !(self.removed.contains(&Table::Prefix) && self.prefix_table.is_empty()) { out.push(("prefix".into(), self.prefix_table.clone())) }
+        if !(self.removed.contains(&Table::Root) && self.root_table.is_empty()) { out.push(("root".into(), self.root_table.clone())) }
         for (n, list) in &self.named { out.push((n.clone(), list.clone())) }
         out.sort_by(|a, b| a.0.cmp(&b.0));
         for (_, list) in out.iter_mut() { list.sort_by_key(|b| order(&b.chord)) }
@@ -201,6 +205,18 @@ impl Keymap {
         list.retain(|b| b.chord != chord);
         list.push(Binding { chord, command, repeat, note: String::new() });
     }
+    /// unbind -a: the table goes, its defaults with it.
+    pub fn remove_table(&mut self, table: Table) {
+        self.table_mut(table).clear();
+        if !self.removed.contains(&table) { self.removed.push(table) }
+    }
+
+    /// Whether a copy-mode key is bound there (the table's defaults, less what was unbound).
+    pub fn copy_key_bound(&self, table: Table, chord: &Chord) -> bool {
+        let own = match table { Table::CopyVi => &self.copy_vi, _ => &self.copy_emacs };
+        own.iter().any(|b| &b.chord == chord) || (!self.removed.contains(&table) && !self.copy_unbound.contains(&(table, *chord)))
+    }
+
     pub fn unbind(&mut self, table: Table, chord: &Chord) {
         self.table_mut(table).retain(|b| &b.chord != chord);
         if matches!(table, Table::CopyVi | Table::CopyEmacs) && !self.copy_unbound.contains(&(table, *chord)) { self.copy_unbound.push((table, *chord)) }
@@ -289,7 +305,7 @@ pub fn name(chord: &Chord) -> String {
         KeyCode::Enter => "Enter".into(), KeyCode::Tab => "Tab".into(), KeyCode::BackTab => "BTab".into(), KeyCode::Esc => "Escape".into(),
         KeyCode::Backspace => "BSpace".into(), KeyCode::Up => "Up".into(), KeyCode::Down => "Down".into(), KeyCode::Left => "Left".into(),
         KeyCode::Right => "Right".into(), KeyCode::PageUp => "PPage".into(), KeyCode::PageDown => "NPage".into(), KeyCode::Home => "Home".into(),
-        KeyCode::End => "End".into(), KeyCode::Delete => "DC".into(), KeyCode::Insert => "IC".into(), KeyCode::F(n) => format!("F{n}"),
+        KeyCode::End => "End".into(), KeyCode::Delete => "DC".into(), KeyCode::Insert => "IC".into(), KeyCode::F(n) if n >= 100 => format!("User{}", n - 100), KeyCode::F(n) => format!("F{n}"),
         _ => "?".into(),
     });
     out
@@ -318,9 +334,11 @@ pub fn parse(text: &str) -> Result<Chord, String> {
         "BSpace" => KeyCode::Backspace, "Up" => KeyCode::Up, "Down" => KeyCode::Down, "Left" => KeyCode::Left, "Right" => KeyCode::Right,
         "PPage" | "PageUp" | "PgUp" => KeyCode::PageUp, "NPage" | "PageDown" | "PgDn" => KeyCode::PageDown, "Home" => KeyCode::Home, "End" => KeyCode::End,
         "DC" => KeyCode::Delete, "IC" => KeyCode::Insert,
-        f if f.len() > 1 && f.starts_with('F') && f[1..].parse::<u8>().is_ok() => KeyCode::F(f[1..].parse().unwrap()),
+        // tmux knows F1 to F12, and User0… (user-keys) — kept here past the F keys.
+        f if f.len() > 1 && f.starts_with('F') && matches!(f[1..].parse::<u8>(), Ok(1..=12)) => KeyCode::F(f[1..].parse().unwrap()),
+        u if u.starts_with("User") && matches!(u[4..].parse::<u8>(), Ok(0..=155)) => KeyCode::F(100 + u[4..].parse::<u8>().unwrap()),
         c if c.chars().count() == 1 => KeyCode::Char(c.chars().next().unwrap()),
-        other => return Err(format!("unknown key {other:?}")),
+        _ => return Err(format!("unknown key: {raw}")),
     };
     Ok(Chord::normal(code, mods))
 }
