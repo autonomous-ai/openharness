@@ -228,6 +228,24 @@ fn run_words(app: &mut App, words: &[String]) {
             else if flag(words, "-p") { input::run(app, "prev-tab-harness") }
         }
         "send-keys" => input::send_keys(app, &words[1..]),
+        // vim-tmux-navigator and friends: `if-shell COND THEN [ELSE]`. The condition asks about the
+        // pane's tty, which lives on another machine here; a harness pane is not vim, so the else
+        // branch runs (a -F format of 1/0 is honoured).
+        "if-shell" | "if" => {
+            let mut i = 1;
+            let mut format = false;
+            while i < words.len() && words[i].starts_with('-') && words[i].len() > 1 {
+                if words[i].contains('F') { format = true }
+                if words[i] == "-t" { i += 1 }
+                i += 1;
+            }
+            let Some(cond) = words.get(i) else { return };
+            let truth = format && !matches!(expand(app, cond).trim(), "" | "0");
+            let pick = if truth { words.get(i + 1) } else { words.get(i + 2) };
+            if let Some(command) = pick.cloned() { execute(app, &command) }
+        }
+        "run-shell" | "run" => {}
+        "send-prefix" => { let prefix = crate::keys::name(&app.keymap.prefix); input::send_keys(app, &[prefix]) }
         "command-prompt" => {
             let label = opt(words, "-p").unwrap_or_else(|| ":".into());
             let initial = opt(words, "-I").map(|i| expand(app, &i)).unwrap_or_default();

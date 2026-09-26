@@ -107,7 +107,7 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
             if seam >= body.x + body.width { continue }
             for y in rect.y..rect.y + rect.height {
                 let touches = active_rect.map(|a| (a.x + a.width == seam || a.x == seam + 1) && y >= a.y && y < a.y + a.height).unwrap_or(false);
-                if let Some(cell) = buf.cell_mut((seam, y)) { cell.set_symbol("│").set_style(border_style(touches)); }
+                if let Some(cell) = buf.cell_mut((seam, y)) { cell.set_symbol("│").set_style(border_style(app, touches)); }
             }
         }
         junctions(buf, body);
@@ -115,14 +115,15 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
 }
 
-fn border_style(active: bool) -> Style {
-    if active { Style::default().fg(theme::TMUX_ACTIVE_BORDER) } else { Style::default() }
+fn border_style(app: &App, active: bool) -> Style {
+    if active { Style::default().fg(app.look.active_border.unwrap_or(theme::TMUX_ACTIVE_BORDER)) }
+    else { app.look.border.map(|c| Style::default().fg(c)).unwrap_or_default() }
 }
 
 /// `pane-border-status top`, tmux's default format: the index (reversed on the active pane) and
 /// the title in quotes — then, because a harness has one, its state; its machine at the far end.
 fn border_line(buf: &mut Buffer, app: &App, id: u64, index: usize, rect: Rect, active: bool) {
-    let style = border_style(active);
+    let style = border_style(app, active);
     for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.set_symbol("─").set_style(style); } }
     let Some(pane) = app.panes.get(&id) else { return };
     let agent = app.fleet.agent(&pane.machine_id, &pane.agent_id);
@@ -262,7 +263,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 
 /// tmux's status line — or, while there is one, the prompt, question or message that takes it.
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
-    let yellow = Style::default().bg(theme::TMUX_MESSAGE_BG).fg(theme::TMUX_MESSAGE_FG);
+    let yellow = Style::default().bg(app.look.message_bg.unwrap_or(theme::TMUX_MESSAGE_BG)).fg(app.look.message_fg.unwrap_or(theme::TMUX_MESSAGE_FG));
     let prompt_like: Option<(String, String, usize, String)> = match &app.modal {
         Some(Modal::Prompt(p)) => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
@@ -299,7 +300,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
             return None;
         }
     }
-    let base = Style::default().bg(theme::TMUX_STATUS_BG).fg(theme::TMUX_STATUS_FG);
+    let base = Style::default().bg(app.look.status_bg.unwrap_or(theme::TMUX_STATUS_BG)).fg(app.look.status_fg.unwrap_or(theme::TMUX_STATUS_FG));
     buf.set_style(rect, base);
     // status-left: tmux's "[#S] " — here this computer's name, the session a window lives in.
     let host = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(crate::app::hostname);

@@ -79,6 +79,8 @@ pub struct App {
     /// Paste buffers, newest first (copy mode's `y`, and `paste-buffer`).
     pub buffers: Vec<String>,
     pub keymap: crate::keys::Keymap,
+    /// Colours from ~/.tmux.conf (status, messages, borders).
+    pub look: crate::tmuxconf::Look,
     /// Until when a `-r` key may be pressed again without the prefix.
     pub repeat_until: Option<Instant>,
     /// Redraw everything next frame (refresh-client).
@@ -135,9 +137,6 @@ pub struct App {
     desk_stale: bool,
     /// The tab before this one, by id — ⌥` goes back to it.
     pub last_tab: Option<String>,
-    /// The person's own bindings (tui.toml): chord → command, or None to leave it to the pane.
-    pub keys: Vec<(crate::config::Chord, Option<String>)>,
-    pub prefix_key: crate::config::Chord,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
     pub fleet_marked: bool,
@@ -169,6 +168,7 @@ impl App {
             messages: Vec::new(),
             buffers: Vec::new(),
             keymap: crate::keys::Keymap::tmux_defaults(),
+            look: Default::default(),
             repeat_until: None,
             redraw_all: false,
             status_top: false,
@@ -205,8 +205,6 @@ impl App {
             desk_inflight: 0,
             desk_stale: false,
             last_tab: None,
-            keys: Vec::new(),
-            prefix_key: crate::config::Config::default().prefix,
             terminal_focused: true,
             fleet_marked: false,
         }

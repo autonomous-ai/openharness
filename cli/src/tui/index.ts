@@ -79,7 +79,7 @@ async function daemonUp(port: number): Promise<boolean> {
 /** This CLI, run again: `harness login`, `harness start`. Their output is the person's to read. */
 function runSelf(args: string[]): number {
   const script = process.argv[1]
-  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit' })
+  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit', env: { ...process.env, HARNESS_SELF: '1' } })
   return result.status ?? 1
 }
 
@@ -120,7 +120,7 @@ export async function tuiCommand(argv: string[], opts: { port: number; signedIn?
   const result = spawnSync(binary, argv, {
     stdio: 'inherit',
     // How the TUI runs this CLI back (`harness link connect` for a machine it has to link).
-    env: { ...process.env, PORT: String(opts.port), HARNESS_CLI: process.execPath, HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
+    env: { ...process.env, PORT: String(opts.port), HARNESS_CLI: process.execPath, HARNESS_SELF: '1', HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
   })
   if (result.error) { console.error(`  ✗ Could not start ${binary}: ${result.error.message}`); return 1 }
   return result.status ?? 0
