@@ -50,6 +50,10 @@ pub struct Options {
     pub window_status_style: Option<(Option<Color>, Option<Color>)>,
     pub pane_border_format: Option<String>,
     pub tim_off: Option<bool>,
+    pub user: std::collections::BTreeMap<String, String>,
+    /// main-pane-width / -height: cells, or 1000 + a percentage.
+    pub main_pane_width: Option<u16>,
+    pub main_pane_height: Option<u16>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -182,6 +186,8 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "window-style" => { let (fg, bg) = style(value); s.look.window_fg = fg; s.look.window_bg = bg }
                 "window-active-style" => { let (fg, bg) = style(value); s.look.active_window_fg = fg; s.look.active_window_bg = bg }
                 "history-limit" => { if let Ok(n) = value.parse::<usize>() { crate::pane::HISTORY.store(n, std::sync::atomic::Ordering::Relaxed) } }
+                "main-pane-width" => s.options.main_pane_width = value.trim_end_matches('%').parse().ok().map(|n: u16| if value.ends_with('%') { 1000 + n } else { n }),
+                "main-pane-height" => s.options.main_pane_height = value.trim_end_matches('%').parse().ok().map(|n: u16| if value.ends_with('%') { 1000 + n } else { n }),
                 "status-justify" => s.options.status_justify = Some(value.to_string()),
                 "window-status-style" => { let (fg, bg) = style(value); s.options.window_status_style = Some((fg, bg)) }
                 "pane-border-format" => s.options.pane_border_format = Some(value.to_string()),
@@ -204,9 +210,10 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 | "set-titles" | "set-titles-string" | "update-environment" | "destroy-unattached" | "exit-empty" | "word-separators" | "wrap-search"
                 | "status-left-style" | "status-right-style" | "window-status-activity-style" | "window-status-bell-style"
                 | "mode-style" | "message-command-style" | "clock-mode-colour" | "clock-mode-style" | "display-panes-colour" | "display-panes-active-colour"
-                | "pane-border-lines" | "popup-style" | "popup-border-style" | "main-pane-width" | "main-pane-height" => {}
+                | "pane-border-lines" | "popup-style" | "popup-border-style" => {}
                 "@tim" => s.options.tim_off = Some(matches!(value, "off" | "0" | "no")),
-                n if n.starts_with('@') => {}
+                // A user option (themes, plugins): kept, for #{@name} and show -v.
+                n if n.starts_with('@') => { s.options.user.insert(n.to_string(), value.to_string()); }
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
                 // Not an error in your tmux.conf: noted (`hn --keys` lists them, `:set` says so).
                 other => s.notes.push(format!("set {other}: not used here")),

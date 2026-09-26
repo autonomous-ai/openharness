@@ -220,12 +220,10 @@ fn listing(app: &App, command: &str) -> Vec<String> {
             format!("{}: [{c}x{r}] \"{title}\" {machine} %{id}{}", i + app.pane_base_index, if Some(*id) == app.focused() { " (active)" } else { "" })
         }).collect(),
         "list-sessions" => {
-            let mut out = vec![format!("{}: {} windows (attached)", app.session_name(), app.tabs.len())];
-            for m in &app.fleet.machines { if m.id != app.fleet.local_id { out.push(format!("  {} — a machine; its harnesses open in any window", m.name)) } }
-            out
+            vec![format!("{}: {} windows (attached)", app.session_name(), app.tabs.len())]
         }
         "list-clients" => vec![format!("{}: {} [{}x{} {}] (utf8)", std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_else(|_| "tty".into()), app.session_name(), app.size.0, app.size.1, std::env::var("TERM").unwrap_or_default())],
-        _ => vec![
+        _ => app.opts.user.iter().map(|(k, v)| format!("{k} \"{v}\"")).chain(vec![
             format!("base-index {}", app.base_index),
             format!("mode-keys {}", if app.opts.mode_keys_emacs == Some(true) { "emacs" } else { "vi" }),
             format!("renumber-windows {}", if app.opts.renumber_windows == Some(true) { "on" } else { "off" }),
@@ -240,6 +238,8 @@ fn listing(app: &App, command: &str) -> Vec<String> {
             format!("synchronize-panes {}", if app.tab().sync { "on" } else { "off" }),
             format!("pane-border-status {}", if app.opts.border_titles == Some(false) { "off" } else { "top" }),
             format!("@hn-hint-time {}", if app.keymap.hint_ms == u64::MAX { 0 } else { app.keymap.hint_ms }),
+            format!("main-pane-width {}", app.opts.main_pane_width.map(|v| if v >= 1000 { format!("{}%", v - 1000) } else { v.to_string() }).unwrap_or_else(|| "80".into())),
+            format!("main-pane-height {}", app.opts.main_pane_height.map(|v| if v >= 1000 { format!("{}%", v - 1000) } else { v.to_string() }).unwrap_or_else(|| "24".into())),
             format!("display-panes-time {}", app.display_panes_ms),
             format!("display-time {}", app.display_ms),
             format!("mouse {}", if app.mouse { "on" } else { "off" }),
@@ -248,7 +248,7 @@ fn listing(app: &App, command: &str) -> Vec<String> {
             format!("prefix2 {}", app.keymap.prefix2.map(|c| crate::keys::name(&c)).unwrap_or_else(|| "None".into())),
             format!("repeat-time {}", app.keymap.repeat_ms),
             format!("status-position {}", if app.status_top { "top" } else { "bottom" }),
-        ],
+        ]).collect(),
     }
 }
 
@@ -298,15 +298,15 @@ fn run_words(app: &mut App, words: &[String]) {
             let command = shell_command(words);
             // The pane this came from decides the machine and folder — read before the new window.
             let from = input::focused_agent(app);
+            let last_before = app.last_tab.clone();
             app.new_tab();
             if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
             // -d: made, not gone to.
             if flag(words, "-d") {
                 let id = app.tabs[was.min(app.tabs.len() - 1)].id.clone();
-                let last = app.last_tab.clone();
                 if let Some(i) = app.tabs.iter().position(|t| t.id == id) { app.select_tab(i) }
-                // Made, not visited: the last window stays what it was.
-                app.last_tab = last.filter(|l| *l != id);
+                // Made, not visited: the last window stays what it was before.
+                app.last_tab = last_before;
                 return;
             }
             // -P: the harness list in it, instead of a shell.
@@ -324,7 +324,7 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "kill-pane" => {
             // -t: that pane; -a: every pane but it (tmux's order of reading).
-            let target = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => Some(x), None => { app.say(format!("Can't find pane: {t}"), theme::WARN); return } }, None => app.focused().map(|f| (app.active, f)) };
+            let target = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => Some(x), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.focused().map(|f| (app.active, f)) };
             match target {
                 Some((w, p)) if flag(words, "-a") => { let others: Vec<u64> = app.tabs[w].panes().into_iter().filter(|x| *x != p).collect(); for o in others { app.close_pane(o) } }
                 Some((_, p)) => app.close_pane(p),
@@ -332,7 +332,7 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "kill-window" => {
-            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => { app.say(format!("Can't find window: {t}"), theme::WARN); return } }, None => app.active };
+            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => { app.say(format!("can't find window: {t}"), theme::WARN); return } }, None => app.active };
             if flag(words, "-a") {
                 let keep = app.tabs[target].id.clone();
                 while let Some(i) = app.tabs.iter().position(|t| t.id != keep) { app.close_tab(i) }
@@ -344,7 +344,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "select-window" => {
             let target = opt(words, "-t").or_else(|| Some(rest(words))).unwrap_or_default();
             if flag(words, "-l") { input::run(app, "last-tab"); return }
-            match window_target(app, &target) { Some(i) => app.select_tab(i), None => app.say(format!("Can't find window: {}", target.trim_start_matches(':')), theme::WARN) }
+            match window_target(app, &target) { Some(i) => app.select_tab(i), None => app.say(format!("can't find window: {}", target.trim_start_matches(':')), theme::WARN) }
         }
         "rename-window" => { let name = rest(words); if !name.trim().is_empty() { app.rename_tab(name.trim()) } }
         "move-window" => {
@@ -397,8 +397,12 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "break-pane" => {
             // -s names the pane (any window); it becomes a window of its own.
+            let back = app.tab().id.clone();
             if let Some((w, p)) = opt(words, "-s").and_then(|t| pane_target(app, &t)) { if w != app.active || app.focused() != Some(p) { app.focus_pane(w, p) } }
-            if app.tab().panes().len() < 2 { app.say("can't break with only one pane", theme::WARN) } else { input::run(app, "pane-tab") }
+            if app.tab().panes().len() < 2 { app.say("can't break with only one pane", theme::WARN); return }
+            input::run(app, "pane-tab");
+            // -d: the new window is made, not gone to.
+            if flag(words, "-d") { if let Some(i) = app.tabs.iter().position(|t| t.id == back) { let new = app.tab().id.clone(); app.select_tab(i); app.last_tab = Some(new) } }
         }
         "rotate-window" => app.rotate(if flag(words, "-D") { -1 } else { 1 }),
         "next-layout" => app.next_layout(),
@@ -417,6 +421,10 @@ fn run_words(app: &mut App, words: &[String]) {
         "copy-mode" => { input::run(app, "copy-mode"); if flag(words, "-u") { if let Some(f) = app.focused() { if let Some(p) = app.panes.get_mut(&f) { let half = p.rows as i32 - 2; p.copy_move(0, -half) } } } }
         "search-backward" | "search-forward" => { if let Some(pane) = app.focused() { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: command == "search-backward" }) } }
         "paste-buffer" => input::paste_buffer(app, 0),
+        "list-buffers" | "choose-buffer" if app.capture.is_some() => {
+            let lines = app.buffers.iter().enumerate().map(|(i, b)| format!("buffer{i}: {} bytes: \"{}\"", b.len(), b.lines().next().unwrap_or("").chars().take(50).collect::<String>())).collect();
+            app.print("list-buffers", lines)
+        }
         "list-buffers" | "choose-buffer" => input::run(app, "choose-buffer"),
         "delete-buffer" => { if !app.buffers.is_empty() { app.buffers.remove(0); } }
         "choose-tree" => {
@@ -440,12 +448,19 @@ fn run_words(app: &mut App, words: &[String]) {
             let text = opt(words, "-F").unwrap_or_else(|| text.join(" "));
             if text.is_empty() && app.capture.is_none() { input::run(app, "info"); return }
             let text = if text.is_empty() { "[#S] #I:#W, current pane #P - (%H:%M %d-%b-%y)".to_string() } else { text };
-            let out = match opt(words, "-t").and_then(|t| pane_target(app, &t)) {
+            let target = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => Some(x), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => None };
+            let out = match target {
                 Some((w, p)) => crate::format::spans_for_pane(app, &text, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect(),
                 None => expand(app, &text),
             };
-            if flag(words, "-p") || app.capture.is_some() { app.print("display", vec![out]) } else { app.say(out, theme::WARN) }
+            // -p prints (to the shell that asked); without it the message is the client's, as tmux's.
+            if flag(words, "-p") { app.print("display", vec![out]) } else {
+                let cap = app.capture_err.take();
+                app.say(out, theme::WARN);
+                app.capture_err = cap;
+            }
         }
+        "show-messages" if app.capture.is_some() => { let lines = app.messages.iter().map(|(_, t)| t.clone()).collect(); app.print("show-messages", lines) }
         "show-messages" => input::run(app, "messages"),
         "list-keys" => {
             // -T copy-mode-vi / copy-mode / root: that table.
@@ -453,6 +468,12 @@ fn run_words(app: &mut App, words: &[String]) {
                 let list = app.keymap.table_mut(t).clone();
                 let lines = list.iter().map(|b| format!("bind-key -T {} {:<8} {}", opt(words, "-T").unwrap_or_default(), crate::keys::name(&b.chord), b.command)).collect();
                 input::picker(app, crate::modal::PickerKind::Output { title: "list-keys".into(), lines }, "list-keys", "");
+            } else if app.capture.is_some() {
+                // From a shell: tmux's own lines, `bind-key [-r] -T prefix KEY command`.
+                let mut lines = Vec::new();
+                for b in &app.keymap.prefix_table { lines.push(format!("bind-key {}-T prefix {:<10} {}", if b.repeat { "-r " } else { "   " }, crate::keys::name(&b.chord), b.command.replace(" ; ", " \\; "))) }
+                for b in &app.keymap.root_table { lines.push(format!("bind-key    -T root   {:<10} {}", crate::keys::name(&b.chord), b.command.replace(" ; ", " \\; "))) }
+                app.print("list-keys", lines);
             } else { input::run(app, "keys") }
         }
         "list-windows" | "list-sessions" | "list-panes" | "list-clients" | "show-options" | "show-window-options" => {
@@ -532,7 +553,7 @@ fn run_words(app: &mut App, words: &[String]) {
                     let keep = flag(words, "-d");
                     if a != app.active { let cur = app.active; app.active = a; app.swap_tabs(a, b); if keep { app.active = cur } } else { app.swap_tabs(a, b) }
                 }
-                _ => app.say("Can't find window", theme::WARN),
+                _ => app.say("can't find window", theme::WARN),
             }
         }
         "join-pane" | "move-pane" => {
@@ -556,8 +577,8 @@ fn run_words(app: &mut App, words: &[String]) {
         "clear-history" => { if let Some(p) = app.focused().and_then(|f| app.panes.get_mut(&f)) { p.clear_history() } }
         "capture-pane" => {
             // -p prints it; else it becomes a paste buffer. -t names the pane.
-            let pane = opt(words, "-t").and_then(|t| pane_target(app, &t)).map(|(_, p)| p).or(app.focused());
-            let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.visible_text()) else { return };
+            let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.focused() };
+            let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.visible_text_full()) else { return };
             if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) } else { app.buffers.insert(0, text) }
         }
         "has-session" => {}
@@ -565,6 +586,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "set-environment" | "setenv" => { if let (Some(k), Some(v)) = (words.iter().skip(1).find(|w| !w.starts_with('-')), words.last()) { app.env.insert(k.clone(), v.clone()); } }
         "show-environment" | "showenv" => { let lines = app.env.iter().map(|(k, v)| format!("{k}={v}")).collect(); app.print("show-environment", lines) }
         "set-hook" | "show-hooks" => {}
+        "wait-for" | "wait" => {}
         "pipe-pane" => app.say("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)", theme::WARN),
         "save-buffer" | "saveb" => {
             let path = rest(words);
@@ -582,7 +604,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "set-buffer" => { let text = rest(words); if !text.is_empty() { app.buffers.insert(0, text) } }
         "show-buffer" => {
             let lines = app.buffers.first().map(|b| b.lines().map(str::to_string).collect()).unwrap_or_default();
-            input::picker(app, crate::modal::PickerKind::Output { title: "show-buffer".into(), lines }, "show-buffer", "");
+            app.print("show-buffer", lines);
         }
         "respawn-pane" => input::run(app, "restart"),
         "suspend-client" => app.suspend = true,
@@ -645,8 +667,7 @@ fn run_words(app: &mut App, words: &[String]) {
                 Ok(o) => {
                     let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
                     let lines: Vec<String> = text.lines().map(str::to_string).collect();
-                    if lines.len() > 1 { input::picker(app, crate::modal::PickerKind::Output { title: "run-shell".into(), lines }, "run-shell", "") }
-                    else if let Some(l) = lines.first() { app.say(l.clone(), theme::WARN) }
+                    if !lines.is_empty() { app.print("run-shell", lines) }
                 }
                 Err(e) => app.say(format!("run-shell: {e}"), theme::WARN),
             }

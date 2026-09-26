@@ -16,6 +16,14 @@ use crate::fleet::agent_from;
 
 /// Run a CLI subcommand; None when `args` is not one (the client should start).
 pub async fn run(args: &[String], port: u16) -> Option<i32> {
+    // -S path / -L name choose the client (as tmux's server); -L alone names the one starting.
+    let (mut socket, mut name, mut i) = (None, None, 0);
+    while i + 1 < args.len() && matches!(args[i].as_str(), "-S" | "-L") {
+        if args[i] == "-S" { socket = Some(args[i + 1].clone()) } else { name = Some(args[i + 1].clone()) }
+        i += 2;
+    }
+    let args = &args[i..];
+    if args.is_empty() { if let Some(n) = &name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } } return None }
     let cmd = args.first()?.as_str();
     match cmd {
         "ls" | "list-sessions" | "list" => Some(ls(port).await),
@@ -24,7 +32,7 @@ pub async fn run(args: &[String], port: u16) -> Option<i32> {
         // attach / a: the client itself, as `tmux attach` is.
         "attach" | "attach-session" | "a" | "at" => None,
         // Any tmux command: run on the newest running client, its output printed here.
-        c if crate::commands::is_command_name(c) => Some(crate::ipc::call(args).await),
+        c if crate::commands::is_command_name(c) => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
         c if !c.starts_with('-') => { eprintln!("unknown command: {c}"); Some(1) }
         _ => None,
     }

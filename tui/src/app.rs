@@ -837,11 +837,12 @@ impl App {
             (&mut l.active_window_fg, n.active_window_fg), (&mut l.active_window_bg, n.active_window_bg)] {
             if from.is_some() { *to = from }
         }
+        for (k, v) in &s.options.user { self.opts.user.insert(k.clone(), v.clone()); }
         let (o, n) = (&mut self.opts, &s.options);
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
         if let Some(off) = s.options.tim_off { self.tim.off = off }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
-            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format);
+            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height);
         self.fit_panes();
         self.redraw_all = true;
     }
@@ -1258,14 +1259,16 @@ impl App {
 
     pub fn apply_preset(&mut self, preset: Preset) {
         let body = self.body();
+        let (main_w, main_h) = (self.opts.main_pane_width, self.opts.main_pane_height);
+        let size = |v: u16, total: u16| -> f32 { if v >= 1000 { total as f32 * (v - 1000) as f32 / 100.0 } else { v as f32 } };
         let tab = self.tab_mut();
         let ids = tab.panes();
         tab.root = layout::build(&ids, preset);
         // tmux's main-pane-width 80 / main-pane-height 24, where the window has room for them.
         if let Some(layout::Node::Split { ratio, .. }) = tab.root.as_mut() {
             match preset {
-                Preset::MainStack if body.width > 100 => *ratio = (80.0 / body.width as f32).clamp(0.3, 0.8),
-                Preset::MainRow if body.height > 34 => *ratio = (24.0 / body.height as f32).clamp(0.3, 0.8),
+                Preset::MainStack if body.width > 100 => *ratio = (size(main_w.unwrap_or(80), body.width) / body.width as f32).clamp(0.1, 0.9),
+                Preset::MainRow if body.height > 34 => *ratio = (size(main_h.unwrap_or(24), body.height) / body.height as f32).clamp(0.1, 0.9),
                 _ => {}
             }
         }

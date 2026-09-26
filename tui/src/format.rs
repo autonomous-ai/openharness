@@ -71,8 +71,20 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "history_size" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().history_size().to_string() }).unwrap_or_default(),
         "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
-        "status" => (app.opts.status != Some(false)).then_some("on").unwrap_or("off").into(),
-        "mouse" => app.mouse.then_some("on").unwrap_or("off").into(),
+        // Switches read as tmux's formats do: 1 or 0.
+        "status" => (app.opts.status != Some(false)).then_some("1").unwrap_or("0").into(),
+        "mouse" => app.mouse.then_some("1").unwrap_or("0").into(),
+        "version" => env!("CARGO_PKG_VERSION").into(),
+        "pid" => std::process::id().to_string(),
+        "socket_path" => crate::ipc::dir().join(format!("{}.sock", std::env::var("HN_SOCKET_NAME").unwrap_or_else(|_| std::process::id().to_string()))).display().to_string(),
+        "client_session" | "client_name" => app.session_name(),
+        "client_tty" => std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_default(),
+        "pane_mode" => pane.filter(|p| p.copy.is_some()).map(|_| "copy-mode").unwrap_or("").into(),
+        "copy_cursor_x" => pane.and_then(|p| p.copy).map(|c| c.point.column.0.to_string()).unwrap_or_default(),
+        "copy_cursor_y" => pane.and_then(|p| p.copy).map(|c| c.point.line.0.to_string()).unwrap_or_default(),
+        "scroll_position" => pane.map(|p| p.scrolled().to_string()).unwrap_or_default(),
+        "pane_search_string" => app.last_search.clone().unwrap_or_default(),
+        n if n.starts_with('@') => app.opts.user.get(n).cloned().unwrap_or_default(),
         "client_prefix" => app.prefix.then_some("1").unwrap_or("0").into(),
         "host" | "H" => host,
         "host_short" | "h" => host.split('.').next().unwrap_or("").to_string(),
@@ -142,6 +154,28 @@ fn braces(app: &App, body: &str, window: usize) -> String {
         let parts = commas(rest);
         let same = parts.len() == 2 && text(app, parts[0], Some(window)) == text(app, parts[1], Some(window));
         return if same == body.starts_with("==") { "1".into() } else { "0".into() };
+    }
+    // #{e|+:1,2}: arithmetic (+ - * / %, `f` for floats is read as integers here).
+    if let Some(rest) = body.strip_prefix("e|") {
+        if let Some((op, args)) = rest.split_once(':') {
+            let parts = commas(args);
+            let num = |p: &str| text(app, p, Some(window)).trim().parse::<i64>().unwrap_or(0);
+            if parts.len() == 2 {
+                let (a, b) = (num(parts[0]), num(parts[1]));
+                let op = op.split('|').next().unwrap_or(op);
+                return match op { "+" => a + b, "-" => a - b, "*" => a * b, "/" if b != 0 => a / b, "%" if b != 0 => a % b, "==" => (a == b) as i64, "!=" => (a != b) as i64, "<" => (a < b) as i64, ">" => (a > b) as i64, "<=" => (a <= b) as i64, ">=" => (a >= b) as i64, _ => 0 }.to_string();
+            }
+        }
+    }
+    // #{s/from/to/:var}: a substitution (literal).
+    if let Some(rest) = body.strip_prefix("s/") {
+        if let Some((spec, name)) = rest.rsplit_once(":") {
+            let mut it = spec.splitn(3, '/');
+            if let (Some(from), Some(to)) = (it.next(), it.next()) {
+                let v = braces(app, name, window);
+                return if from.is_empty() { v } else { v.replace(from, to) };
+            }
+        }
     }
     if let Some(rest) = body.strip_prefix('=') {
         // #{=21:pane_title} (from the left), #{=-21:…} (from the right).
