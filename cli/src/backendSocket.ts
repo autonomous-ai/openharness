@@ -107,6 +107,7 @@ import {
   type TerminalBinaryClear,
 } from './lib/terminalBinary.js'
 import { b64d, fingerprint, isWrapped } from './lib/e2ee/core.js'
+import { tmuxPaneInfo } from './lib/tmux.js'
 import { encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from './lib/deviceRecentTrim.js'
 import { shouldReplayCommander } from './lib/commanderReplay.js'
@@ -2586,6 +2587,18 @@ export class BackendSocket {
           if (!s?.cwd) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
           try { reply(type, requestId, { files: listFileTree(s.cwd) }) }
           catch (e) { reply(type, requestId, { error: e instanceof Error ? e.message : 'FILE_TREE_ERROR' }) }
+          return
+        }
+
+        case 'terminal_info': {
+          // What a harness's pane runs now and where — tmux's #{pane_current_command} and
+          // #{pane_current_path}, for a terminal client's formats. Read-only. Not in the e2ee
+          // sets (core.ts is hash-pinned with the other implementations), so it answers the local
+          // client; over the relay a peer is not asked, and the client keeps its fallback.
+          const id = payload.agentId
+          const agent = typeof id === 'string' ? registry.resolve(id) : undefined
+          if (!agent?.tmuxPane) { reply(type, requestId, { error: 'AGENT_NOT_FOUND' }); return }
+          void tmuxPaneInfo(agent.tmuxPane).then(info => reply(type, requestId, info ? { ...info } : { error: 'PANE_NOT_FOUND' }))
           return
         }
 

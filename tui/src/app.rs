@@ -822,6 +822,25 @@ impl App {
         else { crate::input::picker(self, crate::modal::PickerKind::Output { title: title.to_string(), lines }, title, "") }
     }
 
+    /// Ask the pane's machine what its tmux pane runs and where (terminal_info) — for this
+    /// machine's panes; a daemon that predates it, or a peer, just leaves the fallbacks.
+    pub fn refresh_pane_info(&mut self, pane_id: u64) {
+        let Some(p) = self.panes.get(&pane_id) else { return };
+        if p.machine_id != self.fleet.local_id || p.stream.is_none() { return }
+        let (machine, agent) = (p.machine_id.clone(), p.agent_id.clone());
+        let Some(link) = self.link(&machine) else { return };
+        self.spawn(async move { link.rpc("terminal_info", json!({ "agentId": agent }), Duration::from_secs(3)).await }, move |app, reply| {
+            let Ok(info) = reply else { return };
+            if info.get("error").is_some() { return }
+            let Some(p) = app.panes.get_mut(&pane_id) else { return };
+            let text = |k: &str| info.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+            p.fg_command = text("command");
+            p.live_path = text("path");
+            p.remote_pid = info.get("pid").and_then(Value::as_u64);
+            p.remote_tty = text("tty");
+        });
+    }
+
     /// Close the popup and end its shell.
     pub fn close_popup(&mut self) {
         let Some(crate::modal::Modal::Popup { pane, .. }) = self.modal.take() else { return };
@@ -999,6 +1018,7 @@ impl App {
         self.seen(pane);
         self.sync_titles();
         self.fit_panes();
+        self.refresh_pane_info(pane);
     }
 
     fn seen(&mut self, pane: u64) {
@@ -1468,6 +1488,8 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        // What the panes on screen run (vim? a build?) moves as you work: asked every two seconds.
+        if self.tick % 8 == 4 { for p in self.tab().panes() { self.refresh_pane_info(p) } }
         // display-panes goes away after display-panes-time, as in tmux.
         if matches!(self.modal, Some(crate::modal::Modal::DisplayPanes { until }) if Instant::now() >= until) { self.modal = None }
         self.orphans.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(10));

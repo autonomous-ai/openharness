@@ -43,8 +43,12 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "pane_index" | "P" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
         "pane_title" | "T" => agent.map(|a| a.name.clone()).unwrap_or_else(|| host.clone()),
         "pane_id" | "D" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
-        "pane_current_path" => pane.and_then(|p| p.cwd.clone()).or_else(|| agent.map(|a| a.cwd.clone())).unwrap_or_default(),
-        "pane_current_command" => agent.map(|a| a.engine.clone()).unwrap_or_default(),
+        // What tmux on the pane's machine says (terminal_info), then what the shell said (OSC 7),
+        // then where the harness started.
+        "pane_current_path" => pane.and_then(|p| p.live_path.clone().or_else(|| p.cwd.clone())).or_else(|| agent.map(|a| a.cwd.clone())).unwrap_or_default(),
+        "pane_current_command" => pane.and_then(|p| p.fg_command.clone()).or_else(|| agent.map(|a| a.engine.clone())).unwrap_or_default(),
+        "pane_pid" => pane.and_then(|p| p.remote_pid).map(|n| n.to_string()).unwrap_or_default(),
+        "pane_tty" => pane.and_then(|p| p.remote_tty.clone()).unwrap_or_default(),
         // The tile's size (what you see), as tmux's pane size is its cell.
         "pane_width" | "pane_height" => {
             let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);

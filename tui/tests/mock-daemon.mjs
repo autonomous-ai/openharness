@@ -116,6 +116,8 @@ wss.on('connection', (ws) => {
       case 'models_list': return reply({ models: [{ id: 'runtime-v1:x:claude:opus@high', displayName: 'Opus / High' }, { id: 'runtime-v1:x:claude:sonnet@high', displayName: 'Sonnet / High' }] })
       case 'dsh_list': return reply({ dsh: [] })
       case 'fs_list_dir': return reply({ path: '/home/demo', entries: [] })
+      // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
+      case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
       case 'agent_update': case 'agent_delete': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
       case 'agent_create': {
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
