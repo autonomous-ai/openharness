@@ -90,8 +90,10 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     for (index, (id, rect)) in rects.iter().enumerate() {
         let active = Some(*id) == focus;
         let content = Rect::new(rect.x, rect.y + hdr, rect.width, rect.height.saturating_sub(hdr));
+        // tmux's window-style / window-active-style: the default colours a pane's cells fall back to.
+        let window = if active && many { (app.look.active_window_fg, app.look.active_window_bg) } else if many { (app.look.window_fg, app.look.window_bg) } else { (app.look.active_window_fg.or(app.look.window_fg), app.look.active_window_bg.or(app.look.window_bg)) };
         if let Some(pane) = app.panes.get_mut(id) {
-            if let Some(pos) = pane_body(buf, pane, content, active) { cursor = Some(pos) }
+            if let Some(pos) = pane_body(buf, pane, content, active, window) { cursor = Some(pos) }
             pane.dirty = false;
         }
         if hdr == 1 {
@@ -777,7 +779,8 @@ fn map_color(color: AColor, colors: &alacritty_terminal::term::color::Colors, fg
 }
 
 /// The pane's terminal, cell for cell. Returns where the cursor goes when this pane has it.
-fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool) -> Option<Position> {
+fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window: (Option<Color>, Option<Color>)) -> Option<Position> {
+    if let Some(bg) = window.1 { buf.set_style(area, Style::default().bg(bg)) }
     match &pane.phase {
         Phase::Connecting(note) => { card(buf, area, &[(note.clone(), Style::default().add_modifier(Modifier::DIM))]); return None }
         Phase::Card { title, detail, keys } => {
@@ -809,6 +812,8 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool) -> Opt
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) { continue }
         let (mut fg_color, dim_fg) = map_color(cell.fg, colors, true);
         let (mut bg_color, _) = map_color(cell.bg, colors, false);
+        if fg_color == Color::Reset { if let Some(c) = window.0 { fg_color = c } }
+        if bg_color == Color::Reset { if let Some(c) = window.1 { bg_color = c } }
         let mut style = Style::default();
         let mut mods = Modifier::empty();
         if cell.flags.contains(Flags::BOLD) { mods |= Modifier::BOLD }
