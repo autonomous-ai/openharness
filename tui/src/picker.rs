@@ -136,7 +136,12 @@ impl Picker {
             let o = crate::theme::fzf_opts();
             let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
             let q = crate::fzf::Query::parse(query, case, !o.exact, true).searching(&o.tiebreak);
-            let words: Vec<String> = query.split_whitespace().map(|w| w.trim_start_matches('\'').to_lowercase()).collect();
+            // (Each word's case read as fzf reads a term's: +i, -i, or smart — an upper-case letter.)
+            let words: Vec<(String, bool)> = query.split_whitespace().map(|w| {
+                let w = w.trim_start_matches('\'');
+                let sensitive = o.case.unwrap_or(w != w.to_lowercase());
+                (if sensitive { w.to_string() } else { w.to_lowercase() }, sensitive)
+            }).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
             let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
@@ -151,7 +156,7 @@ impl Picker {
                     }
                     // The keywords behind a row (engine, machine, branch): whole words of three
                     // letters or more find it, after everything that matched what you see.
-                    None if !words.is_empty() && words.iter().all(|w| w.chars().count() >= 3 && names_word(&format!("{} {}", row.label, row.extra), w)) => hidden.push(index),
+                    None if !words.is_empty() && words.iter().all(|(w, sensitive)| w.chars().count() >= 3 && names_word(&format!("{} {}", row.label, row.extra), w, *sensitive)) => hidden.push(index),
                     None => {}
                 }
             }
@@ -334,8 +339,9 @@ fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
 }
 
 /// A hidden keyword this word names from its start (`codex`, `gpu-box`).
-fn names_word(hidden: &str, word: &str) -> bool {
-    hidden.to_lowercase().split(|c: char| c.is_whitespace() || c == '/' || c == '·').any(|w| w.starts_with(word))
+fn names_word(hidden: &str, word: &str, case_sensitive: bool) -> bool {
+    let hidden = if case_sensitive { hidden.to_string() } else { hidden.to_lowercase() };
+    hidden.split(|c: char| c.is_whitespace() || c == '/' || c == '·').any(|w| w.starts_with(word))
 }
 
 #[cfg(test)]
@@ -405,6 +411,18 @@ mod fzf_tests {
         assert_eq!((p.cursor, p.current_id().as_deref()), (6, Some("15")));
         p.type_char('9');
         assert_eq!(p.cursor, 0, "one match left: the cursor kept within the list");
+    }
+
+    /// The words behind a row are read with each word's case as fzf reads a term's: smart case
+    /// by default (an upper-case letter asks for that case), +i and -i when they are given.
+    #[test]
+    fn hidden_words_keep_their_case() {
+        let mut p = Picker::new("t", "");
+        p.set_rows(vec![Row::new("a", "landing page").extra("Codex"), Row::new("b", "docs").extra("codex")]);
+        p.set_query("codex");
+        assert_eq!(ids(&p), ["a", "b"]);
+        p.set_query("Codex");
+        assert_eq!(ids(&p), ["a"]);
     }
 }
 
