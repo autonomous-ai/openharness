@@ -145,6 +145,8 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// Keys typed while a split's shell starts, for it.
+    pub starting_shell: Option<Vec<Vec<u8>>>,
     /// Copy mode's pending count (5k), f/F/t/T waiting for a character, and the last one for ; and ,.
     pub copy_count: usize,
     pub copy_pending: Option<char>,
@@ -186,6 +188,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            starting_shell: None,
             copy_count: 0,
             copy_pending: None,
             copy_last_find: None,

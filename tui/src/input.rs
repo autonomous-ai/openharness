@@ -76,6 +76,10 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }
+    // A shell is on its way (split-window, new-window): what is typed meanwhile is its.
+    if let Some(buffer) = app.starting_shell.as_mut() {
+        if let Some(bytes) = encode_key(&key, alacritty_terminal::term::TermMode::empty()) { buffer.push(bytes); return }
+    }
     let Some(focus) = app.focused() else { home_key(app, key); return };
     let Some(pane) = app.panes.get(&focus) else { return };
     match &pane.phase {
@@ -730,6 +734,33 @@ fn new_what(app: &mut App, machine: String) {
 }
 
 /// `agent_create`, then open it. [cwd] None with an agent = a new project folder.
+/// tmux's split-window / new-window: a shell, now, on this pane's machine and in its folder
+/// (`-c` another), running `command` if one is given. Keys typed before it is up go into it.
+pub fn new_shell(app: &mut App, placement: Placement, cwd: Option<String>, command: Option<String>) {
+    let focused = focused_agent(app);
+    let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
+    let cwd = cwd.or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
+    let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
+    if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
+    app.modal = None;
+    app.starting_shell = Some(command.map(|c| vec![format!("{c}\r").into_bytes()]).unwrap_or_default());
+    app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
+        let typed = app.starting_shell.take().unwrap_or_default();
+        match reply {
+            Ok(reply) => {
+                let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { app.say("The machine made no shell", theme::DANGER); return };
+                app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                app.open_agent(&machine, id, placement);
+                if let Some((_, pane)) = app.find_pane(&machine, id) {
+                    if let Some(p) = app.panes.get_mut(&pane) { p.queued.extend(typed) }
+                }
+            }
+            Err(e) => app.say(format!("Could not start a shell: {e}"), theme::DANGER),
+        }
+    });
+}
+
 fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, message: Option<String>) {
     let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
     let terminal = what.engine == "terminal";

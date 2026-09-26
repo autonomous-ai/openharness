@@ -118,6 +118,21 @@ pub fn split(line: &str) -> Vec<Vec<String>> {
 /// A tmux format, expanded (see format.rs).
 pub fn expand(app: &App, text: &str) -> String { crate::format::text(app, text, None) }
 
+/// The shell command a split-window / new-window was given (its last positional word).
+fn shell_command(words: &[String]) -> Option<String> {
+    let mut i = 1;
+    let mut last = None;
+    while i < words.len() {
+        match words[i].as_str() {
+            "-c" | "-l" | "-t" | "-n" | "-e" | "-F" | "-p" => i += 1,
+            w if w.starts_with('-') && w.len() > 1 => {}
+            w => last = Some(w.to_string()),
+        }
+        i += 1;
+    }
+    last.filter(|c| !c.trim().is_empty())
+}
+
 /// A window target, as tmux reads one: `:2`, `=2`, `^` first, `$` last, `!` the last window,
 /// `+`/`-` (with a count) next/previous, or a name's start.
 fn window_target(app: &App, target: &str) -> Option<usize> {
@@ -216,15 +231,24 @@ fn run_words(app: &mut App, words: &[String]) {
     match command {
         "new-window" => {
             let was = app.active;
+            let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
+            let command = shell_command(words);
             app.new_tab();
             if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
             // -d: made, not gone to.
             if flag(words, "-d") { let id = app.tabs[was.min(app.tabs.len() - 1)].id.clone(); if let Some(i) = app.tabs.iter().position(|t| t.id == id) { app.select_tab(i) } return }
-            input::launch(app, "", Filter::All);
+            // -P: the harness list in it, instead of a shell.
+            if flag(words, "-P") { input::launch(app, "", Filter::All); return }
+            input::new_shell(app, Placement::Auto(None), cwd, command);
         }
         "split-window" => {
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
-            input::split_pick(app, dir);
+            // A shell, as tmux gives; `split-window -P` (or an empty window) picks a harness instead.
+            if flag(words, "-P") { input::split_pick(app, dir); return }
+            let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
+            let command = shell_command(words);
+            let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Split(dir) };
+            input::new_shell(app, placement, cwd, command);
         }
         "kill-pane" => { if let Some(f) = app.focused() { app.close_pane(f) } else if app.tabs.len() > 1 { let i = app.active; app.close_tab(i) } }
         "kill-window" => { let i = app.active; app.close_tab(i) }

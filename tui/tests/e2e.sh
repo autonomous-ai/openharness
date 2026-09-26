@@ -41,9 +41,15 @@ expect "typing round-trips" "echo-me"
 tmux_ send-keys -t t C-b ":"
 expect "C-b : is the command prompt" ":"
 tmux_ send-keys -t t "split-window -h" Enter
-expect "split-window -h asks for a harness" "split-window -h"
-tmux_ send-keys -t t "remote" Enter
-expect "remote machine pane beside it" "Remote shell (mock)"
+# tmux's split: a shell at once, and what is typed straight after it lands in it.
+tmux_ send-keys -t t "typed-ahead"
+expect "split-window -h gives a shell" '"Mock terminal"'
+expect "keys typed while it starts go into it" "typed-ahead"
+tmux_ send-keys -t t C-b x y
+tmux_ send-keys -t t C-b s
+tmux_ send-keys -t t "remote"
+tmux_ send-keys -t t C-v
+expect "C-b s then C-v: a harness beside" "Remote shell (mock)"
 expect "pane titles, tmux pane-border-status" '"Remote shell"'
 tmux_ send-keys -t t C-b o
 tmux_ send-keys -t t C-b z
