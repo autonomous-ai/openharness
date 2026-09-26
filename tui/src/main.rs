@@ -3,6 +3,7 @@
 //! are the account's desk, driven with tmux's keys.
 
 mod app;
+mod cli;
 mod clipboard;
 mod commands;
 mod keys;
@@ -57,8 +58,10 @@ pub fn bell() {
 }
 
 fn usage() {
-    println!("hn — Harness in your terminal\n");
-    println!("  hn [--port N] [--keys]      (also: harness tui)\n");
+    println!("tim — tmux improved: Harness in your terminal\n");
+    println!("  tim [--port N] [--keys]     (also: hn, harness tui)");
+    println!("  tim ls                      every harness on every machine");
+    println!("  tim send -t <harness> text  a message to a harness\n");
     println!("  tmux's keys: C-b s harnesses · C-b c window · C-b % \" split · C-b o next pane · C-b z zoom");
     println!("  C-b [ copy · C-b w windows · C-b C new harness · C-b ? keys · C-b d detach");
     println!("  ~/.tmux.conf is read: your prefix and binds work here too.");
@@ -96,7 +99,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") { usage(); return Ok(()) }
-    if args.iter().any(|a| a == "--version" || a == "-V") { println!("hn {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
+    if args.iter().any(|a| a == "--version" || a == "-V") { println!("tim {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
     if args.iter().any(|a| a == "--keys") {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);
@@ -112,6 +115,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok())
         .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(18473u16);
+    // tim ls, tim send …: answered from here, no client.
+    let plain: Vec<String> = { let mut v = Vec::new(); let mut it = args.iter(); while let Some(a) = it.next() { if a == "--port" { it.next(); } else { v.push(a.clone()) } } v };
+    if let Some(code) = cli::run(&plain, port).await { std::process::exit(code) }
 
     if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("harness tui needs a terminal."); std::process::exit(1) }
 
