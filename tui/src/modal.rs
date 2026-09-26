@@ -212,7 +212,7 @@ pub fn launcher_title(app: &App, kind: &PickerKind) -> (String, String) {
     match kind {
         PickerKind::Open { machine: Some(m), project: None, .. } => (format!("harnesses · @{}", app.fleet.machine_name(m)), "Search this machine's harnesses — esc back".into()),
         PickerKind::Open { project: Some(p), .. } => (format!("harnesses · #{}", p.rsplit('/').next().unwrap_or(p)), "Search this project's harnesses — esc back".into()),
-        PickerKind::Open { .. } => ("harnesses".into(), "Search harnesses   > commands  @ machines  # projects  : models  * store  ? help".into()),
+        PickerKind::Open { .. } => ("harnesses".into(), "Search harnesses   > commands   @ machines   # projects   : models   * store   ? help".into()),
         PickerKind::Palette => ("commands".into(), "Run anything by name".into()),
         PickerKind::Machines => ("machines".into(), "Choose a machine, then one of its harnesses".into()),
         PickerKind::Projects => ("projects".into(), "Choose a project, then one of its harnesses".into()),
