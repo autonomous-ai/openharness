@@ -4,12 +4,12 @@ All of Harness in a terminal — every harness on every machine, in tabs and pan
 terminal you can type into: a laptop, a server over SSH, a tablet's SSH app.
 
 ```bash
-harness tui
+hn            # or: harness tui
 ```
 
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
-![⌥P: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)
+![C-b s: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)
 
 <sub>Screens from the demo fleet in `tests/mock-daemon.mjs` (`MOCK_DEMO=1`).</sub>
 
@@ -18,48 +18,43 @@ live in the daemon's tmux on their own machines, and each pane is a live stream 
 Close it, lose the connection, reopen it anywhere — everything is where you left it, because
 your tabs are the account's **desk**, the same tabs the desktop and the phone show.
 
-On a fresh server `harness tui` signs in (over SSH the login prints a URL and takes the pasted
+On a fresh server `hn` signs in (over SSH the login prints a URL and takes the pasted
 callback), starts the daemon, then opens.
 
 ## Keys
 
-`⌥` is Option/Alt. In terminals that speak the kitty keyboard protocol (kitty, Ghostty, WezTerm,
-foot, recent iTerm2) `⌘` works wherever `⌥` is shown. `^Space` followed by the key without `⌥`
-works in every terminal, including ones where `⌥` types accented letters.
+tmux's. The prefix is `C-b`; every default tmux binding does what it does in tmux, with a window
+being a tab and a pane being a harness. If you have a `~/.tmux.conf`, it is read: your prefix,
+your binds (vim-tmux-navigator's `C-h/j/k/l` included), `base-index`, `mouse`,
+`status-position` and your colours come with you.
 
-| Keys | |
+| tmux keys | |
 |---|---|
-| `⌥P` | the launcher: every harness on every machine |
-| `⌥⇧P` / `>` | commands |
-| `⌥O` / `#` | projects, then one of their harnesses |
-| `⌥I` / `:` | models — switch the focused harness's model and effort; start, stop or get local models |
-| `⌥M` / `@` | machines (with each one's round trip), then one of their harnesses (`^L` links one) |
-| `⌥S` / `*` | the Harness Store |
-| `?` | what the launcher can do |
-| `⌥⇧I` | agents needing input — `⌥1…9` answers without opening the pane |
-| `⌥A` | jump to the next harness waiting on you (oldest question first) |
-| `` ⌥` `` | back to the tab you were on |
-| `⌥N` / `⌥⇧T` | new harness / new terminal |
-| `⌥T` `⌥1…9` `⌥{` `⌥}` `⌥⇧R` `⌥⇧W` | new, go to, previous/next, rename, close tab |
-| `⌥\` `⌥-` `⌥h/j/k/l` `⌥H/J/K/L` `⌥Z` `⌥W` `⌥L` `⌥=` | split right/down, focus, grow, zoom, close, layout, equalize |
-| `⌥⇧F` | find in the pane's history |
-| `⌥V` (or `^Space [`) | copy mode — `hjkl` `w` `b` `0` `$` `g` `G`, `v`/`V` select, `y` copy, `/` find, `q` leave |
-| `⌥B` | send a task — Harness picks the harness |
-| `⌥Q` | quit (harnesses keep running) |
+| `C-b s` | every harness on every machine — an fzf list with a live preview |
+| `C-b c` / `C-b C` / `C-b T` | new window / new harness / new terminal |
+| `C-b %` `C-b "` | split right / below, picking the harness to put there |
+| `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
+| `C-b z` `C-b space` `C-b M-1…5` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
+| `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
+| `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` `C-b &` | windows |
+| `C-b x` | close the pane (the harness keeps running) |
+| `C-b [` `C-b /` `C-b ]` | copy mode (vi keys), search back, paste |
+| `C-b :` | the command prompt — tmux commands, `Tab` completes |
+| `C-b ?` | every key, fzf-searchable |
+| `C-b d` | detach — everything keeps running |
 
-Inside the launcher: type to filter (fzf matching), `↑/↓` or `^P/^N`, `enter` open, `^T` new tab,
-`^V`/`^S` split right/down, `^R` replace this pane, `tab` cycle all / needs input / running /
-paused, `^X` pause or resume, `esc` back out of a machine or project, then close.
+Harness's own, on the letters tmux leaves free:
 
-**macOS terminals send ⌥ as a symbol by default** (⌥P types π). The TUI reads the unambiguous ones
-(π µ † ∑ Ω ˙∆˚¬ √ © ÷ …) as their chords, so ⌥P ⌥M ⌥T ⌥H/J/K/L ⌥V work anyway
-(`HARNESS_TUI_MAC_OPTION=off` stops that). For every chord, press `^Space` then the key, or make ⌥
-a Meta key once: iTerm2 → Profiles → Keys → Left Option key: *Esc+*; Terminal.app →
-Settings → Profiles → Keyboard → *Use Option as Meta key*; Ghostty → `macos-option-as-alt = true`;
-kitty → `macos_option_as_alt yes`; WezTerm → `send_composed_key_when_left_alt_is_pressed = false`.
+| | |
+|---|---|
+| `C-b a` / `C-b A` | next harness waiting on you / all of them (`M-1…9` answers from the list) |
+| `C-b I` `C-b M` `C-b S` | models, machines, the Harness Store |
+| `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
+| `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 
-`⌥⏎`, `⌥←/→`, `⌥B`, `⌥F`, `⌥D` and the other chords a shell's line editor relies on are left to
-the pane. `⇧⏎` reaches the pane as a newline, the way the desktop sends it.
+In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
+`S-↑/↓` scrolls it, `C-a C-e C-w C-u` edit the query, `enter` opens, `C-t` in a new window,
+`C-v` beside, `C-x` below, `esc` leaves.
 
 ## Mouse and clipboard
 
@@ -83,21 +78,21 @@ characters are echoed locally — underlined until the far side confirms them, t
 
 ## Your keys
 
-`~/.config/harness/tui.toml` (or `$XDG_CONFIG_HOME/harness/tui.toml`):
+`~/.tmux.conf` first (`HARNESS_TUI_TMUX_CONF=off` ignores it, `=path` reads another file); then
+`~/.config/harness/tui.toml` for anything specific to Harness:
 
 ```toml
-prefix = "ctrl+a"          # instead of ctrl+space
+prefix = "C-a"
 desk = "sync"              # sync | read | off
 predict = "auto"           # auto | always | off
 notify = true              # OS notifications through the terminal
 
-[keys]
-"alt+h" = "none"           # give ⌥h back to the pane (vim, readline…)
-"alt+x" = "close-pane"
-"super+k" = "palette"
+[keys]                     # the root table: no prefix
+"M-h" = "select-pane -L"
+"M-x" = "none"
 ```
 
-`harness tui --keys` lists every command a key can run, and reports problems in the file.
+`hn --keys` lists every binding, tmux-style, and reports problems in either file.
 
 ## Environment
 
