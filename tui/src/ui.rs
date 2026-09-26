@@ -984,6 +984,7 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
             for c in s.content.chars() { cells.push((c, Some(s.style), hits.contains(&(at as u32)))); at += 1 }
         }
     }
+    let cells = expand_tabs(cells);
     let right_w = row.right.width();
     let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
@@ -1080,6 +1081,19 @@ fn paint(base: theme::fzfcolor::P, matched: theme::fzfcolor::P, part: Option<Sty
     }
 }
 
+/// A tab in a row's text as fzf draws it: blanks to the next --tabstop (the text's first column 0).
+fn expand_tabs(cells: Vec<Cell>) -> Vec<Cell> {
+    if !cells.iter().any(|c| c.0 == '\t') { return cells }
+    let tabstop = theme::fzf_opts().tabstop.max(1);
+    let mut out = Vec::with_capacity(cells.len());
+    let mut col = 0;
+    for c in cells {
+        if c.0 == '\t' { let n = tabstop - col % tabstop; out.extend(std::iter::repeat_n((' ', c.1, c.2), n)); col += n }
+        else { col += unicode_width::UnicodeWidthChar::width(c.0).unwrap_or(0); out.push(c) }
+    }
+    out
+}
+
 /// Whether a row's line fits hn's one-line layout at [text_w] (fzf_row: its title and detail in
 /// the room its lead and right column leave, the right column shown when there is one).
 fn fits_line(row: &crate::picker::Row, text_w: usize) -> bool {
@@ -1090,7 +1104,8 @@ fn fits_line(row: &crate::picker::Row, text_w: usize) -> bool {
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
     let detail: usize = row.detail.iter().flat_map(|s| s.content.chars()).map(cw).sum();
     let has_detail = row.detail.iter().any(|s| !s.content.is_empty());
-    row.label.chars().map(cw).sum::<usize>() + if has_detail { 2 + detail } else { 0 } <= avail && (row.right.is_empty() || show_right)
+    let title = expand_tabs(row.label.chars().map(|c| (c, None, false)).collect()).iter().map(|c| cw(c.0)).sum::<usize>();
+    title + if has_detail { 2 + detail } else { 0 } <= avail && (row.right.is_empty() || show_right)
 }
 
 /// A row's whole line as cells, for --wrap: the lead's glyphs, the title and the detail (lit where
@@ -1110,7 +1125,7 @@ fn line_cells(row: &crate::picker::Row, hits: &[u32]) -> Vec<Cell> {
         at += 2;
         for c in row.right.chars() { cells.push((c, Some(dim), hits.contains(&(at as u32)))); at += 1 }
     }
-    cells
+    expand_tabs(cells)
 }
 
 /// fzf's Chars.Lines for one line: cut where it runs past [cols] columns (a line after the first
