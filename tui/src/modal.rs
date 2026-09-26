@@ -13,11 +13,12 @@ use crate::layout::Preset;
 use crate::picker::{Picker, Row};
 use crate::theme::{self, engine_label, engine_mark, fg, state_mark};
 
+/// Which harnesses a list shows. Only All is reachable from a key today.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Filter { All, NeedsInput, Running, Paused }
 
 impl Filter {
-    pub fn next(self) -> Filter { match self { Filter::All => Filter::NeedsInput, Filter::NeedsInput => Filter::Running, Filter::Running => Filter::Paused, Filter::Paused => Filter::All } }
     pub fn label(self) -> &'static str { match self { Filter::All => "All", Filter::NeedsInput => "Needs input", Filter::Running => "Running", Filter::Paused => "Paused" } }
     fn keeps(self, state: State) -> bool {
         match self {
@@ -147,38 +148,6 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("quit", "Quit", "⌥Q", "harnesses keep running", "Session"),
 ];
 
-pub const SHORTCUTS: &[(&str, &str, &str)] = &[
-    ("Harness", "⌥P", "Harnesses — every harness on every machine"),
-    ("Harness", "⌥⇧P", "Commands (> in the box)"),
-    ("Harness", "⌥O", "Projects (#), then one of their harnesses"),
-    ("Harness", "⌥I", "Models (:) — switch the focused harness's model"),
-    ("Harness", "⌥N", "New Harness"),
-    ("Harness", "⌥⇧T", "New Terminal"),
-    ("Harness", "⌥⇧I", "Agents needing input — ⌥1…9 answers"),
-    ("Harness", "⌥A", "Jump to the next harness waiting on you"),
-    ("Harness", "⌥B", "Send a task — Harness routes it"),
-    ("Harness", "⌥M", "Machines (@)"),
-    ("Harness", "⌥S", "Harness Store (*)"),
-    ("Tabs", "⌥T", "New tab"),
-    ("Tabs", "⌥1…9", "Go to tab"),
-    ("Tabs", "⌥{  ⌥}", "Previous / next tab"),
-    ("Tabs", "⌥`", "The tab you were on before"),
-    ("Tabs", "⌥<  ⌥>", "Move this tab left / right"),
-    ("Tabs", "⌥⇧R", "Rename tab"),
-    ("Tabs", "⌥⇧W", "Close tab (harnesses keep running)"),
-    ("Panes", "⌥\\  ⌥-", "Split right / down"),
-    ("Panes", "⌥h ⌥j ⌥k ⌥l", "Focus left / down / up / right (⌘ arrows too)"),
-    ("Panes", "⌥H ⌥J ⌥K ⌥L", "Grow left / down / up / right"),
-    ("Panes", "⌥Z", "Zoom pane (⌘↵ too)"),
-    ("Panes", "⌥W", "Close pane"),
-    ("Panes", "⌥=", "Equalize panes"),
-    ("Panes", "wheel  ⇧PgUp", "Scroll the pane's history"),
-    ("Panes", "⌥⇧F", "Find in the pane's history (↑ older, ↓ newer)"),
-    ("Panes", "⌥V  ^␣ [", "Copy mode — hjkl w b 0 $ g G, v / V select, y copy, / find, q leave"),
-    ("Session", "^␣", "Prefix — then any key above without ⌥ (^␣ o, ^␣ n, …)"),
-    ("Session", "⌘", "In kitty / Ghostty / WezTerm, ⌘ works where ⌥ is shown"),
-    ("Session", "⌥Q", "Quit — everything keeps running; your tabs come back"),
-];
 
 fn span(text: impl Into<String>, style: Style) -> Span<'static> { Span::styled(text.into(), style) }
 
@@ -392,9 +361,6 @@ pub fn layout_rows() -> Vec<Row> {
     Preset::ALL.iter().enumerate().map(|(i, (_, name, detail))| Row::new(i.to_string(), *name).detail(vec![span(*detail, fg(theme::MUTED))])).collect()
 }
 
-pub fn help_rows() -> Vec<Row> {
-    SHORTCUTS.iter().enumerate().map(|(i, (group, keys, what))| Row::new(i.to_string(), what.to_string()).extra(*keys).group(*group).lead(vec![span(format!("{keys:<16}"), fg(theme::ACCENT))])).collect()
-}
 
 pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
     let mut rows: Vec<Row> = app.fleet.machines.iter().filter(|m| m.usable()).map(|m| {

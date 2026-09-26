@@ -240,8 +240,6 @@ impl Fleet {
     }
 
     pub fn waiting(&self) -> usize { self.agents.values().filter(|a| a.question.is_some() && a.status != "stopped").count() }
-    pub fn working(&self) -> usize { self.agents.values().filter(|a| a.working && a.status != "stopped").count() }
-    pub fn running(&self) -> usize { self.agents.values().filter(|a| a.status == "active").count() }
 }
 
 // ── the roster between runs ────────────────────────────────────────────────────

@@ -107,7 +107,7 @@ pub struct Pane {
 }
 
 // A hollow block marks "the program never chose a cursor": the user's own shape stays.
-fn config() -> Config { Config { scrolling_history: 5_000, default_cursor_style: CursorStyle { shape: CursorShape::HollowBlock, blinking: false }, ..Config::default() } }
+fn config() -> Config { Config { scrolling_history: 10_000, default_cursor_style: CursorStyle { shape: CursorShape::HollowBlock, blinking: false }, ..Config::default() } }
 
 impl Pane {
     /// The cursor the program in this pane asked for (DECSCUSR), as crossterm spells it.
