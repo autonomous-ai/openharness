@@ -26,7 +26,10 @@ trap cleanup EXIT
 node "$here/mock-daemon.mjs" "$port" >/dev/null &
 mock=$!
 sleep 0.5
-tmux_ new-session -d -s t -x 120 -y 32 "HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off $bin"
+# Its own client socket, named: the test's shell calls must never reach a client of yours
+# (an unnamed hn takes "default", which is where `hn <command>` goes).
+client="e2e-$$"
+tmux_ new-session -d -s t -x 120 -y 32 "HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off $bin"
 
 expect "home lists the fleet" "Mock Claude"
 expect "status line, tmux-style" "0:home*"
@@ -52,11 +55,11 @@ tmux_ send-keys -t t C-v
 expect "C-b s then C-v: a harness beside" "Remote shell (mock)"
 expect "pane titles, tmux pane-border-status" '"Remote shell"'
 # From a shell, as tmux is scripted: the running client answers.
-out=$(HOME=$home "$bin" display -p '#{session_windows} #{pane_index}')
+out=$(HOME=$home "$bin" -L "$client" display -p '#{session_windows} #{pane_index}')
 [ -n "$out" ] || fail "hn display -p from a shell answered nothing"
 echo "✓ hn display -p from a shell: $out"
 sleep 2.3
-info=$(HOME=$home "$bin" display -p -t 0 '#{pane_current_command} #{pane_current_path}')
+info=$(HOME=$home "$bin" -L "$client" display -p -t 0 '#{pane_current_command} #{pane_current_path}')
 [ "$info" = "zsh /home/demo/src" ] || fail "pane_current_* from the daemon's tmux: got '$info'"
 echo "✓ #{pane_current_command} and #{pane_current_path} come from the pane's tmux"
 
