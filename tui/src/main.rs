@@ -3,6 +3,7 @@
 //! are the account's desk, driven with tmux's keys.
 
 mod app;
+mod borders;
 mod cli;
 mod clipboard;
 mod commands;

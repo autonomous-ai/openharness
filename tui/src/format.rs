@@ -818,8 +818,8 @@ pub fn pane_title(app: &App, window: usize, pane: u64) -> String {
 pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
     let r = tab_rect(app, window, pane)?;
     let body = app.body();
-    let header = app.tabs.get(window).map(|t| app.tab_header_rows(t)).unwrap_or(0);
-    Some(ratatui::layout::Rect { x: r.x - body.x, y: r.y - body.y + header, width: r.width, height: r.height.saturating_sub(header) })
+    let c = app.content_of(app.tabs.get(window)?, r);
+    Some(ratatui::layout::Rect { x: c.x - body.x, y: c.y - body.y, width: c.width, height: c.height })
 }
 
 /// tmux's format table: a variable's value for a window (and a pane: else the window's active

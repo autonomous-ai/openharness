@@ -55,8 +55,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Modal::Tree { .. } => {}
             Modal::Copy { pane } => {
                 if let (Some(p), Some((_, rect))) = (app.panes.get(pane), rects.iter().find(|(id, _)| id == pane)) {
-                    let hdr = app.header_rows();
-                    let content = Rect::new(rect.x, rect.y + hdr, rect.width, rect.height.saturating_sub(hdr));
+                    let content = app.content_of(app.tab(), *rect);
                     copy_indicator(buf, p, content);
                     cursor = p.copy.and_then(|c| {
                         let row = c.point.line.0 + p.term.grid().display_offset() as i32;
@@ -182,42 +181,54 @@ fn app_preview_placeholder() -> String { String::new() }
 
 // ── the window ───────────────────────────────────────────────────────────────
 
-/// The active window's panes, their borders and the seams between them.
+/// The active window's panes, then their borders and status lines as tmux draws them.
 fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
     let focus = app.focused();
     let rects = app.rects.clone();
-    let hdr = app.header_rows();
     let many = rects.len() > 1;
     let mut cursor = None;
-    for (index, (id, rect)) in rects.iter().enumerate() {
+    for (id, rect) in rects.iter() {
         let active = Some(*id) == focus;
-        let content = Rect::new(rect.x, rect.y + hdr, rect.width, rect.height.saturating_sub(hdr));
+        let content = app.content_of(app.tab(), *rect);
         // tmux's window-style / window-active-style: the default colours a pane's cells fall back to.
         let window = if active && many { (app.look.active_window_fg, app.look.active_window_bg) } else if many { (app.look.window_fg, app.look.window_bg) } else { (app.look.active_window_fg.or(app.look.window_fg), app.look.active_window_bg.or(app.look.window_bg)) };
         if let Some(pane) = app.panes.get_mut(id) {
             if let Some(pos) = pane_body(buf, pane, content, active, window) { cursor = Some(pos) }
             pane.dirty = false;
         }
-        if hdr == 1 {
-            let pane_index = app.tab().panes().iter().position(|p| p == id).unwrap_or(index) + app.pane_base_index;
-            border_line(buf, app, *id, pane_index, *rect, active);
-        }
     }
-    if many {
-        // Seams between side-by-side panes; green where they touch the active pane.
-        let active_rect = rects.iter().find(|(id, _)| Some(*id) == focus).map(|(_, r)| *r);
-        for (_, rect) in &rects {
-            let seam = rect.x + rect.width;
-            if seam >= body.x + body.width { continue }
-            for y in rect.y..rect.y + rect.height {
-                let touches = active_rect.map(|a| (a.x + a.width == seam || a.x == seam + 1) && y >= a.y && y < a.y + a.height).unwrap_or(false);
-                if let Some(cell) = buf.cell_mut((seam, y)) { cell.set_symbol("│").set_style(border_style(app, touches)); }
-            }
-        }
-        let contents: Vec<Rect> = rects.iter().map(|(_, r)| Rect::new(r.x, r.y + hdr, r.width, r.height.saturating_sub(hdr))).collect();
-        junctions(buf, body, &contents);
-    }
+    borders(buf, app, body);
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
+}
+
+/// screen-redraw.c over the window: every border cell (its junction, the active pane's in
+/// pane-active-border-style, the marked pane's reversed, pane-border-indicators' arrows) and each
+/// pane's status line, the format drawn over border characters from two cells in.
+fn borders(buf: &mut Buffer, app: &App, body: Rect) {
+    let tab = app.tab();
+    let status = app.pane_status(tab);
+    let all = app.pane_geoms(app.active);
+    let visible: Vec<(u64, crate::layout::Geom)> = if tab.zoomed {
+        app.rects.iter().map(|(id, r)| { let c = app.content_of(tab, *r); (*id, crate::layout::Geom { x: (c.x - body.x) as u32, y: (c.y - body.y) as u32, w: c.width as u32, h: c.height as u32 }) }).collect()
+    } else { all.clone() };
+    let get = |name: &str| app.options.get(name, &tab.id, None).unwrap_or_default();
+    let frame = crate::borders::Frame {
+        sx: body.width as u32, sy: body.height as u32, all: &all, visible: &visible, active: app.focused(), marked: app.marked,
+        status, lines: crate::borders::Lines::of(&get("pane-border-lines")), indicators: crate::borders::Indicators::of(&get("pane-border-indicators")), base: app.pane_base_index,
+    };
+    for c in frame.cells() {
+        let style = border_style(app, c.paint == crate::borders::Paint::Active);
+        let style = if c.marked { style.add_modifier(Modifier::REVERSED) } else { style };
+        if let Some(cell) = buf.cell_mut((body.x + c.x as u16, body.y + c.y as u16)) { cell.set_symbol(&c.glyph).set_style(style); }
+    }
+    let ids = tab.panes();
+    for t in frame.titles() {
+        let style = border_style(app, t.active);
+        let (x, y) = (body.x + t.x as u16, body.y + t.y as u16);
+        for (k, g) in t.fill.iter().enumerate() { if let Some(cell) = buf.cell_mut((x + k as u16, y)) { cell.set_symbol(g).set_style(style); } }
+        let index = ids.iter().position(|p| *p == t.pane).unwrap_or(0) + app.pane_base_index;
+        title_line(buf, app, t.pane, index, Rect::new(x, y, t.width as u16, 1), t.active, style);
+    }
 }
 
 fn border_style(app: &App, active: bool) -> Style {
@@ -231,29 +242,28 @@ fn border_style(app: &App, active: bool) -> Style {
     else { app.look.border.map(|c| Style::default().fg(c)).unwrap_or_default() }
 }
 
-/// `pane-border-status top`, tmux's default format: the index (reversed on the active pane) and
-/// the title in quotes — then, because a harness has one, its state; its machine at the far end.
-fn border_line(buf: &mut Buffer, app: &App, id: u64, index: usize, rect: Rect, active: bool) {
-    let style = border_style(app, active);
-    for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.set_symbol("─").set_style(style); } }
+/// A pane's status line text over its border characters: your pane-border-format, or hn's —
+/// tmux's default (the index, reversed on the active pane, and the title in quotes), then because
+/// a harness has them, its state, and its machine at the far end.
+fn title_line(buf: &mut Buffer, app: &App, id: u64, index: usize, area: Rect, active: bool, style: Style) {
+    if area.width == 0 { return }
     let Some(pane) = app.panes.get(&id) else { return };
-    // Your pane-border-format, if tmux.conf has one.
     if let Some(fmt) = &app.opts.pane_border_format {
-        let line = clip_spans(crate::format::spans_for_pane(app, fmt, app.active, id, style), rect.width.saturating_sub(1) as usize);
-        buf.set_line(rect.x + 1, rect.y, &line, rect.width.saturating_sub(1));
+        let line = clip_spans(crate::format::spans_for_pane(app, fmt, app.active, id, style), area.width as usize);
+        buf.set_line(area.x, area.y, &line, area.width);
         return;
     }
     let title = crate::format::pane_title(app, app.active, id);
-    let mut spans: Vec<Span> = vec![Span::styled("─", style), Span::styled(index.to_string(), if active { style.add_modifier(Modifier::REVERSED) } else { style }), Span::styled(format!(" \"{title}\""), style)];
+    let mut spans: Vec<Span> = vec![Span::styled(index.to_string(), if active { style.add_modifier(Modifier::REVERSED) } else { style }), Span::styled(format!(" \"{title}\""), style)];
     if let Some(word) = pane_state_word(app, pane) { spans.push(Span::raw(" ")); spans.push(word) }
-    spans.push(Span::styled(" ", style));
     let machine = if app.fleet.machines.len() > 1 { app.fleet.machine_name(&pane.machine_id) } else { String::new() };
     let right = if machine.is_empty() { String::new() } else { format!(" {machine} ") };
-    let limit = rect.width.saturating_sub(right.width() as u16 + 1) as usize;
+    let limit = (area.width as usize).saturating_sub(if right.is_empty() { 0 } else { right.width() + 1 });
     let line = clip_spans(spans, limit);
-    buf.set_line(rect.x, rect.y, &line, rect.width);
-    if !right.is_empty() && rect.width as usize > line.width() + right.width() + 2 {
-        buf.set_string(rect.x + rect.width - right.width() as u16 - 1, rect.y, &right, style);
+    let used = line.width();
+    buf.set_line(area.x, area.y, &line, area.width);
+    if !right.is_empty() && area.width as usize >= used + right.width() + 2 {
+        buf.set_string(area.x + area.width - right.width() as u16, area.y, &right, style);
     }
 }
 
@@ -273,30 +283,6 @@ fn pane_state_word(app: &App, pane: &Pane) -> Option<Span<'static>> {
         State::Failed => Span::styled("[failed]", Style::default().fg(Color::Red)),
         State::Done | State::Ready => return None,
     })
-}
-
-/// Where a seam meets a border line, the box-drawing character that joins them.
-fn junctions(buf: &mut Buffer, body: Rect, contents: &[Rect]) {
-    // Only border cells join: a pane's own `────` touching a seam is the pane's business.
-    let inside = |x: u16, y: u16| contents.iter().any(|r| r.contains(Position::new(x, y)));
-    let sym = |buf: &Buffer, x: u16, y: u16| -> String { if inside(x, y) { String::new() } else { buf.cell((x, y)).map(|c| c.symbol().to_string()).unwrap_or_default() } };
-    let horizontal = |s: &str| matches!(s, "─" | "┬" | "┴" | "┼" | "├" | "┤");
-    let vertical = |s: &str| matches!(s, "│" | "┬" | "┴" | "┼" | "├" | "┤");
-    for y in body.y..body.y + body.height {
-        for x in body.x..body.x + body.width {
-            if sym(buf, x, y) != "│" { continue }
-            let left = x > body.x && horizontal(&sym(buf, x - 1, y));
-            let right = x + 1 < body.x + body.width && horizontal(&sym(buf, x + 1, y));
-            if !left && !right { continue }
-            let up = y > body.y && vertical(&sym(buf, x, y - 1));
-            let down = y + 1 < body.y + body.height && vertical(&sym(buf, x, y + 1));
-            let joined = match (left, right, up, down) {
-                (true, true, true, true) => "┼", (true, true, false, true) => "┬", (true, true, true, false) => "┴",
-                (false, true, _, _) => "├", (true, false, _, _) => "┤", _ => "│",
-            };
-            if let Some(c) = buf.cell_mut((x, y)) { let st = c.style(); c.set_symbol(joined).set_style(st); }
-        }
-    }
 }
 
 /// A window with no harness in it: the harnesses you were just with, one key away.
@@ -1174,7 +1160,8 @@ fn display_panes(buf: &mut Buffer, app: &App) {
         big(buf, &n.to_string(), *rect, color);
         // tmux also prints each pane's size in its top-right corner.
         if app.panes.contains_key(id) {
-            let size = format!("{}x{}", rect.width, rect.height.saturating_sub(app.header_rows()));
+            let c = app.content_of(app.tab(), *rect);
+            let size = format!("{}x{}", c.width, c.height);
             let x = (rect.x + rect.width).saturating_sub(size.width() as u16);
             buf.set_string(x, rect.y, &size, Style::default().fg(color));
         }

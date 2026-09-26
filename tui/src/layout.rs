@@ -4,9 +4,9 @@
 //! closing, resizing, spreading and the named layouts move the same cells tmux's do, so a window
 //! reads the same, cell for cell, in both.
 //!
-//! hn draws a pane's title on the border above it (pane-border-status top): the top pane of a
-//! column takes its title from its own first row, every other one from the border row it shares
-//! with the pane above — `rects` hands out each pane's tile that way, title row included.
+//! A pane's status line (pane-border-status top) is the border row above it — the top pane of
+//! a column gives up its own first row for it; bottom, the row below, and the bottom pane its
+//! last. `rects` hands out each pane's tile that way, status line included.
 
 use ratatui::layout::Rect;
 
@@ -21,10 +21,14 @@ pub enum Dir {
     Vertical,
 }
 
-/// pane-border-status: whether a pane has a title row (on top, as hn draws them), which the
+/// pane-border-status: whether each pane has a status line, above it or below it, which the
 /// layout's minimums count.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Status { #[default] Off, Top }
+pub enum Status { #[default] Off, Top, Bottom }
+
+impl Status {
+    pub fn of(v: &str) -> Status { match v { "top" => Status::Top, "bottom" => Status::Bottom, _ => Status::Off } }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Preset {
@@ -133,9 +137,18 @@ impl Node {
         true
     }
 
-    /// layout_add_border: whether this cell carries the extra title row.
+    /// layout_cell_is_bottom: no cell below it in any column it is in.
+    fn cell_is_bottom(&self, mut i: usize) -> bool {
+        while let Some(p) = self.c[i].parent {
+            if self.c[p].dir == Some(Dir::Vertical) && self.c[p].cells.last() != Some(&i) { return false }
+            i = p;
+        }
+        true
+    }
+
+    /// layout_add_horizontal_border: whether this cell gives a row to its pane's status line.
     fn add_border(&self, i: usize) -> bool {
-        match self.status { Status::Top => self.cell_is_top(i), Status::Off => false }
+        match self.status { Status::Top => self.cell_is_top(i), Status::Bottom => self.cell_is_bottom(i), Status::Off => false }
     }
 
     /// layout_resize_check: how much a cell can give up in a direction.
@@ -250,7 +263,11 @@ impl Node {
         for i in me.walk(me.root) {
             let c = &me.c[i];
             let (x, y, w, h) = (c.xoff, c.yoff, c.sx, c.sy);
-            let (y, h) = if me.status == Status::Top && !me.cell_is_top(i) { (y.saturating_sub(1), h + 1) } else { (y, h) };
+            let (y, h) = match me.status {
+                Status::Top if !me.cell_is_top(i) => (y.saturating_sub(1), h + 1),
+                Status::Bottom if !me.cell_is_bottom(i) => (y, h + 1),
+                _ => (y, h),
+            };
             let r = Rect::new(area.x + x.min(u16::MAX as u32) as u16, area.y + y.min(u16::MAX as u32) as u16, w.min(u16::MAX as u32) as u16, h.min(u16::MAX as u32) as u16);
             out.push((c.pane, r.intersection(area)));
         }
@@ -674,15 +691,19 @@ pub struct Geom { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
 /// tmux's window_pane_find_up/down/left/right (window.c): the panes whose far edge meets this
 /// one's on that side (round to the other side of the window at its edge) and that overlap it
 /// along that edge; of those, the most recently active (`point`), the first in the list on a tie.
-/// `panes` in the window's list order; `size` the window's; `titles` pane-border-status top.
-pub fn find_toward(panes: &[(u64, Geom)], from: u64, toward: Toward, size: (u32, u32), titles: bool, point: &dyn Fn(u64) -> u64) -> Option<u64> {
+/// `panes` in the window's list order; `size` the window's; `status` its pane-border-status.
+pub fn find_toward(panes: &[(u64, Geom)], from: u64, toward: Toward, size: (u32, u32), status: Status, point: &dyn Fn(u64) -> u64) -> Option<u64> {
     let (_, g) = *panes.iter().find(|(id, _)| *id == from)?;
     let (wsx, wsy) = size;
-    let edge = match toward {
-        Toward::Up => if titles { if g.y == 1 { wsy + 1 } else { g.y } } else if g.y == 0 { wsy + 1 } else { g.y },
-        Toward::Down => { let e = g.y + g.h + 1; if e >= wsy { if titles { 1 } else { 0 } } else { e } }
-        Toward::Left => if g.x == 0 { wsx + 1 } else { g.x },
-        Toward::Right => { let e = g.x + g.w + 1; if e >= wsx { 0 } else { e } }
+    let edge = match (toward, status) {
+        (Toward::Up, Status::Top) => if g.y == 1 { wsy + 1 } else { g.y },
+        (Toward::Up, Status::Bottom) => if g.y == 0 { wsy } else { g.y },
+        (Toward::Up, Status::Off) => if g.y == 0 { wsy + 1 } else { g.y },
+        (Toward::Down, Status::Top) => { let e = g.y + g.h + 1; if e >= wsy { 1 } else { e } }
+        (Toward::Down, Status::Bottom) => { let e = g.y + g.h + 1; if e + 1 >= wsy { 0 } else { e } }
+        (Toward::Down, Status::Off) => { let e = g.y + g.h + 1; if e >= wsy { 0 } else { e } }
+        (Toward::Left, _) => if g.x == 0 { wsx + 1 } else { g.x },
+        (Toward::Right, _) => { let e = g.x + g.w + 1; if e >= wsx { 0 } else { e } }
     };
     // Along the edge: from..to of this pane, and whether the other's span meets it (tmux's test,
     // which counts a pane that starts just past this one's end).
@@ -779,7 +800,7 @@ mod tests {
         let g = |x, y, w, h| Geom { x, y, w, h };
         let panes = [(0, g(0, 1, 60, 30)), (1, g(61, 1, 59, 14)), (2, g(61, 16, 59, 15))];
         let point = |p: u64| [5, 1, 9][p as usize];
-        let find = |from, toward| find_toward(&panes, from, toward, (120, 31), true, &point);
+        let find = |from, toward| find_toward(&panes, from, toward, (120, 31), Status::Top, &point);
         assert_eq!(find(0, Toward::Right), Some(2), "the more recently active of the two");
         assert_eq!(find(0, Toward::Left), Some(2), "round the far side");
         assert_eq!(find(1, Toward::Down), Some(2));

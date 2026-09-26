@@ -847,7 +847,7 @@ impl App {
         // title rows counted when the window shows them.
         let body = self.body();
         for i in 0..self.tabs.len() {
-            let status = if self.tab_header_rows(&self.tabs[i]) > 0 { layout::Status::Top } else { layout::Status::Off };
+            let status = self.pane_status(&self.tabs[i]);
             if let Some(root) = self.tabs[i].root.as_mut() {
                 root.status = status;
                 if root.size() != (body.width, body.height) { root.resize(body.width, body.height) }
@@ -859,7 +859,8 @@ impl App {
         // whoever has the keyboard elsewhere keeps it until someone types here.
         let idle: Vec<u64> = visible.iter().map(|(id, _)| *id).filter(|id| self.panes.get(id).map(|p| p.stream.is_none() && !p.opening && matches!(p.phase, Phase::Connecting(_))).unwrap_or(false)).collect();
         for (id, rect) in visible {
-            let content = (rect.width, rect.height.saturating_sub(self.header_rows()));
+            let content = self.content_of(self.tab(), rect);
+            let content = (content.width, content.height);
             let Some(pane) = self.panes.get_mut(&id) else { continue };
             pane.dirty = true;
             let want = pane::stream_size(content.0, content.1);
@@ -1009,7 +1010,7 @@ impl App {
         let tab_id = tab.id.clone();
         let get = |n: &str| self.options.get(n, &tab_id, None).unwrap_or_default();
         let (mw, mh, ow, oh) = (get("main-pane-width"), get("main-pane-height"), get("other-pane-width"), get("other-pane-height"));
-        let status = if tab.panes().len() > 1 && self.opts.border_titles != Some(false) { layout::Status::Top } else { layout::Status::Off };
+        let status = self.pane_status(tab);
         let ids = tab.panes();
         let tab = &mut self.tabs[index];
         tab.root = layout::arrange(named, &ids, body.width, body.height, status, (&mw, &mh), (&ow, &oh));
@@ -1092,15 +1093,23 @@ impl App {
 
     /// A pane's own border line: tmux draws none for a lone pane, and with `pane-border-status top`
     /// a titled line above each pane when a window holds several.
-    pub fn header_rows(&self) -> u16 { self.tab_header_rows(self.tab()) }
 
-    /// A title row over each pane of a split window — unless tmux.conf says pane-border-status off.
-    /// A pane's title row: on (pane-border-status top) where a window has several panes — and on
-    /// a lone pane too once you set pane-border-status yourself, as tmux draws it.
-    pub fn tab_header_rows(&self, tab: &Tab) -> u16 {
-        if self.opts.border_titles == Some(false) || tab.zoomed { return 0 }
+    /// A window's pane-border-status as it shows: hn's default (top) where it has several panes;
+    /// once you set it yourself, as tmux has it — on a lone pane too, and bottom or off.
+    pub fn pane_status(&self, tab: &Tab) -> layout::Status {
+        if self.opts.border_titles == Some(false) { return layout::Status::Off }
         let yours = self.options.global_window.contains_key("pane-border-status") || self.options.windows.get(&tab.id).map(|m| m.contains_key("pane-border-status")).unwrap_or(false);
-        if tab.panes().len() < 2 && !yours { 0 } else { 1 }
+        if tab.panes().len() < 2 && !yours { return layout::Status::Off }
+        layout::Status::of(&self.options.get("pane-border-status", &tab.id, None).unwrap_or_default())
+    }
+
+    /// A pane's own cells within its tile: the status line taken off, above or below.
+    pub fn content_of(&self, tab: &Tab, r: Rect) -> Rect {
+        match self.pane_status(tab) {
+            layout::Status::Top => Rect::new(r.x, r.y + 1, r.width, r.height.saturating_sub(1)),
+            layout::Status::Bottom => Rect::new(r.x, r.y, r.width, r.height.saturating_sub(1)),
+            layout::Status::Off => r,
+        }
     }
 
     fn compute_rects(&self) -> Vec<(u64, Rect)> {
@@ -1116,14 +1125,14 @@ impl App {
 
     fn content_size(&self, pane_id: u64) -> Option<(u16, u16)> {
         let rects = self.compute_rects();
-        if let Some((_, r)) = rects.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(self.header_rows()))) }
+        if let Some((_, r)) = rects.iter().find(|(id, _)| *id == pane_id) { let c = self.content_of(self.tab(), *r); return Some((c.width, c.height)) }
         // A pane in a background tab: size it as if its tab were showing.
         for (index, tab) in self.tabs.iter().enumerate() {
             if index == self.active { continue }
             if let Some(root) = &tab.root {
                 let mut out = Vec::new();
                 root.rects(self.body(), &mut out);
-                if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(self.tab_header_rows(tab)))) }
+                if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { let c = self.content_of(tab, *r); return Some((c.width, c.height)) }
             }
         }
         None
@@ -1509,12 +1518,12 @@ impl App {
     pub fn pane_geoms(&self, w: usize) -> Vec<(u64, layout::Geom)> {
         let Some(tab) = self.tabs.get(w) else { return Vec::new() };
         let body = self.body();
-        let header = self.tab_header_rows(tab);
         let mut out = Vec::new();
         if let Some(root) = tab.root.as_ref() { root.rects(body, &mut out) }
-        tab.panes().into_iter().filter_map(|id| out.iter().find(|(p, _)| *p == id).map(|(_, r)| (id, layout::Geom {
-            x: (r.x - body.x) as u32, y: (r.y - body.y + header) as u32, w: r.width as u32, h: r.height.saturating_sub(header) as u32,
-        }))).collect()
+        tab.panes().into_iter().filter_map(|id| out.iter().find(|(p, _)| *p == id).map(|(_, r)| {
+            let c = self.content_of(tab, *r);
+            (id, layout::Geom { x: (c.x - body.x) as u32, y: (c.y - body.y) as u32, w: c.width as u32, h: c.height as u32 })
+        })).collect()
     }
 
     /// The pane that way from `from`, as tmux's select-pane -L/-R/-U/-D finds it.
@@ -1522,8 +1531,7 @@ impl App {
         let tab = self.tabs.get(w)?;
         let body = self.body();
         let size = tab.root.as_ref().map(|r| r.size()).unwrap_or((body.width, body.height));
-        let titles = self.tab_header_rows(tab) > 0;
-        layout::find_toward(&self.pane_geoms(w), from, toward, (size.0 as u32, size.1 as u32), titles, &|p| tab.points.get(&p).copied().unwrap_or(0))
+        layout::find_toward(&self.pane_geoms(w), from, toward, (size.0 as u32, size.1 as u32), self.pane_status(tab), &|p| tab.points.get(&p).copied().unwrap_or(0))
     }
 
     /// select-pane -L/-R/-U/-D: the pane that way becomes the active one; a zoomed window is
@@ -1567,7 +1575,7 @@ impl App {
     /// A window's cells at the client's size before they are moved.
     fn fit_panes_of(&mut self, tab: usize) -> bool {
         let body = self.body();
-        let status = self.tabs.get(tab).map(|t| if self.tab_header_rows(t) > 0 { layout::Status::Top } else { layout::Status::Off }).unwrap_or_default();
+        let status = self.tabs.get(tab).map(|t| self.pane_status(t)).unwrap_or_default();
         match self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) {
             Some(root) => { root.status = status; if root.size() != (body.width, body.height) { root.resize(body.width, body.height) } true }
             None => false,
@@ -1578,13 +1586,12 @@ impl App {
     /// the window shows them, on top).
     pub fn size_pane(&mut self, tab: usize, pane: u64, dir: Dir, cells: u16) {
         self.fit_panes_of(tab);
-        // tmux: -y counts the top pane's title row too (pane-border-status top).
-        let mut out = Vec::new();
-        let body = self.body();
-        if let Some(root) = self.tabs.get(tab).and_then(|t| t.root.as_ref()) { root.rects(body, &mut out) }
-        let top = out.iter().find(|(id, _)| *id == pane).map(|(_, r)| r.y == body.y).unwrap_or(false);
-        let header = self.tabs.get(tab).map(|t| self.tab_header_rows(t)).unwrap_or(0);
-        let cells = if dir == Dir::Vertical && header > 0 && top { cells + 1 } else { cells };
+        // cmd-resize-pane.c: -y counts the status line of the pane that gives a row to it — the
+        // top pane's with pane-border-status top, the bottom one's with bottom.
+        let (status, g) = match self.tabs.get(tab) { Some(t) => (self.pane_status(t), self.pane_geoms(tab).into_iter().find(|(id, _)| *id == pane).map(|(_, g)| g)), None => return };
+        let sy = self.body().height as u32;
+        let own_row = match (status, g) { (layout::Status::Top, Some(g)) => g.y == 1, (layout::Status::Bottom, Some(g)) => g.y + g.h + 1 == sy, _ => false };
+        let cells = if dir == Dir::Vertical && own_row { cells + 1 } else { cells };
         if let Some(root) = self.tabs.get_mut(tab).and_then(|t| t.root.as_mut()) { root.resize_pane_to(pane, dir, cells as u32); }
         self.fit_panes();
     }
