@@ -73,8 +73,10 @@ pub struct Picker {
     pub row_at: Vec<(u16, usize)>,
     /// A row whose action needs a second Enter (a big download).
     pub armed: Option<String>,
-    /// The query's cursor, in chars (fzf edits the query like readline).
+    /// The query's cursor, in chars (fzf edits the query like readline), and where a query wider
+    /// than its line is shown from (fzf's xoffset).
     pub qcursor: usize,
+    pub xoffset: std::cell::Cell<usize>,
     /// Rows marked with Tab (fzf --multi), by id, in the order marked.
     pub marked: Vec<String>,
     /// The preview window, and how far it is scrolled — for the row it shows: another row's
@@ -118,6 +120,7 @@ impl Picker {
             row_at: Vec::new(),
             armed: None,
             qcursor: 0,
+            xoffset: Default::default(),
             marked: Vec::new(),
             preview: !crate::theme::fzf_opts().preview_window.hidden,
             preview_scroll: Default::default(),

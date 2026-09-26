@@ -794,11 +794,28 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         buf.set_string(area.x + pw, prompt_y, text, st);
         pw += w as u16;
     }
-    let q_room = width.saturating_sub(pw as usize + 1);
-    // A query longer than the line scrolls to keep the cursor in view, as fzf's does.
-    let before: String = picker.query.chars().take(picker.qcursor).collect();
-    let skip = before.width().saturating_sub(q_room);
-    let shown: String = { let mut w = 0; picker.query.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
+    let q_room = width.saturating_sub(pw as usize + 1).max(1);
+    // A query longer than the line (updatePromptOffset): its offset kept between the one that
+    // shows the cursor and half the room past it, so moving the cursor moves the cursor, not the
+    // text; what is before the cursor, then as much after it as fits.
+    let cw = |c: &char| unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+    let chars: Vec<char> = picker.query.chars().collect();
+    let cx = picker.qcursor.min(chars.len());
+    // fzf's trimLeft: how many to drop from the left to fit in [room].
+    let trim_left = |runes: &[char], room: usize| -> usize {
+        let mut from = runes.len().saturating_sub(room);
+        while from < runes.len() && runes[from..].iter().map(cw).sum::<usize>() > room { from += 1 }
+        from
+    };
+    let min_off = trim_left(&chars[..cx], q_room);
+    let max_off = min_off + cx.min(q_room) / 2;
+    let xoff = picker.xoffset.get().min(max_off).max(min_off);
+    picker.xoffset.set(xoff);
+    let before_from = xoff + trim_left(&chars[xoff..cx], q_room);
+    let before_w: usize = chars[before_from..cx].iter().map(cw).sum();
+    let mut after_w = 0;
+    let after: Vec<char> = chars[cx..].iter().take_while(|c| { after_w += cw(c); after_w <= q_room - before_w }).cloned().collect();
+    let shown: String = chars[before_from..cx].iter().chain(after.iter()).collect();
     buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, pal.input.style());
     let mut typed_w = shown.width().min(q_room) as u16;
     // What an inline count keeps clear of: the query and a margin, or the ghost, as fzf shifts it.
@@ -812,7 +829,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         typed_w = text.width() as u16;
         if !text.is_empty() { shift = typed_w as i32 }
     }
-    let cursor = Position::new(area.x + pw + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
+    let cursor = Position::new(area.x + pw + before_w as u16, prompt_y);
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
