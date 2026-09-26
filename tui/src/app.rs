@@ -145,6 +145,10 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// Copy mode's pending count (5k), f/F/t/T waiting for a character, and the last one for ; and ,.
+    pub copy_count: usize,
+    pub copy_pending: Option<char>,
+    pub copy_last_find: Option<(char, char)>,
     /// tmux's status/window/border/copy options from tmux.conf or `set`.
     pub opts: crate::tmuxconf::Options,
     /// Which way the last copy-mode search went (? up, / down).
@@ -182,6 +186,9 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            copy_count: 0,
+            copy_pending: None,
+            copy_last_find: None,
             opts: Default::default(),
             prefix_at: None,
             last_search_up: true,

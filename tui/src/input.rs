@@ -986,6 +986,38 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         !editor.is_empty() && !editor.contains("vi")
     });
     let key = if emacs { match emacs_copy(key) { Some(k) => k, None => return } } else { key };
+    // f/F/t/T wait for their character.
+    if let Some(kind) = app.copy_pending.take() {
+        if let KeyCode::Char(c) = key.code {
+            let n = std::mem::take(&mut app.copy_count).max(1);
+            app.copy_last_find = Some((kind, c));
+            if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..n { p.copy_find_char(c, matches!(kind, 'f' | 't'), matches!(kind, 't' | 'T')); } }
+        }
+        return;
+    }
+    // A count: 5k, 3w.
+    if let KeyCode::Char(d @ '0'..='9') = key.code {
+        if key.modifiers.is_empty() && (d != '0' || app.copy_count > 0) { app.copy_count = (app.copy_count * 10 + (d as usize - '0' as usize)).min(9999); return }
+    }
+    let count = std::mem::take(&mut app.copy_count);
+    if count > 1 && matches!(key.code, KeyCode::Char('h' | 'j' | 'k' | 'l' | 'w' | 'b' | 'e' | 'W' | 'B' | 'E' | 'n' | 'N' | ';' | ',' | '{' | '}') | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right) {
+        for _ in 0..count { copy_key(app, key, pane) }
+        return;
+    }
+    match key.code {
+        KeyCode::Char(c @ ('f' | 'F' | 't' | 'T')) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => { app.copy_pending = Some(c); app.copy_count = count; return }
+        KeyCode::Char(c @ (';' | ',')) => {
+            if let Some((kind, ch)) = app.copy_last_find {
+                let forward = matches!(kind, 'f' | 't') == (c == ';');
+                if let Some(p) = app.panes.get_mut(&pane) { p.copy_find_char(ch, forward, matches!(kind, 't' | 'T')); }
+            }
+            return;
+        }
+        KeyCode::Char('%') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_match_bracket() } return }
+        KeyCode::Char('{') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(false) } return }
+        KeyCode::Char('}') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(true) } return }
+        _ => {}
+    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let Some(p) = app.panes.get_mut(&pane) else { return };
     let rows = p.rows as i32;
@@ -993,8 +1025,8 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
     match key.code {
         KeyCode::Char('q') => { p.copy_end(); return }
         KeyCode::Char('c') if ctrl => { p.copy_end(); return }
-        // Escape clears the selection; a second one leaves (tmux: clear-selection, then cancel).
-        KeyCode::Esc => { if p.copy.map(|c| c.selecting).unwrap_or(false) { p.copy_toggle(false) } else { p.copy_end(); return } }
+        // Escape clears the selection and stays (tmux's copy-mode-vi); q leaves.
+        KeyCode::Esc => { if p.copy.map(|c| c.selecting).unwrap_or(false) { p.copy_toggle(false) } }
         KeyCode::Char('h') | KeyCode::Left => p.copy_move(-1, 0),
         KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
         KeyCode::Char('k') | KeyCode::Up => p.copy_move(0, -1),
