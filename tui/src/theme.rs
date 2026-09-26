@@ -186,7 +186,17 @@ pub fn fzf_opts() -> &'static FzfOpts {
                         let mut parts = Vec::new();
                         for (i, c) in v.char_indices() { match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, ',' if depth == 0 => { parts.push(&v[start..i]); start = i + 1 } _ => {} } }
                         parts.push(&v[start..]);
-                        for pair in parts { if let Some((k, a)) = pair.split_once(':') { o.binds.push((k.replace("return", "enter"), a.to_string())) } }
+                        // fzf's other names for a key, as the one it reports.
+                        let alias = |k: &str| -> String {
+                            // (alt-J and alt-j stay two keys: only the names change.)
+                            let k = k.replace("return", "enter");
+                            match k.as_str() {
+                                "page-up" => "pgup".into(), "page-down" => "pgdn".into(), "backspace" | "bs" => "bspace".into(),
+                                "alt-bspace" | "alt-backspace" => "alt-bs".into(), "delete" => "del".into(),
+                                _ => k,
+                            }
+                        };
+                        for pair in parts { if let Some((k, a)) = pair.split_once(':') { o.binds.push((alias(k), a.to_string())) } }
                     }
                 }
                 _ => {}
