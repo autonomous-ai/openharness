@@ -1523,7 +1523,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "preview-page-up" => picker.preview_page(-1, false), "preview-page-down" => picker.preview_page(1, false),
             "preview-half-page-up" => picker.preview_page(-1, true), "preview-half-page-down" => picker.preview_page(1, true),
             "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_bottom(),
-            "unix-word-rubout" => picker.backspace(true), "kill-line" => { let q: String = picker.query.chars().take(picker.qcursor).collect(); picker.set_query(&q) }
+            "unix-word-rubout" => picker.backspace(true), "kill-line" => picker.kill_line(),
             "backward-char" => picker.qmove(-1, false), "forward-char" => picker.qmove(1, false),
             "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),
             "backward-delete-char" => picker.backspace(false), "delete-char" => picker.delete_forward(),

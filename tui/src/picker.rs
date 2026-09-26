@@ -306,6 +306,18 @@ impl Picker {
         self.changed(&before);
     }
 
+    /// kill-line: from the cursor to the end, into the kill buffer (for C-y), as fzf's.
+    pub fn kill_line(&mut self) {
+        let before = self.query.clone();
+        let chars: Vec<char> = self.query.chars().collect();
+        let at = self.qcursor.min(chars.len());
+        if at < chars.len() {
+            self.kill = chars[at..].iter().collect();
+            self.query = chars[..at].iter().collect();
+        }
+        self.changed(&before);
+    }
+
     /// C-u: everything before the cursor (after the mode character).
     pub fn clear_query(&mut self) {
         let before = self.query.clone();
