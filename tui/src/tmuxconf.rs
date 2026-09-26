@@ -225,7 +225,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             let mut i = 1;
             while i < words.len() && words[i].starts_with('-') && words[i].len() > 1 {
                 let flag = &words[i];
-                if flag == "-T" { i += 1; table = match words.get(i).map(|t| t.as_str()) { Some("root") => Table::Root, Some("prefix") => Table::Prefix, _ => return Ok(()) } }
+                if flag == "-T" { i += 1; table = match words.get(i).and_then(|t| keys::table_named(t)) { Some(t) => t, None => return Ok(()) } }
                 else if flag == "-N" { i += 1 }
                 else { if flag.contains('n') { table = Table::Root } if flag.contains('r') { repeat = true } }
                 i += 1;
@@ -245,12 +245,12 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 match words[i].as_str() {
                     "-a" => all = true,
                     "-n" => table = Table::Root,
-                    "-T" => { i += 1; table = match words.get(i).map(|t| t.as_str()) { Some("root") => Table::Root, Some("prefix") => Table::Prefix, _ => return Ok(()) } }
+                    "-T" => { i += 1; table = match words.get(i).and_then(|t| keys::table_named(t)) { Some(t) => t, None => return Ok(()) } }
                     w => key = Some(w.to_string()),
                 }
                 i += 1;
             }
-            if all { match table { Table::Prefix => keymap.prefix_table.clear(), Table::Root => keymap.root_table.clear() } }
+            if all { keymap.table_mut(table).clear() }
             else if let Some(k) = key {
                 let chord = keys::parse(&k)?;
                 // `unbind C-b` right after `set prefix C-a` means "C-b is not the prefix any more".

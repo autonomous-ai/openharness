@@ -985,13 +985,63 @@ fn emacs_copy(key: KeyEvent) -> Option<KeyEvent> {
     })
 }
 
+/// `send -X <action>` from a copy-mode binding, as the key that does it here.
+fn copy_action_key(action: &str) -> Option<KeyEvent> {
+    let k = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    let c = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let code = |x: KeyCode| KeyEvent::new(x, KeyModifiers::NONE);
+    Some(match action {
+        "begin-selection" => k('v'), "select-line" => k('V'), "rectangle-toggle" | "rectangle-on" => c('v'),
+        a if a.starts_with("copy-selection") || a.starts_with("copy-pipe") || a == "copy-end-of-line" => k('y'),
+        "cancel" => k('q'), "clear-selection" => code(KeyCode::Esc),
+        "cursor-up" => k('k'), "cursor-down" => k('j'), "cursor-left" => k('h'), "cursor-right" => k('l'),
+        "start-of-line" => k('0'), "end-of-line" => k('$'), "back-to-indentation" => k('^'),
+        "top-line" => k('H'), "middle-line" => k('M'), "bottom-line" => k('L'), "history-top" => k('g'), "history-bottom" => k('G'),
+        "page-up" => code(KeyCode::PageUp), "page-down" => code(KeyCode::PageDown), "halfpage-up" => c('u'), "halfpage-down" => c('d'),
+        "scroll-up" => c('y'), "scroll-down" => c('e'),
+        "next-word" | "next-space" => k('w'), "previous-word" | "previous-space" => k('b'), "next-word-end" | "next-space-end" => k('e'),
+        "search-forward" | "search-forward-incremental" => k('/'), "search-backward" | "search-backward-incremental" => k('?'),
+        "search-again" => k('n'), "search-reverse" => k('N'), "next-paragraph" => k('}'), "previous-paragraph" => k('{'),
+        _ => return None,
+    })
+}
+
 fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
     let emacs = app.opts.mode_keys_emacs.unwrap_or_else(|| {
         // tmux: vi keys when $VISUAL or $EDITOR mentions vi, else emacs.
         let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default();
         !editor.is_empty() && !editor.contains("vi")
     });
-    let key = if emacs { match emacs_copy(key) { Some(k) => k, None => return } } else { key };
+    // Your tmux.conf's copy-mode bindings come first (`bind -T copy-mode-vi v send -X begin-selection`).
+    if app.copy_pending.is_none() {
+        let chord = keys::of(&key);
+        let table = if emacs { &app.keymap.copy_emacs } else { &app.keymap.copy_vi };
+        if let Some(b) = table.iter().find(|b| b.chord == chord).cloned() {
+            let words: Vec<&str> = b.command.split_whitespace().collect();
+            let is_send = matches!(words.first(), Some(&"send" | &"send-keys")) && words.contains(&"-X");
+            if is_send {
+                let action = words.iter().skip_while(|w| **w != "-X").nth(1).copied().unwrap_or("");
+                if let Some(k) = copy_action_key(action) {
+                    // Run it as the vi key it is (no second lookup: the table is not asked again).
+                    let saved = std::mem::take(&mut app.keymap.copy_vi);
+                    let saved_e = std::mem::take(&mut app.keymap.copy_emacs);
+                    let was = app.opts.mode_keys_emacs;
+                    app.opts.mode_keys_emacs = Some(false);
+                    copy_key(app, k, pane);
+                    app.opts.mode_keys_emacs = was;
+                    app.keymap.copy_vi = saved;
+                    app.keymap.copy_emacs = saved_e;
+                } else { app.say(format!("{action}: not a copy-mode action here"), theme::WARN); app.modal = Some(Modal::Copy { pane }) }
+            } else {
+                // Any other command (select-pane -L): copy mode ends where tmux's would lose focus.
+                let before = app.focused();
+                commands::execute(app, &b.command);
+                if app.focused() == before && app.modal.is_none() { app.modal = Some(Modal::Copy { pane }) }
+            }
+            return;
+        }
+    }
+    let key = if emacs { match emacs_copy(key) { Some(k) => k, None => { app.modal = Some(Modal::Copy { pane }); return } } } else { key };
     // f/F/t/T wait for their character.
     if let Some(kind) = app.copy_pending.take() {
         if let KeyCode::Char(c) = key.code {
@@ -999,29 +1049,33 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             app.copy_last_find = Some((kind, c));
             if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..n { p.copy_find_char(c, matches!(kind, 'f' | 't'), matches!(kind, 't' | 'T')); } }
         }
+        app.modal = Some(Modal::Copy { pane });
         return;
     }
     // A count: 5k, 3w.
     if let KeyCode::Char(d @ '0'..='9') = key.code {
-        if key.modifiers.is_empty() && (d != '0' || app.copy_count > 0) { app.copy_count = (app.copy_count * 10 + (d as usize - '0' as usize)).min(9999); return }
+        if key.modifiers.is_empty() && (d != '0' || app.copy_count > 0) { app.copy_count = (app.copy_count * 10 + (d as usize - '0' as usize)).min(9999); app.modal = Some(Modal::Copy { pane }); return }
     }
     let count = std::mem::take(&mut app.copy_count);
     if count > 1 && matches!(key.code, KeyCode::Char('h' | 'j' | 'k' | 'l' | 'w' | 'b' | 'e' | 'W' | 'B' | 'E' | 'n' | 'N' | ';' | ',' | '{' | '}') | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right) {
-        for _ in 0..count { copy_key(app, key, pane) }
+        // Each run puts copy mode back (or leaves it, as the key says); the next run needs it there.
+        for _ in 0..count { if !matches!(app.modal, None | Some(Modal::Copy { .. })) { break } app.modal = None; copy_key(app, key, pane); if app.modal.is_none() { break } app.modal = None }
+        if app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false) { app.modal = Some(Modal::Copy { pane }) }
         return;
     }
     match key.code {
-        KeyCode::Char(c @ ('f' | 'F' | 't' | 'T')) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => { app.copy_pending = Some(c); app.copy_count = count; return }
+        KeyCode::Char(c @ ('f' | 'F' | 't' | 'T')) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => { app.copy_pending = Some(c); app.copy_count = count; app.modal = Some(Modal::Copy { pane }); return }
         KeyCode::Char(c @ (';' | ',')) => {
             if let Some((kind, ch)) = app.copy_last_find {
                 let forward = matches!(kind, 'f' | 't') == (c == ';');
                 if let Some(p) = app.panes.get_mut(&pane) { p.copy_find_char(ch, forward, matches!(kind, 't' | 'T')); }
             }
+            app.modal = Some(Modal::Copy { pane });
             return;
         }
-        KeyCode::Char('%') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_match_bracket() } return }
-        KeyCode::Char('{') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(false) } return }
-        KeyCode::Char('}') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(true) } return }
+        KeyCode::Char('%') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_match_bracket() } app.modal = Some(Modal::Copy { pane }); return }
+        KeyCode::Char('{') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(false) } app.modal = Some(Modal::Copy { pane }); return }
+        KeyCode::Char('}') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(true) } app.modal = Some(Modal::Copy { pane }); return }
         _ => {}
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);

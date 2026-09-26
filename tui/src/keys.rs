@@ -27,6 +27,9 @@ pub struct Keymap {
     pub prefix2: Option<Chord>,
     pub prefix_table: Vec<Binding>,
     pub root_table: Vec<Binding>,
+    /// `bind -T copy-mode-vi` / `-T copy-mode`: over copy mode's own keys.
+    pub copy_vi: Vec<Binding>,
+    pub copy_emacs: Vec<Binding>,
     /// tmux `repeat-time`.
     pub repeat_ms: u64,
     /// How long after the prefix before the key hint shows (`set -g @hn-hint-time`; 0: never).
@@ -129,21 +132,22 @@ impl Keymap {
         // `/` is list-keys -1N in tmux (describe a key); here it is the far more used search. The
         // describe variant stays reachable through `?`.
         t.retain(|x| !(x.chord == ch('/') && x.command == "list-keys"));
-        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), repeat_ms: 500, hint_ms: 600 }
+        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), copy_vi: Vec::new(), copy_emacs: Vec::new(), repeat_ms: 500, hint_ms: 600 }
     }
 
     pub fn prefix_command(&self, chord: &Chord) -> Option<&Binding> { self.prefix_table.iter().rev().find(|b| &b.chord == chord) }
     pub fn root_command(&self, chord: &Chord) -> Option<&Binding> { self.root_table.iter().rev().find(|b| &b.chord == chord) }
 
     /// `bind` / `unbind`, as a config file says them.
+    pub fn table_mut(&mut self, table: Table) -> &mut Vec<Binding> {
+        match table { Table::Prefix => &mut self.prefix_table, Table::Root => &mut self.root_table, Table::CopyVi => &mut self.copy_vi, Table::CopyEmacs => &mut self.copy_emacs }
+    }
     pub fn bind(&mut self, table: Table, chord: Chord, command: String, repeat: bool) {
-        let list = match table { Table::Prefix => &mut self.prefix_table, Table::Root => &mut self.root_table };
+        let list = self.table_mut(table);
         list.retain(|b| b.chord != chord);
         list.push(Binding { chord, command, repeat, note: String::new() });
     }
-    pub fn unbind(&mut self, table: Table, chord: &Chord) {
-        match table { Table::Prefix => self.prefix_table.retain(|b| &b.chord != chord), Table::Root => self.root_table.retain(|b| &b.chord != chord) }
-    }
+    pub fn unbind(&mut self, table: Table, chord: &Chord) { self.table_mut(table).retain(|b| &b.chord != chord) }
 
     /// The first key that runs [command] (for hints: "C-b s").
     /// The key for a command by name: its exact binding, else one that runs it with arguments
@@ -163,8 +167,13 @@ impl Keymap {
 
 fn name_of(chord: &Chord) -> String { name(chord) }
 
+/// A `-T` table name.
+pub fn table_named(name: &str) -> Option<Table> {
+    match name { "root" => Some(Table::Root), "prefix" => Some(Table::Prefix), "copy-mode-vi" => Some(Table::CopyVi), "copy-mode" => Some(Table::CopyEmacs), _ => None }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Table { Prefix, Root }
+pub enum Table { Prefix, Root, CopyVi, CopyEmacs }
 
 /// A key in tmux's spelling: `C-b`, `M-o`, `S-Up`, `%`, `Space`, `PPage`.
 pub fn name(chord: &Chord) -> String {
