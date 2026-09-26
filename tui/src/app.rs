@@ -551,11 +551,8 @@ impl App {
             return;
         };
         let (cols, rows) = content.unwrap_or((pane.cols, pane.rows));
-        if cols < pane::MIN_COLS || rows < pane::MIN_ROWS {
-            pane.phase = Phase::Card { title: "Pane too small".into(), detail: format!("A terminal needs {}×{}; this one is {cols}×{rows}.", pane::MIN_COLS, pane::MIN_ROWS), keys: vec![(self.keymap.hint("resize-pane -Z").unwrap_or_default(), "zoom".into())] };
-            pane.dirty = true;
-            return;
-        }
+        // Below the daemon's 40×12 the far terminal stays 40×12 and the tile shows the part of it
+        // around the cursor, as tmux shows a window bigger than its client.
         let (cols, rows) = pane::stream_size(cols, rows);
         pane.opening = true;
         pane.want = (cols, rows);
@@ -708,13 +705,6 @@ impl App {
             let Some(pane) = self.panes.get_mut(&id) else { continue };
             pane.dirty = true;
             let want = pane::stream_size(content.0, content.1);
-            let too_small = content.0 < pane::MIN_COLS || content.1 < pane::MIN_ROWS;
-            if too_small { continue }
-            if matches!(pane.phase, Phase::Card { ref title, .. } if title == "Pane too small") {
-                pane.phase = Phase::Connecting("Opening…".into());
-                self.open_stream(id, true);
-                continue;
-            }
             if pane.want == want { continue }
             pane.want = want;
             let Some(stream) = pane.stream else { continue };
@@ -945,8 +935,10 @@ impl App {
     }
 
     pub fn new_tab(&mut self) {
-        self.tabs.insert(self.active + 1, Tab::new("home"));
-        self.active += 1;
+        // tmux's new-window: the next index, at the end — the others keep their numbers.
+        self.last_tab = Some(self.tabs[self.active].id.clone());
+        self.tabs.push(Tab::new("home"));
+        self.active = self.tabs.len() - 1;
         self.home_cursor = 0;
         self.fit_panes();
     }
