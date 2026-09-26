@@ -109,6 +109,78 @@ void main() {
     );
   });
 
+  group('OSC 8 hyperlinks', () {
+    // Claude Code's table cell for `[!125](…/merge_requests/125)`, as tmux
+    // hands it over: the label is shown, the address rides in OSC 8.
+    const mr = 'https://git.example.com/group/project/-/merge_requests/125';
+
+    test('opens the hidden target from any cell of the label', () {
+      final terminal = Terminal()..resize(60, 4);
+      terminal.write(
+        '| MR | \x1b[94m\x1b]8;id=1a8pnbt;$mr\x1b\\!125\x1b[39m\x1b]8;;\x1b\\ | x',
+      );
+      for (var x = 7; x < 11; x++) {
+        expect(terminalLinkAt(terminal, CellOffset(x, 0)), mr);
+      }
+      expect(terminalLinkAt(terminal, const CellOffset(6, 0)), isNull);
+      expect(terminalLinkAt(terminal, const CellOffset(11, 0)), isNull);
+    });
+
+    test('BEL-terminated, with semicolons kept in the URI', () {
+      const url = 'https://example.com/a;b?c=1';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x07here\x1b]8;;\x07 after');
+      expect(terminalLinkAt(terminal, const CellOffset(1, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(7, 0)), isNull);
+    });
+
+    test('survives an SGR reset and clears when the cell is rewritten', () {
+      const url = 'https://example.com/x';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x1b\\ab\x1b[0mcd\x1b]8;;\x1b\\');
+      expect(terminalLinkAt(terminal, const CellOffset(3, 0)), url);
+      terminal.write('\r\x1b[2Kplain');
+      expect(terminalLinkAt(terminal, const CellOffset(1, 0)), isNull);
+    });
+
+    test('moves with inserted and deleted characters', () {
+      const url = 'https://example.com/y';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('ab\x1b]8;;$url\x1b\\LINK\x1b]8;;\x1b\\');
+      terminal.write('\r\x1b[2@');
+      expect(terminalLinkAt(terminal, const CellOffset(4, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(2, 0)), isNull);
+      terminal.write('\r\x1b[3P');
+      expect(terminalLinkAt(terminal, const CellOffset(1, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), isNull);
+    });
+
+    test('spans exactly the linked cells for the hover underline', () {
+      final terminal = Terminal()..resize(60, 4);
+      terminal.write(
+        '| MR | \x1b[94m\x1b]8;id=1a8pnbt;$mr\x1b\\!125\x1b[39m\x1b]8;;\x1b\\ | x',
+      );
+      expect(terminalLinkSpans(terminal, const CellOffset(8, 0), mr), [
+        (row: 0, start: 7, end: 10),
+      ]);
+    });
+
+    test('a link never closed ends at a full reset', () {
+      const url = 'https://example.com/leak';
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;$url\x1b\\cut off');
+      terminal.write('\x1bc\r\nprompt');
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), url);
+      expect(terminalLinkAt(terminal, const CellOffset(1, 1)), isNull);
+    });
+
+    test('ignores non-web schemes', () {
+      final terminal = Terminal()..resize(40, 4);
+      terminal.write('\x1b]8;;javascript:alert(1)\x1b\\x\x1b]8;;\x1b\\');
+      expect(terminalLinkAt(terminal, const CellOffset(0, 0)), isNull);
+    });
+  });
+
   group('hard-wrapped web URLs', () {
     // What Claude Code (Ink) writes for a long address in a narrow pane: rows
     // with their own newlines, cut at the box width, each indented by the box.
@@ -118,6 +190,17 @@ void main() {
       terminal.write(rows.join('\r\n'));
       return terminal;
     }
+
+    test('spans every row of a cut URL for the hover underline', () {
+      final terminal = ink([
+        '  Command Code here: https://commandc',
+        '  ode.ai/0xkongamoto/settings/billing',
+      ]);
+      expect(terminalLinkSpans(terminal, const CellOffset(5, 1), url), [
+        (row: 0, start: 21, end: 36),
+        (row: 1, start: 2, end: 36),
+      ]);
+    });
 
     test('reads the whole URL from either row', () {
       final terminal = ink([

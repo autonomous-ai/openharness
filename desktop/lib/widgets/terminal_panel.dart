@@ -223,6 +223,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   late final TerminalLinkOpener _linkOpener;
   Offset? _linkPointerPosition;
   String? _hoveredLink;
+  List<TerminalLinkSpan> _hoveredLinkSpans = const [];
+  Rect? _hoveredLinkAnchor;
+  final _linkUnderlineKey = GlobalKey();
   String? _pressedLink;
   bool _openingLink = false;
   bool _linkRefreshPending = false;
@@ -373,6 +376,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       _viewTerminal.addListener(_scheduleLinkRefresh);
       _pressedLink = null;
       _hoveredLink = null;
+      _hoveredLinkSpans = const [];
       _observeLinkModifiers(false);
       _terminalViewKey = GlobalKey<TerminalViewState>();
       _followTail = true;
@@ -387,6 +391,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       _cancelDialInertia();
       _linkPointerPosition = null;
       _hoveredLink = null;
+      _hoveredLinkSpans = const [];
       _pressedLink = null;
       _observeLinkModifiers(false);
     }
@@ -618,6 +623,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _viewTerminal.addListener(_scheduleLinkRefresh);
     _pressedLink = null;
     _hoveredLink = null;
+    _hoveredLinkSpans = const [];
     _observeLinkModifiers(false);
     _cancelDialInertia();
     _alternateScrollRemainder = 0;
@@ -1468,22 +1474,74 @@ class _TerminalPanelState extends State<TerminalPanel>
     _scheduleLinkRefresh();
   }
 
-  String? _linkAtPointer(Offset globalPosition) {
+  CellOffset? _cellAtPointer(Offset globalPosition) {
     final view = _laidOutTerminalView();
     if (view == null) return null;
     final render = view.renderTerminal;
     final local = render.globalToLocal(globalPosition);
     if (!(Offset.zero & render.size).contains(local)) return null;
-    return terminalLinkAt(_viewTerminal, render.getCellOffset(local));
+    return render.getCellOffset(local);
+  }
+
+  /// Puts the link tooltip under the link itself (over it near the bottom
+  /// edge). The tooltip wraps the whole pane, so Flutter's default would
+  /// centre it on the pane, however far that is from the pointer.
+  Offset _linkTooltipPosition(TooltipPositionContext context) {
+    final anchor = _hoveredLinkAnchor;
+    return positionDependentBox(
+      size: context.overlaySize,
+      childSize: context.tooltipSize,
+      target: anchor?.center ?? context.target,
+      verticalOffset: anchor == null
+          ? context.verticalOffset
+          : anchor.height / 2 + 4,
+      preferBelow: context.preferBelow,
+    );
+  }
+
+  /// The global rect of the hovered link's last row. Measured on hover, as
+  /// the tooltip positions itself mid-layout, when nothing may be measured.
+  Rect? _linkAnchor(List<TerminalLinkSpan> spans) {
+    final render = _laidOutTerminalView()?.renderTerminal;
+    if (render == null || !render.attached || spans.isEmpty) return null;
+    final last = spans.last;
+    final cell = render.cellSize;
+    return render.localToGlobal(
+          render.getOffset(CellOffset(last.start, last.row)),
+        ) &
+        Size((last.end - last.start + 1) * cell.width, cell.height);
+  }
+
+  String? _linkAtPointer(Offset globalPosition) {
+    final cell = _cellAtPointer(globalPosition);
+    return cell == null ? null : terminalLinkAt(_viewTerminal, cell);
   }
 
   void _hoverLink(Offset? globalPosition) {
     _linkPointerPosition = widget.visible ? globalPosition : null;
-    final target = _linkPointerPosition == null
+    final cell = _linkPointerPosition == null
         ? null
-        : _linkAtPointer(_linkPointerPosition!);
+        : _cellAtPointer(_linkPointerPosition!);
+    final target = cell == null ? null : terminalLinkAt(_viewTerminal, cell);
     _observeLinkModifiers(target != null);
-    if (target != _hoveredLink) setState(() => _hoveredLink = target);
+    // Walking the link's extent costs a lookup per cell, so it runs when the
+    // pointer reaches a new link, not on every move along the same one.
+    final onSpans =
+        cell != null &&
+        _hoveredLinkSpans.any(
+          (s) => s.row == cell.y && s.start <= cell.x && cell.x <= s.end,
+        );
+    if (target == _hoveredLink && (target == null || onSpans)) {
+      _hoveredLinkAnchor = _linkAnchor(_hoveredLinkSpans); // it may scroll
+      return;
+    }
+    setState(() {
+      _hoveredLink = target;
+      _hoveredLinkSpans = target == null
+          ? const []
+          : terminalLinkSpans(_viewTerminal, cell!, target);
+      _hoveredLinkAnchor = _linkAnchor(_hoveredLinkSpans);
+    });
   }
 
   bool _onLinkTapDown(TapDownDetails details, CellOffset cell) {
@@ -1669,46 +1727,64 @@ class _TerminalPanelState extends State<TerminalPanel>
                         onHover: (event) => _hoverLink(event.position),
                         onExit: (_) => _hoverLink(null),
                         child: Tooltip(
+                          // With the address: an OSC 8 label such as `!125`
+                          // does not say where it leads.
                           message: _hoveredLink == null
                               ? ''
                               : '${defaultTargetPlatform == TargetPlatform.macOS ? '⌘' : 'Ctrl'}-click to open\n$_hoveredLink',
-                          child: TerminalView(
-                            session.terminal,
-                            key: _terminalViewKey,
-                            controller: _controller,
-                            autoResize: widget.visible && !session.readOnly,
-                            resizeBuffer: false,
-                            renderingEnabled: widget.visible,
-                            outputRepaintInterval: widget.outputRepaintInterval,
-                            scrollController: _scrollController,
-                            focusNode: _focusNode,
-                            autofocus: widget.focused && !showComposer,
-                            readOnly: widget.readOnly || !session.acceptsInput,
-                            theme: terminalThemeFor(
-                              grid.AppTheme.palette.value,
-                              terminalThemeStore.value,
+                          positionDelegate: _linkTooltipPosition,
+                          child: CustomPaint(
+                            key: _linkUnderlineKey,
+                            foregroundPainter: _LinkUnderlinePainter(
+                              spans: _hoveredLinkSpans,
+                              source: session.terminal,
+                              terminal: _laidOutTerminalView,
+                              host: () =>
+                                  _linkUnderlineKey.currentContext
+                                          ?.findRenderObject()
+                                      as RenderBox?,
+                              repaint: _scrollController,
                             ),
-                            padding: const EdgeInsets.all(10),
-                            textStyle: terminalFontStore.value,
-                            // The chosen point size already sizes each terminal cell.
-                            // Applying the OS text scale again would change rows/cols
-                            // and resize the remote terminal unexpectedly.
-                            textScaler: TextScaler.noScaling,
-                            onKeyEvent: _onTerminalKey,
-                            onTapDown: _onLinkTapDown,
-                            onTapUp: _onLinkTapUp,
-                            mouseCursor:
-                                _hoveredLink != null && _linkModifierPressed
-                                ? SystemMouseCursors.click
-                                // An I-beam invites typing; a blocked pane does not.
-                                : _inputBlocked
-                                ? SystemMouseCursors.basic
-                                : SystemMouseCursors.text,
-                            onSecondaryTapDown: (_, _) => _copyOrPaste(),
+                            child: TerminalView(
+                              session.terminal,
+                              key: _terminalViewKey,
+                              controller: _controller,
+                              autoResize: widget.visible && !session.readOnly,
+                              resizeBuffer: false,
+                              renderingEnabled: widget.visible,
+                              outputRepaintInterval:
+                                  widget.outputRepaintInterval,
+                              scrollController: _scrollController,
+                              focusNode: _focusNode,
+                              autofocus: widget.focused && !showComposer,
+                              readOnly:
+                                  widget.readOnly || !session.acceptsInput,
+                              theme: terminalThemeFor(
+                                grid.AppTheme.palette.value,
+                                terminalThemeStore.value,
+                              ),
+                              padding: const EdgeInsets.all(10),
+                              textStyle: terminalFontStore.value,
+                              // The chosen point size already sizes each terminal cell.
+                              // Applying the OS text scale again would change rows/cols
+                              // and resize the remote terminal unexpectedly.
+                              textScaler: TextScaler.noScaling,
+                              onKeyEvent: _onTerminalKey,
+                              onTapDown: _onLinkTapDown,
+                              onTapUp: _onLinkTapUp,
+                              mouseCursor:
+                                  _hoveredLink != null && _linkModifierPressed
+                                  ? SystemMouseCursors.click
+                                  // An I-beam invites typing; a blocked pane does not.
+                                  : _inputBlocked
+                                  ? SystemMouseCursors.basic
+                                  : SystemMouseCursors.text,
+                              onSecondaryTapDown: (_, _) => _copyOrPaste(),
 
-                            onAltBufferScroll: session.scrollViaTmuxCopyMode
-                                ? (up) => session.sendScrollCommand(up, 1)
-                                : null,
+                              onAltBufferScroll: session.scrollViaTmuxCopyMode
+                                  ? (up) => session.sendScrollCommand(up, 1)
+                                  : null,
+                            ),
                           ),
                         ),
                       ),
@@ -2414,6 +2490,56 @@ class _TerminalHeader extends StatelessWidget {
 /// The three shapes describe one hop, an intermediate hop, and a central server respectively. That
 /// makes the modes distinguishable without colour while keeping the badge small enough for a four-pane
 /// layout. The wire name `relay` still means the backend WebSocket; only its human-facing label is WS.
+/// Underlines the link under the pointer, in each span's own text colour —
+/// the terminal's cells carry no underline for it, so this paints on top.
+class _LinkUnderlinePainter extends CustomPainter {
+  _LinkUnderlinePainter({
+    required this.spans,
+    required this.source,
+    required this.terminal,
+    required this.host,
+    super.repaint,
+  });
+
+  final List<TerminalLinkSpan> spans;
+  final Terminal source;
+  final TerminalViewState? Function() terminal;
+  final RenderBox? Function() host;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (spans.isEmpty) return;
+    final render = terminal()?.renderTerminal;
+    final box = host();
+    if (render == null || box == null || !render.attached) return;
+    final lines = source.buffer.lines;
+    final cell = render.cellSize;
+    final thickness = math.max(1.0, cell.height / 16).roundToDouble();
+    final paint = Paint()..strokeWidth = thickness;
+    for (final span in spans) {
+      if (span.row >= lines.length) continue;
+      final from = box.globalToLocal(
+        render.localToGlobal(
+          render.getOffset(CellOffset(span.start, span.row)),
+        ),
+      );
+      final y = from.dy + cell.height - thickness;
+      if (y < 0 || y > size.height) continue;
+      paint.color = render.resolveForegroundColor(
+        lines[span.row].getForeground(span.start),
+      );
+      canvas.drawLine(
+        Offset(from.dx, y),
+        Offset(from.dx + (span.end - span.start + 1) * cell.width, y),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LinkUnderlinePainter old) => !identical(old.spans, spans);
+}
+
 class _LinkModeMark extends StatelessWidget {
   final String mode;
 

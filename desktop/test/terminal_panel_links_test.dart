@@ -410,6 +410,27 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
     },
   );
+  testOnPlatform('the link tooltip sits under the link, not mid-pane', (
+    tester,
+  ) async {
+    await mount(tester);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(point(tester));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    final render = tester
+        .state<TerminalViewState>(find.byType(TerminalView))
+        .renderTerminal;
+    final linkBottom = render
+        .localToGlobal(render.getOffset(const CellOffset(0, 1)))
+        .dy;
+    final tip = tester.getRect(find.textContaining('-click to open'));
+    expect(tip.top, greaterThanOrEqualTo(linkBottom));
+    expect(tip.top, lessThan(linkBottom + render.cellSize.height * 3));
+    await mouse.removePointer();
+    await tester.pump(const Duration(milliseconds: 350));
+  });
   testOnPlatform(
     'hover shows the shortcut and refreshes after streamed output changes',
     (tester) async {
