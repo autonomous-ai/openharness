@@ -166,7 +166,7 @@ impl Picker {
             // fzf's tiebreak: score, then the shorter line, then the original order.
             // Only negations (`!rate`): nothing scores, so the list keeps its order, as fzf's does.
             let positive = groups.iter().any(|g| g.iter().any(|t| !t.negative()));
-            if !self.keep_order && positive { scored.sort_by(|a, b| b.1.cmp(&a.1).then(self.rows[a.0].label.chars().count().cmp(&self.rows[b.0].label.chars().count())).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
+            if !self.keep_order && positive { scored.sort_by(|a, b| b.1.cmp(&a.1).then(line_len(&self.rows[a.0]).cmp(&line_len(&self.rows[b.0]))).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
             self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
         }
         // Keep the cursor on the same item across a rebuild.
@@ -308,6 +308,9 @@ impl Picker {
     pub fn say(&mut self, text: impl Into<String>) { self.flash = Some((text.into(), Instant::now())) }
 }
 
+/// The length of the line a row shows (fzf's length tiebreak is the whole line's).
+fn line_len(row: &Row) -> usize { row.label.chars().count() + row.detail.iter().map(|s| s.content.chars().count() + 2).sum::<usize>() }
+
 /// Where an alphanumeric word ends, going back or forward from `at` (readline's M-b / M-f).
 fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
     let word = |c: char| c.is_alphanumeric();
@@ -378,7 +381,8 @@ impl Term {
                 p.indices(Utf32Str::new(haystack, buf), matcher, &mut hits).map(|s| (s, hits))
             }
             Term::Anchored { text, prefix, suffix, negate } => {
-                let smart = text.chars().any(char::is_uppercase);
+                // -i / +i from FZF_DEFAULT_OPTS, else smart case.
+                let smart = match crate::theme::fzf_opts().case { Some(respect) => respect, None => text.chars().any(char::is_uppercase) };
                 let (l, t) = if smart { (label.to_string(), text.clone()) } else { (label.to_lowercase(), text.to_lowercase()) };
                 let n = l.chars().count() as u32;
                 let k = t.chars().count() as u32;
