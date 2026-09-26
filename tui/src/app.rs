@@ -41,7 +41,7 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(name: &str) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last_focus: None, layout_at: 0, on_desk: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last_focus: None, layout_at: 4, on_desk: false, layout: json!({}) }
     }
     pub fn panes(&self) -> Vec<u64> { self.root.as_ref().map(Node::leaves).unwrap_or_default() }
 }
@@ -145,6 +145,8 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// tmux's status/window/border/copy options from tmux.conf or `set`.
+    pub opts: crate::tmuxconf::Options,
     /// Which way the last copy-mode search went (? up, / down).
     pub last_search_up: bool,
     /// The home list's order while it is on screen (see `home_agents`).
@@ -180,6 +182,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            opts: Default::default(),
             prefix_at: None,
             last_search_up: true,
             home_order: Default::default(),
@@ -769,6 +772,11 @@ impl App {
             (&mut l.active_window_fg, n.active_window_fg), (&mut l.active_window_bg, n.active_window_bg)] {
             if from.is_some() { *to = from }
         }
+        let (o, n) = (&mut self.opts, &s.options);
+        macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
+        take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
+            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status);
+        self.fit_panes();
         self.redraw_all = true;
     }
 
@@ -798,6 +806,11 @@ impl App {
     pub fn renumber(&mut self) {
         let ids: HashSet<String> = self.tabs.iter().map(|t| t.id.clone()).collect();
         self.nums.retain(|id, _| ids.contains(id));
+        // renumber-windows on: no gaps, in order.
+        if self.opts.renumber_windows == Some(true) {
+            for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index); }
+            return;
+        }
         for i in 0..self.tabs.len() {
             if self.nums.contains_key(&self.tabs[i].id) { continue }
             let n = self.free_num();
@@ -832,16 +845,17 @@ impl App {
     pub fn focused(&self) -> Option<u64> { self.tab().focus }
 
     /// Everything but the status line (tmux `status-position`, bottom by default).
-    pub fn body(&self) -> Rect { Rect::new(0, if self.status_top { 1 } else { 0 }, self.size.0, self.size.1.saturating_sub(1)) }
+    pub fn body(&self) -> Rect {
+        if self.opts.status == Some(false) { return Rect::new(0, 0, self.size.0, self.size.1) }
+        Rect::new(0, if self.status_top { 1 } else { 0 }, self.size.0, self.size.1.saturating_sub(1))
+    }
 
     /// A pane's own border line: tmux draws none for a lone pane, and with `pane-border-status top`
     /// a titled line above each pane when a window holds several.
-    pub fn header_rows(&self) -> u16 {
-        let tab = self.tab();
-        if tab.zoomed || tab.panes().len() < 2 { 0 } else { 1 }
-    }
+    pub fn header_rows(&self) -> u16 { self.tab_header_rows(self.tab()) }
 
-    pub fn tab_header_rows(tab: &Tab) -> u16 { if tab.zoomed || tab.panes().len() < 2 { 0 } else { 1 } }
+    /// A title row over each pane of a split window — unless tmux.conf says pane-border-status off.
+    pub fn tab_header_rows(&self, tab: &Tab) -> u16 { if self.opts.border_titles == Some(false) || tab.zoomed || tab.panes().len() < 2 { 0 } else { 1 } }
 
     fn compute_rects(&self) -> Vec<(u64, Rect)> {
         let tab = self.tab();
@@ -863,7 +877,7 @@ impl App {
             if let Some(root) = &tab.root {
                 let mut out = Vec::new();
                 root.rects(self.body(), &mut out);
-                if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(App::tab_header_rows(tab)))) }
+                if let Some((_, r)) = out.iter().find(|(id, _)| *id == pane_id) { return Some((r.width, r.height.saturating_sub(self.tab_header_rows(tab)))) }
             }
         }
         None
@@ -1019,12 +1033,14 @@ impl App {
         tab.root = tab.root.take().and_then(|root| root.remove(id));
         tab.zoomed = false;
         let rest = tab.panes();
-        tab.focus = rest.get(at.min(rest.len().saturating_sub(1))).copied();
+        // The pane you were in before goes on, as tmux's kill-pane does; else a neighbour.
+        tab.focus = tab.last_focus.filter(|l| rest.contains(l)).or_else(|| rest.get(at.min(rest.len().saturating_sub(1))).copied());
         let tab_id = tab.id.clone();
         self.drop_pane(id);
         if let Some((machine, agent)) = agent { self.desk_op(json!({ "op": "pane.remove", "tabId": tab_id, "machineId": machine, "agentId": agent })) }
         if self.tabs[index].root.is_none() && self.tabs.len() > 1 { self.close_tab(index) }
         else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "home".into() }
+        self.sync_titles();
         self.fit_panes();
     }
 
@@ -1034,7 +1050,10 @@ impl App {
         for id in tab.panes() { self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
         if self.tabs.is_empty() { self.tabs.push(Tab::new("home")) }
-        if self.active >= self.tabs.len() || (index < self.active) { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
+        // Closing the current window lands on the last one, as tmux does; else keep our place.
+        let last = self.last_tab.as_ref().and_then(|id| self.tabs.iter().position(|t| &t.id == id));
+        if index == self.active && last.is_some() { self.active = last.unwrap_or(0); self.last_tab = None }
+        else if self.active >= self.tabs.len() || (index < self.active) { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
         self.fit_panes();
     }
 
@@ -1128,6 +1147,7 @@ impl App {
         let at = ids.iter().position(|x| *x == focus).unwrap_or(0) as i64;
         let other = ids[(at + by).rem_euclid(ids.len() as i64) as usize];
         if let Some(root) = self.tab_mut().root.as_mut() { root.swap(focus, other) }
+        self.sync_titles();
         self.fit_panes();
     }
 
@@ -1143,6 +1163,7 @@ impl App {
             let mut i = 0;
             root.relabel(&mut |_| { let id = rotated[i]; i += 1; id });
         }
+        self.sync_titles();
         self.fit_panes();
     }
 

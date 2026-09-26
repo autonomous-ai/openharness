@@ -220,6 +220,19 @@ pub fn neighbour(rects: &[(u64, Rect)], from: u64, toward: Toward) -> Option<u64
         })
         .min_by(|a, b| a.1.cmp(&b.1).then(b.2.cmp(&a.2)))
         .map(|(id, _, _)| id)
+        // Nothing that way: tmux wraps round to the far side.
+        .or_else(|| {
+            let overlap = |a0: u16, a1: u16, b0: u16, b1: u16| (a1.min(b1) as i32 - a0.max(b0) as i32).max(0);
+            rects.iter().filter(|(id, _)| *id != from).filter_map(|(id, o)| {
+                let (edge, shared) = match toward {
+                    Toward::Left => ((o.x + o.width) as i32, overlap(r.y, r.y + r.height, o.y, o.y + o.height)),
+                    Toward::Right => (-(o.x as i32), overlap(r.y, r.y + r.height, o.y, o.y + o.height)),
+                    Toward::Up => ((o.y + o.height) as i32, overlap(r.x, r.x + r.width, o.x, o.x + o.width)),
+                    Toward::Down => (-(o.y as i32), overlap(r.x, r.x + r.width, o.x, o.x + o.width)),
+                };
+                (shared > 0).then_some((*id, edge, shared))
+            }).max_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2))).map(|(id, _, _)| id)
+        })
 }
 
 #[cfg(test)]
@@ -244,7 +257,8 @@ mod tests {
         root.rects(Rect::new(0, 0, 81, 20), &mut out);
         assert_eq!(out[0].1.width + out[1].1.width + 1, 81);
         assert_eq!(neighbour(&out, 1, Toward::Right), Some(2));
-        assert_eq!(neighbour(&out, 1, Toward::Left), None);
+        // tmux wraps: left of the leftmost is the rightmost.
+        assert_eq!(neighbour(&out, 1, Toward::Left), Some(2));
     }
 
     #[test]

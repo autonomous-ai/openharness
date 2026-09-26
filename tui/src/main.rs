@@ -11,6 +11,7 @@ mod config;
 mod daemon;
 mod event;
 mod fleet;
+mod format;
 mod input;
 mod layout;
 mod modal;
@@ -105,6 +106,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         for b in &km.prefix_table { println!("bind-key {}{:<8} {}", if b.repeat { "-r " } else { "   " }, keys::name(&b.chord), b.command) }
         for b in &km.root_table { println!("bind-key -n {:<8} {}", keys::name(&b.chord), b.command) }
         for p in config.problems.iter().chain(settings.problems.iter()) { println!("\n  ! {p}") }
+        for n in &settings.notes { println!("  - {n}") }
         return Ok(())
     }
     let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok())

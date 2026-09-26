@@ -30,8 +30,29 @@ pub struct Look {
     pub active_window_bg: Option<Color>,
 }
 
+/// tmux's formats and switches for the status line, borders and copy mode.
+#[derive(Default, Clone, Debug)]
+pub struct Options {
+    pub status_left: Option<String>,
+    pub status_right: Option<String>,
+    pub status_left_length: Option<usize>,
+    pub status_right_length: Option<usize>,
+    pub window_status_format: Option<String>,
+    pub window_status_current_format: Option<String>,
+    pub window_status_current_style: Option<(Option<Color>, Option<Color>)>,
+    pub window_status_separator: Option<String>,
+    pub renumber_windows: Option<bool>,
+    /// pane-border-status: Some(false) is `off` — no title row on the panes.
+    pub border_titles: Option<bool>,
+    pub mode_keys_emacs: Option<bool>,
+    pub status: Option<bool>,
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct Settings {
+    pub options: Options,
+    pub notes: Vec<String>,
+    depth: u8,
     pub base_index: Option<usize>,
     pub pane_base_index: Option<usize>,
     pub mouse: Option<bool>,
@@ -80,6 +101,24 @@ fn style(text: &str) -> (Option<Color>, Option<Color>) {
 }
 
 fn on_off(v: &str) -> Option<bool> { match v { "on" | "yes" | "1" | "true" => Some(true), "off" | "no" | "0" | "false" => Some(false), _ => None } }
+
+fn expand_home(path: &str) -> String {
+    match path.strip_prefix("~/") { Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()), None => path.to_string() }
+}
+
+/// Run a condition with sh, a second at most; true when it exits 0.
+pub fn shell_true(cond: &str) -> bool {
+    use std::process::{Command, Stdio};
+    let Ok(mut child) = Command::new("sh").arg("-c").arg(cond).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else { return false };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(5)),
+            _ => { let _ = child.kill(); return false }
+        }
+    }
+}
 
 pub fn load(keymap: &mut Keymap) -> Settings {
     let mut settings = Settings::default();
@@ -130,8 +169,54 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "pane-active-border-style" => { let (fg, _) = style(value); s.look.active_border = fg }
                 "window-style" => { let (fg, bg) = style(value); s.look.window_fg = fg; s.look.window_bg = bg }
                 "window-active-style" => { let (fg, bg) = style(value); s.look.active_window_fg = fg; s.look.active_window_bg = bg }
+                "status-left" => s.options.status_left = Some(value.to_string()),
+                "status-right" => s.options.status_right = Some(value.to_string()),
+                "status-left-length" => s.options.status_left_length = value.parse().ok(),
+                "status-right-length" => s.options.status_right_length = value.parse().ok(),
+                "window-status-format" => s.options.window_status_format = Some(value.to_string()),
+                "window-status-current-format" => s.options.window_status_current_format = Some(value.to_string()),
+                "window-status-current-style" => { let (fg, bg) = style(value); s.options.window_status_current_style = Some((fg, bg)) }
+                "window-status-separator" => s.options.window_status_separator = Some(value.to_string()),
+                "renumber-windows" => s.options.renumber_windows = on_off(value),
+                "pane-border-status" => s.options.border_titles = Some(value != "off"),
+                "mode-keys" => s.options.mode_keys_emacs = Some(value == "emacs"),
+                "status" => s.options.status = on_off(value),
+                // Options with no effect here (the terminal's, the server's): accepted quietly.
+                "escape-time" | "history-limit" | "default-terminal" | "terminal-overrides" | "terminal-features" | "focus-events" | "set-clipboard"
+                | "allow-passthrough" | "extended-keys" | "default-shell" | "default-command" | "aggressive-resize" | "status-keys" | "status-interval"
+                | "status-justify" | "monitor-activity" | "visual-activity" | "visual-bell" | "bell-action" | "automatic-rename" | "allow-rename"
+                | "set-titles" | "set-titles-string" | "update-environment" | "destroy-unattached" | "exit-empty" | "word-separators" | "wrap-search"
+                | "status-left-style" | "status-right-style" | "window-status-style" | "window-status-activity-style" | "window-status-bell-style"
+                | "mode-style" | "message-command-style" | "clock-mode-colour" | "clock-mode-style" | "display-panes-colour" | "display-panes-active-colour"
+                | "pane-border-format" | "pane-border-lines" | "popup-style" | "popup-border-style" | "main-pane-width" | "main-pane-height" => {}
+                n if n.starts_with('@') => {}
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
-                _ => {}
+                // Not an error in your tmux.conf: noted (`hn --keys` lists them, `:set` says so).
+                other => s.notes.push(format!("{other}: an option hn does not use")),
+            }
+        }
+        // Another file, as tmux reads it (-q: quiet when missing). Depth-limited against loops.
+        "source-file" | "source" => {
+            let quiet = words.iter().any(|w| w == "-q");
+            for path in words[1..].iter().filter(|w| !w.starts_with('-')) {
+                let path = expand_home(path);
+                if s.depth > 8 { return Err("source-file nested too deep".into()) }
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => { s.depth += 1; apply(&text, keymap, s); s.depth -= 1 }
+                    Err(_) if quiet => {}
+                    Err(_) => return Err(format!("{path}: No such file or directory")),
+                }
+            }
+        }
+        // if-shell at load time runs on this computer, as tmux's server would.
+        "if-shell" | "if" => {
+            let mut i = 1;
+            let mut format = false;
+            while i < words.len() && words[i].starts_with('-') && words[i].len() > 1 { if words[i].contains('F') { format = true } if words[i] == "-t" { i += 1 } i += 1 }
+            let Some(cond) = words.get(i) else { return Ok(()) };
+            let truth = if format { !matches!(cond.trim(), "" | "0") } else { shell_true(cond) };
+            if let Some(command) = words.get(if truth { i + 1 } else { i + 2 }) {
+                for part in split(command) { directive(&part, keymap, s)? }
             }
         }
         "bind" | "bind-key" => {
