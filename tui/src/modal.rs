@@ -83,11 +83,14 @@ pub struct Prompt {
     pub cursor: usize,
     /// Where Up/Down are in the command history.
     pub history_at: Option<usize>,
+    /// status-keys vi: Esc leaves insert for normal mode; an operator (d, c, r) waits for its motion.
+    pub vi_normal: bool,
+    pub vi_pending: Option<char>,
 }
 
 impl Prompt {
     pub fn status(kind: PromptKind, label: &str, initial: &str) -> Prompt {
-        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None }
+        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, vi_pending: None }
     }
 }
 

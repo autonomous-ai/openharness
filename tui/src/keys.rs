@@ -107,6 +107,7 @@ impl Keymap {
         b(k(KeyCode::Char('o'), alt), "rotate-window -D", false, "Rotate through the panes in reverse");
         b(k(KeyCode::Char('o'), ctrl), "rotate-window", false, "Rotate through the panes");
         b(k(KeyCode::Char('z'), ctrl), "suspend-client", false, "Suspend the current client");
+        b(ch('$'), "command-prompt -I \"#S\" -p (rename-session) rename-session", false, "Rename the session (this computer's name here)");
         b(ch('('), "switch-client -p", false, "Switch to the previous harness");
         b(ch(')'), "switch-client -n", false, "Switch to the next harness");
         b(k(KeyCode::Up, alt), "resize-pane -U 5", true, "Resize the pane up by 5");

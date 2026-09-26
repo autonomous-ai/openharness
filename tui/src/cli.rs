@@ -27,7 +27,8 @@ pub async fn run(args: &[String], port: u16) -> Option<i32> {
     let cmd = args.first()?.as_str();
     match cmd {
         "-V" | "--version" => { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), crate::tmuxconf::TMUX_VERSION); Some(0) }
-        "ls" | "list-sessions" | "list" => Some(ls(port).await),
+        // hn's ls: every harness on every machine (tmux's list-sessions runs in the client).
+        "ls" | "list" => Some(ls(port).await),
         "send" | "send-message" => Some(send(port, &args[1..]).await),
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         // attach / a: the client itself, as `tmux attach` is.

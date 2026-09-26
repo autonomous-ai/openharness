@@ -152,6 +152,10 @@ pub struct App {
     /// -P [-F fmt] on split-window / new-window: print the new pane once it is there; the
     /// shell that asked waits for it (the reply is held here).
     pub print_new: Option<String>,
+    /// rename-session: what this session is called here (else the machine's name).
+    pub session_alias: Option<String>,
+    /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
+    pub marked: Option<u64>,
     /// copy-pipe's command, for the copy about to happen.
     pub copy_pipe: Option<String>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
@@ -211,6 +215,8 @@ impl App {
             suspend: false,
             capture: None,
             print_new: None,
+            session_alias: None,
+            marked: None,
             copy_pipe: None,
             return_to: None,
             held_reply: None,
@@ -857,7 +863,7 @@ impl App {
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
         if let Some(off) = s.options.tim_off { self.tim.off = off }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
-            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height, copy_command);
+            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height, copy_command, status_keys_vi);
         self.fit_panes();
         self.redraw_all = true;
     }
@@ -881,7 +887,14 @@ impl App {
 
     /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
     pub fn session_name(&self) -> String {
+        if let Some(a) = &self.session_alias { return a.clone() }
         self.fleet.machine(&self.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(hostname)
+    }
+
+    /// move-window -r: every window numbered in order from base-index.
+    pub fn renumber_all(&mut self) {
+        for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index); }
+        self.fit_panes();
     }
 
     /// Give every window without an index the first free one; forget closed windows'.
@@ -1106,6 +1119,7 @@ impl App {
     }
 
     fn drop_pane(&mut self, id: u64) {
+        if self.marked == Some(id) { self.marked = None }
         if let Some(pane) = self.panes.remove(&id) {
             if let (Some(stream), Some(link)) = (pane.stream, self.links.get(&pane.machine_id).and_then(|s| s.link.clone())) {
                 link.send("terminal_close", json!({ "streamId": stream.to_string() }));
@@ -1290,7 +1304,7 @@ impl App {
         // tmux's main-pane-width 80 / main-pane-height 24, where the window has room for them.
         if let Some(layout::Node::Split { ratio, .. }) = tab.root.as_mut() {
             match preset {
-                Preset::MainStack if body.width > 100 => *ratio = (size(main_w.unwrap_or(80), body.width) / body.width as f32).clamp(0.1, 0.9),
+                Preset::MainStack if body.width > 100 => *ratio = (size(main_w.unwrap_or(80), body.width) / body.width.saturating_sub(1) as f32).clamp(0.1, 0.9),
                 Preset::MainRow if body.height > 34 => *ratio = (size(main_h.unwrap_or(24), body.height) / body.height as f32).clamp(0.1, 0.9),
                 _ => {}
             }

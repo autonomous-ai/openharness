@@ -70,7 +70,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // The picker drew with a placeholder preview; a live pane preview needs the whole app.
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
-        if let Some(area) = picker_preview_area(body, picker) { preview(buf, app, kind, picker, area) }
+        if let Some(area) = picker_preview_area(fzf_inner(body), picker) { preview(buf, app, kind, picker, area) }
     }
     if let Some(Modal::Tree { cursor: at, collapsed }) = &app.modal { tree(buf, app, body, *at, collapsed) }
     let popup = match &app.modal { Some(Modal::Popup { pane, width, height, title }) => Some((*pane, *width, *height, title.clone())), _ => None };
@@ -221,6 +221,7 @@ fn pane_state_word(app: &App, pane: &Pane) -> Option<Span<'static>> {
     if let Phase::Watching(who) = &pane.phase {
         return Some(Span::styled(format!("[watching{}]", if who.is_empty() { String::new() } else { format!(" — {who} has it") }), Style::default().fg(Color::Yellow)));
     }
+    if app.marked == Some(pane.id) { return Some(Span::styled("[marked]", Style::default().add_modifier(Modifier::REVERSED))) }
     let agent = app.fleet.agent(&pane.machine_id, &pane.agent_id)?;
     Some(match app.fleet.state_of(agent) {
         State::NeedsInput => Span::styled("[waiting]", Style::default().fg(Color::Black).bg(Color::Yellow)),
@@ -557,6 +558,34 @@ fn local_time(offset: i64) -> (String, String) {
 
 // ── fzf ──────────────────────────────────────────────────────────────────────
 
+/// FZF_DEFAULT_OPTS --border: the lists' box (rounded, sharp, bold, double, horizontal, vertical,
+/// top, bottom, left, right, none), drawn in the border colour; the list lives inside it.
+fn fzf_inner(body: Rect) -> Rect {
+    let Some(style) = theme::fzf_opts().border.as_deref() else { return body };
+    let (t, b, l, r) = match style { "none" => (0, 0, 0, 0), "horizontal" => (1, 1, 0, 0), "vertical" => (0, 0, 1, 1), "top" => (1, 0, 0, 0), "bottom" => (0, 1, 0, 0), "left" => (0, 0, 1, 0), "right" => (0, 0, 0, 1), _ => (1, 1, 1, 1) };
+    Rect::new(body.x + l, body.y + t, body.width.saturating_sub(l + r), body.height.saturating_sub(t + b))
+}
+
+fn fzf_border(buf: &mut Buffer, body: Rect) {
+    let Some(style) = theme::fzf_opts().border.clone() else { return };
+    let st = Style::default().fg(theme::fzf().border);
+    let (h, v, tl, tr, bl, br) = match style.as_str() {
+        "sharp" => ("─", "│", "┌", "┐", "└", "┘"), "bold" => ("━", "┃", "┏", "┓", "┗", "┛"), "double" => ("═", "║", "╔", "╗", "╚", "╝"),
+        "block" | "thinblock" => ("▀", "█", "█", "█", "█", "█"), _ => ("─", "│", "╭", "╮", "╰", "╯"),
+    };
+    let (top, bottom, left, right) = match style.as_str() { "none" => (false, false, false, false), "horizontal" => (true, true, false, false), "vertical" => (false, false, true, true), "top" => (true, false, false, false), "bottom" => (false, true, false, false), "left" => (false, false, true, false), "right" => (false, false, false, true), _ => (true, true, true, true) };
+    if body.width < 2 || body.height < 2 { return }
+    let (x1, y1) = (body.x + body.width - 1, body.y + body.height - 1);
+    if top { for x in body.x..=x1 { buf.set_string(x, body.y, h, st) } }
+    if bottom { for x in body.x..=x1 { buf.set_string(x, y1, h, st) } }
+    if left { for y in body.y..=y1 { buf.set_string(body.x, y, v, st) } }
+    if right { for y in body.y..=y1 { buf.set_string(x1, y, v, st) } }
+    if top && left { buf.set_string(body.x, body.y, tl, st) }
+    if top && right { buf.set_string(x1, body.y, tr, st) }
+    if bottom && left { buf.set_string(body.x, y1, bl, st) }
+    if bottom && right { buf.set_string(x1, y1, br, st) }
+}
+
 fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
     (picker.preview && body.width >= 80 && body.height >= 8).then(|| {
         let list_w = body.width / 2;
@@ -568,6 +597,10 @@ fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
 /// (236; the current row's in 161 on 236), matches in 108 (151 on the current row), the info line
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
 fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: &str) -> Position {
+    fzf_border(buf, body);
+    let body = fzf_inner(body);
+    // --color=bg: the list's own background, under everything drawn on it.
+    if let Some(bg) = theme::fzf_opts().bg { buf.set_style(body, Style::default().bg(bg)) }
     let preview = picker_preview_area(body, picker);
     let area = match preview { Some(p) => Rect::new(body.x, body.y, p.x - body.x, body.height), None => body };
     let width = area.width as usize;
@@ -823,6 +856,8 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
+    // --color=selected-bg: marked rows carry it (the current row keeps bg+).
+    if marked && !current { if let Some(bg) = theme::fzf_opts().selected_bg { buf.set_style(Rect::new(x + gutter_width(), y, text_w as u16, 1), Style::default().bg(bg)) } }
 }
 
 /// The pointer's cells (fzf pads every row to it) and the pointer and marker together.
@@ -883,6 +918,7 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area
     for y in area.y..area.y + h {
         for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } }
     }
+    if let Some(bg) = theme::fzf_opts().bg { buf.set_style(area, Style::default().bg(bg)) }
     buf.set_string(area.x, area.y, "╭", border);
     buf.set_string(area.x + w - 1, area.y, "╮", border);
     buf.set_string(area.x, area.y + h - 1, "╰", border);
