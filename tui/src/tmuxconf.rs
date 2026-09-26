@@ -97,7 +97,11 @@ pub fn apply(text: &str, keymap: &mut Keymap, settings: &mut Settings) {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') { continue }
         for words in split(line) {
-            if let Err(e) = directive(&words, keymap, settings) { settings.problems.push(format!("tmux.conf:{}: {e}", n + 1)) }
+            // `\;` chains commands: part of the command a bind binds, else one directive after another.
+            let parts: Vec<&[String]> = if matches!(words.first().map(|w| w.as_str()), Some("bind" | "bind-key")) { vec![&words[..]] } else { words.split(|w| w == ";").filter(|p| !p.is_empty()).collect() };
+            for part in parts {
+                if let Err(e) = directive(part, keymap, settings) { settings.problems.push(format!("tmux.conf:{}: {e}", n + 1)) }
+            }
         }
     }
 }
@@ -156,7 +160,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 match words[i].as_str() {
                     "-a" => all = true,
                     "-n" => table = Table::Root,
-                    "-T" => { i += 1; table = if words.get(i).map(|t| t == "root").unwrap_or(false) { Table::Root } else { Table::Prefix } }
+                    "-T" => { i += 1; table = match words.get(i).map(|t| t.as_str()) { Some("root") => Table::Root, Some("prefix") => Table::Prefix, _ => return Ok(()) } }
                     w => key = Some(w.to_string()),
                 }
                 i += 1;
@@ -202,6 +206,8 @@ set -g pane-active-border-style fg=colour208
 set -g window-style fg=colour245,bg=colour234
 set -g window-active-style fg=terminal,bg=terminal
 set -g @plugin 'tmux-plugins/tpm'
+bind r source-file ~/.tmux.conf \; display "Reloaded!"
+unbind -T copy-mode-vi Space
 run '~/.tmux/plugins/tpm/tpm'
 "##;
         let mut km = Keymap::tmux_defaults();
@@ -220,6 +226,8 @@ run '~/.tmux/plugins/tpm/tpm'
         assert_eq!(s.look.status_bg, Some(Color::Indexed(235)));
         assert_eq!(s.look.active_border, Some(Color::Indexed(208)));
         assert_eq!(s.look.window_bg, Some(Color::Indexed(234)));
+        assert_eq!(km.prefix_command(&keys::parse("r").unwrap()).unwrap().command, "source-file ~/.tmux.conf ; display Reloaded!");
+        assert!(km.prefix_command(&keys::parse("Space").unwrap()).is_some());
         assert_eq!(s.look.active_window_bg, Some(Color::Reset));
     }
 }

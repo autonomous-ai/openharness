@@ -46,7 +46,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
             return;
         }
         if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
-            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. })) { app.modal = None }
+            // A list or view on screen gives way to the command, as tmux's choose modes do.
+            if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. }) | Some(Modal::Tree { .. })) { app.modal = None }
             app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
             commands::execute(app, &binding.command);
         }
@@ -63,7 +64,10 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         app.repeat_until = None;
     }
-    if !typing(app) && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
+    // The prefix works over the lists too (they are tmux's choose modes); only a line being typed
+    // at the status line keeps it.
+    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }));
+    if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.prefix = true;
         app.prefix_at = Some(std::time::Instant::now());
         return;
