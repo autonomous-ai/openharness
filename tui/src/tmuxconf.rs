@@ -2,7 +2,8 @@
 //!
 //! Understood: `set[-option] … prefix / prefix2 / base-index / pane-base-index / mouse /
 //! status-position / display-time / display-panes-time / repeat-time / status-style / status-bg /
-//! status-fg / message-style / pane-active-border-style / pane-border-style`,
+//! status-fg / message-style / pane-active-border-style / pane-border-style / window-style /
+//! window-active-style`,
 //! `bind[-key] [-r] [-n] [-T prefix|root] key command…`, `unbind[-key] [-a] [-n] [-T …] key`.
 //! Everything else (plugins, `if-shell`, copy-mode tables, hooks) is skipped quietly; binds to a
 //! command this TUI does not have are kept and say so when pressed. `HARNESS_TUI_TMUX_CONF=off`
@@ -23,6 +24,10 @@ pub struct Look {
     pub message_fg: Option<Color>,
     pub active_border: Option<Color>,
     pub border: Option<Color>,
+    pub window_fg: Option<Color>,
+    pub window_bg: Option<Color>,
+    pub active_window_fg: Option<Color>,
+    pub active_window_bg: Option<Color>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -118,6 +123,8 @@ fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Result<
                 "status-fg" => s.look.status_fg = colour(value),
                 "message-style" => { let (fg, bg) = style(value); s.look.message_fg = fg.or(s.look.message_fg); s.look.message_bg = bg.or(s.look.message_bg) }
                 "pane-active-border-style" => { let (fg, _) = style(value); s.look.active_border = fg }
+                "window-style" => { let (fg, bg) = style(value); s.look.window_fg = fg; s.look.window_bg = bg }
+                "window-active-style" => { let (fg, bg) = style(value); s.look.active_window_fg = fg; s.look.active_window_bg = bg }
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
                 _ => {}
             }
@@ -191,6 +198,8 @@ set -g mouse on
 set -g status-position top
 set -g status-style bg=colour235,fg=colour136
 set -g pane-active-border-style fg=colour208
+set -g window-style fg=colour245,bg=colour234
+set -g window-active-style fg=terminal,bg=terminal
 set -g @plugin 'tmux-plugins/tpm'
 run '~/.tmux/plugins/tpm/tpm'
 "##;
@@ -209,5 +218,7 @@ run '~/.tmux/plugins/tpm/tpm'
         assert_eq!(s.status_top, Some(true));
         assert_eq!(s.look.status_bg, Some(Color::Indexed(235)));
         assert_eq!(s.look.active_border, Some(Color::Indexed(208)));
+        assert_eq!(s.look.window_bg, Some(Color::Indexed(234)));
+        assert_eq!(s.look.active_window_bg, Some(Color::Reset));
     }
 }
