@@ -895,8 +895,9 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         let end = text_w.min((used + right_w + 24).max(text_w.min(90)));
         spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
         // The right column is part of the line: its hits are lit too.
+        // Its place in the line as drawn (picker::line): after the detail, when there is one.
         let detail_len: isize = row.detail.iter().map(|s| s.content.chars().count() as isize).sum();
-        let right_at = label_len as isize + 2 + detail_len + 2;
+        let right_at = label_len as isize + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
         push_lit(&mut spans, &row.right, right_at, fill.add_modifier(Modifier::DIM), hit.remove_modifier(Modifier::DIM));
     } else if current {
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));

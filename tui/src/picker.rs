@@ -1,13 +1,11 @@
-//! The list behind every overlay (⌥O, ⌥P, needs input, machines, new harness…): a query line, rows
-//! matched with nucleo (Helix's matcher — fzf's algorithm), a cursor that stays on the same ITEM when
-//! the rows are rebuilt under it, and group headings in the unfiltered view.
+//! The list behind every overlay (C-b s, the palette, machines, new harness…): a query line, rows
+//! matched as fzf matches them (fzf.rs), a cursor that stays on the same ITEM when the rows are
+//! rebuilt under it, and group headings in the unfiltered view.
 
 use std::time::Instant;
 
 use std::collections::HashMap;
 
-use nucleo::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::text::Span;
 
 pub struct Row {
@@ -76,7 +74,6 @@ pub struct Picker {
     /// The preview window, and how far it is scrolled.
     pub preview: bool,
     pub preview_scroll: u16,
-    matcher: Matcher,
 }
 
 impl Picker {
@@ -103,7 +100,6 @@ impl Picker {
             marked: Vec::new(),
             preview: true,
             preview_scroll: 0,
-            matcher: Matcher::new(Config::DEFAULT),
             preview_max: Default::default(),
             kill: String::new(),
             page_rows: std::cell::Cell::new(10),
@@ -127,52 +123,32 @@ impl Picker {
         if query.is_empty() {
             self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
         } else {
-            // fzf's extended search: space-separated terms all match; `a | b` is one term either side
-            // satisfies; 'exact and fuzzy are nucleo's; ^prefix, suffix$ and their !negations are
-            // matched here against the title the row shows (nucleo's anchors miss uppercase).
-            let mut groups: Vec<Vec<Term>> = Vec::new();
-            let mut or_next = false;
-            for word in terms(query) {
-                if word == "|" { or_next = true; continue }
-                let term = Term::parse(&word);
-                match groups.last_mut() { Some(g) if or_next => g.push(term), _ => groups.push(vec![term]) }
-                or_next = false;
-            }
-            let mut buf = Vec::new();
-            let mut scored: Vec<(usize, u32, Vec<u32>)> = Vec::new();
+            // fzf itself (fzf.rs, ported from fzf 0.67): the extended-search terms, FuzzyMatchV2's
+            // scores and lit characters, the tiebreak — over the line as it is drawn.
+            let o = crate::theme::fzf_opts();
+            let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
+            let q = crate::fzf::Query::parse(query, case, !o.exact, true);
+            let words: Vec<String> = query.split_whitespace().map(|w| w.trim_start_matches('\'').to_lowercase()).collect();
+            let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
+            let mut hidden: Vec<usize> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled { continue }
-                // As fzf: the line you see is what matches. The hidden keywords (engine, branch, the
-                // machine's id…) still find a row, but only below every visible match.
-                let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
-                // Laid out as the row draws it (two spaces between), so hit positions map back to cells.
-                let visible = format!("{}  {}  {}", row.label, detail, row.right);
-                let hidden = format!("{} {}", row.label, row.extra);
-                let mut indices = Vec::new();
-                let mut total = Some(0u32);
-                for group in &groups {
-                    // The title first (its hits are what gets highlighted), then the rest of the line
-                    // you see, then — whole words only — the keywords behind it (engine, machine).
-                    // (A negation must hold for the whole line you see, so it is only asked of that.)
-                    // fzf's way: the whole line you see is searched and scored as one.
-                    let mut best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s);
-                    if best.is_none() { best = group.iter().filter(|t| t.names_word(&hidden)).map(|_| (8u32, Vec::new())).next() }
-                    match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
-                }
-                if let Some(score) = total {
-                    indices.sort_unstable();
-                    indices.dedup();
-                    // A row's boost (waiting, live) only breaks ties: once you type, the match decides.
-                    scored.push((index, score, indices));
+                let chars: Vec<char> = line(row).chars().collect();
+                match q.matches(&chars) {
+                    Some(hit) => {
+                        let mut rank = crate::fzf::rank(&hit, &chars, &o.tiebreak);
+                        // --tac: the input read bottom-up, ties too.
+                        rank.push(if o.tac { -(index as i64) } else { index as i64 });
+                        scored.push((rank, index, hit.positions.iter().map(|p| *p as u32).collect()));
+                    }
+                    // The keywords behind a row (engine, machine, branch): whole words of three
+                    // letters or more find it, after everything that matched what you see.
+                    None if !words.is_empty() && words.iter().all(|w| w.chars().count() >= 3 && names_word(&format!("{} {}", row.label, row.extra), w)) => hidden.push(index),
+                    None => {}
                 }
             }
-            // fzf's tiebreak: score, then the shorter line, then the original order.
-            // Only negations (`!rate`): nothing scores, so the list keeps its order, as fzf's does.
-            let positive = groups.iter().any(|g| g.iter().any(|t| !t.negative()));
-            let o = crate::theme::fzf_opts();
-            if o.tiebreak_index && !self.keep_order && positive && !o.no_sort { scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0))) }
-            else if !self.keep_order && positive && !o.no_sort { scored.sort_by(|a, b| b.1.cmp(&a.1).then(line_len(&self.rows[a.0]).cmp(&line_len(&self.rows[b.0]))).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
-            self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
+            if !self.keep_order && q.sortable() && !o.no_sort { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
+            self.visible = scored.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).collect();
         }
         // --tac: the input order reversed (wherever the order is the input's).
         {
@@ -320,7 +296,15 @@ impl Picker {
 }
 
 /// The length of the line a row shows (fzf's length tiebreak is the whole line's).
-fn line_len(row: &Row) -> usize { row.label.chars().count() + row.detail.iter().map(|s| s.content.chars().count() + 2).sum::<usize>() + row.right.chars().count() + 2 }
+/// A row's line as it is drawn, and as fzf would read it: the title, then the detail and the right
+/// column (two spaces before each that is there). Hit positions are places in this.
+pub fn line(row: &Row) -> String {
+    let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
+    let mut out = row.label.clone();
+    if !detail.is_empty() { out.push_str("  "); out.push_str(&detail) }
+    if !row.right.is_empty() { out.push_str("  "); out.push_str(&row.right) }
+    out
+}
 
 /// Where an alphanumeric word ends, going back or forward from `at` (readline's M-b / M-f).
 fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
@@ -335,99 +319,9 @@ fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
     at
 }
 
-/// Split a query into terms: whitespace separates, `\ ` is a literal space.
-fn terms(query: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut word = String::new();
-    let mut chars = query.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' if chars.peek() == Some(&' ') => { word.push(' '); chars.next(); }
-            c if c.is_whitespace() => { if !word.is_empty() { out.push(std::mem::take(&mut word)) } }
-            c => word.push(c),
-        }
-    }
-    if !word.is_empty() { out.push(word) }
-    out
-}
-
-/// One search term.
-enum Term {
-    Anchored { text: String, prefix: bool, suffix: bool, negate: bool },
-    Nucleo(Pattern, String),
-}
-
-impl Term {
-    fn parse(word: &str) -> Term {
-        let (negate, rest) = match word.strip_prefix('!') { Some(r) => (true, r), None => (false, word) };
-        let prefix = rest.starts_with('^');
-        let suffix = rest.ends_with('$') && !rest.ends_with("\\$") && rest.len() > 1;
-        if prefix || suffix {
-            let mut text = rest.trim_start_matches('^').to_string();
-            if suffix { text.pop(); }
-            return Term::Anchored { text, prefix, suffix, negate };
-        }
-        // FZF_DEFAULT_OPTS --exact turns 'x around (plain words exact, 'x fuzzy); -i / +i set the case.
-        let o = crate::theme::fzf_opts();
-        let word: String = if o.exact { match word.strip_prefix('\'') { Some(w) => w.to_string(), None if !word.starts_with('!') => format!("'{word}"), None => word.to_string() } } else { word.to_string() };
-        let case = match o.case { Some(true) => CaseMatching::Respect, Some(false) => CaseMatching::Ignore, None => CaseMatching::Smart };
-        Term::Nucleo(Pattern::parse(&word.replace(' ', "\\ "), case, Normalization::Smart), word.trim_start_matches('\'').to_lowercase())
-    }
-
-    fn negative(&self) -> bool {
-        match self { Term::Anchored { negate, .. } => *negate, Term::Nucleo(_, raw) => raw.starts_with('!') }
-    }
-
-    /// A hidden keyword this term names from its start (`codex`, `gpu-box`): three letters or more.
-    fn names_word(&self, hidden: &str) -> bool {
-        let Term::Nucleo(_, raw) = self else { return false };
-        raw.chars().count() >= 3 && !raw.starts_with('!') && hidden.to_lowercase().split(|c: char| c.is_whitespace() || c == '/' || c == '·').any(|w| w.starts_with(raw.as_str()))
-    }
-
-    /// A score and the matched character positions, or None when the row does not match.
-    fn score(&self, label: &str, haystack: &str, buf: &mut Vec<char>, matcher: &mut Matcher) -> Option<(u32, Vec<u32>)> {
-        match self {
-            Term::Nucleo(p, _) => {
-                let mut hits = Vec::new();
-                p.indices(Utf32Str::new(haystack, buf), matcher, &mut hits).map(|s| (s, hits))
-            }
-            Term::Anchored { text, prefix, suffix, negate } => {
-                // -i / +i from FZF_DEFAULT_OPTS, else smart case.
-                let smart = match crate::theme::fzf_opts().case { Some(respect) => respect, None => text.chars().any(char::is_uppercase) };
-                let (l, t) = if smart { (label.to_string(), text.clone()) } else { (label.to_lowercase(), text.to_lowercase()) };
-                let n = l.chars().count() as u32;
-                let k = t.chars().count() as u32;
-                let hit = match (prefix, suffix) { (true, true) => l == t, (true, false) => l.starts_with(&t), _ => l.ends_with(&t) };
-                // suffix$ also ends a column of the line (the detail): "main$" finds `webapp · main`;
-                // ^prefix likewise starts one.
-                let column_start = if *prefix && !*suffix && !hit && haystack != label {
-                    let h = if smart { haystack.to_string() } else { haystack.to_lowercase() };
-                    let mut at = 0u32;
-                    let mut found = None;
-                    for part in h.split("  ") {
-                        if found.is_none() && !part.is_empty() && part.starts_with(&t) { found = Some(at) }
-                        at += part.chars().count() as u32 + 2;
-                    }
-                    found
-                } else { None };
-                let column_end = if let Some(f) = column_start { Some(f) } else if *suffix && !*prefix && !hit && haystack != label {
-                    let h = if smart { haystack.to_string() } else { haystack.to_lowercase() };
-                    let mut at = 0u32;
-                    let mut found = None;
-                    for part in h.split("  ") {
-                        let len = part.chars().count() as u32;
-                        if !part.is_empty() && part.ends_with(&t) { found = Some(at + len - k) }
-                        at += len + 2;
-                    }
-                    found
-                } else { None };
-                if *negate { return (!hit && column_end.is_none()).then(|| (0, Vec::new())) }
-                if !hit && column_end.is_none() { return None }
-                let from = if let Some(f) = column_end { f } else if *prefix { 0 } else { n - k };
-                Some((16 * k + 32, (from..from + k).collect()))
-            }
-        }
-    }
+/// A hidden keyword this word names from its start (`codex`, `gpu-box`).
+fn names_word(hidden: &str, word: &str) -> bool {
+    hidden.to_lowercase().split(|c: char| c.is_whitespace() || c == '/' || c == '·').any(|w| w.starts_with(word))
 }
 
 #[cfg(test)]
