@@ -476,6 +476,25 @@ pub fn parse(text: &str, env: &mut dyn Env, parse_only: bool) -> Result<Vec<Comm
     }
 }
 
+/// cmd_parse_from_arguments: a command given as arguments (a binding's, a shell's `hn …`)
+/// split into commands where an argument ends with `;` (`\;` at its end is a `;` it keeps).
+pub fn from_arguments(words: &[String]) -> Vec<Vec<String>> {
+    let (mut out, mut cmd): (Vec<Vec<String>>, Vec<String>) = (Vec::new(), Vec::new());
+    for w in words {
+        if w.starts_with(crate::tmuxconf::BLOCK) { cmd.push(w.clone()); continue }
+        match w.strip_suffix(';') {
+            Some(rest) if rest.ends_with('\\') => cmd.push(format!("{};", &rest[..rest.len() - 1])),
+            Some(rest) => {
+                if !rest.is_empty() { cmd.push(rest.to_string()) }
+                if !cmd.is_empty() { out.push(std::mem::take(&mut cmd)) }
+            }
+            None => cmd.push(w.clone()),
+        }
+    }
+    if !cmd.is_empty() { out.push(cmd) }
+    out
+}
+
 /// A command as tmux prints it (cmd_print): its name, then each argument escaped, a block as
 /// `{ … }`.
 pub fn print(cmd: &Command) -> String {
