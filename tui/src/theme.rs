@@ -21,12 +21,48 @@ pub const TEXT: Color = Color::Reset;
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
-pub struct Fzf { pub reverse: bool, pub pointer_char: String, pub marker_char: String, pub prompt_text: String, pub sixteen: bool, pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool }
+pub struct Fzf { pub reverse: bool, pub pointer_char: String, pub marker_char: String, pub prompt_text: String, pub sixteen: bool, pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool, pub attrs: FzfAttrs, pub border_dim: bool, pub gutter_dim: bool }
+
+/// The attributes --color gives a slot (`hl+:-1:underline:reverse`, `prompt:bold:red`).
+#[derive(Default, Clone, Copy)]
+pub struct FzfAttrs { pub hl: Modifier, pub hl_plus: Modifier, pub fg_plus: Modifier, pub prompt: Modifier, pub pointer: Modifier, pub marker: Modifier, pub info: Modifier, pub header: Modifier, pub border: Modifier }
+
+impl Fzf {
+    /// The border, separator and scrollbar: the default colour dimmed where the theme has none
+    /// (16 and bw), as fzf's.
+    pub fn border_style(&self) -> Style { let st = if self.border_dim { Style::default().add_modifier(Modifier::DIM) } else { Style::default().fg(self.border) }; st.add_modifier(self.attrs.border) }
+    pub fn prompt_style(&self) -> Style { Style::default().fg(self.prompt).add_modifier(self.attrs.prompt) }
+    pub fn info_style(&self) -> Style { Style::default().fg(self.info).add_modifier(self.attrs.info) }
+    pub fn header_style(&self) -> Style { Style::default().fg(self.header).add_modifier(self.attrs.header) }
+    pub fn gutter_style(&self) -> Style { if self.gutter_dim { Style::default().add_modifier(Modifier::DIM) } else { Style::default().fg(self.gutter) } }
+}
+
+/// FZF_DEFAULT_OPTS_FILE's options, then FZF_DEFAULT_OPTS's, as fzf reads them.
+pub fn default_opts() -> String {
+    let file = std::env::var("FZF_DEFAULT_OPTS_FILE").ok().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    format!("{} {}", file.replace('\n', " "), std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default())
+}
+
+/// A --color slot's value: `-1`, 0–255, #rrggbb, a name (bright-* too), and attributes, in any
+/// order — the last colour wins, the attributes add up (`regular` clears them).
+pub fn fzf_spec(v: &str) -> (Option<Color>, Modifier) {
+    let (mut colour, mut attrs) = (None, Modifier::empty());
+    for c in v.split(':') {
+        match c {
+            "regular" => attrs = Modifier::empty(),
+            "bold" | "strong" => attrs |= Modifier::BOLD, "dim" => attrs |= Modifier::DIM, "italic" => attrs |= Modifier::ITALIC,
+            "underline" => attrs |= Modifier::UNDERLINED, "blink" => attrs |= Modifier::SLOW_BLINK, "reverse" => attrs |= Modifier::REVERSED,
+            "strikethrough" => attrs |= Modifier::CROSSED_OUT, "strip" | "" => {}
+            other => { if let Some(c) = fzf_colour(other) { colour = Some(c) } }
+        }
+    }
+    (colour, attrs)
+}
 
 pub fn fzf() -> &'static Fzf {
     static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
     FZF.get_or_init(|| {
-        let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
+        let opts = words(&default_opts());
         // Every --color (either form), in order: a base scheme and slot:colour pairs.
         let mut specs: Vec<String> = Vec::new();
         let (mut reverse, mut pointer, mut marker, mut prompt) = (false, None, None, None);
@@ -53,21 +89,33 @@ pub fn fzf() -> &'static Fzf {
         // A terminal that only has 16 colours gets fzf's 16-colour scheme, as fzf itself does.
         let base = if base.is_empty() && depth() < 256 { "16".to_string() } else { base };
         let mut z = match base.as_str() {
-            _ if no_color || base == "bw" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true },
-            "light" | "light256" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: i(251), bg_plus: i(251), fg_plus: i(237), hl: i(66), hl_plus: i(23), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false },
-            "16" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: true, gutter: Color::DarkGray, bg_plus: Color::DarkGray, fg_plus: Color::White, hl: Color::Green, hl_plus: Color::LightGreen, pointer: Color::Red, marker: Color::Magenta, info: Color::Yellow, prompt: Color::Blue, border: Color::DarkGray, header: Color::Cyan, bw: false },
-            _ => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false },
+            _ if no_color || base == "bw" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true, attrs: FzfAttrs::default(), border_dim: true, gutter_dim: true },
+            "light" | "light256" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: i(251), bg_plus: i(251), fg_plus: i(237), hl: i(66), hl_plus: i(23), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false, attrs: FzfAttrs::default(), border_dim: false, gutter_dim: false },
+            "16" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: true, gutter: Color::DarkGray, bg_plus: Color::DarkGray, fg_plus: Color::White, hl: Color::Green, hl_plus: Color::LightGreen, pointer: Color::Red, marker: Color::Magenta, info: Color::Yellow, prompt: Color::Blue, border: Color::DarkGray, header: Color::Cyan, bw: false, attrs: FzfAttrs::default(), border_dim: true, gutter_dim: false },
+            _ => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false, attrs: FzfAttrs::default(), border_dim: false, gutter_dim: false },
         };
         // Slot overrides: --color=hl:204,bg+:236,pointer:#ff0000 …
         if !z.bw {
-            let gutter_given = specs.iter().flat_map(|s| s.split(',')).any(|p| p.starts_with("gutter:"));
-            for pair in specs.iter().flat_map(|s| s.split(',')).filter_map(|p| p.split_once(':')) {
-                let Some(c) = fzf_colour(pair.1) else { continue };
-                match pair.0 {
+            let entries = || specs.iter().flat_map(|s| s.split([',', ' ', '\t'])).map(|p| p.trim().to_lowercase()).collect::<Vec<_>>();
+            let gutter_given = entries().iter().any(|p| p.starts_with("gutter:"));
+            for entry in entries() {
+                let Some((slot, spec)) = entry.split_once(':') else { continue };
+                let (colour, attrs) = fzf_spec(spec);
+                let a = &mut z.attrs;
+                match slot {
+                    "hl" => a.hl = attrs, "hl+" => a.hl_plus = attrs, "fg+" | "current-fg" => a.fg_plus = attrs, "prompt" => a.prompt = attrs,
+                    "pointer" => a.pointer = attrs, "marker" => a.marker = attrs, "info" => a.info = attrs, "header" => a.header = attrs,
+                    "border" | "separator" | "scrollbar" | "list-border" => a.border = attrs,
+                    _ => {}
+                }
+                let Some(c) = colour else { continue };
+                match slot {
                     // fzf's gutter is bg+ unless it is given.
                     "hl" => z.hl = c, "hl+" => z.hl_plus = c, "fg+" | "current-fg" => z.fg_plus = c, "bg+" | "current-bg" => { z.bg_plus = c; if !gutter_given { z.gutter = c } }
-                    "gutter" => z.gutter = c, "pointer" => z.pointer = c, "marker" => z.marker = c, "info" => z.info = c,
-                    "prompt" => z.prompt = c, "border" | "separator" | "scrollbar" => z.border = c, "header" => z.header = c,
+                    "gutter" => { z.gutter = c; z.gutter_dim = false }
+                    "pointer" => z.pointer = c, "marker" => z.marker = c, "info" => z.info = c,
+                    "prompt" => z.prompt = c, "border" | "separator" | "scrollbar" | "list-border" => { z.border = c; z.border_dim = false }
+                    "header" => z.header = c,
                     _ => {}
                 }
             }
@@ -82,13 +130,13 @@ pub fn fzf() -> &'static Fzf {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
-        let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3 };
+        let opts = words(&default_opts());
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3 };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -127,7 +175,7 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--color" => {
                     if let Some(v) = take() {
                         for (slot, c) in v.split(',').filter_map(|p| p.split_once(':')) {
-                            match slot { "fg" => o.fg = fzf_colour(c), "bg" | "list-bg" => o.bg = fzf_colour(c), "selected-bg" => o.selected_bg = fzf_colour(c), _ => {} }
+                            match slot { "fg" | "list-fg" => o.fg = fzf_spec(c).0, "bg" => o.bg = fzf_spec(c).0, "list-bg" => o.list_bg = fzf_spec(c).0, "selected-bg" => o.selected_bg = fzf_spec(c).0, _ => {} }
                         }
                     }
                 }
@@ -154,6 +202,10 @@ pub fn fzf_opts() -> &'static FzfOpts {
 fn fzf_colour(v: &str) -> Option<Color> {
     let v = v.split(':').next().unwrap_or(v);
     if v == "-1" { return Some(Color::Reset) }
+    let named = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+    if let Some(n) = named.iter().position(|c| *c == v) { return Some(Color::Indexed(n as u8)) }
+    if let Some(n) = v.strip_prefix("bright-").and_then(|b| named.iter().position(|c| *c == b)) { return Some(Color::Indexed(n as u8 + 8)) }
+    if v == "gray" || v == "grey" { return Some(Color::Indexed(8)) }
     if let Ok(n) = v.parse::<u8>() { return Some(Color::Indexed(n)) }
     if let Some(hex) = v.strip_prefix('#') { let n = u32::from_str_radix(hex, 16).ok()?; return Some(Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8)) }
     crate::tmuxconf::colour(v)

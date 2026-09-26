@@ -616,7 +616,7 @@ fn fzf_inner(body: Rect) -> Rect {
 
 fn fzf_border(buf: &mut Buffer, body: Rect) {
     let Some(style) = theme::fzf_opts().border.clone() else { return };
-    let st = Style::default().fg(theme::fzf().border);
+    let st = theme::fzf().border_style();
     // fzf's glyphs (tui.go MakeBorderStyle): top, bottom, left, right, then the corners.
     let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = match style.as_str() {
         "sharp" => ("─", "─", "│", "│", "┌", "┐", "└", "┘"),
@@ -652,10 +652,11 @@ fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
 fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: &str) -> Position {
     fzf_border(buf, body);
     let body = fzf_inner(body);
-    // --color=bg: the list's own background, under everything drawn on it.
+    // --color=bg: under everything (the preview too); list-bg: under the list alone.
     if let Some(bg) = theme::fzf_opts().bg { buf.set_style(body, Style::default().bg(bg)) }
     let preview = picker_preview_area(body, picker);
     let area = match preview { Some(p) => Rect::new(body.x, body.y, p.x - body.x, body.height), None => body };
+    if let Some(bg) = theme::fzf_opts().list_bg { buf.set_style(area, Style::default().bg(bg)) }
     let width = area.width as usize;
     let bottom = area.y + area.height;
     // Prompt, then info, then the header (the keys), then the list above — or, with
@@ -678,7 +679,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let (prompt_y, info_y) = match (header_first, prompt_top) { (true, true) => (prompt_y + 1, info_y + 1), (true, false) => (prompt_y - 1, info_y - 1), _ => (prompt_y, info_y) };
     let edge = if prompt_top { prompt_y.max(info_y) } else { prompt_y.min(info_y) };
     let header_y = match (header_first, prompt_top) { (true, true) => area.y, (true, false) => bottom - 1, _ => if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else { edge } };
-    let prompt = Style::default().fg(theme::fzf().prompt);
+    let prompt = theme::fzf().prompt_style();
     let prompt_text = theme::fzf().prompt_text.clone();
     let pw = prompt_text.width() as u16;
     // The glyph bold in the prompt colour; its trailing space plain, as fzf draws it.
@@ -703,12 +704,12 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
-    let info_style = Style::default().fg(theme::fzf().info);
+    let info_style = theme::fzf().info_style();
     let rule = |buf: &mut Buffer, from: u16, to: u16, y: u16| {
         if !o.separator || to <= from { return }
         let ch = o.separator_char.clone();
         let n = (to - from) as usize / ch.width().max(1);
-        buf.set_string(from, y, ch.repeat(n), Style::default().fg(theme::fzf().border));
+        buf.set_string(from, y, ch.repeat(n), theme::fzf().border_style());
     };
     // fzf's printInfoImpl: the last column stays blank; a list still loading spins in the first.
     let end = (area.x + area.width).saturating_sub(1);
@@ -796,7 +797,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let start = ((list_h - thumb) as f32 * top_frac).round() as usize;
         for i in 0..thumb {
             let y = list_top + (start + i) as u16;
-            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, Style::default().fg(theme::fzf().border)); }
+            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, theme::fzf().border_style()); }
         }
     }
     cursor
@@ -813,9 +814,9 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     // fzf --color=bw: the current line in reverse video, matches underlined.
     let plus = if z.bw { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(z.bg_plus) };
     if current {
-        buf.set_string(x, y, format!("{:<w$}", z.pointer_char, w = pointer_w()), if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD) });
+        buf.set_string(x, y, format!("{:<w$}", z.pointer_char, w = pointer_w()), if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD).add_modifier(z.attrs.pointer) });
     } else {
-        buf.set_string(x, y, format!("{:<w$}", "▌", w = pointer_w()), Style::default().fg(z.gutter));
+        buf.set_string(x, y, format!("{:<w$}", "▌", w = pointer_w()), z.gutter_style());
     }
     // The marker cell: the marker on a selected row (on selected-bg), bg+ on the current one — plain
     // in bw, where fzf leaves an unselected marker cell alone.
@@ -826,11 +827,11 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         _ => Style::default(),
     };
     buf.set_string(x + pointer_w() as u16, y, if marked { format!("{:<mw$}", z.marker_char) } else { " ".repeat(mw) }, marker_style);
-    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { o.fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
+    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD).add_modifier(z.attrs.fg_plus) } else { o.fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
     let hit = match (current, z.bw) {
         (_, true) => base.add_modifier(Modifier::UNDERLINED),
-        (true, false) => plus.fg(z.hl_plus).add_modifier(Modifier::BOLD),
-        (false, false) => Style::default().fg(z.hl),
+        (true, false) => plus.fg(z.hl_plus).add_modifier(Modifier::BOLD).add_modifier(z.attrs.hl_plus),
+        (false, false) => Style::default().fg(z.hl).add_modifier(z.attrs.hl),
     };
     // The glyphs' colours follow the scheme: none in bw, the 16 in 16.
     let tone = |st: Style| -> Style {
@@ -964,24 +965,24 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
     if let Some(h) = &picker.heading {
         let h = clip(h, width.saturating_sub(indent + 12));
         used += h.width() + 3;
-        spans.push(Span::styled(h, Style::default().fg(theme::fzf().header).add_modifier(Modifier::BOLD)));
-        if !picker.hints.is_empty() { spans.push(Span::styled(" · ", Style::default().fg(theme::fzf().border))) }
+        spans.push(Span::styled(h, theme::fzf().header_style().add_modifier(Modifier::BOLD)));
+        if !picker.hints.is_empty() { spans.push(Span::styled(" · ", theme::fzf().border_style())) }
     }
     for (i, (k, w)) in picker.hints.iter().enumerate() {
         // Whole hints only: the ones that do not fit are left out, not cut.
         let piece = if i > 0 { 3 } else { 0 } + k.width() + 1 + w.width();
         if used + piece > width { break }
         used += piece;
-        if i > 0 { spans.push(Span::styled(" · ", Style::default().fg(theme::fzf().border))) }
-        spans.push(Span::styled(k.to_string(), Style::default().fg(theme::fzf().header).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(format!(" {w}"), Style::default().fg(theme::fzf().header)));
+        if i > 0 { spans.push(Span::styled(" · ", theme::fzf().border_style())) }
+        spans.push(Span::styled(k.to_string(), theme::fzf().header_style().add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(format!(" {w}"), theme::fzf().header_style()));
     }
     Some(Line::from(spans))
 }
 
 /// The preview window: fzf's rounded border in 59, a label at the top, the content inside.
 fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area: Rect) {
-    let border = Style::default().fg(theme::fzf().border);
+    let border = theme::fzf().border_style();
     let w = area.width;
     let h = area.height;
     for y in area.y..area.y + h {
