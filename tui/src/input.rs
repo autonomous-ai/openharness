@@ -810,11 +810,24 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
                 app.shells.insert((machine.clone(), id.to_string()));
                 app.open_agent(&machine, id, placement);
-                if let Some((_, pane)) = app.find_pane(&machine, id) {
+                // new-window -d: made in the background; back to where you were.
+                if let Some((back, last)) = app.return_to.take() {
+                    if let Some(i) = app.tabs.iter().position(|t| t.id == back) { app.select_tab(i); app.last_tab = last }
+                }
+                if let Some((w, pane)) = app.find_pane(&machine, id) {
                     if let Some(p) = app.panes.get_mut(&pane) { p.queued.extend(typed) }
+                    // -P: what was made, printed (to the shell waiting on it).
+                    if let Some(fmt) = app.print_new.take() {
+                        let line: String = crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect();
+                        match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new())); } None => app.say(line, theme::WARN) }
+                    }
                 }
             }
-            Err(e) => app.say(format!("Could not start a shell: {e}"), theme::DANGER),
+            Err(e) => {
+                if let Some(tx) = app.held_reply.take() { let _ = tx.send((Vec::new(), vec![format!("create pane failed: {e}")])); }
+                app.print_new = None;
+                app.say(format!("Could not start a shell: {e}"), theme::DANGER)
+            }
         }
     });
 }
@@ -1710,16 +1723,6 @@ pub fn focused_title(app: &App) -> String {
     focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| x.name.clone())).unwrap_or_default()
 }
 
-/// `split-window`: pick the harness that goes beside (-h) or below the active pane.
-pub fn split_pick(app: &mut App, dir: Dir) {
-    if app.tab().root.is_none() { launch(app, "", Filter::All); return }
-    app.modal = None;
-    launch(app, "", Filter::All);
-    if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
-        picker.title = if dir == Dir::Horizontal { "split-window -h".into() } else { "split-window".into() };
-    }
-    SPLIT.with(|s| s.set(Some(dir)));
-}
 
 /// `paste-buffer`: the buffer, pasted into the pane.
 pub fn paste_buffer(app: &mut App, index: usize) {

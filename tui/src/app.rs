@@ -149,6 +149,14 @@ pub struct App {
     pub suspend: bool,
     /// Output of a command run from a shell (`hn display -p …`): printed there, not on screen.
     pub capture: Option<Vec<String>>,
+    /// -P [-F fmt] on split-window / new-window: print the new pane once it is there; the
+    /// shell that asked waits for it (the reply is held here).
+    pub print_new: Option<String>,
+    /// new-window -d: the window to go back to (and the last window then) once its shell is up.
+    pub return_to: Option<(String, Option<String>)>,
+    pub held_reply: Option<tokio::sync::oneshot::Sender<(Vec<String>, Vec<String>)>>,
+    /// set-buffer -b name: named paste buffers.
+    pub named_buffers: std::collections::BTreeMap<String, String>,
     pub capture_err: Option<Vec<String>>,
     /// setenv's variables (this client's).
     pub env: std::collections::BTreeMap<String, String>,
@@ -200,6 +208,10 @@ impl App {
             cursor_shape: String::new(),
             suspend: false,
             capture: None,
+            print_new: None,
+            return_to: None,
+            held_reply: None,
+            named_buffers: Default::default(),
             capture_err: None,
             env: Default::default(),
             tim: crate::tim::Tim::load(),

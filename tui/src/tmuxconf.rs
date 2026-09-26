@@ -118,6 +118,70 @@ pub fn quote_word(w: &str) -> String {
     format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+fn truthy(v: &str) -> bool { let v = v.trim(); !v.is_empty() && v != "0" }
+
+fn unquote(s: &str) -> &str { s.trim().trim_matches('"').trim_matches('\'') }
+
+/// The tmux level hn speaks, for version-gated configs (`%if #{>=:#{version},3.2}`).
+pub const TMUX_VERSION: &str = "3.5";
+
+/// Formats as tmux.conf can ask them at load: #{version}, #{@user}, #{==: != < > <= >= && ||},
+/// #{?c,a,b}, #{e|op:a,b}. Anything else is empty (no window exists yet).
+pub fn eval(s: &Settings, text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("#{") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        let (body, tail) = brace(after);
+        out.push_str(&eval_braces(s, body));
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+fn brace(s: &str) -> (&str, &str) {
+    let mut depth = 1;
+    for (i, c) in s.char_indices() { match c { '{' => depth += 1, '}' => { depth -= 1; if depth == 0 { return (&s[..i], &s[i + 1..]) } } _ => {} } }
+    (s, "")
+}
+
+fn top_commas(s: &str) -> Vec<&str> {
+    let (mut out, mut depth, mut start) = (Vec::new(), 0, 0);
+    for (i, c) in s.char_indices() { match c { '{' => depth += 1, '}' => depth -= 1, ',' if depth == 0 => { out.push(&s[start..i]); start = i + 1 } _ => {} } }
+    out.push(&s[start..]);
+    out
+}
+
+/// Compare as versions / numbers where both read as such ("3.10" > "3.2"), else as text.
+pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
+    let parts = |v: &str| -> Option<Vec<u64>> { v.trim().split('.').map(|p| p.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse().ok()).collect() };
+    match (parts(a), parts(b)) { (Some(x), Some(y)) => x.cmp(&y), _ => a.cmp(b) }
+}
+
+fn eval_braces(s: &Settings, body: &str) -> String {
+    let b = |v: bool| if v { "1".to_string() } else { "0".to_string() };
+    if let Some(rest) = body.strip_prefix('?') {
+        let p = top_commas(rest);
+        let c = eval(s, &format!("#{{{}}}", p.first().copied().unwrap_or("")));
+        return eval(s, if truthy(&c) { p.get(1).copied().unwrap_or("") } else { p.get(2).copied().unwrap_or("") });
+    }
+    for (op, f) in [("==:", 0), ("!=:", 1), ("<=:", 2), (">=:", 3), ("<:", 4), (">:", 5), ("&&:", 6), ("||:", 7)] {
+        if let Some(rest) = body.strip_prefix(op) {
+            let p = top_commas(rest);
+            let (x, y) = (eval(s, p.first().copied().unwrap_or("")), eval(s, p.get(1).copied().unwrap_or("")));
+            use std::cmp::Ordering::*;
+            return b(match f { 0 => x == y, 1 => x != y, 2 => compare(&x, &y) != Greater, 3 => compare(&x, &y) != Less, 4 => compare(&x, &y) == Less, 5 => compare(&x, &y) == Greater, 6 => truthy(&x) && truthy(&y), _ => truthy(&x) || truthy(&y) });
+        }
+    }
+    match body {
+        "version" => TMUX_VERSION.into(),
+        n if n.starts_with('@') => s.options.user.get(n).cloned().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
 pub fn expand_home(path: &str) -> String {
     match path.strip_prefix("~/") { Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()), None => path.to_string() }
 }
@@ -148,9 +212,30 @@ pub fn load(keymap: &mut Keymap) -> Settings {
 pub fn apply(text: &str, keymap: &mut Keymap, settings: &mut Settings) {
     // Join continued lines (a trailing backslash).
     let joined = text.replace("\\\n", " ");
+    // %if / %elif / %else / %endif: a stack of (this branch runs, a branch already ran).
+    let mut stack: Vec<(bool, bool)> = Vec::new();
     for (n, raw) in joined.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') { continue }
+        let live = stack.iter().all(|(on, _)| *on);
+        if let Some(cond) = line.strip_prefix("%if") {
+            let t = live && truthy(&eval(settings, unquote(cond.trim())));
+            stack.push((t, t));
+            continue;
+        }
+        if let Some(cond) = line.strip_prefix("%elif") {
+            let outer = stack.len() < 2 || stack[..stack.len() - 1].iter().all(|(on, _)| *on);
+            if let Some(top) = stack.last_mut() { let t = outer && !top.1 && truthy(&eval(settings, unquote(cond.trim()))); top.0 = t; top.1 |= t; }
+            continue;
+        }
+        if line.starts_with("%else") {
+            let outer = stack.len() < 2 || stack[..stack.len() - 1].iter().all(|(on, _)| *on);
+            if let Some(top) = stack.last_mut() { top.0 = outer && !top.1; top.1 = true; }
+            continue;
+        }
+        if line.starts_with("%endif") { stack.pop(); continue }
+        if line.starts_with("%hidden") { continue }
+        if !live { continue }
         for words in split(line) {
             // `\;` chains commands: part of the command a bind binds, else one directive after another.
             let parts: Vec<&[String]> = if matches!(words.first().map(|w| w.as_str()), Some("bind" | "bind-key")) { vec![&words[..]] } else { words.split(|w| w == ";").filter(|p| !p.is_empty()).collect() };
@@ -238,11 +323,13 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             let mut format = false;
             while i < words.len() && words[i].starts_with('-') && words[i].len() > 1 { if words[i].contains('F') { format = true } if words[i] == "-t" { i += 1 } i += 1 }
             let Some(cond) = words.get(i) else { return Ok(()) };
-            let truth = if format { !matches!(cond.trim(), "" | "0") } else { shell_true(cond) };
+            let truth = if format { truthy(&eval(s, cond)) } else { shell_true(cond) };
             if let Some(command) = words.get(if truth { i + 1 } else { i + 2 }) {
                 for part in split(command) { directive(&part, keymap, s)? }
             }
         }
+        // Hooks are not run here; said so, not silently dropped.
+        "set-hook" => s.notes.push(format!("set-hook {}: hooks do not run here", words[1..].join(" "))),
         // Plugins (tpm) and scripts run through tmux itself; noted, not run at load.
         "run-shell" | "run" => s.notes.push(format!("{}: not run (tmux plugins do not load here)", words[1..].join(" "))),
         "bind" | "bind-key" => {
@@ -334,6 +421,11 @@ run '~/.tmux/plugins/tpm/tpm'
         assert!(km.prefix_command(&keys::parse("h").unwrap()).unwrap().repeat);
         assert_eq!(km.root_command(&keys::parse("M-Left").unwrap()).unwrap().command, "select-pane -L");
         assert_eq!(s.base_index, Some(1));
+        let mut k2 = Keymap::tmux_defaults();
+        let mut s2 = Settings::default();
+        apply("set -g @a x\n%if #{==:#{@a},x}\nset -g @r yes\n%else\nset -g @r no\n%endif\n%if #{>=:#{version},3.2}\nset -g @v new\n%endif\n", &mut k2, &mut s2);
+        assert_eq!(s2.options.user.get("@r").map(String::as_str), Some("yes"));
+        assert_eq!(s2.options.user.get("@v").map(String::as_str), Some("new"));
         assert_eq!(s.pane_base_index, Some(1));
         assert_eq!(s.status_top, Some(true));
         assert_eq!(s.look.status_bg, Some(Color::Indexed(235)));

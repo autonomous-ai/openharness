@@ -75,7 +75,9 @@ fn var(app: &App, name: &str, window: usize) -> String {
         // Switches read as tmux's formats do: 1 or 0.
         "status" => (app.opts.status != Some(false)).then_some("1").unwrap_or("0").into(),
         "mouse" => app.mouse.then_some("1").unwrap_or("0").into(),
-        "version" => env!("CARGO_PKG_VERSION").into(),
+        // The tmux level hn speaks (version-gated configs ask); hn's own is #{hn_version}.
+        "version" => crate::tmuxconf::TMUX_VERSION.into(),
+        "hn_version" => env!("CARGO_PKG_VERSION").into(),
         "pid" => std::process::id().to_string(),
         "socket_path" => crate::ipc::dir().join(format!("{}.sock", std::env::var("HN_SOCKET_NAME").unwrap_or_else(|_| std::process::id().to_string()))).display().to_string(),
         "client_session" | "client_name" => app.session_name(),
@@ -140,6 +142,20 @@ fn commas(s: &str) -> Vec<&str> {
     out
 }
 
+/// fnmatch-style: * ? and literal text.
+fn glob(pat: &str, s: &str) -> bool {
+    let (p, t): (Vec<char>, Vec<char>) = (pat.chars().collect(), s.chars().collect());
+    fn m(p: &[char], t: &[char]) -> bool {
+        match p.first() {
+            None => t.is_empty(),
+            Some('*') => (0..=t.len()).any(|i| m(&p[1..], &t[i..])),
+            Some('?') => !t.is_empty() && m(&p[1..], &t[1..]),
+            Some(c) => t.first() == Some(c) && m(&p[1..], &t[1..]),
+        }
+    }
+    m(&p, &t)
+}
+
 fn truthy(v: &str) -> bool { !v.is_empty() && v != "0" }
 
 /// One `#{…}` body: a variable, `?cond,a,b`, `=N:var`, `==:a,b` and friends.
@@ -156,14 +172,83 @@ fn braces(app: &App, body: &str, window: usize) -> String {
         let same = parts.len() == 2 && text(app, parts[0], Some(window)) == text(app, parts[1], Some(window));
         return if same == body.starts_with("==") { "1".into() } else { "0".into() };
     }
+    // Comparisons and logic: == != < > <= >= && ||.
+    for (op, f) in [("<=:", 2), (">=:", 3), ("<:", 4), (">:", 5), ("&&:", 6), ("||:", 7)] {
+        if let Some(rest) = body.strip_prefix(op) {
+            let parts = commas(rest);
+            let (x, y) = (text(app, parts.first().copied().unwrap_or(""), Some(window)), text(app, parts.get(1).copied().unwrap_or(""), Some(window)));
+            use std::cmp::Ordering::*;
+            let c = crate::tmuxconf::compare(&x, &y);
+            let v = match f { 2 => c != Greater, 3 => c != Less, 4 => c == Less, 5 => c == Greater, 6 => truthy(&x) && truthy(&y), _ => truthy(&x) || truthy(&y) };
+            return if v { "1".into() } else { "0".into() };
+        }
+    }
+    // Loops: #{W:fmt}, #{W:fmt,current-fmt}, #{P:…}; #{S:…} (one session here).
+    for (tag, what) in [("W:", 'W'), ("P:", 'P'), ("S:", 'S')] {
+        if let Some(rest) = body.strip_prefix(tag) {
+            let parts = commas(rest);
+            let (fmt, cur) = (parts.first().copied().unwrap_or(""), parts.get(1).copied());
+            return match what {
+                'W' => (0..app.tabs.len()).map(|w| text(app, if w == app.active { cur.unwrap_or(fmt) } else { fmt }, Some(w))).collect(),
+                'P' => {
+                    let panes = app.tabs.get(window).map(|t| t.panes()).unwrap_or_default();
+                    let focus = app.tabs.get(window).and_then(|t| t.focus);
+                    panes.into_iter().map(|p| { let f = if Some(p) == focus { cur.unwrap_or(fmt) } else { fmt }; spans_for_pane(app, f, window, p, Style::default()).into_iter().map(|s| s.content.into_owned()).collect::<String>() }).collect()
+                }
+                _ => text(app, cur.unwrap_or(fmt), Some(window)),
+            };
+        }
+    }
+    // One-word modifiers on a value: b: basename, d: dirname, n: length, q: shell-quoted,
+    // a: a character from its number, E:/T: expanded again (T: with strftime), m:pattern,value.
+    for tag in ["b:", "d:", "n:", "q:", "a:", "E:", "T:"] {
+        if let Some(rest) = body.strip_prefix(tag) {
+            let v = if tag == "E:" || tag == "T:" { text(app, &braces(app, rest, window), Some(window)) } else { braces(app, rest, window) };
+            return match tag {
+                "b:" => v.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string(),
+                "d:" => { let t = v.trim_end_matches('/'); match t.rfind('/') { Some(0) => "/".into(), Some(i) => t[..i].to_string(), None => ".".into() } }
+                "n:" => v.chars().count().to_string(),
+                "q:" => v.chars().map(|c| if " \t\"'\\$`!*?[]{}()|&;<>#~".contains(c) { format!("\\{c}") } else { c.to_string() }).collect(),
+                "a:" => v.trim().parse::<u32>().ok().and_then(char::from_u32).map(|c| c.to_string()).unwrap_or_default(),
+                _ => v,
+            };
+        }
+    }
+    if let Some(rest) = body.strip_prefix("m:").or_else(|| body.strip_prefix("m/r:")) {
+        let parts = commas(rest);
+        let (pat, val) = (text(app, parts.first().copied().unwrap_or(""), Some(window)), text(app, parts.get(1).copied().unwrap_or(""), Some(window)));
+        return if glob(&pat, &val) { "1".into() } else { "0".into() };
+    }
+    // p<N>: pad to N (negative: pad on the left).
+    if let Some(rest) = body.strip_prefix('p') {
+        if let Some((n, name)) = rest.split_once(':') {
+            if let Ok(n) = n.parse::<i64>() {
+                let v = braces(app, name, window);
+                let w = n.unsigned_abs() as usize;
+                return if n >= 0 { format!("{v:<w$}") } else { format!("{v:>w$}") };
+            }
+        }
+    }
     // #{e|+:1,2}: arithmetic (+ - * / %, `f` for floats is read as integers here).
     if let Some(rest) = body.strip_prefix("e|") {
         if let Some((op, args)) = rest.split_once(':') {
             let parts = commas(args);
+            // e|*|f|2: floats (and a precision) when asked for, else whole numbers.
+            let mut bits = op.split('|');
+            let o = bits.next().unwrap_or("");
+            if bits.next() == Some("f") {
+                let prec: usize = bits.next().and_then(|p| p.parse().ok()).unwrap_or(2);
+                let f = |p: &str| text(app, p, Some(window)).trim().parse::<f64>().unwrap_or(0.0);
+                if parts.len() == 2 {
+                    let (a, b) = (f(parts[0]), f(parts[1]));
+                    let v = match o { "+" => a + b, "-" => a - b, "*" => a * b, "/" if b != 0.0 => a / b, "%" if b != 0.0 => a % b, _ => 0.0 };
+                    return format!("{v:.prec$}");
+                }
+            }
             let num = |p: &str| text(app, p, Some(window)).trim().parse::<i64>().unwrap_or(0);
             if parts.len() == 2 {
                 let (a, b) = (num(parts[0]), num(parts[1]));
-                let op = op.split('|').next().unwrap_or(op);
+                let op = o;
                 return match op { "+" => a + b, "-" => a - b, "*" => a * b, "/" if b != 0 => a / b, "%" if b != 0 => a % b, "==" => (a == b) as i64, "!=" => (a != b) as i64, "<" => (a < b) as i64, ">" => (a > b) as i64, "<=" => (a <= b) as i64, ">=" => (a >= b) as i64, _ => 0 }.to_string();
             }
         }
