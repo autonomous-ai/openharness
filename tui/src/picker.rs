@@ -112,14 +112,28 @@ impl Picker {
         if query.is_empty() {
             self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
         } else {
-            let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+            // fzf's extended search: space-separated terms all match ('exact ^prefix suffix$ !not are
+            // nucleo's own); `a | b` is one term that either side satisfies.
+            let mut groups: Vec<Vec<Pattern>> = Vec::new();
+            let mut or_next = false;
+            for word in query.split_whitespace() {
+                if word == "|" { or_next = true; continue }
+                let p = Pattern::parse(word, CaseMatching::Smart, Normalization::Smart);
+                match groups.last_mut() { Some(g) if or_next => g.push(p), _ => groups.push(vec![p]) }
+                or_next = false;
+            }
             let mut buf = Vec::new();
             let mut scored: Vec<(usize, u32, Vec<u32>)> = Vec::new();
             for (index, row) in self.rows.iter().enumerate() {
                 if row.disabled { continue }
                 let haystack = format!("{} {}", row.label, row.extra);
                 let mut indices = Vec::new();
-                if let Some(score) = pattern.indices(Utf32Str::new(&haystack, &mut buf), &mut self.matcher, &mut indices) {
+                let mut total = Some(0u32);
+                for group in &groups {
+                    let best = group.iter().filter_map(|p| { let mut hits = Vec::new(); p.indices(Utf32Str::new(&haystack, &mut buf), &mut self.matcher, &mut hits).map(|s| (s, hits)) }).max_by_key(|(s, _)| *s);
+                    match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
+                }
+                if let Some(score) = total {
                     let label_len = row.label.chars().count() as u32;
                     indices.sort_unstable();
                     indices.dedup();
@@ -266,6 +280,18 @@ mod tests {
         assert_eq!(p.current_id().as_deref(), Some("b"));
         p.set_rows(vec![Row::new("z", "zeta"), Row::new("b", "login flake")]);
         assert_eq!(p.current_id().as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn extended_search() {
+        let mut p = Picker::new("t", "");
+        p.set_rows(vec![Row::new("a", "landing page"), Row::new("b", "login flake"), Row::new("c", "docs site")]);
+        let ids = |p: &Picker| { let mut v: Vec<String> = p.visible.iter().map(|(i, _)| p.rows[*i].id.clone()).collect(); v.sort(); v };
+        p.set_query("docs | flake"); assert_eq!(ids(&p), ["b", "c"]);
+        p.set_query("!docs"); assert_eq!(ids(&p), ["a", "b"]);
+        p.set_query("^lo"); assert_eq!(ids(&p), ["b"]);
+        p.set_query("page$"); assert_eq!(ids(&p), ["a"]);
+        p.set_query("'site"); assert_eq!(ids(&p), ["c"]);
     }
 }
 
