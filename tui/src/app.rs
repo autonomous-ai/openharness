@@ -912,7 +912,15 @@ impl App {
     /// Put a harness on screen. Already showing somewhere: go there instead.
     pub fn open_agent(&mut self, machine_id: &str, agent_id: &str, placement: Placement) {
         if placement != Placement::Replace {
-            if let Some((tab, pane)) = self.find_pane(machine_id, agent_id) { self.focus_pane(tab, pane); return }
+            if let Some((tab, pane)) = self.find_pane(machine_id, agent_id) {
+                // One harness, one pane: say where it went rather than splitting a second copy.
+                if tab != self.active && matches!(placement, Placement::Split(_)) {
+                    let name = self.fleet.agent(machine_id, agent_id).map(|a| a.name.clone()).unwrap_or_default();
+                    self.say(format!("{name} is already in window {}", self.win_num(tab)), crate::theme::WARN);
+                }
+                self.focus_pane(tab, pane);
+                return;
+            }
         }
         let id = self.new_pane(machine_id, agent_id);
         let empty = self.tab().root.is_none();
