@@ -296,7 +296,6 @@ fn voice(app: &mut App, p: &Value) {
             return;
         }
         let mut picker = crate::picker::Picker::new(format!("Send: {}", words.chars().take(48).collect::<String>()), "Filter…");
-        picker.keep_order = true;
         picker.set_rows(rows);
         picker.hints = vec![("enter", "send")];
         picker.heading = Some(picker.title.clone());

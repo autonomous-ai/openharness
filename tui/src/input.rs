@@ -340,7 +340,6 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.empty = "No projects yet.".into();
         }
         PickerKind::Models => {
-            picker.keep_order = true;
             let mut rows = modal::model_rows(app);
             rows.extend(modal::local_model_rows(app));
             picker.set_rows(rows);
@@ -355,7 +354,6 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
         PickerKind::Inbox => {
-            picker.keep_order = true;
             picker.set_rows(modal::inbox_rows(app));
             picker.status = format!("{} waiting", app.fleet.waiting());
             picker.hints = vec![("enter", "answer / go"), ("C-o", "open"), ("M-1..9", "answer")];
@@ -429,7 +427,6 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "run it")];
         }
         PickerKind::Buffers => {
-            picker.keep_order = true;
             // tmux's choose-buffer rows: `name: size bytes: "sample"`, newest first.
             let rows = app.paste.walk().map(|b| {
                 crate::picker::Row::new(b.name.clone(), format!("\"{}\"", crate::paste::sample(b))).lead(vec![ratatui::text::Span::styled(format!("{}: {} bytes: ", b.name, b.data.len()), theme::fg(theme::MUTED))])
@@ -1882,7 +1879,6 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                     let rows = modal::route_rows(&reply);
                     if rows.is_empty() { app.say(reply.get("reason").and_then(|v| v.as_str()).unwrap_or("No harness fits that").to_string(), theme::MUTED); return }
                     let mut picker = Picker::new(format!("Send: {}", value.chars().take(48).collect::<String>()), "Filter…");
-                    picker.keep_order = true;
                     picker.set_rows(rows);
                     picker.hints = vec![("enter", "send")];
         picker.heading = Some(picker.title.clone());
