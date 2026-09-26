@@ -648,6 +648,7 @@ dependencies = [
  "futures-util",
  "nucleo",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
  "tokio",

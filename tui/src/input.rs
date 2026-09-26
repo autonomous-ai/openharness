@@ -32,7 +32,7 @@ pub fn handle(app: &mut App, event: CEvent) {
 
 /// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
 fn typing(app: &App) -> bool {
-    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }))
+    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }))
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
@@ -69,7 +69,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
     // The prefix works over the lists too (they are tmux's choose modes); only a line being typed
     // at the status line keeps it.
-    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }));
+    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }));
     if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.prefix = true;
         app.prefix_at = Some(std::time::Instant::now());
@@ -887,6 +887,30 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             }
         }
         Modal::Clock { .. } => {}
+        // tmux's menu: ↑↓ (k j, C-p C-n) move, Enter runs, an item's key runs it, q Esc C-c leave.
+        Modal::Menu { title, items, mut cursor } => {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let step = |from: usize, by: i64| -> usize {
+                let n = items.len() as i64;
+                let mut i = from as i64;
+                for _ in 0..n { i = (i + by).rem_euclid(n); if !items[i as usize].disabled && !items[i as usize].separator { return i as usize } }
+                from
+            };
+            let name = keys::name(&keys::of(&key));
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => return,
+                KeyCode::Char('c' | 'g') if ctrl => return,
+                KeyCode::Up | KeyCode::Char('k') if !ctrl => cursor = step(cursor, -1),
+                KeyCode::Down | KeyCode::Char('j') if !ctrl => cursor = step(cursor, 1),
+                KeyCode::Char('p') if ctrl => cursor = step(cursor, -1),
+                KeyCode::Char('n') if ctrl => cursor = step(cursor, 1),
+                KeyCode::Enter => { let c = items[cursor].command.clone(); if !items[cursor].disabled { commands::execute(app, &c) } return }
+                _ => {
+                    if let Some(it) = items.iter().find(|it| !it.disabled && !it.separator && it.key == name) { let c = it.command.clone(); commands::execute(app, &c); return }
+                }
+            }
+            app.modal = Some(Modal::Menu { title, items, cursor });
+        }
         // Everything goes to the popup's program (the prefix still works, as in tmux).
         Modal::Popup { pane, width, height, title } => {
             if let Some(bytes) = app.panes.get(&pane).and_then(|p| encode_key(&key, p.mode())) {
@@ -932,6 +956,13 @@ fn modal_key(app: &mut App, key: KeyEvent) {
 fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // command-prompt -k: the key itself is the answer, by its tmux name (C-b / then x → "x").
+    if let PromptKind::Key { template } = &p.kind {
+        let name = keys::name(&keys::of(&key));
+        let command = if template.contains("%%") { template.replace("%%", &name) } else { format!("{template} {}", quote(&name)) };
+        commands::execute(app, &command);
+        return;
+    }
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
     let vi = app.opts.status_keys_vi.unwrap_or_else(|| { let e = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default(); e.contains("vi") });
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
@@ -1714,6 +1745,8 @@ fn store_install(app: &mut App, kind: PickerKind, mut picker: Picker) {
 fn submit_prompt(app: &mut App, p: Prompt) {
     let value = p.value.trim().to_string();
     match p.kind {
+        // Answered by a key press in prompt_key; nothing to submit.
+        PromptKind::Key { .. } => {}
         PromptKind::Command { template } => {
             match template {
                 // `%%` (or the end of the template) takes what was typed, as tmux's command-prompt does.

@@ -88,12 +88,48 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let inner = Rect::new(area.x + 1, area.y + 1, w.saturating_sub(2), h.saturating_sub(2));
         if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, (None, None)); }
     }
+    if let Some(Modal::Menu { title, items, cursor }) = &app.modal { menu(buf, body, title, items, *cursor) }
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.opts.status == Some(false);
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Find { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.display_ms)).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
+}
+
+/// tmux's display-menu: a box in the middle, the title in its top border, `Label  (k)` rows, the
+/// chosen one in menu-selected-style (yellow on black), disabled ones dim, '' a rule across.
+fn menu(buf: &mut Buffer, body: Rect, title: &str, items: &[crate::modal::MenuItem], cursor: usize) {
+    let row_w = items.iter().filter(|it| !it.separator).map(|it| it.label.width() + if it.key.is_empty() { 0 } else { it.key.width() + 4 }).max().unwrap_or(0);
+    let w = (row_w.max(title.width() + 2) as u16 + 4).min(body.width);
+    let h = (items.len() as u16 + 2).min(body.height);
+    let area = Rect::new(body.x + (body.width - w) / 2, body.y + (body.height - h) / 2, w, h);
+    for y in area.y..area.y + h { for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
+    let border = Style::default();
+    let (x1, y1) = (area.x + w - 1, area.y + h - 1);
+    for x in area.x..=x1 { buf.set_string(x, area.y, "─", border); buf.set_string(x, y1, "─", border) }
+    for y in area.y..=y1 { buf.set_string(area.x, y, "│", border); buf.set_string(x1, y, "│", border) }
+    buf.set_string(area.x, area.y, "┌", border); buf.set_string(x1, area.y, "┐", border);
+    buf.set_string(area.x, y1, "└", border); buf.set_string(x1, y1, "┘", border);
+    if !title.is_empty() {
+        let t = clip(&format!(" {title} "), w.saturating_sub(2) as usize);
+        buf.set_string(area.x + (w - t.width() as u16) / 2, area.y, &t, border);
+    }
+    let inner = w.saturating_sub(2) as usize;
+    for (i, it) in items.iter().enumerate().take(h.saturating_sub(2) as usize) {
+        let y = area.y + 1 + i as u16;
+        if it.separator {
+            buf.set_string(area.x, y, "├", border);
+            for x in area.x + 1..x1 { buf.set_string(x, y, "─", border) }
+            buf.set_string(x1, y, "┤", border);
+            continue;
+        }
+        let key = if it.key.is_empty() { String::new() } else { format!("({})", it.key) };
+        let gap = inner.saturating_sub(it.label.width() + key.width() + 2);
+        let text = format!(" {}{}{} ", it.label, " ".repeat(gap), key);
+        let style = if i == cursor && !it.disabled { Style::default().bg(Color::Yellow).fg(Color::Black) } else if it.disabled { Style::default().add_modifier(Modifier::DIM) } else { Style::default() };
+        buf.set_stringn(area.x + 1, y, clip(&text, inner), inner, style);
+    }
 }
 
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),

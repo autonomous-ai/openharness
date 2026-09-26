@@ -69,6 +69,8 @@ pub enum PromptKind {
     /// tmux `command-prompt`: with a template, the typed text fills it (`rename-window %%`);
     /// without one, the typed text is the command.
     Command { template: Option<String> },
+    /// command-prompt -k: the next key pressed, by its tmux name, fills the template.
+    Key { template: String },
 }
 
 /// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
@@ -94,7 +96,13 @@ impl Prompt {
     }
 }
 
+/// One row of a tmux display-menu: a label, its shortcut key, the command it runs.
+#[derive(Clone, Debug)]
+pub struct MenuItem { pub label: String, pub key: String, pub command: String, pub disabled: bool, pub separator: bool }
+
 pub enum Modal {
+    /// tmux's display-menu: a box of items, each with its key; Enter or the key runs one.
+    Menu { title: String, items: Vec<MenuItem>, cursor: usize },
     Picker { kind: PickerKind, picker: Picker },
     Prompt(Prompt),
     /// tmux `confirm-before`: `kill-pane 0? (y/n)` in the status line.

@@ -75,6 +75,9 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "window_layout" | "window_visible_layout" => tab.and_then(|t| t.root.as_ref()).map(|r| r.to_tmux(app.body())).unwrap_or_default(),
         "history_size" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().history_size().to_string() }).unwrap_or_default(),
         "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
+        "pane_marked" => (focus.is_some() && app.marked == focus).then_some("1").unwrap_or("0").into(),
+        "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
+        "window_id" => format!("@{}", app.win_num(window)),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         // Switches read as tmux's formats do: 1 or 0.
         "status" => (app.opts.status != Some(false)).then_some("1").unwrap_or("0").into(),
@@ -218,10 +221,15 @@ fn braces(app: &App, body: &str, window: usize) -> String {
             };
         }
     }
-    if let Some(rest) = body.strip_prefix("m:").or_else(|| body.strip_prefix("m/r:")) {
-        let parts = commas(rest);
-        let (pat, val) = (text(app, parts.first().copied().unwrap_or(""), Some(window)), text(app, parts.get(1).copied().unwrap_or(""), Some(window)));
-        return if glob(&pat, &val) { "1".into() } else { "0".into() };
+    // m:pattern,value (fnmatch), m/r: (a regular expression), m/i or m/ri (ignoring case).
+    for (tag, re, icase) in [("m:", false, false), ("m/i:", false, true), ("m/r:", true, false), ("m/ri:", true, true), ("m/ir:", true, true)] {
+        if let Some(rest) = body.strip_prefix(tag) {
+            let parts = commas(rest);
+            let (pat, val) = (text(app, parts.first().copied().unwrap_or(""), Some(window)), text(app, parts.get(1).copied().unwrap_or(""), Some(window)));
+            let hit = if re { regex::RegexBuilder::new(&pat).case_insensitive(icase).build().map(|r| r.is_match(&val)).unwrap_or(false) }
+                else if icase { glob(&pat.to_lowercase(), &val.to_lowercase()) } else { glob(&pat, &val) };
+            return if hit { "1".into() } else { "0".into() };
+        }
     }
     // p<N>: pad to N (negative: pad on the left).
     if let Some(rest) = body.strip_prefix('p') {
@@ -264,6 +272,19 @@ fn braces(app: &App, body: &str, window: usize) -> String {
             if let (Some(from), Some(to)) = (it.next(), it.next()) {
                 let v = braces(app, name, window);
                 return if from.is_empty() { v } else { v.replace(from, to) };
+            }
+        }
+    }
+    // #{=/N/suffix:var}: cut to N, the suffix marking the cut.
+    if let Some(rest) = body.strip_prefix("=/") {
+        if let Some((spec, name)) = rest.split_once(':') {
+            let (n, suffix) = spec.split_once('/').unwrap_or((spec, ""));
+            if let Ok(n) = n.parse::<i64>() {
+                let v = braces(app, name, window);
+                let chars: Vec<char> = v.chars().collect();
+                let k = n.unsigned_abs() as usize;
+                if chars.len() <= k { return v }
+                return if n >= 0 { format!("{}{suffix}", chars[..k].iter().collect::<String>()) } else { format!("{suffix}{}", chars[chars.len() - k..].iter().collect::<String>()) };
             }
         }
     }

@@ -60,6 +60,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("tim", "tim", "tim, the creature in the status line: how it is (set -g @tim off hides it)"),
     ("display-popup", "popup", "A shell (or a command: display-popup -E lazygit) floating over the window"),
     ("list-commands", "lscm", "Every command"),
+    ("display-menu", "menu", "A menu: display-menu -T title name key command …"),
+    ("customize-mode", "customize-mode", "Options and keys, as they are"),
     ("has-session", "has", "Is it running (for scripts: hn has-session)"),
     ("set-environment", "setenv", "Set a variable for this client"),
     ("show-environment", "showenv", "Variables set with setenv"),
@@ -115,6 +117,11 @@ pub fn split(line: &str) -> Vec<Vec<String>> {
             }
             (None, ';') if word.is_empty() && !in_word => commands.push(Vec::new()),
             (None, ';') if chars.peek().map(|n| n.is_whitespace()).unwrap_or(true) => { commands.last_mut().unwrap().push(std::mem::take(&mut word)); in_word = false; commands.push(Vec::new()) }
+            // `{ … }`: tmux's command block — one argument, the commands inside it (lines become `;`).
+            (None, '{') if word.is_empty() && !in_word && chars.peek().map(|n| n.is_whitespace()).unwrap_or(true) => {
+                let block = take_block(&mut chars);
+                commands.last_mut().unwrap().push(block);
+            }
             (None, '#') if word.is_empty() && !in_word => break,
             (None, c) if c.is_whitespace() => { if in_word || !word.is_empty() { commands.last_mut().unwrap().push(std::mem::take(&mut word)); in_word = false } }
             (None, c) => { word.push(c); in_word = true }
@@ -123,6 +130,41 @@ pub fn split(line: &str) -> Vec<Vec<String>> {
     if in_word || !word.is_empty() { commands.last_mut().unwrap().push(word) }
     commands.retain(|c| !c.is_empty());
     commands
+}
+
+/// The inside of a `{ … }` block, up to its standalone closing `}` (nested blocks, quotes and
+/// `#{format}` braces kept whole); newlines separate its commands, as `;` does.
+fn take_block(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut out = String::new();
+    let (mut depth, mut quote, mut format, mut prev) = (1usize, None::<char>, 0usize, ' ');
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => { quote = None; out.push(c) }
+            (Some(_), c) => out.push(c),
+            (None, '"' | '\'') => { quote = Some(c); out.push(c) }
+            (None, '{') if prev == '#' => { format += 1; out.push(c) }
+            (None, '}') if format > 0 => { format -= 1; out.push(c) }
+            (None, '{') if prev.is_whitespace() && chars.peek().map(|n| n.is_whitespace()).unwrap_or(true) => { depth += 1; out.push(c) }
+            (None, '}') if prev.is_whitespace() || prev == ';' => {
+                depth -= 1;
+                if depth == 0 { break }
+                out.push(c)
+            }
+            (None, '\n') if depth == 1 => {
+                // A line break between commands: `;`, the next line's indent dropped.
+                while chars.peek().map(|n| *n == ' ' || *n == '\t').unwrap_or(false) { chars.next(); }
+                let t = out.trim_end().len();
+                out.truncate(t);
+                if !out.is_empty() && !out.ends_with(';') { out.push_str(" ;") }
+                out.push(' ');
+                prev = ' ';
+                continue;
+            }
+            (None, c) => out.push(c),
+        }
+        prev = c;
+    }
+    out.trim().trim_matches(';').trim().to_string()
 }
 
 /// A tmux format, expanded (see format.rs).
@@ -222,6 +264,7 @@ fn window_target(app: &App, target: &str) -> Option<usize> {
         "$" | "{end}" => Some(n - 1),
         "{next}" => Some((app.active + 1) % n),
         "{previous}" => Some((app.active + n - 1) % n),
+        t if t.starts_with('@') => t[1..].parse::<usize>().ok().and_then(|n| app.tab_by_num(n)),
         "!" | "{last}" => app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|x| &x.id == id)),
         _ if t.starts_with('+') || t.starts_with('-') => {
             let by: i64 = t[1..].parse().unwrap_or(1);
@@ -296,11 +339,24 @@ fn canonical(command: &str) -> String {
 }
 
 /// A tmux command's name or alias (for `hn <command>` from a shell).
+/// A title with its `#[…]` styles taken out (a menu's border draws it plain).
+fn strip_styles(t: &str) -> String {
+    let mut out = String::new();
+    let mut rest = t;
+    while let Some(i) = rest.find("#[") {
+        out.push_str(&rest[..i]);
+        rest = rest[i..].find(']').map(|j| &rest[i + j + 1..]).unwrap_or("");
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn is_command_name(name: &str) -> bool {
     COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
         || matches!(name, "display" | "send" | "neww" | "splitw" | "killp" | "killw" | "selectw" | "selectp" | "lsw" | "lsp" | "ls" | "capturep" | "showw" | "show" | "set" | "bind" | "unbind" | "source" | "run" | "if"
             | "run-shell" | "if-shell" | "wait-for" | "wait" | "pipe-pane" | "pipep" | "set-hook" | "show-hooks" | "resize-window" | "resizew" | "kill-session" | "send-prefix" | "display-menu" | "menu"
-            | "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" | "source-file" | "kill-server" | "detach-client" | "detach")
+            | "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" | "source-file" | "kill-server" | "detach-client" | "detach"
+            | "customize-mode" | "refresh-client" | "refresh")
 }
 
 fn resolve(name: &str) -> &str {
@@ -350,6 +406,8 @@ fn run_words(app: &mut App, words: &[String]) {
             let was_id = app.tab().id.clone();
             let _ = was;
             app.new_tab();
+            // -a: at the index after this window's, the ones after it moving up one.
+            if flag(words, "-a") { app.place_after(&was_id) }
             if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
             // -d: made, not gone to.
             if flag(words, "-d") {
@@ -477,7 +535,10 @@ fn run_words(app: &mut App, words: &[String]) {
             if flag(words, "-E") { input::run(app, "equalize"); return }
             let preset = match rest(words).trim() {
                 "even-horizontal" => Preset::Columns, "even-vertical" => Preset::Rows,
-                "main-horizontal" | "main-horizontal-mirrored" => Preset::MainRow, "main-vertical" | "main-vertical-mirrored" => Preset::MainStack,
+                "main-horizontal" => Preset::MainRow, "main-vertical" => Preset::MainStack,
+                // The main pane on the other side (tmux 3.5's M-6 / M-7).
+                "main-horizontal-mirrored" => { app.apply_preset(Preset::MainRow); app.mirror_layout(); return }
+                "main-vertical-mirrored" => { app.apply_preset(Preset::MainStack); app.mirror_layout(); return }
                 "tiled" => Preset::Grid,
                 "" => { input::run(app, "layout"); return }
                 // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
@@ -547,6 +608,16 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "show-messages" if app.capture.is_some() => { let lines = app.messages.iter().map(|(_, t)| t.clone()).collect(); app.print("show-messages", lines) }
         "show-messages" => input::run(app, "messages"),
+        "list-keys" if flag(words, "-1") || words.iter().skip(1).any(|w| !w.starts_with('-') && opt(words, "-T").as_deref() != Some(w.as_str())) => {
+            // list-keys -1N KEY (C-b /): what that key does, in a line.
+            let Some(name) = words.iter().skip(1).rev().find(|w| !w.starts_with('-')).cloned() else { return };
+            let chord = match crate::keys::parse(&name) { Ok(c) => c, Err(e) => { app.say(e, theme::WARN); return } };
+            let prefix = crate::keys::name(&app.keymap.prefix);
+            let line = if let Some(b) = app.keymap.prefix_command(&chord) { format!("{prefix} {}  {}", crate::keys::name(&chord), if b.note.is_empty() || !flag(words, "-N") { b.command.clone() } else { b.note.clone() }) }
+                else if let Some(b) = app.keymap.root_command(&chord) { format!("{}  {}", crate::keys::name(&chord), b.command) }
+                else { format!("{prefix} {} is not bound", crate::keys::name(&chord)) };
+            if app.capture.is_some() { app.print("list-keys", vec![line]) } else { let cap = app.capture_err.take(); app.say(line, theme::WARN); app.capture_err = cap }
+        }
         "list-keys" => {
             // -T copy-mode-vi / copy-mode / root: that table.
             if let Some(t) = opt(words, "-T").and_then(|t| crate::keys::table_named(&t)) {
@@ -638,7 +709,9 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "swap-window" => {
             let src = opt(words, "-s").map(|t| window_target(app, &t)).unwrap_or(Some(app.active));
-            let dst = opt(words, "-t").map(|t| window_target(app, &t)).unwrap_or(Some(app.active));
+            // No target: the window holding the marked pane, as tmux's.
+            let marked = app.marked.and_then(|m| app.tabs.iter().position(|t| t.panes().contains(&m)));
+            let dst = match opt(words, "-t") { Some(t) => window_target(app, &t), None => marked.or(Some(app.active)) };
             match (src, dst) {
                 (Some(a), Some(b)) => {
                     // -d leaves the current window where it was; without it, focus follows the move.
@@ -783,11 +856,66 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "send-prefix" => { let prefix = crate::keys::name(&app.keymap.prefix); input::send_keys(app, &[prefix]) }
         "command-prompt" => {
-            let label = opt(words, "-p").unwrap_or_else(|| ":".into());
-            let initial = opt(words, "-I").map(|i| expand(app, &i)).unwrap_or_default();
-            let template = rest(words);
+            // command-prompt [-1bFikN] [-I initial] [-p prompt] [-T type] [template]:
+            // -k takes one key (its name fills %%), -F expands the template as a format first.
+            let (mut label, mut initial, mut template, mut key, mut format) = (":".to_string(), String::new(), Vec::new(), false, false);
+            let mut i = 1;
+            while i < words.len() {
+                match words[i].as_str() {
+                    "-p" => { label = words.get(i + 1).cloned().unwrap_or_default(); i += 1 }
+                    "-I" => { initial = expand(app, words.get(i + 1).map(String::as_str).unwrap_or("")); i += 1 }
+                    "-T" | "-t" => i += 1,
+                    w if w.starts_with('-') && w.len() > 1 && template.is_empty() => { if w.contains('k') { key = true } if w.contains('F') { format = true } }
+                    w => template.push(w.to_string()),
+                }
+                i += 1;
+            }
+            let template = template.iter().map(|w| if w.contains(' ') { w.clone() } else { w.clone() }).collect::<Vec<_>>().join(" ");
+            let template = if format { expand(app, &template) } else { template };
             let label = if label == ":" { ":".to_string() } else { format!("{label} ") };
-            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: (!template.is_empty()).then_some(template) }, &label, &initial)));
+            let kind = if key { PromptKind::Key { template } } else { PromptKind::Command { template: (!template.is_empty()).then_some(template) } };
+            app.modal = Some(Modal::Prompt(Prompt::status(kind, &label, &initial)));
+        }
+        "display-menu" | "menu" => {
+            // display-menu [-O] [-T title] [-x x] [-y y] name key command … ('' a separator; a
+            // name that expands empty leaves the item out; a name starting `-` shows it disabled).
+            let mut title = String::new();
+            let mut i = 1;
+            while i < words.len() {
+                match words[i].as_str() {
+                    "-T" => { title = expand(app, words.get(i + 1).map(String::as_str).unwrap_or("")); i += 2 }
+                    "-x" | "-y" | "-t" | "-c" | "-b" | "-s" | "-S" | "-H" | "-C" => i += 2,
+                    "-O" | "-M" => i += 1,
+                    _ => break,
+                }
+            }
+            let mut items: Vec<crate::modal::MenuItem> = Vec::new();
+            while i < words.len() {
+                let name = words[i].clone();
+                if name.is_empty() {
+                    if items.last().map(|it| !it.separator).unwrap_or(false) { items.push(crate::modal::MenuItem { label: String::new(), key: String::new(), command: String::new(), disabled: true, separator: true }) }
+                    i += 1;
+                    continue;
+                }
+                let (key, command) = (words.get(i + 1).cloned().unwrap_or_default(), words.get(i + 2).cloned().unwrap_or_default());
+                i += 3;
+                let label: String = crate::format::text(app, &name, None);
+                if label.is_empty() { continue }
+                let (disabled, label) = match label.strip_prefix('-') { Some(l) => (true, l.to_string()), None => (false, label) };
+                items.push(crate::modal::MenuItem { label, key, command, disabled, separator: false });
+            }
+            while items.last().map(|it| it.separator).unwrap_or(false) { items.pop(); }
+            let title = strip_styles(&title);
+            let cursor = items.iter().position(|it| !it.disabled && !it.separator).unwrap_or(0);
+            if items.is_empty() { return }
+            app.modal = Some(Modal::Menu { title, items, cursor });
+        }
+        "customize-mode" => {
+            // tmux's options-and-keys tree, read here as one list: the options as they are, then every key.
+            let mut lines = listing(app, "show-options");
+            lines.push(String::new());
+            for b in &app.keymap.prefix_table { lines.push(format!("{} {:<9} {}", crate::keys::name(&app.keymap.prefix), crate::keys::name(&b.chord), b.command)) }
+            app.print("customize-mode", lines);
         }
         "confirm-before" => {
             let prompt = opt(words, "-p").map(|p| expand(app, &p));
@@ -825,6 +953,11 @@ mod tests {
         assert_eq!(split("copy-mode \\; send -X begin-selection"), vec![vec!["copy-mode", ";", "send", "-X", "begin-selection"]]);
         assert_eq!(split("send-keys 'make test' Enter"), vec![vec!["send-keys", "make test", "Enter"]]);
         assert_eq!(split("display 'a;b'"), vec![vec!["display", "a;b"]]);
+        // tmux 3's command blocks: one argument each, their commands inside.
+        assert_eq!(split("command-prompt -I \"#W\" { rename-window \"%%\" }"), vec![vec!["command-prompt", "-I", "#W", "rename-window \"%%\""]]);
+        assert_eq!(split("if -F '#{pane_at_left}' { send-keys M-h } { select-pane -L }"), vec![vec!["if", "-F", "#{pane_at_left}", "send-keys M-h", "select-pane -L"]]);
+        assert_eq!(split("bind x {\n  display a\n  display b\n}"), vec![vec!["bind", "x", "display a ; display b"]]);
+        assert_eq!(split("display-menu Swap l { swap-window -t :-1 } '' Kill X { kill-window }"), vec![vec!["display-menu", "Swap", "l", "swap-window -t :-1", "", "Kill", "X", "kill-window"]]);
         for yes in ["vim", "nvim", "vi", "view", "gvim", "vimdiff", "nvimdiff", "lvim", "fzf", "/usr/bin/nvim", "vimx"] { assert!(is_vim_command(yes), "{yes}") }
         for no in ["zsh", "bash", "claude", "node", "vite", "vim-server", "less"] { assert!(!is_vim_command(no), "{no}") }
     }

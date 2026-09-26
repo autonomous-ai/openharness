@@ -67,8 +67,8 @@ tmux_ send-keys -t t C-b z
 tmux_ send-keys -t t C-b I
 expect "C-b I: models for the focused harness" "Sonnet / High"
 tmux_ send-keys -t t Escape
-tmux_ send-keys -t t C-b M
-expect "C-b M: machines" "mock-remote"
+tmux_ send-keys -t t C-b @
+expect "C-b @: machines" "mock-remote"
 tmux_ send-keys -t t Escape
 tmux_ send-keys -t t C-b c
 tmux_ send-keys -t t Escape
