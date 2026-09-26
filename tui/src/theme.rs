@@ -57,35 +57,38 @@ pub mod fzfcolor {
         pub input_bg: CA, pub matched: CA, pub current: CA, pub current_match: CA, pub spinner: CA, pub info: CA,
         pub cursor: CA, pub marker: CA, pub header: CA, pub header_bg: CA, pub separator: CA, pub scrollbar: CA,
         pub border: CA, pub border_label: CA, pub list_border: CA,
+        pub preview_fg: CA, pub preview_bg: CA, pub preview_border: CA, pub preview_scrollbar: CA, pub preview_label: CA,
     }
 
     pub const NO_COLOR: Theme = Theme {
         colored: false, input: D, ghost: U, fg: D, bg: D, list_fg: D, list_bg: D, alt_bg: U, selected_fg: D, selected_bg: D,
         selected_match: D, dark_bg: D, gutter: U, prompt: D, input_bg: D, matched: D, current: U, current_match: U, spinner: D,
         info: D, cursor: D, marker: D, header: D, header_bg: D, separator: D, scrollbar: D, border: U, border_label: D, list_border: D,
+        preview_fg: D, preview_bg: D, preview_border: D, preview_scrollbar: D, preview_label: D,
     };
     pub const EMPTY: Theme = Theme {
         colored: true, input: U, ghost: U, fg: U, bg: U, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: U, gutter: U, prompt: U, input_bg: U, matched: U, current: U, current_match: U, spinner: U,
         info: U, cursor: U, marker: U, header: U, header_bg: U, separator: U, scrollbar: U, border: U, border_label: U, list_border: U,
+        preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DEFAULT16: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(8), gutter: U, prompt: c(4), input_bg: U, matched: c(2), current: c(15), current_match: c(10),
         spinner: c(2), info: c(3), cursor: c(1), marker: c(5), header: c(6), header_bg: U, separator: U, scrollbar: U, border: U,
-        border_label: D, list_border: U,
+        border_label: D, list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const DARK256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(236), gutter: U, prompt: c(110), input_bg: U, matched: c(108), current: c(254), current_match: c(151),
         spinner: c(148), info: c(144), cursor: c(161), marker: c(168), header: c(109), header_bg: U, separator: U, scrollbar: U,
-        border: c(59), border_label: c(145), list_border: U,
+        border: c(59), border_label: c(145), list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
     pub const LIGHT256: Theme = Theme {
         colored: true, input: D, ghost: U, fg: D, bg: D, list_fg: U, list_bg: U, alt_bg: U, selected_fg: U, selected_bg: U,
         selected_match: U, dark_bg: c(251), gutter: U, prompt: c(25), input_bg: U, matched: c(66), current: c(237), current_match: c(23),
         spinner: c(65), info: c(101), cursor: c(161), marker: c(168), header: c(31), header_bg: U, separator: U, scrollbar: U,
-        border: c(145), border_label: c(59), list_border: U,
+        border: c(145), border_label: c(59), list_border: U, preview_fg: U, preview_bg: U, preview_border: U, preview_scrollbar: U, preview_label: U,
     };
 
     /// A --color value's colour: -1, 0–255, #rrggbb, a name.
@@ -118,6 +121,8 @@ pub mod fzfcolor {
                 "list-border" => &mut theme.list_border, "prompt" => &mut theme.prompt, "input-bg" => &mut theme.input_bg,
                 "spinner" => &mut theme.spinner, "info" => &mut theme.info, "pointer" => &mut theme.cursor, "marker" => &mut theme.marker,
                 "header" | "header-fg" => &mut theme.header, "header-bg" => &mut theme.header_bg,
+                "preview-fg" => &mut theme.preview_fg, "preview-bg" => &mut theme.preview_bg, "preview-border" => &mut theme.preview_border,
+                "preview-scrollbar" => &mut theme.preview_scrollbar, "preview-label" => &mut theme.preview_label,
                 _ => continue,
             };
             for comp in &parts[1..] {
@@ -204,6 +209,7 @@ pub mod fzfcolor {
         pub cursor: P, pub cursor_empty: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
         pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub border_label: P,
+        pub preview: P, pub preview_border: P, pub preview_label: P, pub preview_scrollbar: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
         pub alt_bg: CA,
         /// Whether the base theme has colours (not bw / NO_COLOR).
@@ -278,9 +284,16 @@ pub mod fzfcolor {
         let mut gutter = t.gutter;
         if !base.colored && gutter.undefined() { gutter.attr = DIM }
         t.gutter = over(t.dark_bg, gutter);
+        // (Whether the scrollbar and the preview border were given, before they inherit.)
+        let (scrollbar_defined, preview_border_defined) = (!t.scrollbar.undefined(), !t.preview_border.undefined());
+        t.preview_fg = over(t.fg, t.preview_fg);
+        t.preview_bg = over(t.bg, t.preview_bg);
+        t.preview_label = over(t.border_label, t.preview_label);
+        t.preview_border = over(t.border, t.preview_border);
         t.list_border = over(t.border, t.list_border);
         t.separator = over(t.list_border, t.separator);
         t.scrollbar = over(t.list_border, t.scrollbar);
+        t.preview_scrollbar = if scrollbar_defined && !preview_border_defined { over(t.scrollbar, t.preview_scrollbar) } else { over(t.preview_border, t.preview_scrollbar) };
         // No input window of its own: the input's background is the list's.
         t.input_bg = over(t.bg, t.list_bg);
         t.header_bg = over(t.bg, t.list_bg);
@@ -295,7 +308,9 @@ pub mod fzfcolor {
             current_cursor_empty: pair(blank, t.dark_bg), current_marker: pair(t.marker, t.dark_bg), current_selected_empty: pair(blank, t.dark_bg),
             spinner: pair(t.spinner, t.input_bg), info: pair(t.info, t.input_bg), separator: pair(t.separator, t.input_bg),
             scrollbar: pair(t.scrollbar, t.list_bg), border: pair(t.border, t.bg), header: pair(t.header, t.header_bg),
-            list_border: pair(t.list_border, t.list_bg), border_label: pair(t.border_label, t.bg), alt_bg: t.alt_bg, colored: base.colored,
+            list_border: pair(t.list_border, t.list_bg), border_label: pair(t.border_label, t.bg),
+            preview: pair(t.preview_fg, t.preview_bg), preview_border: pair(t.preview_border, t.preview_bg),
+            preview_label: pair(t.preview_label, t.preview_bg), preview_scrollbar: pair(t.preview_scrollbar, t.preview_bg), alt_bg: t.alt_bg, colored: base.colored,
         }
     }
 
@@ -524,6 +539,81 @@ fn parse_label_pos(s: &str) -> (i64, bool) {
     (column, bottom)
 }
 
+/// --preview-window: where the preview goes and how big (right, 50%), its border (rounded; `line`
+/// is the side facing the list), wrap (hn wraps its own text unless told `nowrap`), hidden, follow,
+/// info (its N/M), the starting scroll (+N[-/D]), and an alternative below a size (<N(…)).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewWindow {
+    pub position: char, pub size: Size, pub border: String, pub wrap: Option<bool>, pub hidden: bool, pub follow: bool,
+    pub info: bool, pub scroll: String, pub threshold: usize, pub alternative: Option<Box<PreviewWindow>>,
+}
+
+impl Default for PreviewWindow {
+    fn default() -> Self {
+        PreviewWindow { position: 'r', size: Size { size: 50.0, percent: true }, border: "rounded".into(), wrap: None, hidden: false, follow: false, info: true, scroll: String::new(), threshold: 0, alternative: None }
+    }
+}
+
+impl PreviewWindow {
+    /// previewOpts.Border: `line` as the side facing the list.
+    pub fn shape(&self) -> &str {
+        if self.border != "line" { return &self.border }
+        match self.position { 'u' => "bottom", 'd' => "top", 'l' => "right", _ => "left" }
+    }
+}
+
+/// parsePreviewWindow: its tokens (split at , and :) over [pw]; `<N(…)` an alternative under N.
+fn parse_preview_window(pw: &mut PreviewWindow, input: &str) {
+    let mut alternative: Option<String> = None;
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        while i < chars.len() && (chars[i] == ',' || chars[i] == ':') { i += 1 }
+        if i >= chars.len() { break }
+        if chars[i] == '<' {
+            let rest: String = chars[i + 1..].iter().collect();
+            if let Some((n, tail)) = rest.split_once('(') {
+                if let (Ok(threshold), Some((alt, _))) = (n.parse::<usize>(), tail.split_once(')')) {
+                    pw.threshold = threshold;
+                    alternative = Some(alt.to_string());
+                    i += 1 + n.len() + 1 + alt.len() + 1;
+                    continue;
+                }
+            }
+        }
+        let start = i;
+        while i < chars.len() && chars[i] != ',' && chars[i] != ':' { i += 1 }
+        let token: String = chars[start..i].iter().collect();
+        match token.as_str() {
+            "default" => *pw = PreviewWindow::default(),
+            "hidden" => pw.hidden = true, "nohidden" => pw.hidden = false,
+            "wrap" => pw.wrap = Some(true), "nowrap" => pw.wrap = Some(false),
+            "up" | "top" => pw.position = 'u', "down" | "bottom" => pw.position = 'd', "left" => pw.position = 'l', "right" => pw.position = 'r',
+            "rounded" | "border" | "border-rounded" => pw.border = "rounded".into(),
+            "border-line" => pw.border = "line".into(),
+            "sharp" | "border-sharp" => pw.border = "sharp".into(),
+            "border-bold" => pw.border = "bold".into(), "border-block" => pw.border = "block".into(),
+            "border-thinblock" => pw.border = "thinblock".into(), "border-double" => pw.border = "double".into(),
+            "noborder" | "border-none" => pw.border = "none".into(),
+            "border-horizontal" => pw.border = "horizontal".into(), "border-vertical" => pw.border = "vertical".into(),
+            "border-up" | "border-top" => pw.border = "top".into(), "border-down" | "border-bottom" => pw.border = "bottom".into(),
+            "border-left" => pw.border = "left".into(), "border-right" => pw.border = "right".into(),
+            "follow" => pw.follow = true, "nofollow" => pw.follow = false,
+            "info" => pw.info = true, "noinfo" => pw.info = false,
+            t if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) || t.ends_with('%') && t[..t.len() - 1].chars().all(|c| c.is_ascii_digit()) && t.len() > 1 => { if let Some(s) = parse_size(t) { pw.size = s } }
+            t if t.starts_with('+') || t.starts_with('-') || t.starts_with('/') => pw.scroll = t.to_string(),
+            _ => {}
+        }
+    }
+    if let Some(alt) = alternative {
+        let mut a = pw.clone();
+        a.hidden = false;
+        a.alternative = None;
+        parse_preview_window(&mut a, &alt);
+        pw.alternative = Some(Box::new(a));
+    }
+}
+
 /// A label's text without its ANSI colours.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::new();
@@ -537,13 +627,13 @@ fn strip_ansi(s: &str) -> String {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String>, pub keep_right: bool, pub gap: usize, pub gap_line: Option<String> }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String>, pub keep_right: bool, pub gap: usize, pub gap_line: Option<String>, pub preview_window: PreviewWindow, pub preview_label: Option<String>, pub preview_label_pos: (i64, bool) }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None, keep_right: false, gap: 0, gap_line: None, preview_window: PreviewWindow::default(), preview_label: None, preview_label_pos: (0, false) };
         let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
@@ -612,6 +702,11 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--no-gap" => o.gap = 0,
                 "--gap-line" => { o.gap_line = value.clone().or_else(|| opts.get(i + 1).filter(|w| !w.starts_with('-') && !w.starts_with('+')).cloned().inspect(|_| i += 1)) }
                 "--no-gap-line" => o.gap_line = Some(String::new()),
+                // Each --preview-window over the one before, as fzf reads them.
+                "--preview-window" => { if let Some(v) = take() { parse_preview_window(&mut o.preview_window, &v) } }
+                "--preview-label" => { if let Some(v) = take() { o.preview_label = Some(strip_ansi(v.split('\n').next().unwrap_or(""))) } }
+                "--no-preview-label" => o.preview_label = Some(String::new()),
+                "--preview-label-pos" => { if let Some(v) = take() { o.preview_label_pos = parse_label_pos(&v) } }
                 // --gutter=CHAR: the gutter's character (a blank in reverse under --no-unicode).
                 "--gutter" => { if let Some(v) = take() { o.gutter = Some(v) } }
                 // --scrollbar=CHAR1[CHAR2]: the list's, and the preview's (CHAR1 when there is no CHAR2).

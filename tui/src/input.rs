@@ -1266,7 +1266,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Char('e') if ctrl => picker.qend(),
             KeyCode::Home => picker.qhome(),
             KeyCode::End => picker.qend(),
-            KeyCode::Char('/' | '_' | '7') if ctrl => { picker.preview = !picker.preview; picker.preview_scroll = 0 }
+            KeyCode::Char('/' | '_' | '7') if ctrl => { picker.preview = !picker.preview; picker.preview_scroll.set(0) }
             // fzf 0.67's alt-/: toggle-wrap (its ctrl-/ too; here C-/ stays the preview's, as fzf's
             // README binds it).
             KeyCode::Char('/') if alt => picker.toggle_wrap(),
@@ -1398,7 +1398,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, mul
             "toggle-out" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { -1 } else { 1 }) }
             "preview-page-up" => picker.preview_page(-1, false), "preview-page-down" => picker.preview_page(1, false),
             "preview-half-page-up" => picker.preview_page(-1, true), "preview-half-page-down" => picker.preview_page(1, true),
-            "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_bottom(),
+            "preview-top" => picker.preview_to(0), "preview-bottom" => picker.preview_bottom(),
             "unix-word-rubout" => picker.backspace(true), "kill-line" => picker.kill_line(),
             "backward-char" => picker.qmove(-1, false), "forward-char" => picker.qmove(1, false),
             "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),

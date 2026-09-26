@@ -58,7 +58,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // The picker drew with a placeholder preview; a live pane preview needs the whole app.
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
-        if let Some(area) = picker_preview_area(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, area) }
+        if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
     if let Some(Modal::Tree { cursor: at, collapsed }) = &app.modal { tree(buf, app, body, *at, collapsed) }
     let popup = match &app.modal { Some(Modal::Popup { pane, width, height, title }) => Some((*pane, *width, *height, title.clone())), _ => None };
@@ -651,11 +651,84 @@ fn fzf_border(buf: &mut Buffer, body: Rect) {
     if col >= 0 { buf.set_stringn(body.x + col as u16, row, &text, (w - col).max(0) as usize, theme::fzf().pal.border_label.style()); }
 }
 
-fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
-    (picker.preview && body.width >= 80 && body.height >= 8).then(|| {
-        let list_w = body.width / 2;
-        Rect::new(body.x + list_w, body.y, body.width - list_w, body.height)
-    })
+/// The preview's box (its border, its shape) and what is inside it: the text, and the column of
+/// its scrollbar.
+pub struct PreviewBox { pub rect: Rect, pub shape: String, pub inner: Rect, pub bar_x: u16, pub opts: theme::PreviewWindow }
+
+/// A border shape's sides: top, right, bottom, left.
+fn shape_sides(shape: &str) -> (bool, bool, bool, bool) {
+    match shape {
+        "none" | "line" => (false, false, false, false),
+        "horizontal" => (true, false, true, false), "vertical" => (false, true, false, true),
+        "top" => (true, false, false, false), "right" => (false, true, false, false),
+        "bottom" => (false, false, true, false), "left" => (false, false, false, true),
+        _ => (true, true, true, true),
+    }
+}
+
+/// fzf's calculateSize: a size (cells, or a percentage of [base]) kept to at least [min] and to what
+/// [occupied] leaves.
+fn calculate_size(base: i64, size: theme::Size, occupied: i64, min: i64) -> i64 {
+    let max = (base - occupied).max(min);
+    let v = if size.percent { (base as f64 * 0.01 * size.size) as i64 } else { size.size as i64 + min - 1 };
+    v.clamp(min, max)
+}
+
+/// resizeWindows, the preview's half: the list's window and the preview's box inside [inner] —
+/// right, left, up or down, its size, its border, the alternative under its threshold, none when
+/// hidden or the list has none; with the outer border on the right and nothing of the preview's
+/// there, the list (and the preview) take back the border's column of padding (listStickToRight).
+/// The third value: whether that column is the list's (else it is left blank).
+fn fzf_split(inner: Rect, picker: &Picker) -> (Rect, Option<PreviewBox>, bool) {
+    let o = theme::fzf_opts();
+    let (_, outer_right, _, _) = border_sides();
+    let (x, y) = (inner.x as i64, inner.y as i64);
+    let (width, height) = (inner.width as i64, inner.height as i64);
+    let rect = |x: i64, y: i64, w: i64, h: i64| Rect::new(x.max(0) as u16, y.max(0) as u16, w.max(0) as u16, h.max(0) as u16);
+    let alone = |stick: bool| (rect(x, y, width + stick as i64, height), None, stick);
+    if !picker.preview { return alone(outer_right) }
+    let mut pw = &o.preview_window;
+    loop {
+        let shape = pw.shape().to_string();
+        let (bt, br, bb, bl) = shape_sides(&shape);
+        let bar = o.preview_scrollbar.is_some();
+        let min_w = 1 + 2 * (bl as i64 + br as i64) + (matches!(pw.position, 'l' | 'r') && bar && !br) as i64;
+        let min_h = 1 + bt as i64 + bb as i64;
+        let (list, pbox, stick) = match pw.position {
+            'u' | 'd' => {
+                let ph = calculate_size(height, pw.size, 3 - no_separator_line() as i64, min_h);
+                if pw.threshold > 0 && ph < pw.threshold as i64 { if let Some(alt) = &pw.alternative { if alt.hidden { return alone(outer_right) } pw = alt; continue } }
+                if pw.hidden { return alone(outer_right) }
+                let stick = outer_right && !br;
+                let w = width + stick as i64;
+                let available = height - (2 - no_separator_line() as i64) - min_h;
+                let ph = ph.min(available).max(min_h);
+                if pw.position == 'u' { (rect(x, y + ph, w, height - ph), rect(x, y, w, ph), stick) }
+                else { (rect(x, y, w, height - ph), rect(x, y + height - ph, w, ph), stick) }
+            }
+            _ => {
+                let pwidth = calculate_size(width, pw.size, 4, min_w);
+                if pw.threshold > 0 && pwidth < pw.threshold as i64 { if let Some(alt) = &pw.alternative { if alt.hidden { return alone(outer_right) } pw = alt; continue } }
+                if pw.hidden { return alone(outer_right) }
+                if pw.position == 'l' {
+                    // A column between the preview and the list; the list against the outer border.
+                    let inner_w = width + outer_right as i64;
+                    (rect(x + pwidth + 1, y, inner_w - pwidth - 1, height), rect(x, y, pwidth, height), outer_right)
+                } else {
+                    let stick = outer_right && !br;
+                    let w = width + stick as i64;
+                    (rect(x, y, w - pwidth, height), rect(x + w - pwidth, y, pwidth, height), stick)
+                }
+            }
+        };
+        // createPreviewWindow: inside the border's sides (a side and its margin), a column for the
+        // scrollbar where the border has no right side.
+        let (px, py) = (pbox.x as i64 + 2 * bl as i64, pbox.y as i64 + bt as i64);
+        let pw_w = pbox.width as i64 - 2 * (bl as i64 + br as i64) - (bar && !br) as i64;
+        let ph_h = pbox.height as i64 - bt as i64 - bb as i64;
+        let bar_x = (pbox.x + pbox.width).saturating_sub(if br { 2 } else { 1 });
+        return (list, Some(PreviewBox { rect: pbox, shape, inner: rect(px, py, pw_w, ph_h), bar_x, opts: pw.clone() }), stick);
+    }
 }
 
 /// fzf 0.67's default layout, measured: rows bottom-up (best nearest the prompt), `▌` gutter
@@ -672,17 +745,16 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // --color=bg: under everything (the preview too); list-bg: under the list alone.
     let pal = theme::fzf().pal;
     if let Some(bg) = pal.border.style().bg { buf.set_style(body, Style::default().bg(bg)) }
-    let preview = picker_preview_area(body, picker);
-    let area = match preview { Some(p) => Rect::new(body.x, body.y, p.x - body.x, body.height), None => body };
-    // fzf's listStickToRight: with a border on the right and nothing between (no preview), the
-    // list takes back the column of padding there, its scrollbar against the border.
-    let right_border = matches!(theme::fzf_opts().border.as_deref(), Some(b) if !matches!(b, "none" | "horizontal" | "top" | "bottom" | "left"));
-    let area = if right_border && preview.is_none() { Rect { width: area.width + 1, ..area } } else { area };
-    if right_border && preview.is_none() {
-        // (The border's margin there is the list's column now, blank until the list draws on it.)
-        let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 }.style();
-        for y in area.y..area.y + area.height { buf.set_string(area.x + area.width - 1, y, " ", plain) }
+    let (area, pbox, stick) = fzf_split(body, picker);
+    let (_, right_border, _, _) = border_sides();
+    if right_border {
+        // The outer border's margin on the right: the list's column now (listStickToRight), blank
+        // until it draws there, or cleared between the border and a preview with a side of its own.
+        let (bg, rows) = if stick { (pal.normal.bg, area.y..area.y + area.height) } else { (pal.border.bg, body.y..body.y + body.height) };
+        let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg, attr: 0 }.style();
+        for y in rows { buf.set_string(body.x + body.width, y, " ", plain) }
     }
+    let preview = pbox.as_ref().map(|p| p.rect).filter(|p| p.x > area.x);
     if let Some(bg) = pal.normal.style().bg { buf.set_style(area, Style::default().bg(bg)) }
     let width = area.width as usize;
     let bottom = area.y + area.height;
@@ -1441,64 +1513,177 @@ fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'st
     Some(Line::from(spans))
 }
 
-/// The preview window: fzf's rounded border in 59, a label at the top, the content inside.
-fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area: Rect) {
-    let border = theme::fzf().border_style();
+/// A border drawn as fzf's LightWindow draws it (drawBorderAround, drawBorderHorizontal,
+/// drawBorderVertical): a box's corners and lines, or its lines only, each side with a column of
+/// margin inside it, in [st].
+fn draw_box(buf: &mut Buffer, area: Rect, shape: &str, st: Style) {
+    if area.width < 2 || area.height == 0 { return }
+    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs(shape);
+    let (x0, y0, x1, y1) = (area.x, area.y, area.x + area.width - 1, area.y + area.height - 1);
+    let boxed = !matches!(shape, "horizontal" | "vertical" | "top" | "bottom" | "left" | "right" | "none" | "line");
+    let (t, r, b, l) = shape_sides(shape);
+    if boxed {
+        for x in x0 + 1..x1 { buf.set_string(x, y0, top_c, st); buf.set_string(x, y1, bottom_c, st) }
+        buf.set_string(x0, y0, tl, st); buf.set_string(x1, y0, tr, st); buf.set_string(x0, y1, bl, st); buf.set_string(x1, y1, br, st);
+        for y in y0 + 1..y1 { buf.set_string(x0, y, format!("{left_c} "), st); buf.set_string(x1 - 1, y, format!(" {right_c}"), st) }
+        return;
+    }
+    if t { for x in x0..=x1 { buf.set_string(x, y0, top_c, st) } }
+    if b { for x in x0..=x1 { buf.set_string(x, y1, bottom_c, st) } }
+    for y in y0..=y1 {
+        if l { buf.set_string(x0, y, format!("{left_c} "), st) }
+        if r { buf.set_string(x1 - 1, y, format!(" {right_c}"), st) }
+    }
+}
+
+/// evaluateScrollOffset without placeholders: +N and -N add up from line 0 (+1 is the first), a
+/// /D takes a D-th of the window off.
+fn scroll_offset(expr: &str, height: usize) -> Option<usize> {
+    let mut rest = expr.to_string();
+    while let (Some(a), Some(b)) = (rest.find('{'), rest.find('}')) { if b < a { break } let from = if a > 0 && rest.as_bytes()[a - 1] == b'+' { a - 1 } else { a }; rest.replace_range(from..=b, "") }
+    if rest.is_empty() && expr.is_empty() { return None }
+    let mut base: i64 = -1;
+    let chars: Vec<char> = rest.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let neg_div = chars[i] == '-' && chars.get(i + 1) == Some(&'/');
+        if chars[i] == '/' || neg_div {
+            let from = i + if neg_div { 2 } else { 1 };
+            let d: String = chars[from..].iter().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(d) = d.parse::<i64>() { if d != 0 { base -= height as i64 / d } }
+            break;
+        }
+        if chars[i] == '+' || chars[i] == '-' {
+            let n: String = chars[i + 1..].iter().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(v) = n.parse::<i64>() { base += if chars[i] == '-' { -v } else { v } }
+            i += 1 + n.len();
+            continue;
+        }
+        i += 1;
+    }
+    Some(base.max(0) as usize)
+}
+
+/// A line cut where it runs past [width] columns, the rows after the first starting with the wrap
+/// sign (fzf's preview with `wrap`).
+fn char_wrap(line: &Line<'static>, width: usize, sign: &str) -> Vec<Line<'static>> {
+    let sign_w = sign.width();
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let (mut used, mut room) = (0usize, width);
+    for span in &line.spans {
+        for c in span.content.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + cw > room && used > 0 {
+                rows.push(vec![Span::styled(sign.to_string(), Style::default().add_modifier(Modifier::DIM))]);
+                used = 0;
+                room = width.saturating_sub(sign_w).max(1);
+            }
+            rows.last_mut().unwrap().push(Span::styled(c.to_string(), span.style));
+            used += cw;
+        }
+    }
+    rows.into_iter().map(Line::from).collect()
+}
+
+/// The preview window (printPreview): its box in --preview-window's border and the preview-border
+/// colour, its label on the box's line where --preview-label-pos puts it (centred; hn's label is
+/// the row's own unless --preview-label says), the text in preview-fg on preview-bg — hn's own
+/// text wrapped at spaces, or fzf's `wrap` (the wrap sign after the cut, the lines counted as
+/// they were) or `nowrap` (cut) — from where +N or follow put it; the scrollbar's column in
+/// preview-scrollbar, its thumb when the text runs past, and (info) its N/M.
+fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, pb: &PreviewBox) {
+    let pal = theme::fzf().pal;
+    let o = theme::fzf_opts();
+    let pw = &pb.opts;
+    let area = pb.rect;
     let w = area.width;
-    let h = area.height;
-    for y in area.y..area.y + h {
+    for y in area.y..area.y + area.height {
         for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } }
     }
-    if let Some(bg) = theme::fzf_opts().bg { buf.set_style(area, Style::default().bg(bg)) }
-    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs("rounded");
-    buf.set_string(area.x, area.y, tl, border);
-    buf.set_string(area.x + w - 1, area.y, tr, border);
-    buf.set_string(area.x, area.y + h - 1, bl, border);
-    buf.set_string(area.x + w - 1, area.y + h - 1, br, border);
-    for x in area.x + 1..area.x + w - 1 { buf.set_string(x, area.y, top_c, border); buf.set_string(x, area.y + h - 1, bottom_c, border); }
-    // The padding inside the sides is the border's too (the right one is the scrollbar's column).
-    for y in area.y + 1..area.y + h - 1 { buf.set_string(area.x, y, format!("{left_c} "), border); buf.set_string(area.x + w - 2, y, format!(" {right_c}"), border); }
-    let inner = Rect::new(area.x + 2, area.y + 1, w.saturating_sub(4), h.saturating_sub(2));
+    // The window in preview-bg (its blanks in the default colour, as fzf clears them); the text in
+    // preview-fg where it has no colour of its own.
+    let text_fg = pal.preview.style().fg;
+    buf.set_style(area, Style { fg: Some(Color::Reset), ..pal.preview.style() });
+    draw_box(buf, area, &pb.shape, pal.preview_border.style());
+    let inner = pb.inner;
+    let (bt, br, bb, bl) = shape_sides(&pb.shape);
+    let _ = (br, bl);
+    // The scrollbar's column: blank in its colour until a thumb is drawn there.
+    let scrollbar = o.preview_scrollbar.clone();
+    if scrollbar.is_some() { for y in inner.y..inner.y + inner.height { buf.set_string(pb.bar_x, y, " ", pal.preview_scrollbar.style()) } }
     let Some(id) = picker.current_id() else { return };
-    let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
-    let label = format!(" {} ", clip(&label, (w as usize).saturating_sub(6)));
-    buf.set_string(area.x + 2, area.y, &label, border.add_modifier(Modifier::BOLD));
+    // printLabel on the box's line (a shape with one).
+    let has_line = bt || bb;
+    if has_line {
+        let text = match &o.preview_label {
+            Some(l) => l.clone(),
+            None => format!(" {} ", clip(&picker.current().map(|r| r.label.clone()).unwrap_or_default(), (w as usize).saturating_sub(6))),
+        };
+        let len = text.width() as i64;
+        if len > 0 {
+            let ww = w as i64;
+            let (column, at_bottom) = o.preview_label_pos;
+            let col = if column == 0 { ((ww - len) / 2).max(0) } else if column < 0 { (ww + column + 1 - len).max(0) } else { (column - 1).min(ww - len) };
+            let row = if pb.shape == "bottom" || at_bottom || !bt { area.y + area.height - 1 } else { area.y };
+            let text = if len > ww { let ell = o.ellipsis.clone(); trim_right(&text, (ww - ell.width() as i64) as i32) + &ell } else { text };
+            if col >= 0 { buf.set_stringn(area.x + col as u16, row, &text, (ww - col).max(0) as usize, pal.preview_label.style()); }
+        }
+    }
     // A harness that is on screen somewhere: its terminal, live.
     if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) {
         let key = id.split('#').next().unwrap_or(&id);
         if let Some((m, a)) = key.split_once(':') {
             if let Some((_, pane_id)) = app.find_pane(m, a) {
                 if let Some(pane) = app.panes.get(&pane_id) {
-                    if matches!(pane.phase, Phase::Live | Phase::Watching(_)) { preview_grid(buf, pane, inner, picker.preview_scroll); return }
+                    if matches!(pane.phase, Phase::Live | Phase::Watching(_)) { preview_grid(buf, pane, inner, picker.preview_scroll.get()); return }
                 }
             }
         }
     }
-    // Long lines wrap, as fzf's preview does (it is text, not a screen).
-    let lines: Vec<Line> = crate::preview::lines(app, kind, &id).into_iter().flat_map(|l| wrap_line(l, inner.width as usize)).collect();
-    // A preview that fits does not scroll; one that does scrolls until its last line is at the
-    // top (fzf's scrollPreviewTo).
-    let (total, height) = (lines.len(), inner.height as usize);
-    let scrollable = total > height && height > 0;
-    let most = if scrollable { (total - 1).min(u16::MAX as usize) as u16 } else { 0 };
+    let (iw, height) = (inner.width as usize, inner.height as usize);
+    let text = crate::preview::lines(app, kind, &id);
+    let fzf_wrap = pw.wrap == Some(true);
+    let lines: Vec<Line> = match pw.wrap { None => text.into_iter().flat_map(|l| wrap_line(l, iw)).collect(), _ => text };
+    let total = lines.len();
+    // A new row's preview starts where follow or +N says.
+    if picker.preview_fresh.replace(false) {
+        picker.preview_following.set(pw.follow);
+        if !pw.follow { if let Some(n) = scroll_offset(&pw.scroll, height) { picker.preview_scroll.set(n.min(total.saturating_sub(1)).min(u16::MAX as usize) as u16) } }
+    }
+    if pw.follow && picker.preview_following.get() { picker.preview_scroll.set(picker.preview_scroll.get().max(total.saturating_sub(height).min(u16::MAX as usize) as u16)) }
+    // The rows it fills from its offset (fzf: a wrapped line takes as many as it needs).
+    let draw_from = |offset: usize| -> (Vec<Line<'static>>, bool) {
+        let mut rows = Vec::new();
+        for line in lines.iter().skip(offset) {
+            let parts = if fzf_wrap { char_wrap(line, iw, &o.wrap_sign) } else { vec![line.clone()] };
+            for p in parts { if rows.len() >= height { return (rows, true) } rows.push(p) }
+        }
+        (rows, false)
+    };
+    let (_, filled_at_top) = draw_from(0);
+    // Scrollable (fzf): past the top, or more lines than rows, or a wrapped text that fills them.
+    let scrollable = height > 0 && (total > height || (fzf_wrap && filled_at_top) || picker.preview_scroll.get() > 0);
+    let most = if scrollable { total.saturating_sub(1).min(u16::MAX as usize) as u16 } else { 0 };
     picker.preview_max.set(most);
     picker.preview_lines.set(total);
     picker.preview_rows.set(inner.height);
-    let offset = picker.preview_scroll.min(most) as usize;
-    for (i, line) in lines.iter().skip(offset).take(height).enumerate() {
-        buf.set_line(inner.x, inner.y + i as u16, line, inner.width);
+    let offset = picker.preview_scroll.get().min(most) as usize;
+    let (rows, _) = draw_from(offset);
+    for (i, line) in rows.into_iter().enumerate() {
+        let line = Line::from(line.spans.into_iter().map(|sp| { let st = if sp.style.fg.is_none() { Style { fg: text_fg, ..sp.style } } else { sp.style }; Span::styled(sp.content, st) }).collect::<Vec<_>>());
+        buf.set_line(inner.x, inner.y + i as u16, &line, inner.width);
     }
-    if !scrollable { return }
-    // fzf's preview scrollbar, in the column before the border: getScrollbar's thumb and start.
-    if let Some(bar) = theme::fzf_opts().preview_scrollbar.clone() {
+    // getScrollbar(1, lines, height, min(lines - height, offset)): the thumb, in its colour.
+    if let (Some(bar), true) = (&scrollbar, total > height && height > 0) {
         let thumb = (height * height / total).max(1);
-        let start = ((height - thumb) * offset / (total - height)).min(height - thumb);
-        for i in 0..thumb { buf.set_string(area.x + w - 2, inner.y + (start + i) as u16, &bar, border); }
+        let at = offset.min(total - height);
+        let start = if total == height { 0 } else { ((height - thumb) * at / (total - height)).min(height - thumb) };
+        for i in 0..thumb { buf.set_string(pb.bar_x, inner.y + (start + i) as u16, bar, pal.preview_scrollbar.style()); }
     }
-    // Its offset, N/M, at the top right in the info colour reversed.
+    // Its offset, N/M, at the top right in the info colour reversed (not with noinfo).
     let mark = format!("{}/{}", offset + 1, total);
-    if (mark.width() as u16) < inner.width {
-        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, theme::fzf().pal.info.style().add_modifier(Modifier::REVERSED));
+    if scrollable && pw.info && (mark.width() as u16) < inner.width {
+        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, pal.info.style().add_modifier(Modifier::REVERSED));
     }
 }
 

@@ -80,8 +80,12 @@ pub struct Picker {
     /// The preview window, and how far it is scrolled — for the row it shows: another row's
     /// preview starts at its top, as fzf runs the preview again.
     pub preview: bool,
-    pub preview_scroll: u16,
+    pub preview_scroll: std::cell::Cell<u16>,
     preview_of: Option<String>,
+    /// A row's preview not drawn yet (it starts where --preview-window's +N or follow says), and
+    /// whether it follows its end (follow, until scrolled up from it).
+    pub preview_fresh: std::cell::Cell<bool>,
+    pub preview_following: std::cell::Cell<bool>,
     /// fzf's --wrap, toggled by toggle-wrap (M-/): a long row goes on over the lines below it —
     /// and the columns it was last wrapped at (0 before it is drawn so), for the page keys.
     pub wrap: bool,
@@ -115,9 +119,11 @@ impl Picker {
             armed: None,
             qcursor: 0,
             marked: Vec::new(),
-            preview: true,
-            preview_scroll: 0,
+            preview: !crate::theme::fzf_opts().preview_window.hidden,
+            preview_scroll: Default::default(),
             preview_of: None,
+            preview_fresh: std::cell::Cell::new(true),
+            preview_following: Default::default(),
             wrap: crate::theme::fzf_opts().wrap,
             wrap_width: Default::default(),
             line_cache: Default::default(),
@@ -206,11 +212,18 @@ impl Picker {
             self.cursor = ((self.cursor as i64 + direction).rem_euclid(n)) as usize;
         }
         self.selected_id = Some(self.rows[self.visible[self.cursor].0].id.clone());
-        if self.selected_id != self.preview_of { self.preview_scroll = 0; self.preview_of = self.selected_id.clone() }
+        if self.selected_id != self.preview_of { self.preview_scroll.set(0); self.preview_fresh.set(true); self.preview_of = self.selected_id.clone() }
     }
 
     /// fzf's scrollPreviewBy: from the first line until the last one is at the top.
-    pub fn preview_by(&mut self, by: i64) { self.preview_scroll = (self.preview_scroll as i64 + by).clamp(0, self.preview_max.get() as i64) as u16 }
+    pub fn preview_by(&mut self, by: i64) { self.preview_to(self.preview_scroll.get() as i64 + by) }
+
+    /// scrollPreviewTo: kept in range, and following again once back at the end.
+    pub fn preview_to(&mut self, to: i64) {
+        let at = to.clamp(0, self.preview_max.get() as i64);
+        self.preview_scroll.set(at as u16);
+        self.preview_following.set(at >= self.preview_lines.get() as i64 - self.preview_rows.get() as i64);
+    }
 
     /// preview-page-*: the window's height; preview-half-page-*: half of it.
     pub fn preview_page(&mut self, pages: i64, half: bool) {
@@ -221,8 +234,7 @@ impl Picker {
     /// preview-bottom: the last line at the bottom.
     pub fn preview_bottom(&mut self) {
         let bottom = self.preview_lines.get().saturating_sub(self.preview_rows.get() as usize) as i64;
-        self.preview_scroll = 0;
-        self.preview_by(bottom);
+        self.preview_to(bottom);
     }
 
     /// fzf's vset: the cursor to [to], kept in the list (no --cycle), off a disabled row.
