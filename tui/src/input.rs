@@ -1747,7 +1747,7 @@ pub fn send_keys(app: &mut App, words: &[String]) {
         i += 1;
     }
     let pane = match &target {
-        Some(t) => match crate::commands::pane_target(app, t) { Some((_, p)) => p, None => { app.say(format!("Can't find pane: {t}"), theme::WARN); return } },
+        Some(t) => match crate::commands::pane_target(app, t) { Some((_, p)) => p, None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } },
         None => match app.focused() { Some(f) => f, None => return },
     };
     let mode = app.panes.get(&pane).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());

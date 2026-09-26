@@ -24,7 +24,10 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
     let dir = dir();
     std::fs::create_dir_all(&dir).ok()?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)); }
-    let path = dir.join(format!("{}.sock", std::process::id()));
+    // Named with -L (as tmux's), else by this client's pid. Sockets of clients gone are swept.
+    sweep(&dir);
+    let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| std::process::id().to_string());
+    let path = dir.join(format!("{name}.sock"));
     let _ = std::fs::remove_file(&path);
     let listener = tokio::net::UnixListener::bind(&path).ok()?;
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)); }
@@ -54,6 +57,22 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Remove sockets nobody answers on (a client that was killed).
+fn sweep(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() { let _ = std::fs::remove_file(&p); }
+    }
+}
+
+/// Which client to ask: -S path, -L name, $HN_SOCKET, else the newest.
+fn chosen(socket: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
+    if let Some(p) = socket.map(str::to_string).or_else(|| std::env::var("HN_SOCKET").ok().filter(|s| !s.is_empty())) { return Some(PathBuf::from(p)) }
+    if let Some(n) = name { return Some(dir().join(format!("{n}.sock"))) }
+    newest()
+}
+
 /// The newest running client's socket.
 fn newest() -> Option<PathBuf> {
     let mut socks: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir()).ok()?.filter_map(|e| e.ok()).map(|e| e.path())
@@ -64,10 +83,11 @@ fn newest() -> Option<PathBuf> {
 }
 
 /// `hn <command> …` from a shell: 0 when it ran, 1 with its error, 1 "no client" when none runs.
-pub async fn call(words: &[String]) -> i32 {
+pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) -> i32 {
     let mut tried = 0;
+    let pinned = socket.is_some() || name.is_some() || std::env::var("HN_SOCKET").map(|s| !s.is_empty()).unwrap_or(false);
     loop {
-        let Some(path) = newest() else { eprintln!("no client running (start one with: hn)"); return 1 };
+        let Some(path) = chosen(socket, name) else { eprintln!("no client running (start one with: hn)"); return 1 };
         match tokio::net::UnixStream::connect(&path).await {
             Ok(stream) => {
                 let (read, mut write) = stream.into_split();
@@ -81,7 +101,10 @@ pub async fn call(words: &[String]) -> i32 {
                 return if err.is_empty() { 0 } else { 1 };
             }
             // A socket left by a client that died: gone, try the next.
-            Err(_) => { let _ = std::fs::remove_file(&path); tried += 1; if tried > 8 { eprintln!("no client running (start one with: hn)"); return 1 } }
+            Err(_) => {
+                if pinned { eprintln!("no client at {}", path.display()); return 1 }
+                let _ = std::fs::remove_file(&path); tried += 1; if tried > 8 { eprintln!("no client running (start one with: hn)"); return 1 }
+            }
         }
     }
 }
