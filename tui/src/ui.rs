@@ -73,8 +73,48 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if let Some(area) = picker_preview_area(body, picker) { preview(buf, app, kind, picker, area) }
     }
     if let Some(Modal::Tree { cursor: at, collapsed }) = &app.modal { tree(buf, app, body, *at, collapsed) }
+    if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
+}
+
+/// A pause after the prefix: every key that can come next, from the live table (your binds too),
+/// in a box over the bottom of the window — tmux's keys, with the hint zellij users praise.
+fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
+    let mut items: Vec<(String, String)> = Vec::new();
+    let mut digits = false;
+    for b in &app.keymap.prefix_table {
+        let key = crate::keys::name(&b.chord);
+        if b.command.starts_with("select-window -t ") && key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) { digits = true; continue }
+        let what = if b.note.is_empty() { b.command.clone() } else { b.note.clone() };
+        items.push((key, what));
+    }
+    if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
+    let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
+    let col_w: usize = key_w + 32;
+    let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
+    let rows_needed = items.len().div_ceil(cols);
+    let height = (rows_needed as u16 + 2).min(body.height);
+    let area = Rect::new(body.x, body.y + body.height - height, body.width, height);
+    for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
+    let border = Style::default();
+    for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border) }
+    for y in area.y..area.y + area.height { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + area.width - 1, y, "│", border) }
+    buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + area.width - 1, area.y, "┐", border);
+    buf.set_string(area.x, area.y + area.height - 1, "└", border); buf.set_string(area.x + area.width - 1, area.y + area.height - 1, "┘", border);
+    let title = format!(" {} ", crate::keys::name(&app.keymap.prefix));
+    buf.set_string(area.x + 2, area.y, &title, Style::default().add_modifier(Modifier::BOLD));
+    let inner_rows = area.height.saturating_sub(2) as usize;
+    // Column-major, like ls: read down, then across.
+    for (i, (key, what)) in items.iter().enumerate() {
+        let (col, row) = (i / inner_rows.max(1), i % inner_rows.max(1));
+        if col >= cols { break }
+        let x = area.x + 2 + (col * col_w) as u16;
+        let y = area.y + 1 + row as u16;
+        buf.set_string(x, y, format!("{key:>key_w$}"), Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD));
+        let room = col_w - key_w - 3;
+        buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default());
+    }
 }
 
 fn app_preview_placeholder() -> String { String::new() }

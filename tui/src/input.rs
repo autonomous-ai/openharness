@@ -65,6 +65,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
     if !typing(app) && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.prefix = true;
+        app.prefix_at = Some(std::time::Instant::now());
         return;
     }
     if !typing(app) {

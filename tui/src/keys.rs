@@ -29,6 +29,8 @@ pub struct Keymap {
     pub root_table: Vec<Binding>,
     /// tmux `repeat-time`.
     pub repeat_ms: u64,
+    /// How long after the prefix before the key hint shows (`set -g @hn-hint-time`; 0: never).
+    pub hint_ms: u64,
 }
 
 fn k(code: KeyCode, mods: KeyModifiers) -> Chord { Chord::normal(code, mods) }
@@ -50,7 +52,9 @@ impl Keymap {
         b(ch('&'), "confirm-before -p \"kill-window #W? (y/n)\" kill-window", false, "Kill current window (harnesses keep running)");
         b(ch('\''), "command-prompt -p index select-window", false, "Prompt for window index to select");
         b(ch(','), "command-prompt -I \"#W\" -p (rename-window) rename-window", false, "Rename current window");
-        b(ch('-'), "delete-buffer", false, "Delete the most recent paste buffer");
+        // The split keys nearly every tmux.conf adds, beside % and " (tmux's `-` was delete-buffer).
+        b(ch('|'), "split-window -h", false, "Split window horizontally (as %)");
+        b(ch('-'), "split-window", false, "Split window vertically (as \")");
         b(ch('.'), "command-prompt -p (move-window) move-window", false, "Move the current window");
         b(ch('/'), "list-keys", false, "Describe key binding");
         for n in 0..=9u8 { b(ch((b'0' + n) as char), &format!("select-window -t {n}"), false, &format!("Select window {n}")); }
@@ -125,7 +129,7 @@ impl Keymap {
         // `/` is list-keys -1N in tmux (describe a key); here it is the far more used search. The
         // describe variant stays reachable through `?`.
         t.retain(|x| !(x.chord == ch('/') && x.command == "list-keys"));
-        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), repeat_ms: 500 }
+        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), repeat_ms: 500, hint_ms: 600 }
     }
 
     pub fn prefix_command(&self, chord: &Chord) -> Option<&Binding> { self.prefix_table.iter().rev().find(|b| &b.chord == chord) }

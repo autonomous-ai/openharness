@@ -103,6 +103,8 @@ pub struct App {
     pub rects: Vec<(u64, Rect)>,
     pub quit: bool,
     pub prefix: bool,
+    /// When the prefix was pressed: a pause after it shows the keys (which-key).
+    pub prefix_at: Option<Instant>,
     pub tick: u64,
     pub home_cursor: usize,
     pub desk_mode: DeskMode,
@@ -178,6 +180,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            prefix_at: None,
             last_search_up: true,
             home_order: Default::default(),
             mouse_changed: false,
