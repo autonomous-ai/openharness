@@ -81,13 +81,13 @@ pub fn fzf() -> &'static Fzf {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
+pub struct FzfOpts { pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
-        let mut o = FzfOpts { cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
+        let mut o = FzfOpts { info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -95,6 +95,8 @@ pub fn fzf_opts() -> &'static FzfOpts {
             let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
             match flag.as_str() {
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
+                "--inline-info" => o.info_inline = true,
+                "--info" => { if let Some(v) = take() { o.info_inline = v.starts_with("inline") } }
                 "-e" | "--exact" => o.exact = true, "--no-exact" => o.exact = false,
                 "-i" | "--ignore-case" => o.case = Some(false), "+i" | "--no-ignore-case" => o.case = Some(true), "--smart-case" => o.case = None,
                 "--no-separator" => o.separator = false,

@@ -576,7 +576,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // `--layout=reverse` in FZF_DEFAULT_OPTS, all of it top-down.
     let reverse = theme::fzf().reverse;
     let prompt_y = if reverse { area.y } else { bottom - 1 };
-    let info_y = if reverse { area.y + 1 } else { prompt_y.saturating_sub(1) };
+    // --info=inline: the count sits on the prompt line, after the query.
+    let inline = theme::fzf_opts().info_inline;
+    let info_y = if inline { prompt_y } else if reverse { area.y + 1 } else { prompt_y.saturating_sub(1) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
     let header_y = if header.is_some() { if reverse { info_y + 1 } else { info_y.saturating_sub(1) } } else { info_y };
@@ -603,6 +605,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut info = format!("  {}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { info.push_str(&format!(" ({})", picker.marked.len())) }
+    if inline {
+        let qx = area.x + pw + shown.width().min(q_room) as u16;
+        if picker.query.is_empty() { /* the placeholder has the line */ } else {
+            let text = format!("  < {}", info.trim_start());
+            buf.set_stringn(qx, info_y, &text, (area.x + area.width).saturating_sub(qx) as usize, Style::default().fg(theme::fzf().info));
+        }
+    } else {
     buf.set_string(area.x, info_y, &info, Style::default().fg(theme::fzf().info));
     let mut x = area.x + info.width() as u16;
     let label = picker.busy.clone().or_else(|| (!picker.title.is_empty()).then(|| picker.title.clone()));
@@ -619,6 +628,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let gap = if preview.is_some() { 2 } else { 1 };
         let sep = "─".repeat((area.x + area.width).saturating_sub(x + gap) as usize);
         buf.set_string(x + 1, info_y, &sep, Style::default().fg(theme::fzf().border));
+    }
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
         let text = format!(" {flash} ");
@@ -692,7 +702,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
     // A waiting question keeps some of itself in view; any other detail gives way to the title.
     let asking = row.detail.first().map(|s| s.content.starts_with("? ")).unwrap_or(false);
-    let label_room = if asking && avail >= 50 { row.label.width().min((avail * 3 / 5).max(12)).min(avail) } else { avail };
+    // …and a row that matched only in its detail gives the detail room to show why.
+    let label_n = row.label.chars().count() as u32;
+    let detail_hit = !hits.is_empty() && hits.iter().all(|h| *h >= label_n);
+    let label_room = if (asking && avail >= 50) || (detail_hit && avail >= 24) { row.label.width().min((avail * 3 / 5).max(12)).min(avail) } else { avail };
     // fzf's --hscroll: a hit past the end of the room slides the title left, `..` in front.
     let label_chars: Vec<char> = row.label.chars().collect();
     let label_len = label_chars.len();
@@ -737,12 +750,26 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         let mut at = label_len as isize + 2;
         for s in &row.detail {
             if left == 0 { break }
-            let t = clip_fzf(&s.content, left);
+            let chars: Vec<char> = s.content.chars().collect();
+            let len = chars.len() as isize;
+            // A hit past the room slides this part left too, the ellipsis in front.
+            let last = hits.iter().map(|h| *h as isize - at).filter(|r| *r >= 0 && *r < len).max();
+            let (t, first) = match last {
+                Some(r) if s.content.width() > left && r as usize + 2 > left && left > 6 => {
+                    let ell = theme::fzf_opts().ellipsis.clone();
+                    let ew = ell.chars().count();
+                    // Room for the ellipsis in front and (if more follows) one behind, the hit between.
+                    let start = (r as usize + 1 + 2 * ew).saturating_sub(left).min(chars.len());
+                    let tail: String = chars[start..].iter().collect();
+                    (format!("{ell}{}", clip_fzf(&tail, left - ew)), at + start as isize - ew as isize)
+                }
+                _ => (clip_fzf(&s.content, left), at),
+            };
             left = left.saturating_sub(t.width());
             let st = tone(if current { s.style.patch(plus) } else { s.style });
             let lit = if st.add_modifier.contains(Modifier::DIM) { hit.add_modifier(Modifier::DIM) } else { hit };
-            push_lit(&mut spans, &t, at, st, lit);
-            at += s.content.chars().count() as isize;
+            push_lit(&mut spans, &t, first, st, lit);
+            at += len;
         }
     }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
@@ -995,8 +1022,8 @@ fn display_panes(buf: &mut Buffer, app: &App) {
         let color = if Some(*id) == focus { theme::TMUX_DISPLAY_PANES_ACTIVE } else { theme::TMUX_DISPLAY_PANES };
         big(buf, &n.to_string(), *rect, color);
         // tmux also prints each pane's size in its top-right corner.
-        if let Some(p) = app.panes.get(id) {
-            let size = format!("{}x{}", p.cols, p.rows);
+        if app.panes.contains_key(id) {
+            let size = format!("{}x{}", rect.width, rect.height.saturating_sub(app.header_rows()));
             let x = (rect.x + rect.width).saturating_sub(size.width() as u16);
             buf.set_string(x, rect.y, &size, Style::default().fg(color));
         }
