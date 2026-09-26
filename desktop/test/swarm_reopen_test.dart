@@ -34,6 +34,7 @@ void main() {
     );
     addTearDown(app.dispose);
     app.renameSwarm(app.activeSwarmId, 'Private work');
+    app.adoptSessionForTest(terminal('other-private', []));
     final pane = app.adoptSessionForTest(terminal('private', []));
     await app.closePane(pane.id);
     await app.closeSwarm(app.activeSwarmId);
