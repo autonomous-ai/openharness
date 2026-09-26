@@ -169,6 +169,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
     }
     if let Some(problem) = config.problems.first().or(settings.problems.first()) { app.say(problem.clone(), theme::DANGER) }
+    else if !settings.notes.is_empty() { app.say(format!("tmux.conf: {} line{} not used here — tim --keys lists them", settings.notes.len(), if settings.notes.len() == 1 { "" } else { "s" }), theme::WARN) }
     else if let Some(path) = &settings.path { app.say(format!("{} read — your prefix is {}", path.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) }
     app.boot();
 

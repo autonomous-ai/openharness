@@ -46,6 +46,9 @@ pub struct Options {
     pub border_titles: Option<bool>,
     pub mode_keys_emacs: Option<bool>,
     pub status: Option<bool>,
+    pub status_justify: Option<String>,
+    pub window_status_style: Option<(Option<Color>, Option<Color>)>,
+    pub pane_border_format: Option<String>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -169,6 +172,9 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "pane-active-border-style" => { let (fg, _) = style(value); s.look.active_border = fg }
                 "window-style" => { let (fg, bg) = style(value); s.look.window_fg = fg; s.look.window_bg = bg }
                 "window-active-style" => { let (fg, bg) = style(value); s.look.active_window_fg = fg; s.look.active_window_bg = bg }
+                "status-justify" => s.options.status_justify = Some(value.to_string()),
+                "window-status-style" => { let (fg, bg) = style(value); s.options.window_status_style = Some((fg, bg)) }
+                "pane-border-format" => s.options.pane_border_format = Some(value.to_string()),
                 "status-left" => s.options.status_left = Some(value.to_string()),
                 "status-right" => s.options.status_right = Some(value.to_string()),
                 "status-left-length" => s.options.status_left_length = value.parse().ok(),
@@ -184,15 +190,15 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 // Options with no effect here (the terminal's, the server's): accepted quietly.
                 "escape-time" | "history-limit" | "default-terminal" | "terminal-overrides" | "terminal-features" | "focus-events" | "set-clipboard"
                 | "allow-passthrough" | "extended-keys" | "default-shell" | "default-command" | "aggressive-resize" | "status-keys" | "status-interval"
-                | "status-justify" | "monitor-activity" | "visual-activity" | "visual-bell" | "bell-action" | "automatic-rename" | "allow-rename"
+                | "monitor-activity" | "visual-activity" | "visual-bell" | "bell-action" | "automatic-rename" | "allow-rename"
                 | "set-titles" | "set-titles-string" | "update-environment" | "destroy-unattached" | "exit-empty" | "word-separators" | "wrap-search"
-                | "status-left-style" | "status-right-style" | "window-status-style" | "window-status-activity-style" | "window-status-bell-style"
+                | "status-left-style" | "status-right-style" | "window-status-activity-style" | "window-status-bell-style"
                 | "mode-style" | "message-command-style" | "clock-mode-colour" | "clock-mode-style" | "display-panes-colour" | "display-panes-active-colour"
-                | "pane-border-format" | "pane-border-lines" | "popup-style" | "popup-border-style" | "main-pane-width" | "main-pane-height" => {}
+                | "pane-border-lines" | "popup-style" | "popup-border-style" | "main-pane-width" | "main-pane-height" => {}
                 n if n.starts_with('@') => {}
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
                 // Not an error in your tmux.conf: noted (`hn --keys` lists them, `:set` says so).
-                other => s.notes.push(format!("{other}: an option hn does not use")),
+                other => s.notes.push(format!("set {other}: not used here")),
             }
         }
         // Another file, as tmux reads it (-q: quiet when missing). Depth-limited against loops.
@@ -219,6 +225,8 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 for part in split(command) { directive(&part, keymap, s)? }
             }
         }
+        // Plugins (tpm) and scripts run through tmux itself; noted, not run at load.
+        "run-shell" | "run" => s.notes.push(format!("{}: not run (tmux plugins do not load here)", words[1..].join(" "))),
         "bind" | "bind-key" => {
             let mut table = Table::Prefix;
             let mut repeat = false;
