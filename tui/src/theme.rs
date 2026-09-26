@@ -21,24 +21,87 @@ pub const TEXT: Color = Color::Reset;
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
-pub struct Fzf { pub sixteen: bool, pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool }
+pub struct Fzf { pub reverse: bool, pub pointer_char: String, pub marker_char: String, pub prompt_text: String, pub sixteen: bool, pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool }
 
 pub fn fzf() -> &'static Fzf {
     static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
     FZF.get_or_init(|| {
-        let opts = std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default();
-        let base = opts.split_whitespace().rev().find_map(|w| w.strip_prefix("--color=").or_else(|| w.strip_prefix("--color "))).map(|c| c.split(',').next().unwrap_or("").to_string()).unwrap_or_default();
+        let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
+        // Every --color (either form), in order: a base scheme and slot:colour pairs.
+        let mut specs: Vec<String> = Vec::new();
+        let (mut reverse, mut pointer, mut marker, mut prompt) = (false, None, None, None);
+        let mut i = 0;
+        while i < opts.len() {
+            let w = &opts[i];
+            let (flag, value) = match w.split_once('=') { Some((f, v)) => (f.to_string(), Some(v.to_string())), None => (w.clone(), None) };
+            let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
+            match flag.as_str() {
+                "--color" => { if let Some(v) = take() { specs.push(v) } }
+                "--layout" => { if let Some(v) = take() { reverse = v == "reverse" || v == "reverse-list" } }
+                "--reverse" => reverse = true,
+                "--pointer" => pointer = take(),
+                "--marker" => marker = take(),
+                "--prompt" => prompt = take(),
+                _ => {}
+            }
+            i += 1;
+        }
+        let base = specs.iter().flat_map(|s| s.split(',')).filter(|p| !p.contains(':')).last().unwrap_or("").to_string();
         let no_color = no_color();
         let i = Color::Indexed;
         // A terminal that only has 16 colours gets fzf's 16-colour scheme, as fzf itself does.
         let base = if base.is_empty() && depth() < 256 { "16".to_string() } else { base };
-        match base.as_str() {
-            _ if no_color || base == "bw" => Fzf { sixteen: false, gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true },
-            "light" | "light256" => Fzf { sixteen: false, gutter: i(251), bg_plus: i(251), fg_plus: i(237), hl: i(66), hl_plus: i(23), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false },
-            "16" => Fzf { sixteen: true, gutter: Color::DarkGray, bg_plus: Color::DarkGray, fg_plus: Color::White, hl: Color::Green, hl_plus: Color::LightGreen, pointer: Color::Red, marker: Color::Magenta, info: Color::Yellow, prompt: Color::Blue, border: Color::DarkGray, header: Color::Cyan, bw: false },
-            _ => Fzf { sixteen: false, gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false },
+        let mut z = match base.as_str() {
+            _ if no_color || base == "bw" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true },
+            "light" | "light256" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: i(251), bg_plus: i(251), fg_plus: i(237), hl: i(66), hl_plus: i(23), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false },
+            "16" => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: true, gutter: Color::DarkGray, bg_plus: Color::DarkGray, fg_plus: Color::White, hl: Color::Green, hl_plus: Color::LightGreen, pointer: Color::Red, marker: Color::Magenta, info: Color::Yellow, prompt: Color::Blue, border: Color::DarkGray, header: Color::Cyan, bw: false },
+            _ => Fzf { reverse: false, pointer_char: String::new(), marker_char: String::new(), prompt_text: String::new(), sixteen: false, gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false },
+        };
+        // Slot overrides: --color=hl:204,bg+:236,pointer:#ff0000 …
+        if !z.bw {
+            for pair in specs.iter().flat_map(|s| s.split(',')).filter_map(|p| p.split_once(':')) {
+                let Some(c) = fzf_colour(pair.1) else { continue };
+                match pair.0 {
+                    "hl" => z.hl = c, "hl+" => z.hl_plus = c, "fg+" => z.fg_plus = c, "bg+" => { z.bg_plus = c; }
+                    "gutter" => z.gutter = c, "pointer" => z.pointer = c, "marker" => z.marker = c, "info" => z.info = c,
+                    "prompt" => z.prompt = c, "border" | "separator" | "scrollbar" => z.border = c, "header" => z.header = c,
+                    _ => {}
+                }
+            }
         }
+        z.reverse = reverse;
+        z.pointer_char = pointer.unwrap_or_else(|| "▌".into());
+        z.marker_char = marker.unwrap_or_else(|| "┃".into());
+        z.prompt_text = prompt.unwrap_or_else(|| "> ".into());
+        z
     })
+}
+
+/// fzf's colour values: 0-255, #rrggbb, a name, -1 (the default).
+fn fzf_colour(v: &str) -> Option<Color> {
+    let v = v.split(':').next().unwrap_or(v);
+    if v == "-1" { return Some(Color::Reset) }
+    if let Ok(n) = v.parse::<u8>() { return Some(Color::Indexed(n)) }
+    if let Some(hex) = v.strip_prefix('#') { let n = u32::from_str_radix(hex, 16).ok()?; return Some(Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8)) }
+    crate::tmuxconf::colour(v)
+}
+
+/// Split options the way a shell would (quotes, backslashes).
+fn words(s: &str) -> Vec<String> {
+    let (mut out, mut w, mut q, mut any) = (Vec::new(), String::new(), None::<char>, false);
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match (q, c) {
+            (Some(x), c) if c == x => q = None,
+            (Some(_), c) => w.push(c),
+            (None, '"' | '\'') => { q = Some(c); any = true }
+            (None, '\\') => { if let Some(n) = chars.next() { w.push(n); any = true } }
+            (None, c) if c.is_whitespace() => { if any || !w.is_empty() { out.push(std::mem::take(&mut w)); any = false } }
+            (None, c) => { w.push(c); any = true }
+        }
+    }
+    if any || !w.is_empty() { out.push(w) }
+    out
 }
 
 // tmux's default colours.

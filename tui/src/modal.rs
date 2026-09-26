@@ -343,7 +343,7 @@ pub fn machine_rows(app: &App) -> Vec<Row> {
             _ if m.local && m.reach == Reach::Ready => ("●", theme::ONLINE, "this computer".to_string()),
             Reach::Ready => ("●", theme::ONLINE, "connected".into()),
             Reach::Connecting => ("◌", theme::WARN, "connecting…".into()),
-            Reach::NeedsLink => ("●", theme::ATTENTION, "not linked — ^L to link".into()),
+            Reach::NeedsLink => ("●", theme::ATTENTION, "not linked — M-l links it".into()),
             Reach::Error(e) => ("●", theme::DANGER, e.chars().take(40).collect()),
             _ if m.online() => ("○", theme::SOFT, "online".into()),
             _ => ("○", theme::MUTED, "offline".into()),

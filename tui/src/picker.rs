@@ -142,7 +142,8 @@ impl Picker {
                 // As fzf: the line you see is what matches. The hidden keywords (engine, branch, the
                 // machine's id…) still find a row, but only below every visible match.
                 let detail: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
-                let visible = format!("{} {} {}", row.label, detail, row.right);
+                // Laid out as the row draws it (two spaces between), so hit positions map back to cells.
+                let visible = format!("{}  {}  {}", row.label, detail, row.right);
                 let hidden = format!("{} {}", row.label, row.extra);
                 let mut indices = Vec::new();
                 let mut total = Some(0u32);
@@ -150,21 +151,19 @@ impl Picker {
                     // The title first (its hits are what gets highlighted), then the rest of the line
                     // you see, then — whole words only — the keywords behind it (engine, machine).
                     let mut best = group.iter().filter_map(|t| t.score(&row.label, &row.label, &mut buf, &mut self.matcher)).map(|(s, h)| (s + 40, h)).max_by_key(|(s, _)| *s);
-                    if best.is_none() { best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).map(|(s, _)| (s, Vec::new())).max_by_key(|(s, _)| *s) }
+                    if best.is_none() { best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s) }
                     if best.is_none() { best = group.iter().filter(|t| t.names_word(&hidden)).map(|_| (8u32, Vec::new())).next() }
                     match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
                 }
                 if let Some(score) = total {
-                    let label_len = row.label.chars().count() as u32;
                     indices.sort_unstable();
                     indices.dedup();
-                    indices.retain(|i| *i < label_len);
                     // A row's boost (waiting, live) only breaks ties: once you type, the match decides.
                     scored.push((index, score, indices));
                 }
             }
             // fzf's tiebreak: score, then the shorter line, then the original order.
-            if !self.keep_order { scored.sort_by(|a, b| b.1.cmp(&a.1).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(self.rows[a.0].label.chars().count().cmp(&self.rows[b.0].label.chars().count())).then(a.0.cmp(&b.0))) }
+            if !self.keep_order { scored.sort_by(|a, b| b.1.cmp(&a.1).then(self.rows[a.0].label.chars().count().cmp(&self.rows[b.0].label.chars().count())).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
             self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
         }
         // Keep the cursor on the same item across a rebuild.

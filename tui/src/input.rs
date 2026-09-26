@@ -154,7 +154,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
                 let half = app.size.0 / 2;
                 if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
                     if picker.preview && mouse.column >= half { picker.preview_scroll = if up { picker.preview_scroll.saturating_sub(1) } else { picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()) } }
-                    else { picker.move_by(if up { 1 } else { -1 }) }
+                    else { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -392,7 +392,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.set_rows(modal::machine_rows(app));
             let up = app.fleet.machines.iter().filter(|m| m.usable()).count();
             picker.status = format!("{up}/{} connected", app.fleet.machines.len());
-            picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("C-l", "link")];
+            picker.hints = vec![("enter", "its harnesses"), ("M-n", "new there"), ("C-t", "terminal there"), ("M-l", "link")];
         }
         PickerKind::Layout => { picker.set_rows(modal::layout_rows()); picker.hints = vec![("enter", "apply")] }
         PickerKind::Help => { picker.keep_order = true; picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
@@ -932,6 +932,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     }
     let before = picker.query.clone();
     let page = (app.size.1 as i64 - 6).max(1);
+    let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
     // Lists that only show things (tmux's view mode): q leaves, as in tmux.
     let view = matches!(kind, PickerKind::Keys | PickerKind::Messages | PickerKind::Output { .. } | PickerKind::Buffers | PickerKind::Help);
@@ -940,15 +941,19 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
         KeyCode::Up if shift => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
         KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
-        KeyCode::Up => picker.move_by(1),
-        KeyCode::Down => picker.move_by(-1),
-        KeyCode::Char('k' | 'p') if ctrl => picker.move_by(1),
-        KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-1),
-        KeyCode::PageUp => picker.move_by(page),
-        KeyCode::PageDown => picker.move_by(-page),
+        // Up is toward the top of the screen: further down the list, unless it is reversed.
+        KeyCode::Up => picker.move_by(up),
+        KeyCode::Down => picker.move_by(-up),
+        KeyCode::Char('k' | 'p') if ctrl => picker.move_by(up),
+        KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-up),
+        KeyCode::PageUp => picker.move_by(page * up),
+        KeyCode::PageDown => picker.move_by(-page * up),
+        // fzf: C-d on an empty query closes the list; C-l redraws (no link here).
+        KeyCode::Char('d') if ctrl && picker.query.is_empty() => { SPLIT.with(|s| s.set(None)); return }
+        KeyCode::Char('l') if ctrl => { app.redraw_all = true }
         // fzf --multi, in the harness lists only: Tab marks and moves down (toward the prompt).
-        KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-1) }
-        KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(1) }
+        KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-up) }
+        KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(up) }
         KeyCode::Char('q') if view && picker.query.is_empty() => { return }
         KeyCode::Backspace if alt => picker.kill_word(false),
         KeyCode::Backspace => picker.backspace(false),
@@ -979,7 +984,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         KeyCode::Char('x') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
         KeyCode::Char('s') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
         KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
-        KeyCode::Char('l') if ctrl => { choose(app, kind, picker, Choice::Link); return }
+        KeyCode::Char('l') if alt => { choose(app, kind, picker, Choice::Link); return }
         KeyCode::Char('n') if alt => { choose(app, kind, picker, Choice::New); return }
         KeyCode::Char('i') if alt => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
         KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
