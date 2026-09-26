@@ -69,8 +69,9 @@ fn fold(c: char, case_sensitive: bool, normalize: bool) -> char {
 }
 
 /// FuzzyMatchV2: the best-scoring alignment of `pattern` in `text` — (start, end, score, the
-/// matched positions) — or None.
-fn fuzzy_v2(case_sensitive: bool, normalize: bool, text: &[char], pattern: &[char]) -> Option<(usize, usize, i32, Vec<usize>)> {
+/// matched positions) — or None. Not `forward` (--tiebreak=end or pathname): of equal scores the
+/// last one wins, as fzf searches from the end.
+fn fuzzy_v2(case_sensitive: bool, normalize: bool, forward: bool, text: &[char], pattern: &[char]) -> Option<(usize, usize, i32, Vec<usize>)> {
     let m = pattern.len();
     if m == 0 { return Some((0, 0, 0, Vec::new())) }
     let n = text.len();
@@ -104,10 +105,10 @@ fn fuzzy_v2(case_sensitive: bool, normalize: bool, text: &[char], pattern: &[cha
             let score = SCORE_MATCH + bonus * BONUS_FIRST_CHAR_MULTIPLIER;
             h0[off] = score;
             c0[off] = 1;
-            if m == 1 && score > max_score {
+            if m == 1 && (forward && score > max_score || !forward && score >= max_score) {
                 max_score = score;
                 max_pos = off;
-                if bonus >= BONUS_BOUNDARY { break }
+                if forward && bonus >= BONUS_BOUNDARY { break }
             }
             in_gap = false;
         } else {
@@ -149,7 +150,7 @@ fn fuzzy_v2(case_sensitive: bool, normalize: bool, text: &[char], pattern: &[cha
             c[row + j] = consecutive;
             in_gap = s1 < s2;
             let score = s1.max(s2).max(0);
-            if pidx == m - 1 && score > max_score { max_score = score; max_pos = col }
+            if pidx == m - 1 && (forward && score > max_score || !forward && score >= max_score) { max_score = score; max_pos = col }
             h[row + j] = score;
         }
     }
@@ -204,31 +205,36 @@ fn calculate_score(case_sensitive: bool, normalize: bool, text: &[char], pattern
     score
 }
 
-/// ExactMatchNaive / ExactMatchBoundary: the occurrence with the best bonus at its start.
-fn exact(case_sensitive: bool, normalize: bool, boundary: bool, text: &[char], pattern: &[char]) -> Option<(usize, usize, i32)> {
+/// ExactMatchNaive / ExactMatchBoundary: the occurrence with the best bonus at its start — looked
+/// for from the end when not `forward` (--tiebreak=end or pathname), as fzf does.
+fn exact(case_sensitive: bool, normalize: bool, forward: bool, boundary: bool, text: &[char], pattern: &[char]) -> Option<(usize, usize, i32)> {
     let m = pattern.len();
     if m == 0 { return Some((0, 0, 0)) }
     let n = text.len();
     if n < m { return None }
+    // indexAt: an index counted from the end when searching backward.
+    let at = |i: usize, max: usize| if forward { i } else { max - i - 1 };
     let (mut pidx, mut best_pos, mut bonus, mut bbonus, mut best_bonus) = (0usize, None::<usize>, 0i32, 0i32, -1i32);
     let mut index = 0isize;
     while (index as usize) < n {
-        let idx = index as usize;
+        let idx = at(index as usize, n);
         let ch = fold(text[idx], case_sensitive, normalize);
-        let mut ok = pattern[pidx] == ch;
+        let p = at(pidx, m);
+        let mut ok = pattern[p] == ch;
         if ok {
-            if pidx == 0 { bonus = bonus_at(text, idx) }
+            if p == 0 { bonus = bonus_at(text, idx) }
             if boundary {
-                if pidx == 0 { bbonus = bonus }
+                if forward && p == 0 { bbonus = bonus }
+                else if !forward && p == m - 1 { bbonus = if idx < n - 1 { bonus_at(text, idx + 1) } else { BONUS_BOUNDARY_WHITE } }
                 ok = bbonus >= BONUS_BOUNDARY;
-                if ok && pidx == 0 { ok = idx == 0 || class_of(text[idx - 1]) <= Class::Delimiter }
-                if ok && pidx == m - 1 { ok = idx == n - 1 || class_of(text[idx + 1]) <= Class::Delimiter }
+                if ok && p == 0 { ok = idx == 0 || class_of(text[idx - 1]) <= Class::Delimiter }
+                if ok && p == m - 1 { ok = idx == n - 1 || class_of(text[idx + 1]) <= Class::Delimiter }
             }
         }
         if ok {
             pidx += 1;
             if pidx == m {
-                if bonus > best_bonus { best_pos = Some(idx); best_bonus = bonus }
+                if bonus > best_bonus { best_pos = Some(index as usize); best_bonus = bonus }
                 if bonus >= BONUS_BOUNDARY { break }
                 index -= (pidx - 1) as isize;
                 pidx = 0;
@@ -242,7 +248,7 @@ fn exact(case_sensitive: bool, normalize: bool, boundary: bool, text: &[char], p
         index += 1;
     }
     let best = best_pos?;
-    let (sidx, eidx) = (best + 1 - m, best + 1);
+    let (sidx, eidx) = if forward { (best + 1 - m, best + 1) } else { (n - (best + 1), n - (best + 1 - m)) };
     let score = if boundary {
         // As fzf: the bonus the loop ended on; underscore boundaries rank below the others.
         let mut score = bonus;
@@ -318,10 +324,11 @@ pub enum Case { Smart, Respect, Ignore }
 /// A query in fzf's extended-search syntax: terms that must all match, `|` between the ones any
 /// of which will do.
 #[derive(Clone, Debug)]
-pub struct Query { sets: Vec<Vec<Term>> }
+pub struct Query { sets: Vec<Vec<Term>>, forward: bool }
 
-/// A line's match: its score, where the terms matched (for the tiebreaks), and the characters lit.
-pub struct Hit { pub score: i32, pub begin: usize, pub end: usize, pub positions: Vec<usize> }
+/// A line's match: its score, where the terms matched (for the tiebreaks: the first begin, the
+/// first and the last end), and the characters lit.
+pub struct Hit { pub score: i32, pub begin: usize, pub min_end: usize, pub end: usize, pub positions: Vec<usize> }
 
 impl Query {
     /// fzf's parseTerms. `fuzzy`: false under --exact; `normalize`: false under --literal.
@@ -362,7 +369,16 @@ impl Query {
             }
         }
         if !set.is_empty() { sets.push(set) }
-        Query { sets }
+        Query { sets, forward: true }
+    }
+
+    /// The direction fzf searches in for these tiebreaks (core.go): backward when the first of
+    /// end, begin and pathname given is end or pathname.
+    pub fn searching(mut self, criteria: &[Tiebreak]) -> Query {
+        for c in criteria.iter().rev() {
+            match c { Tiebreak::End | Tiebreak::Pathname => self.forward = false, Tiebreak::Begin => self.forward = true, _ => {} }
+        }
+        self
     }
 
     /// Some term asks for something (not only `!x`): fzf sorts only then.
@@ -372,12 +388,12 @@ impl Query {
     /// matches; a `!term` by its absence), the scores summed.
     pub fn matches(&self, line: &[char]) -> Option<Hit> {
         let (mut total, mut positions) = (0i32, Vec::new());
-        let (mut begin, mut end, mut valid) = (usize::MAX, 0usize, false);
+        let (mut begin, mut min_end, mut end, mut valid) = (usize::MAX, usize::MAX, 0usize, false);
         for set in &self.sets {
             let mut matched = false;
             let (mut score, mut off, mut pos): (i32, (usize, usize), Vec<usize>) = (0, (0, 0), Vec::new());
             for term in set {
-                match run(term, line) {
+                match run(term, line, self.forward) {
                     Some((s, e, sc, p)) => {
                         if term.inv { continue }
                         score = sc;
@@ -393,21 +409,21 @@ impl Query {
             if !matched { return None }
             total += score;
             positions.extend(pos);
-            if off.0 < off.1 { begin = begin.min(off.0); end = end.max(off.1); valid = true }
+            if off.0 < off.1 { begin = begin.min(off.0); min_end = min_end.min(off.1); end = end.max(off.1); valid = true }
         }
         positions.sort_unstable();
         positions.dedup();
-        Some(Hit { score: total, begin: if valid { begin } else { 0 }, end: if valid { end } else { 0 }, positions })
+        Some(Hit { score: total, begin: if valid { begin } else { 0 }, min_end: if valid { min_end } else { 0 }, end: if valid { end } else { 0 }, positions })
     }
 }
 
 /// One term against a line: (start, end, score, positions when the algorithm knows them).
-fn run(term: &Term, line: &[char]) -> Option<(usize, usize, i32, Option<Vec<usize>>)> {
+fn run(term: &Term, line: &[char], forward: bool) -> Option<(usize, usize, i32, Option<Vec<usize>>)> {
     let (cs, nz, p) = (term.case_sensitive, term.normalize, &term.text[..]);
     match term.kind {
-        Kind::Fuzzy => fuzzy_v2(cs, nz, line, p).map(|(s, e, sc, pos)| (s, e, sc, Some(pos))),
-        Kind::Exact => exact(cs, nz, false, line, p).map(|(s, e, sc)| (s, e, sc, None)),
-        Kind::ExactBoundary => exact(cs, nz, true, line, p).map(|(s, e, sc)| (s, e, sc, None)),
+        Kind::Fuzzy => fuzzy_v2(cs, nz, forward, line, p).map(|(s, e, sc, pos)| (s, e, sc, Some(pos))),
+        Kind::Exact => exact(cs, nz, forward, false, line, p).map(|(s, e, sc)| (s, e, sc, None)),
+        Kind::ExactBoundary => exact(cs, nz, forward, true, line, p).map(|(s, e, sc)| (s, e, sc, None)),
         Kind::Prefix => prefix(cs, nz, line, p).map(|(s, e, sc)| (s, e, sc, None)),
         Kind::Suffix => suffix(cs, nz, line, p).map(|(s, e, sc)| (s, e, sc, None)),
         Kind::Equal => equal(cs, nz, line, p).map(|(s, e, sc)| (s, e, sc, None)),
@@ -418,34 +434,38 @@ fn run(term: &Term, line: &[char]) -> Option<(usize, usize, i32, Option<Vec<usiz
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tiebreak { Length, Chunk, Pathname, Begin, End }
 
-/// The rank fzf gives a matched line: lower first (buildResult's points, then the input order).
+/// The rank fzf gives a matched line: lower first — buildResult's points (each a uint16, as fzf
+/// keeps them), then the input order.
 pub fn rank(hit: &Hit, line: &[char], criteria: &[Tiebreak]) -> Vec<i64> {
-    let mut out = vec![-(hit.score as i64)];
-    let trim_len = || { let n = line.len(); let l = leading_ws(line); if l == n { 0 } else { n - l - trailing_ws(line) } };
+    const MAX: i64 = u16::MAX as i64;
+    let u16 = |v: i64| v.clamp(0, MAX);
+    let mut out = vec![MAX - u16(hit.score as i64)];
+    let n = line.len();
+    let trim_len = || { let l = leading_ws(line); if l == n { 0 } else { (n - l - trailing_ws(line)) as i64 } };
     let valid = hit.begin < hit.end;
     for c in criteria {
         out.push(match c {
-            Tiebreak::Length => trim_len() as i64,
-            Tiebreak::Chunk => {
-                if !valid { i64::MAX } else {
-                    let mut b = hit.begin;
-                    while b >= 1 && !line[b - 1].is_whitespace() { b -= 1 }
-                    let mut e = hit.end;
-                    while e < line.len() && !line[e].is_whitespace() { e += 1 }
-                    (e - b) as i64
-                }
+            Tiebreak::Length => u16(trim_len()),
+            Tiebreak::Chunk if valid => {
+                let mut b = hit.begin;
+                while b >= 1 && !line[b - 1].is_whitespace() { b -= 1 }
+                let mut e = hit.end;
+                while e < n && !line[e].is_whitespace() { e += 1 }
+                u16((e - b) as i64)
             }
-            Tiebreak::Pathname => {
-                if !valid { i64::MAX } else {
-                    match line.iter().rposition(|c| *c == '/' || *c == '\\') { Some(d) if d <= hit.begin => (hit.begin - d) as i64, Some(_) => i64::MAX, None => hit.begin as i64 + 1 }
-                }
+            // The last delimiter as fzf finds it: a byte index in the line's text.
+            Tiebreak::Pathname if valid => {
+                let text: String = line.iter().collect();
+                let last = text.bytes().rposition(|b| b == b'/' || b == b'\\').map(|i| i as i64).unwrap_or(-1);
+                if last <= hit.begin as i64 { u16(hit.begin as i64 - last) } else { MAX }
             }
-            Tiebreak::Begin | Tiebreak::End => {
-                if !valid { i64::MAX } else {
-                    let white = line.iter().take(hit.begin).take_while(|c| c.is_whitespace()).count();
-                    if *c == Tiebreak::Begin { (hit.begin - white) as i64 } else { -(((hit.end - white) as i64 * 65535) / (trim_len() as i64 + 1)) }
-                }
+            Tiebreak::Begin | Tiebreak::End if valid => {
+                // Leading blanks don't count (up to where the match begins).
+                let mut white = 0usize;
+                for (idx, ch) in line.iter().enumerate() { white = idx; if idx == hit.begin || !ch.is_whitespace() { break } }
+                if *c == Tiebreak::Begin { u16(hit.min_end as i64 - white as i64) } else { u16(MAX - MAX * (hit.end as i64 - white as i64) / (trim_len() + 1)) }
             }
+            _ => MAX,
         });
     }
     out
@@ -580,22 +600,50 @@ mod tests {
     /// Real fzf 0.67's order for 30 queries over 186 lines (tests/fixtures/fzf: `fzf --filter`).
     #[test]
     fn ranks_as_fzf_does() {
+        use Tiebreak::*;
+        // fzf 0.67's own --filter output over the same lines, for each --tiebreak.
+        let fixtures: [(&str, &[Tiebreak]); 11] = [
+            (include_str!("../tests/fixtures/fzf/expected.txt"), &[Length]),
+            (include_str!("../tests/fixtures/fzf/expected-end.txt"), &[End]),
+            (include_str!("../tests/fixtures/fzf/expected-begin.txt"), &[Begin]),
+            (include_str!("../tests/fixtures/fzf/expected-pathname.txt"), &[Pathname]),
+            (include_str!("../tests/fixtures/fzf/expected-chunk.txt"), &[Chunk]),
+            (include_str!("../tests/fixtures/fzf/expected-index.txt"), &[]),
+            (include_str!("../tests/fixtures/fzf/expected-end-length.txt"), &[End, Length]),
+            (include_str!("../tests/fixtures/fzf/expected-begin-length.txt"), &[Begin, Length]),
+            (include_str!("../tests/fixtures/fzf/expected-length-end.txt"), &[Length, End]),
+            (include_str!("../tests/fixtures/fzf/expected-pathname-length.txt"), &[Pathname, Length]),
+            (include_str!("../tests/fixtures/fzf/expected-chunk-begin.txt"), &[Chunk, Begin]),
+        ];
         let lines: Vec<&str> = include_str!("../tests/fixtures/fzf/lines.txt").lines().collect();
         let mut wrong = Vec::new();
-        for block in include_str!("../tests/fixtures/fzf/expected.txt").split("### ").filter(|b| !b.is_empty()) {
-            let mut it = block.lines();
-            let q = it.next().unwrap_or("");
-            let want: Vec<&str> = it.collect();
-            let query = Query::parse(q, Case::Smart, true, true);
-            let mut got: Vec<(Vec<i64>, &str)> = lines.iter().enumerate().filter_map(|(i, l)| {
-                let chars: Vec<char> = l.chars().collect();
-                query.matches(&chars).map(|h| { let mut r = rank(&h, &chars, &[Tiebreak::Length]); r.push(i as i64); (r, *l) })
-            }).collect();
-            if query.sortable() { got.sort_by(|a, b| a.0.cmp(&b.0)) }
-            let got: Vec<&str> = got.into_iter().map(|(_, l)| l).collect();
-            if got != want { wrong.push(format!("{q:?}: fzf {} lines, hn {}; first difference at {}", want.len(), got.len(), got.iter().zip(&want).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len())))) }
+        for (fixture, criteria) in fixtures {
+            for block in fixture.split("### ").filter(|b| !b.is_empty()) {
+                let mut it = block.lines();
+                let q = it.next().unwrap_or("");
+                let want: Vec<&str> = it.collect();
+                let query = Query::parse(q, Case::Smart, true, true).searching(criteria);
+                let mut got: Vec<(Vec<i64>, &str)> = lines.iter().enumerate().filter_map(|(i, l)| {
+                    let chars: Vec<char> = l.chars().collect();
+                    query.matches(&chars).map(|h| { let mut r = rank(&h, &chars, criteria); r.push(i as i64); (r, *l) })
+                }).collect();
+                if query.sortable() { got.sort_by(|a, b| a.0.cmp(&b.0)) }
+                let got: Vec<&str> = got.into_iter().map(|(_, l)| l).collect();
+                if got != want { wrong.push(format!("{criteria:?} {q:?}: fzf {} lines, hn {}; first difference at {}", want.len(), got.len(), got.iter().zip(&want).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len())))) }
+            }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The characters fzf lights when it searches from the end (--tiebreak=end): the last of the
+    /// best, as fzf 0.67 draws them.
+    #[test]
+    fn lights_from_the_end_for_tiebreak_end() {
+        let lit = |q: &str, line: &str, criteria: &[Tiebreak]| { let chars: Vec<char> = line.chars().collect(); Query::parse(q, Case::Smart, true, true).searching(criteria).matches(&chars).unwrap().positions };
+        let line = "C-b E  select-layout -E  Spread panes out evenly";
+        assert_eq!(lit("e", line, &[Tiebreak::End]), vec![42]);
+        assert_eq!(lit("e", line, &[Tiebreak::Length]), vec![4]);
+        assert_eq!(lit("'lay", line, &[Tiebreak::End]), vec![14, 15, 16]);
     }
 
     #[test]

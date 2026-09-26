@@ -122,16 +122,20 @@ impl Picker {
     }
 
     pub fn refilter(&mut self) {
-        let mut query = self.query.trim();
-        if self.prefixed && query.starts_with(['>', '@', '#', ':', '*', '?']) { query = query[1..].trim() }
-        if query.is_empty() {
+        // The query as fzf's pattern reads it: leading blanks and trailing unescaped ones aside
+        // (`pane\ ` keeps its escaped space).
+        let mut query = self.query.as_str();
+        if self.prefixed && query.trim_start().starts_with(['>', '@', '#', ':', '*', '?']) { query = &query.trim_start()[1..] }
+        // fzf sorts only when a term asks for something (`!x` alone keeps the input order).
+        let mut sorted = false;
+        if query.trim().is_empty() {
             self.visible = self.rows.iter().enumerate().map(|(i, _)| (i, Vec::new())).collect();
         } else {
             // fzf itself (fzf.rs, ported from fzf 0.67): the extended-search terms, FuzzyMatchV2's
             // scores and lit characters, the tiebreak — over the line as it is drawn.
             let o = crate::theme::fzf_opts();
             let case = match o.case { Some(true) => crate::fzf::Case::Respect, Some(false) => crate::fzf::Case::Ignore, None => crate::fzf::Case::Smart };
-            let q = crate::fzf::Query::parse(query, case, !o.exact, true);
+            let q = crate::fzf::Query::parse(query, case, !o.exact, true).searching(&o.tiebreak);
             let words: Vec<String> = query.split_whitespace().map(|w| w.trim_start_matches('\'').to_lowercase()).collect();
             let mut scored: Vec<(Vec<i64>, usize, Vec<u32>)> = Vec::new();
             let mut hidden: Vec<usize> = Vec::new();
@@ -151,15 +155,12 @@ impl Picker {
                     None => {}
                 }
             }
-            if !self.keep_order && q.sortable() && !o.no_sort { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
+            sorted = !self.keep_order && q.sortable() && !o.no_sort;
+            if sorted { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
             self.visible = scored.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).collect();
         }
         // --tac: the input order reversed (wherever the order is the input's).
-        {
-            let o = crate::theme::fzf_opts();
-            let sorted = !self.keep_order && !o.no_sort && !self.query.trim().is_empty();
-            if o.tac && !sorted { self.visible.reverse() }
-        }
+        if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
         // Keep the cursor on the same item across a rebuild.
         let keep = self.selected_id.as_ref().and_then(|id| self.visible.iter().position(|(i, _)| &self.rows[*i].id == id));
         self.cursor = keep.unwrap_or(self.cursor.min(self.visible.len().saturating_sub(1)));
@@ -185,8 +186,11 @@ impl Picker {
         self.skip_disabled(if delta >= 0 { 1 } else { -1 });
     }
 
-    fn changed(&mut self) {
-        self.cursor = 0;
+    /// The query was edited: the list is matched again. As fzf 0.67 does, the cursor keeps its
+    /// place in the list (not the item it was on), kept within it; an edit that leaves the query
+    /// as it was changes nothing.
+    fn changed(&mut self, before: &str) {
+        if self.query == before { return }
         self.selected_id = None;
         self.preview_scroll = 0;
         self.refilter();
@@ -196,17 +200,19 @@ impl Picker {
     fn qlen(&self) -> usize { self.query.chars().count() }
 
     pub fn type_char(&mut self, c: char) {
+        let before = self.query.clone();
         self.qcursor = self.qcursor.min(self.qlen());
         let at = self.byte_at(self.qcursor);
         self.query.insert(at, c);
         self.qcursor += 1;
-        self.changed();
+        self.changed(&before);
     }
 
     /// Backspace (or, with [word], C-w / M-BS: the word before the cursor).
     /// Backspace; C-w (word: back to whitespace, as unix-word-rubout); what a word-kill takes goes
     /// to the kill buffer for C-y.
     pub fn backspace(&mut self, word: bool) {
+        let before = self.query.clone();
         self.qcursor = self.qcursor.min(self.qlen());
         if self.qcursor == 0 { return }
         let chars: Vec<char> = self.query.chars().collect();
@@ -218,11 +224,12 @@ impl Picker {
         }
         self.query = chars[..from].iter().chain(chars[self.qcursor..].iter()).collect();
         self.qcursor = from;
-        self.changed();
+        self.changed(&before);
     }
 
     /// M-BSpace (back) and M-d (forward): kill an alphanumeric word, as readline and fzf do.
     pub fn kill_word(&mut self, forward: bool) {
+        let before = self.query.clone();
         let chars: Vec<char> = self.query.chars().collect();
         let at = self.qcursor.min(chars.len());
         let to = word_edge(&chars, at, forward);
@@ -231,7 +238,7 @@ impl Picker {
         self.kill = chars[a..b].iter().collect();
         self.query = chars[..a].iter().chain(chars[b..].iter()).collect();
         self.qcursor = a;
-        self.changed();
+        self.changed(&before);
     }
 
     /// C-y: put back what was last killed.
@@ -242,20 +249,22 @@ impl Picker {
 
     /// Delete / C-d: the character under the cursor.
     pub fn delete_forward(&mut self) {
+        let before = self.query.clone();
         let chars: Vec<char> = self.query.chars().collect();
         if self.qcursor >= chars.len() { return }
         self.query = chars[..self.qcursor].iter().chain(chars[self.qcursor + 1..].iter()).collect();
-        self.changed();
+        self.changed(&before);
     }
 
     /// C-u: everything before the cursor.
     pub fn clear_query(&mut self) {
+        let before = self.query.clone();
         let chars: Vec<char> = self.query.chars().collect();
         let at = self.qcursor.min(chars.len());
         if at > 0 { self.kill = chars[..at].iter().collect() }
         self.query = chars[at..].iter().collect();
         self.qcursor = 0;
-        self.changed();
+        self.changed(&before);
     }
 
     /// Move the query cursor: by chars, or (word) to the previous / next word boundary.
@@ -277,9 +286,10 @@ impl Picker {
     #[cfg_attr(not(test), allow(dead_code))]
     /// Replace the query outright (a mode switch, a history recall).
     pub fn set_query(&mut self, text: &str) {
+        let before = self.query.clone();
         self.query = text.to_string();
         self.qcursor = self.qlen();
-        self.changed();
+        self.changed(&before);
     }
 
     pub fn current(&self) -> Option<&Row> {
@@ -359,6 +369,42 @@ mod tests {
         p.set_query("main$"); assert!(ids(&p).is_empty());
         p.set_query("Fix\\ flaky"); assert_eq!(ids(&p), ["f"]);
         p.set_query("!^Fix"); assert_eq!(ids(&p), ["g"]);
+    }
+}
+
+#[cfg(test)]
+mod fzf_tests {
+    use super::*;
+
+    fn ids(p: &Picker) -> Vec<String> { p.visible.iter().map(|(i, _)| p.rows[*i].id.clone()).collect() }
+
+    /// fzf 0.67's --filter keeps only "split pane below" for `pane\ ` (and `'pane\ `).
+    #[test]
+    fn a_trailing_escaped_space_stays() {
+        let mut p = Picker::new("t", "");
+        p.set_rows(["split pane below", "panes", "kill pane", "the pane", "pane"].iter().map(|l| Row::new(*l, *l)).collect());
+        p.set_query("pane\\ ");
+        assert_eq!(ids(&p), ["split pane below"]);
+        p.set_query("'pane\\ ");
+        assert_eq!(ids(&p), ["split pane below"]);
+        p.set_query(" pane");
+        assert_eq!(ids(&p).len(), 5);
+    }
+
+    /// fzf 0.67 (seen in tmux): Up five times, then C-u with nothing before the cursor, keeps the
+    /// cursor; typing keeps its place in the new list (row 7 stays row 7), not the item.
+    #[test]
+    fn the_cursor_keeps_its_place_as_fzf_does() {
+        let mut p = Picker::new("t", "");
+        p.set_rows((1..=100).map(|n| Row::new(n.to_string(), n.to_string())).collect());
+        p.move_by(6);
+        assert_eq!(p.cursor, 6);
+        p.clear_query();
+        assert_eq!(p.cursor, 6);
+        p.type_char('1');
+        assert_eq!((p.cursor, p.current_id().as_deref()), (6, Some("15")));
+        p.type_char('9');
+        assert_eq!(p.cursor, 0, "one match left: the cursor kept within the list");
     }
 }
 
