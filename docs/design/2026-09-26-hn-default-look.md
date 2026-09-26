@@ -311,3 +311,62 @@ Questions:
 1. B2, with the branch added to wide titles?
 2. Should the spinner animate (Orca's does), or should working be a still `●`?
 3. Should the status line use your zsh prompt style for the project and branch, as the desktop app can?
+
+---
+
+## What was built (B2), 26 September
+
+The real screen, 100 × 30, on the demo fleet (`MOCK_DEMO=1`), a few seconds in. The billing refactor has just
+finished, so its window shows `✓`:
+
+```
+── ⠦ Fix flaky login test ──── fix/login-flake ──┬── ? Add rate limiting to the API ────────────────
+✳ Fix flaky login test                           │✳ Add rate limiting to the API
+                                                 │
+> fix flaky login test                           │> add rate limiting to the api
+                                                 │
+⏺ Reading src/webapp/handler.ts                  │⏺ Reading src/api/handler.ts
+⏺ Running npm test -- webapp                     │⏺ Running npm test -- api
+  ✓ 41 passed  ✗ 1 failed                        │  ✓ 41 passed  ✗ 1 failed
+⏺ The failure is a race in the session refresh — │⏺ The failure is a race in the session refresh — t
+the token is read                                │he token is read
+  before the refresh promise settles. Fixing it a│  before the refresh promise settles. Fixing it an
+nd re-running.                                   │d re-running.
+                                                 │
+────────────────────────────────────────         │────────────────────────────────────────
+❯                                                │❯
+                                                 ├── gpu-box shell ──────────── ml-lab git:(main) ──
+                                                 │dev@gpu-box:~/ml-lab$ nvidia-smi --query-gpu=name,
+                                                 │utilization.gpu --format=csv
+                                                 │name, utilization.gpu [%]
+                                                 │NVIDIA RTX 4090, 97 %
+                                                 │NVIDIA RTX 4090, 95 %
+                                                 │dev@gpu-box:~/ml-lab$
+                                                 │
+                                                 │
+                                                 │
+                                                 │
+                                                 │
+                                                 │
+                                                 │
+[studio] 0:? Fix flaky login test* 1:✓ Refacto> 1 waiting webapp git:(fix/login-flake) =^o_o^= 13:23
+```
+
+- **Pane titles:** the state symbol (none for a plain shell) and the harness's whole name. Where the pane is
+  wide enough, the project and branch go at the far end: `webapp git:(fix/login-flake)`, then `git:(branch)`,
+  then just the branch as the pane narrows. This answers question 1: yes, in wide titles.
+- **Symbols:** Orca's set. A turning spinner (fzf's frames, cyan) means working, and it answers question 2:
+  it animates. `?` (yellow) means needs you, `✓` (green) means done and not looked at yet, `·` (grey) means
+  idle, and `✗` (red) means failed. hn adds `◌` for starting, `‖` for paused and `○` for offline.
+- **Window list:** each window's most urgent symbol, and its name in whole words within 20 columns
+  (`#{window_short_name}`). A window with a harness waiting on you is a bell (`!`) and one that finished is
+  activity (`#`), so tmux shows both reversed.
+- **Status line, right side:** harnesses waiting on you, then the focused pane's project and branch. They are
+  written as zsh's robbyrussell prompt writes them, which answers question 3: `webapp git:(fix/login-flake)`.
+  A pane on another machine is written as scp writes a path, `gpu-box:ml-lab`. Then tim and the clock; the
+  date was dropped for room.
+- **Other defaults:** a lone pane gets its title row too (tmux draws `pane-border-status` over every pane).
+  hn starts in a shell as tmux does, and opens the desk's tabs when there are any.
+- **Your own formats:** `#{pane_agent_icon}`, `#{pane_agent_state}`, `#{window_agent_icon}`,
+  `#{window_agent_state}`, `#{pane_project}` and `#{pane_branch}` (see tui/README.md, "At a glance").
+
