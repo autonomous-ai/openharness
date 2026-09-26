@@ -608,24 +608,31 @@ fn local_time(offset: i64) -> (String, String) {
 /// top, bottom, left, right, none), drawn in the border colour; the list lives inside it.
 fn fzf_inner(body: Rect) -> Rect {
     let Some(style) = theme::fzf_opts().border.as_deref() else { return body };
-    let (t, b, l, r) = match style { "none" => (0, 0, 0, 0), "horizontal" => (1, 1, 0, 0), "vertical" => (0, 0, 1, 1), "top" => (1, 0, 0, 0), "bottom" => (0, 1, 0, 0), "left" => (0, 0, 1, 0), "right" => (0, 0, 0, 1), _ => (1, 1, 1, 1) };
+    // fzf's margins for a border: a row for the top or bottom, two columns for a side (the glyph and
+    // a column of padding inside it).
+    let (t, b, l, r) = match style { "none" => (0, 0, 0, 0), "horizontal" => (1, 1, 0, 0), "vertical" => (0, 0, 2, 2), "top" => (1, 0, 0, 0), "bottom" => (0, 1, 0, 0), "left" => (0, 0, 2, 0), "right" => (0, 0, 0, 2), _ => (1, 1, 2, 2) };
     Rect::new(body.x + l, body.y + t, body.width.saturating_sub(l + r), body.height.saturating_sub(t + b))
 }
 
 fn fzf_border(buf: &mut Buffer, body: Rect) {
     let Some(style) = theme::fzf_opts().border.clone() else { return };
     let st = Style::default().fg(theme::fzf().border);
-    let (h, v, tl, tr, bl, br) = match style.as_str() {
-        "sharp" => ("─", "│", "┌", "┐", "└", "┘"), "bold" => ("━", "┃", "┏", "┓", "┗", "┛"), "double" => ("═", "║", "╔", "╗", "╚", "╝"),
-        "block" | "thinblock" => ("▀", "█", "█", "█", "█", "█"), _ => ("─", "│", "╭", "╮", "╰", "╯"),
+    // fzf's glyphs (tui.go MakeBorderStyle): top, bottom, left, right, then the corners.
+    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = match style.as_str() {
+        "sharp" => ("─", "─", "│", "│", "┌", "┐", "└", "┘"),
+        "bold" => ("━", "━", "┃", "┃", "┏", "┓", "┗", "┛"),
+        "double" => ("═", "═", "║", "║", "╔", "╗", "╚", "╝"),
+        "block" => ("▀", "▄", "▌", "▐", "▛", "▜", "▙", "▟"),
+        "thinblock" => ("▔", "▁", "▏", "▕", "🭽", "🭾", "🭼", "🭿"),
+        _ => ("─", "─", "│", "│", "╭", "╮", "╰", "╯"),
     };
     let (top, bottom, left, right) = match style.as_str() { "none" => (false, false, false, false), "horizontal" => (true, true, false, false), "vertical" => (false, false, true, true), "top" => (true, false, false, false), "bottom" => (false, true, false, false), "left" => (false, false, true, false), "right" => (false, false, false, true), _ => (true, true, true, true) };
     if body.width < 2 || body.height < 2 { return }
     let (x1, y1) = (body.x + body.width - 1, body.y + body.height - 1);
-    if top { for x in body.x..=x1 { buf.set_string(x, body.y, h, st) } }
-    if bottom { for x in body.x..=x1 { buf.set_string(x, y1, h, st) } }
-    if left { for y in body.y..=y1 { buf.set_string(body.x, y, v, st) } }
-    if right { for y in body.y..=y1 { buf.set_string(x1, y, v, st) } }
+    if top { for x in body.x..=x1 { buf.set_string(x, body.y, top_c, st) } }
+    if bottom { for x in body.x..=x1 { buf.set_string(x, y1, bottom_c, st) } }
+    if left { for y in body.y..=y1 { buf.set_string(body.x, y, left_c, st) } }
+    if right { for y in body.y..=y1 { buf.set_string(x1, y, right_c, st) } }
     if top && left { buf.set_string(body.x, body.y, tl, st) }
     if top && right { buf.set_string(x1, body.y, tr, st) }
     if bottom && left { buf.set_string(body.x, y1, bl, st) }
@@ -660,15 +667,17 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // --info: default (its own line), inline (after the query), inline-right (right of the
     // prompt, the rule on its own line), right (its own line, the count at the right), hidden.
     let mode = o.info_mode.as_str();
-    let info_own_line = matches!(mode, "default" | "right" | "inline-right");
+    // Hidden keeps its rule on a line of its own too (fzf 0.67), unless --no-separator.
+    let info_own_line = matches!(mode, "default" | "right" | "inline-right") || (mode == "hidden" && o.separator);
     let (prompt_y, info_y) = if prompt_top { (area.y, if info_own_line { area.y + 1 } else { area.y }) } else { (bottom - 1, if info_own_line { bottom.saturating_sub(2) } else { bottom - 1 }) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
-    // --header-first (reverse): the header above the prompt.
-    let header_first = o.header_first && prompt_top && header.is_some();
-    let (prompt_y, info_y) = if header_first { (prompt_y + 1, info_y + 1) } else { (prompt_y, info_y) };
+    // --header-first: the header on the prompt's other side — above it with the prompt on top,
+    // on the last line below it otherwise.
+    let header_first = o.header_first && header.is_some();
+    let (prompt_y, info_y) = match (header_first, prompt_top) { (true, true) => (prompt_y + 1, info_y + 1), (true, false) => (prompt_y - 1, info_y - 1), _ => (prompt_y, info_y) };
     let edge = if prompt_top { prompt_y.max(info_y) } else { prompt_y.min(info_y) };
-    let header_y = if header_first { area.y } else if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else if prompt_top { edge } else { edge };
+    let header_y = match (header_first, prompt_top) { (true, true) => area.y, (true, false) => bottom - 1, _ => if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else { edge } };
     let prompt = Style::default().fg(theme::fzf().prompt);
     let prompt_text = theme::fzf().prompt_text.clone();
     let pw = prompt_text.width() as u16;
@@ -701,45 +710,45 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         let n = (to - from) as usize / ch.width().max(1);
         buf.set_string(from, y, ch.repeat(n), Style::default().fg(theme::fzf().border));
     };
-    let gap = if preview.is_some() { 2 } else { 1 };
-    let end = (area.x + area.width).saturating_sub(gap);
+    // fzf's printInfoImpl: the last column stays blank; a list still loading spins in the first.
+    let end = (area.x + area.width).saturating_sub(1);
+    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let spin = picker.busy.as_ref().map(|_| SPINNER[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100 % 10) as usize]);
     match mode {
-        "hidden" => {}
+        // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
+        "hidden" => rule(buf, area.x, end, info_y),
         "inline" => {
             // `> query  < 3/6 (0) ────`: the rule runs on to the edge.
             let x = area.x + pw + typed_w + 1;
             if x + 3 + count.width() as u16 <= area.x + area.width {
                 buf.set_string(x, info_y, " < ", prompt.add_modifier(Modifier::BOLD));
                 buf.set_string(x + 3, info_y, &count, info_style);
-                rule(buf, x + 4 + count.width() as u16, end, info_y);
+                if let Some(sp) = spin { buf.set_string(x + 4 + count.width() as u16, info_y, sp, info_style) }
+                rule(buf, x + 4 + count.width() as u16 + if spin.is_some() { 2 } else { 0 }, end, info_y);
             }
         }
         "inline-right" => {
-            // The count at the right of the prompt line; the rule has a line of its own.
+            // The count at the right of the prompt line (ending a column short of the edge); the
+            // rule has a line of its own, from the first column.
             let x = end.saturating_sub(count.width() as u16);
-            if x > area.x + pw + typed_w + 1 { buf.set_string(x, prompt_y, &count, info_style) }
-            rule(buf, area.x + 1, end, info_y);
+            if x > area.x + pw + typed_w + 2 {
+                if let Some(sp) = spin { buf.set_string(x - 2, prompt_y, sp, info_style) }
+                buf.set_string(x, prompt_y, &count, info_style);
+            }
+            rule(buf, area.x, end, info_y);
         }
         "right" => {
-            // `──────── 3/6 (0)`: the count at the end of its own line.
+            // `──────── 3/6 (0) `: the rule from the first column, the count at the end.
             let x = end.saturating_sub(count.width() as u16);
-            rule(buf, area.x + 1, x.saturating_sub(1), info_y);
+            rule(buf, area.x, x.saturating_sub(if spin.is_some() { 3 } else { 1 }), info_y);
+            if let Some(sp) = spin { buf.set_string(x - 2, info_y, sp, info_style) }
             buf.set_string(x, info_y, &count, info_style);
         }
         _ => {
-            // `  3/6 (0)  harnesses  ────`.
-            let info = format!("  {count}");
-            buf.set_string(area.x, info_y, &info, info_style);
-            let mut x = area.x + info.width() as u16;
-            let label = picker.busy.clone().or_else(|| (!picker.title.is_empty()).then(|| picker.title.clone()));
-            if let Some(label) = label {
-                let text = format!(" {label} ");
-                if (x as usize) + text.width() + 4 < (area.x as usize + width) {
-                    buf.set_string(x + 1, info_y, &text, Style::default().fg(theme::fzf().header));
-                    x += text.width() as u16 + 1;
-                }
-            }
-            rule(buf, x + 1, end, info_y);
+            // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a space, the rule.
+            if let Some(sp) = spin { buf.set_string(area.x, info_y, sp, info_style) }
+            buf.set_string(area.x + 2, info_y, &count, info_style);
+            rule(buf, area.x + 3 + count.width() as u16, end, info_y);
         }
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
@@ -750,7 +759,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if let Some(h) = &header { buf.set_line(area.x, header_y, h, area.width); }
     // The list: bottom-up (default), or top-down — under the prompt (reverse) or from the top
     // with the prompt below (reverse-list).
-    let (list_top, list_bottom) = if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() { header_y } else { edge }) };
+    let (list_top, list_bottom) = if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() && !header_first { header_y } else { edge }) };
     picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
     let list_h = list_bottom.saturating_sub(list_top) as usize;
     let n = picker.visible.len();
@@ -759,19 +768,25 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         picker.row_at.clear();
         return cursor;
     }
-    // Scroll so the cursor row is in view (scroll = first visible index from the bottom).
-    if picker.cursor < picker.scroll { picker.scroll = picker.cursor }
-    if picker.cursor >= picker.scroll + list_h { picker.scroll = picker.cursor + 1 - list_h }
+    // Scroll so the cursor row is in view (scroll = first visible index from the bottom), with
+    // fzf's --scroll-off rows (3; at most half the list) kept on either side of it.
+    let so = theme::fzf_opts().scroll_off.min(list_h / 2);
+    if picker.cursor < picker.scroll + so { picker.scroll = picker.cursor.saturating_sub(so) }
+    if picker.cursor + so >= picker.scroll + list_h { picker.scroll = (picker.cursor + so + 1).saturating_sub(list_h) }
     picker.scroll = picker.scroll.min(n.saturating_sub(list_h.max(1)));
     picker.row_at.clear();
     // A column of air before the scrollbar, so right-aligned keys never touch it.
     let bar = n > list_h && list_h > 2 && theme::fzf_opts().scrollbar.is_some();
     let text_w = width.saturating_sub(gutter_width() as usize + if bar { 2 } else { 1 });
+    // The right column lines up down the list: one edge for every row on screen, after the widest
+    // line, within the list.
+    let shown = picker.scroll..(picker.scroll + list_h.min(n - picker.scroll));
+    let right_edge = shown.clone().map(|vi| { let r = &picker.rows[picker.visible[vi].0]; r.lead.iter().map(|s| s.content.width()).sum::<usize>() + crate::picker::line(r).width() }).max().unwrap_or(0).min(text_w);
     for slot in 0..list_h.min(n - picker.scroll) {
         let vi = picker.scroll + slot;
         let y = if reverse { list_top + slot as u16 } else { list_bottom - 1 - slot as u16 };
         picker.row_at.push((y, vi));
-        fzf_row(buf, picker, vi, area.x, y, text_w);
+        fzf_row(buf, picker, vi, area.x, y, text_w, right_edge);
     }
     // Scrollbar on the right edge, like fzf's: only the thumb, in the border colour.
     if let (true, Some(bar)) = (n > list_h && list_h > 2, theme::fzf_opts().scrollbar.clone()) {
@@ -788,12 +803,13 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
 }
 
 /// One fzf row: gutter, marker, then the text — matches lit, the current row on 236.
-fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w: usize) {
+fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w: usize, right_edge: usize) {
     let (ri, hits) = &picker.visible[vi];
     let row = &picker.rows[*ri];
     let current = vi == picker.cursor;
     let marked = picker.marked.contains(&row.id);
     let z = theme::fzf();
+    let o = theme::fzf_opts();
     // fzf --color=bw: the current line in reverse video, matches underlined.
     let plus = if z.bw { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(z.bg_plus) };
     if current {
@@ -801,110 +817,109 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     } else {
         buf.set_string(x, y, format!("{:<w$}", "▌", w = pointer_w()), Style::default().fg(z.gutter));
     }
-    let marker_style = if current { plus.fg(z.marker) } else { Style::default().fg(z.marker) };
+    // The marker cell: the marker on a selected row (on selected-bg), bg+ on the current one — plain
+    // in bw, where fzf leaves an unselected marker cell alone.
     let mw = z.marker_char.width().max(1);
+    let marker_style = match (current, marked) {
+        (_, true) => { let st = if current && !z.bw { plus.fg(z.marker) } else { Style::default().fg(z.marker) }; o.selected_bg.filter(|_| !current).map(|bg| st.bg(bg)).unwrap_or(st) }
+        (true, false) if !z.bw => plus,
+        _ => Style::default(),
+    };
     buf.set_string(x + pointer_w() as u16, y, if marked { format!("{:<mw$}", z.marker_char) } else { " ".repeat(mw) }, marker_style);
-    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { theme::fzf_opts().fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
+    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { o.fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
     let hit = match (current, z.bw) {
         (_, true) => base.add_modifier(Modifier::UNDERLINED),
         (true, false) => plus.fg(z.hl_plus).add_modifier(Modifier::BOLD),
         (false, false) => Style::default().fg(z.hl),
     };
-    let fill = if current { plus } else { Style::default() };
-    // Room: the right column first (so every row lines up), then the title, then the detail.
-    let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
-    let right_w = row.right.width();
-    let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
-    let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
-    // A waiting question keeps some of itself in view; any other detail gives way to the title.
-    let asking = row.detail.first().map(|s| s.content.starts_with("? ")).unwrap_or(false);
-    // …and a row that matched only in its detail gives the detail room to show why.
-    let label_n = row.label.chars().count() as u32;
-    let detail_hit = !hits.is_empty() && hits.iter().all(|h| *h >= label_n);
-    let label_room = if (asking && avail >= 50) || (detail_hit && avail >= 24) { row.label.width().min((avail * 3 / 5).max(12)).min(avail) } else { avail };
-    // fzf's --hscroll: a hit past the end of the room slides the title left, `..` in front.
-    let label_chars: Vec<char> = row.label.chars().collect();
-    let label_len = label_chars.len();
-    let last_hit = hits.iter().copied().filter(|h| (*h as usize) < label_len).max().map(|h| h as usize);
-    let (label, offset) = match last_hit {
-        Some(h) if row.label.width() > label_room && h + 2 > label_room && label_room > 6 => {
-            let start = (h + 3).saturating_sub(label_room).min(label_len);
-            let tail: String = label_chars[start..].iter().collect();
-            let ell = theme::fzf_opts().ellipsis.clone();
-            let ew = ell.chars().count();
-            (format!("{ell}{}", clip_fzf(&tail, label_room - ew)), start as isize - ew as isize)
-        }
-        _ => (clip_fzf(&row.label, label_room), 0),
-    };
-    let mut spans: Vec<Span> = Vec::new();
     // The glyphs' colours follow the scheme: none in bw, the 16 in 16.
     let tone = |st: Style| -> Style {
         if z.bw { Style { fg: None, bg: None, ..st } }
         else if z.sixteen { Style { fg: st.fg.map(theme::to16), ..st } }
         else { st }
     };
+    let mut spans: Vec<Span> = Vec::new();
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), if current { tone(s.style).patch(plus) } else { tone(s.style) })) }
-    // Characters, lit where they matched: `at` is each one's place in the searched line.
-    let push_lit = |spans: &mut Vec<Span<'static>>, text: &str, first: isize, plain: Style, lit_style: Style| {
-        let mut run = String::new();
-        let mut lit = false;
-        for (i, ch) in text.chars().enumerate() {
-            let at = first + i as isize;
-            let on = at >= 0 && hits.contains(&(at as u32)) && !theme::fzf_opts().ellipsis.contains(ch) && ch != '…';
-            if on != lit && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), if lit { lit_style } else { plain })) }
-            lit = on;
-            run.push(ch);
-        }
-        if !run.is_empty() { spans.push(Span::styled(run, if lit { lit_style } else { plain })) }
-    };
-    push_lit(&mut spans, &label, offset, base, hit);
-    // The detail, lit too (dim kept); it starts two cells after the title in the searched line.
-    let detail_room = avail.saturating_sub(label.width() + 2);
-    if !row.detail.is_empty() && detail_room >= 4 {
-        spans.push(Span::styled("  ", fill));
-        let mut left = detail_room;
-        let mut at = label_len as isize + 2;
+    let lead_w: usize = row.lead.iter().map(|s| s.content.width()).sum();
+    // The line as fzf reads it (picker::line): the title, then the detail; each cell with its style
+    // and whether it matched. The right column is drawn at the list's own edge.
+    let label_len = row.label.chars().count();
+    let mut cells: Vec<(char, Style, bool)> = row.label.chars().enumerate().map(|(i, c)| (c, base, hits.contains(&(i as u32)))).collect();
+    let detail_len: usize = row.detail.iter().map(|s| s.content.chars().count()).sum();
+    if detail_len > 0 {
+        cells.push((' ', base, false));
+        cells.push((' ', base, false));
+        let mut at = label_len + 2;
         for s in &row.detail {
-            if left == 0 { break }
-            let chars: Vec<char> = s.content.chars().collect();
-            let len = chars.len() as isize;
-            // A hit past the room slides this part left too, the ellipsis in front.
-            let last = hits.iter().map(|h| *h as isize - at).filter(|r| *r >= 0 && *r < len).max();
-            let (t, first) = match last {
-                Some(r) if s.content.width() > left && r as usize + 2 > left && left > 6 => {
-                    let ell = theme::fzf_opts().ellipsis.clone();
-                    let ew = ell.chars().count();
-                    // Room for the ellipsis in front and (if more follows) one behind, the hit between.
-                    let start = (r as usize + 1 + 2 * ew).saturating_sub(left).min(chars.len());
-                    let tail: String = chars[start..].iter().collect();
-                    (format!("{ell}{}", clip_fzf(&tail, left - ew)), at + start as isize - ew as isize)
-                }
-                _ => (clip_fzf(&s.content, left), at),
-            };
-            left = left.saturating_sub(t.width());
             let st = tone(if current { s.style.patch(plus) } else { s.style });
-            // A hit is full intensity, in dim text too (fzf's hl is not dimmed).
-            let lit = hit.remove_modifier(Modifier::DIM);
-            push_lit(&mut spans, &t, first, st, lit);
-            at += len;
+            for c in s.content.chars() { cells.push((c, st, hits.contains(&(at as u32)))); at += 1 }
+        }
+    }
+    let right_w = row.right.width();
+    let show_right = !row.right.is_empty() && text_w >= lead_w + right_w + 14;
+    let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
+    let cells = hscroll(cells, avail, base, o);
+    // A hit is full intensity, in dim text too (fzf's hl is not dimmed).
+    let lit = hit.remove_modifier(Modifier::DIM);
+    let mut run = String::new();
+    let mut run_style = None::<Style>;
+    for (c, st, on) in &cells {
+        let st = if *on { lit } else { *st };
+        if run_style != Some(st) && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), run_style.unwrap_or_default())) }
+        run_style = Some(st);
+        run.push(*c);
+    }
+    if !run.is_empty() { spans.push(Span::styled(run, run_style.unwrap_or_default())) }
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    // Past the text the current row keeps bg+ only as far as the line goes (fzf; --highlight-line
+    // fills the row): to the end of the right column when there is one.
+    let fill = if current { plus } else { Style::default() };
+    if show_right {
+        let end = right_edge.clamp(used + right_w + 2, text_w);
+        spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
+        let right_at = label_len + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
+        for (i, c) in row.right.chars().enumerate() {
+            let on = hits.contains(&((right_at + i) as u32));
+            spans.push(Span::styled(c.to_string(), if on { lit } else { fill.add_modifier(Modifier::DIM) }));
         }
     }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
-    if show_right {
-        // The right column sits at the row's end, or not far past a short row's text.
-        let end = text_w.min((used + right_w + 24).max(text_w.min(90)));
-        spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
-        // The right column is part of the line: its hits are lit too.
-        // Its place in the line as drawn (picker::line): after the detail, when there is one.
-        let detail_len: isize = row.detail.iter().map(|s| s.content.chars().count() as isize).sum();
-        let right_at = label_len as isize + if detail_len > 0 { 2 + detail_len } else { 0 } + 2;
-        push_lit(&mut spans, &row.right, right_at, fill.add_modifier(Modifier::DIM), hit.remove_modifier(Modifier::DIM));
-    } else if current {
-        spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
-    }
+    if current && o.highlight_line { spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), plus)) }
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
     // --color=selected-bg: marked rows carry it (the current row keeps bg+).
-    if marked && !current { if let Some(bg) = theme::fzf_opts().selected_bg { buf.set_style(Rect::new(x + gutter_width(), y, text_w as u16, 1), Style::default().bg(bg)) } }
+    if marked && !current { if let Some(bg) = o.selected_bg { buf.set_style(Rect::new(x + gutter_width(), y, used.min(text_w) as u16, 1), Style::default().bg(bg)) } }
+}
+
+/// fzf's hscroll (terminal.go, printHighlighted): a line wider than its room keeps its last match
+/// in view with --hscroll-off columns after it, the ellipsis where it was cut on either side.
+fn hscroll(cells: Vec<(char, Style, bool)>, room: usize, base: Style, o: &theme::FzfOpts) -> Vec<(char, Style, bool)> {
+    let w = |c: &[(char, Style, bool)]| -> usize { c.iter().map(|(ch, ..)| unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0)).sum() };
+    if w(&cells) <= room { return cells }
+    let ell: Vec<(char, Style, bool)> = o.ellipsis.chars().map(|c| (c, base, false)).collect();
+    let ew = w(&ell).min(room);
+    let trim_right = |c: &[(char, Style, bool)], width: usize| -> Vec<(char, Style, bool)> {
+        let mut out = Vec::new();
+        let mut used = 0;
+        for x in c { let cw = unicode_width::UnicodeWidthChar::width(x.0).unwrap_or(0); if used + cw > width { break } used += cw; out.push(*x) }
+        out
+    };
+    let max_end = cells.iter().rposition(|c| c.2).map(|i| i + 1).unwrap_or(0);
+    let maxe = (max_end + (room / 2).saturating_sub(ew).min(o.hscroll_off)).min(cells.len());
+    if !o.hscroll || w(&cells[..maxe]) <= room.saturating_sub(ew) {
+        let mut out = trim_right(&cells, room.saturating_sub(ew));
+        out.extend(ell.iter().take(if room >= ew { ell.len() } else { 0 }));
+        return out;
+    }
+    let mut cells = cells;
+    if w(&cells[maxe..]) > ew { cells.truncate(maxe); cells.extend(ell.iter().cloned()) }
+    // Trim from the left until it fits beside the leading ellipsis.
+    let width = room.saturating_sub(ew);
+    let mut current = w(&cells);
+    let mut from = 0;
+    while current > width && from < cells.len() { current -= unicode_width::UnicodeWidthChar::width(cells[from].0).unwrap_or(0); from += 1 }
+    let mut out = ell;
+    out.extend(cells[from..].iter().cloned());
+    out
 }
 
 /// The pointer's cells (fzf pads every row to it) and the pointer and marker together.
@@ -1176,19 +1191,6 @@ fn copy_indicator(buf: &mut Buffer, pane: &Pane, content: Rect) {
     let text = format!("{count}[{}/{}]", grid.display_offset(), grid.history_size());
     let x = (content.x + content.width).saturating_sub(text.width() as u16);
     buf.set_string(x, content.y, &text, Style::default().bg(Color::Yellow).fg(Color::Black));
-}
-
-/// clip, with fzf's ellipsis (`··`, or --ellipsis).
-fn clip_fzf(text: &str, cols: usize) -> String {
-    let ell = &theme::fzf_opts().ellipsis;
-    if text.width() <= cols { return text.to_string() }
-    if cols <= ell.width() { return ell.chars().take(cols).collect() }
-    let mut out = String::new();
-    for ch in text.chars() {
-        if out.width() + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) + ell.width() > cols { break }
-        out.push(ch);
-    }
-    format!("{}{ell}", out.trim_end())
 }
 
 fn clip(text: &str, cols: usize) -> String {

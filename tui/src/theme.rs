@@ -82,13 +82,13 @@ pub fn fzf() -> &'static Fzf {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3 };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -96,6 +96,10 @@ pub fn fzf_opts() -> &'static FzfOpts {
             let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
             match flag.as_str() {
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
+                "--hscroll" => o.hscroll = true, "--no-hscroll" => o.hscroll = false,
+                "--hscroll-off" => { if let Some(v) = take() { o.hscroll_off = v.parse().unwrap_or(10) } }
+                "--highlight-line" => o.highlight_line = true, "--no-highlight-line" => o.highlight_line = false,
+                "--scroll-off" => { if let Some(v) = take() { o.scroll_off = v.parse().unwrap_or(3) } }
                 "--inline-info" => o.info_inline = true,
                 "--no-info" => { o.info_hidden = true; o.info_mode = "hidden".into() }
                 "--info" => { if let Some(v) = take() { let v = v.split(':').next().unwrap_or("").to_string(); o.info_inline = v.starts_with("inline"); o.info_right = v == "inline-right"; o.info_hidden = v == "hidden"; o.info_mode = v } }
