@@ -740,31 +740,45 @@ fn run_words(app: &mut App, words: &[String]) {
     let command = resolve(&words[0]);
     match command {
         "new-window" => {
-            let was = app.active;
+            // tmux's new-window [-abdkPS] [-c dir] [-n name] [-t index] [-F fmt] [command]: a
+            // window with a shell, at -t's index (else the first free one); -a after the target
+            // window, -b before it (the windows from there moving up one); -k replacing a window
+            // at that index (else `index N in use`); -S with -n: a window of that name selected
+            // instead; -d not gone to; -P printed.
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let command = shell_command(words);
+            let name = opt(words, "-n");
+            if flag(words, "-S") && opt(words, "-t").is_none() {
+                if let Some(n) = &name {
+                    let want = expand(app, n);
+                    let hits: Vec<usize> = (0..app.tabs.len()).filter(|i| app.tabs[*i].name == want).collect();
+                    if hits.len() > 1 { return app.say(format!("multiple windows named {n}"), theme::WARN) }
+                    if let Some(&i) = hits.first() { if !flag(words, "-d") { app.select_tab(i) } return }
+                }
+            }
             // The pane this came from decides the machine and folder — read before the new window.
             let from = input::focused_agent(app);
             let last_before = app.last_tab.clone();
             let was_id = app.tab().id.clone();
-            let _ = was;
-            // -t N: at that index (tmux: "index N in use" when it is taken).
-            let at = opt(words, "-t").map(|t| t.trim_start_matches(|c| c == ':' || c == '=').to_string()).filter(|t| !t.is_empty());
-            let at = match at.as_deref().map(|t| t.parse::<usize>()) {
-                Some(Ok(n)) => { if app.tab_by_num(n).is_some() && !flag(words, "-a") { return app.say(format!("index {n} in use"), theme::WARN) } Some(n) }
-                Some(Err(_)) => None,
-                None => None,
-            };
-            app.new_tab();
-            if let Some(n) = at { let _ = app.move_tab_to(n); }
-            // -a: at the index after this window's, the ones after it moving up one.
-            if flag(words, "-a") { app.place_after(&was_id) }
-            if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
-            // -d: made, not gone to.
-            if flag(words, "-d") {
-                // Made, not visited: its shell starts there, and you stay where you were.
-                app.return_to = Some((was_id, last_before));
+            let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+            let found = crate::cmd::resolve(app, opt(words, "-t").as_deref(), spec).unwrap_or_default();
+            let mut idx = found.idx;
+            if flag(words, "-a") || flag(words, "-b") {
+                let at = found.window.map(|w| app.win_num(w)).unwrap_or_else(|| app.win_num(app.active));
+                let at = if flag(words, "-b") { at } else { at + 1 };
+                app.shuffle_up(at);
+                idx = Some(at);
             }
+            if let Some(n) = idx {
+                if let Some(i) = app.tab_by_num(n) {
+                    if !flag(words, "-k") { return app.say(format!("create window failed: index {n} in use"), theme::WARN) }
+                    app.close_tab(i);
+                }
+            }
+            app.new_tab_at(idx);
+            if let Some(n) = &name { let n = expand(app, n); app.rename_tab(&n) }
+            // -d: made, not visited: its shell starts there, and you stay where you were.
+            if flag(words, "-d") { app.return_to = Some((was_id, last_before)) }
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
             input::new_shell_from(app, from, Placement::Auto(None), cwd, command);
         }

@@ -1110,23 +1110,6 @@ impl App {
         self.fit_panes();
     }
 
-    /// new-window -a: the new (current) window takes the index after `after`'s, the windows
-    /// numbered from there moving up one, and its place in the order.
-    pub fn place_after(&mut self, after: &str) {
-        self.renumber();
-        let Some(base) = self.tabs.iter().find(|t| t.id == after).and_then(|t| self.nums.get(&t.id).copied()) else { return };
-        let me = self.tab().id.clone();
-        let want = base + 1;
-        let ids: Vec<String> = self.tabs.iter().filter(|t| t.id != me).map(|t| t.id.clone()).collect();
-        for id in ids { if let Some(n) = self.nums.get_mut(&id) { if *n >= want { *n += 1 } } }
-        self.nums.insert(me.clone(), want);
-        let Some(from) = self.tabs.iter().position(|t| t.id == me) else { return };
-        let tab = self.tabs.remove(from);
-        let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|n| *n > want).unwrap_or(false)).unwrap_or(self.tabs.len());
-        self.tabs.insert(at, tab);
-        self.active = at;
-        self.fit_panes();
-    }
 
     /// move-window -r: every window numbered in order from base-index.
     pub fn renumber_all(&mut self) {
@@ -1585,6 +1568,33 @@ impl App {
         self.fit_panes();
     }
 
+    /// new-window's window at index `n` (the first free one without), in its place in the order.
+    pub fn new_tab_at(&mut self, n: Option<usize>) {
+        self.renumber();
+        self.last_tab = Some(self.tabs[self.active].id.clone());
+        let tab = Tab::new("home");
+        let n = n.unwrap_or_else(|| self.free_num());
+        self.nums.insert(tab.id.clone(), n);
+        let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
+        self.tabs.insert(at, tab);
+        self.active = at;
+        self.home_cursor = 0;
+        self.home_order.borrow_mut().clear();
+        self.fit_panes();
+    }
+
+    /// winlink_shuffle_up: the windows from index `idx` up to the first free one move up one,
+    /// so `idx` is free.
+    pub fn shuffle_up(&mut self, idx: usize) {
+        self.renumber();
+        let used: HashSet<usize> = self.nums.values().copied().collect();
+        let mut last = idx;
+        while used.contains(&last) { last += 1 }
+        for n in (idx..last).rev() {
+            if let Some(id) = self.nums.iter().find(|(_, v)| **v == n).map(|(k, _)| k.clone()) { self.nums.insert(id, n + 1); }
+        }
+    }
+
     pub fn new_tab(&mut self) {
         // tmux's new-window: the first free index; the others keep their numbers.
         self.renumber();
@@ -1628,6 +1638,8 @@ impl App {
         tab.name = name.to_string();
         tab.named = true;
         let (id, on_desk) = (tab.id.clone(), tab.on_desk);
+        // tmux: a window named by hand is no longer renamed automatically.
+        self.options.windows.entry(id.clone()).or_default().insert("automatic-rename".into(), "off".into());
         if on_desk { self.desk_op(json!({ "op": "tab.rename", "id": id, "name": name, "nameIsCustom": true })) }
     }
 
