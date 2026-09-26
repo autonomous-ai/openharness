@@ -1,7 +1,7 @@
-//! tim from a shell, as `tmux ls` and `tmux send-keys` are used from scripts and editors:
+//! hn from a shell, as `tmux ls` and `tmux send-keys` are used from scripts and editors:
 //!
-//!   tim ls                          every harness on every machine
-//!   tim send -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
+//!   hn ls                          every harness on every machine
+//!   hn send -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
 //!
 //! Anything else starts the client.
 
@@ -45,9 +45,9 @@ async fn roster(port: u16, machine: &str) -> Vec<crate::fleet::Agent> {
     reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default().iter().map(|r| agent_from(machine, r, None)).collect()
 }
 
-/// `tim ls`: `machine: name (engine) status  folder`, one line each, as `tmux ls` is one per session.
+/// `hn ls`: `machine: name (engine) status  folder`, one line each, as `tmux ls` is one per session.
 async fn ls(port: u16) -> i32 {
-    let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("tim: {e}"); return 1 } };
+    let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("hn: {e}"); return 1 } };
     for (id, name, up) in list {
         if !up { println!("{name}: offline"); continue }
         for a in roster(port, &id).await {
@@ -58,7 +58,7 @@ async fn ls(port: u16) -> i32 {
     0
 }
 
-/// `tim send -t <harness> <text…>`: the harness is a name (its start will do) or an id.
+/// `hn send -t <harness> <text…>`: the harness is a name (its start will do) or an id.
 async fn send(port: u16, args: &[String]) -> i32 {
     let mut target = None;
     let mut text = Vec::new();
@@ -68,8 +68,8 @@ async fn send(port: u16, args: &[String]) -> i32 {
         text.push(args[i].clone());
         i += 1;
     }
-    let (Some(target), false) = (target, text.is_empty()) else { eprintln!("usage: tim send -t <harness> <text>"); return 2 };
-    let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("tim: {e}"); return 1 } };
+    let (Some(target), false) = (target, text.is_empty()) else { eprintln!("usage: hn send -t <harness> <text>"); return 2 };
+    let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("hn: {e}"); return 1 } };
     let want = target.to_lowercase();
     for (id, _, up) in list {
         if !up { continue }
@@ -82,6 +82,6 @@ async fn send(port: u16, args: &[String]) -> i32 {
             return 0;
         }
     }
-    eprintln!("tim: can't find harness: {target}");
+    eprintln!("hn: can't find harness: {target}");
     1
 }

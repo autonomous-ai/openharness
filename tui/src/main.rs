@@ -58,10 +58,10 @@ pub fn bell() {
 }
 
 fn usage() {
-    println!("tim — tmux improved: Harness in your terminal\n");
-    println!("  tim [--port N] [--keys]     (also: hn, harness tui)");
-    println!("  tim ls                      every harness on every machine");
-    println!("  tim send -t <harness> text  a message to a harness\n");
+    println!("hn — tmux improved: Harness in your terminal\n");
+    println!("  hn [--port N] [--keys]      (also: harness tui)");
+    println!("  hn ls                       every harness on every machine");
+    println!("  hn send -t <harness> text   a message to a harness\n");
     println!("  tmux's keys: C-b s harnesses · C-b c window · C-b % \" split · C-b o next pane · C-b z zoom");
     println!("  C-b [ copy · C-b w windows · C-b C new harness · C-b ? keys · C-b d detach");
     println!("  ~/.tmux.conf is read: your prefix and binds work here too.");
@@ -99,7 +99,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") { usage(); return Ok(()) }
-    if args.iter().any(|a| a == "--version" || a == "-V") { println!("tim {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
+    if args.iter().any(|a| a == "--version" || a == "-V") { println!("hn {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
     if args.iter().any(|a| a == "--keys") {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);
@@ -115,7 +115,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok())
         .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(18473u16);
-    // tim ls, tim send …: answered from here, no client.
+    // hn ls, hn send …: answered from here, no client.
     let plain: Vec<String> = { let mut v = Vec::new(); let mut it = args.iter(); while let Some(a) = it.next() { if a == "--port" { it.next(); } else { v.push(a.clone()) } } v };
     if let Some(code) = cli::run(&plain, port).await { std::process::exit(code) }
 
@@ -175,7 +175,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
     }
     if let Some(problem) = config.problems.first().or(settings.problems.first()) { app.say(problem.clone(), theme::DANGER) }
-    else if !settings.notes.is_empty() { app.say(format!("tmux.conf: {} line{} not used here — tim --keys lists them", settings.notes.len(), if settings.notes.len() == 1 { "" } else { "s" }), theme::WARN) }
+    else if !settings.notes.is_empty() { app.say(format!("tmux.conf: {} line{} not used here — hn --keys lists them", settings.notes.len(), if settings.notes.len() == 1 { "" } else { "s" }), theme::WARN) }
     else if let Some(path) = &settings.path { app.say(format!("{} read — your prefix is {}", path.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) }
     app.boot();
 

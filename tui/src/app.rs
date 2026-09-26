@@ -147,7 +147,7 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
-    /// Shells tim made for split-window / new-window: they end with their pane.
+    /// Shells hn made for split-window / new-window: they end with their pane.
     pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
     pub starting_shell: Option<Vec<Vec<u8>>>,

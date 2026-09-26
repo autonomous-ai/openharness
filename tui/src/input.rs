@@ -981,10 +981,34 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     }
     let before = picker.query.clone();
     let page = (app.size.1 as i64 - 6).max(1);
-    let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
-    // Lists that only show things (tmux's view mode): q leaves, as in tmux.
-    let view = matches!(kind, PickerKind::Keys | PickerKind::Messages | PickerKind::Output { .. } | PickerKind::Buffers | PickerKind::Help);
+    let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
+    // FZF_DEFAULT_OPTS --bind: your key:action pairs come first.
+    let name = fzf_key_name(&key);
+    if let Some(actions) = theme::fzf_opts().binds.iter().find(|(k, _)| *k == name).map(|(_, a)| a.clone()) {
+        for action in actions.split('+') {
+            match action {
+                "up" => picker.move_by(up), "down" => picker.move_by(-up),
+                "page-up" => picker.move_by(page * up), "page-down" => picker.move_by(-page * up),
+                "first" => { picker.move_by(-(picker.visible.len() as i64)) } "last" => { picker.move_by(picker.visible.len() as i64) }
+                "toggle" => picker.toggle_mark(),
+                "select-all" => { if multi { picker.marked = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } }
+                "deselect-all" => picker.marked.clear(),
+                "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
+                "toggle-preview" => picker.preview = !picker.preview,
+                "preview-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
+                "preview-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
+                "clear-query" => picker.set_query(""),
+                "backward-kill-word" => picker.kill_word(false), "kill-word" => picker.kill_word(true), "unix-line-discard" => picker.clear_query(),
+                "beginning-of-line" => picker.qhome(), "end-of-line" => picker.qend(),
+                "accept" => { choose(app, kind, picker, Choice::Enter); return }
+                "abort" | "cancel" => { SPLIT.with(|s| s.set(None)); return }
+                _ => {}
+            }
+        }
+        app.modal = Some(Modal::Picker { kind, picker });
+        return;
+    }
     match key.code {
         KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
         KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
@@ -1003,7 +1027,6 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         // fzf --multi, in the harness lists only: Tab marks and moves down (toward the prompt).
         KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-up) }
         KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(up) }
-        KeyCode::Char('q') if view && picker.query.is_empty() => { return }
         KeyCode::Backspace if alt => picker.kill_word(false),
         KeyCode::Backspace => picker.backspace(false),
         KeyCode::Char('d') if alt => picker.kill_word(true),
@@ -1268,6 +1291,27 @@ fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<
         _ => {}
     }
     app.modal = Some(Modal::Tree { cursor: cursor.min(n - 1), collapsed });
+}
+
+/// A key as fzf's --bind names it: ctrl-j, alt-a, enter, btab, f1, ctrl-/ …
+fn fzf_key_name(key: &KeyEvent) -> String {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let base = match key.code {
+        KeyCode::Char(' ') => "space".to_string(), KeyCode::Char(c) => c.to_lowercase().to_string(),
+        KeyCode::Enter => "enter".into(), KeyCode::Esc => "esc".into(), KeyCode::Tab => "tab".into(), KeyCode::BackTab => "btab".into(),
+        KeyCode::Backspace => "bspace".into(), KeyCode::Delete => "del".into(), KeyCode::Up => "up".into(), KeyCode::Down => "down".into(),
+        KeyCode::Left => "left".into(), KeyCode::Right => "right".into(), KeyCode::Home => "home".into(), KeyCode::End => "end".into(),
+        KeyCode::PageUp => "page-up".into(), KeyCode::PageDown => "page-down".into(), KeyCode::F(n) => format!("f{n}"),
+        _ => String::new(),
+    };
+    let upper = matches!(key.code, KeyCode::Char(c) if c.is_uppercase());
+    match (ctrl, alt) {
+        (true, true) => format!("ctrl-alt-{base}"),
+        (true, false) => format!("ctrl-{base}"),
+        (false, true) => if upper { format!("alt-{}", base.to_uppercase()) } else { format!("alt-{base}") },
+        _ => if upper { base.to_uppercase() } else { base },
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

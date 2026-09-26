@@ -581,7 +581,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let prompt = Style::default().fg(theme::fzf().prompt);
     let prompt_text = theme::fzf().prompt_text.clone();
     let pw = prompt_text.width() as u16;
-    buf.set_string(area.x, prompt_y, &prompt_text, prompt.add_modifier(Modifier::BOLD));
+    // The glyph bold in the prompt colour; its trailing space plain, as fzf draws it.
+    let glyph = prompt_text.trim_end();
+    buf.set_string(area.x, prompt_y, glyph, prompt.add_modifier(Modifier::BOLD));
     let q_room = width.saturating_sub(pw as usize + 1);
     // A query longer than the line scrolls to keep the cursor in view, as fzf's does.
     let before: String = picker.query.chars().take(picker.qcursor).collect();
@@ -610,7 +612,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
             x += text.width() as u16 + 1;
         }
     }
-    if x + 1 < area.x + area.width {
+    if x + 1 < area.x + area.width && theme::fzf_opts().separator {
         buf.set_string(x, info_y, " ", Style::default());
         let gap = if preview.is_some() { 2 } else { 1 };
         let sep = "─".repeat((area.x + area.width).saturating_sub(x + gap) as usize);
@@ -674,7 +676,7 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     }
     let marker_style = if current { plus.fg(z.marker) } else { Style::default().fg(z.marker) };
     buf.set_string(x + 1, y, if marked { clip(&z.marker_char, 1) } else { " ".into() }, marker_style);
-    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { Style::default() };
+    let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { theme::fzf_opts().fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
     let hit = match (current, z.bw) {
         (_, true) => base.add_modifier(Modifier::UNDERLINED),
         (true, false) => plus.fg(z.hl_plus).add_modifier(Modifier::BOLD),
@@ -697,9 +699,11 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         Some(h) if row.label.width() > label_room && h + 2 > label_room && label_room > 6 => {
             let start = (h + 3).saturating_sub(label_room).min(label_len);
             let tail: String = label_chars[start..].iter().collect();
-            (format!("..{}", clip(&tail, label_room - 2)), start as isize - 2)
+            let ell = theme::fzf_opts().ellipsis.clone();
+            let ew = ell.chars().count();
+            (format!("{ell}{}", clip_fzf(&tail, label_room - ew)), start as isize - ew as isize)
         }
-        _ => (clip(&row.label, label_room), 0),
+        _ => (clip_fzf(&row.label, label_room), 0),
     };
     let mut spans: Vec<Span> = Vec::new();
     // The glyphs' colours follow the scheme: none in bw, the 16 in 16.
@@ -715,7 +719,7 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         let mut lit = false;
         for (i, ch) in text.chars().enumerate() {
             let at = first + i as isize;
-            let on = at >= 0 && hits.contains(&(at as u32)) && ch != '…' && ch != '.';
+            let on = at >= 0 && hits.contains(&(at as u32)) && !theme::fzf_opts().ellipsis.contains(ch) && ch != '…';
             if on != lit && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), if lit { lit_style } else { plain })) }
             lit = on;
             run.push(ch);
@@ -725,13 +729,13 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     push_lit(&mut spans, &label, offset, base, hit);
     // The detail, lit too (dim kept); it starts two cells after the title in the searched line.
     let detail_room = avail.saturating_sub(label.width() + 2);
-    if !row.detail.is_empty() && detail_room >= 8 {
+    if !row.detail.is_empty() && detail_room >= 4 {
         spans.push(Span::styled("  ", fill));
         let mut left = detail_room;
         let mut at = label_len as isize + 2;
         for s in &row.detail {
             if left == 0 { break }
-            let t = clip(&s.content, left);
+            let t = clip_fzf(&s.content, left);
             left = left.saturating_sub(t.width());
             let st = tone(if current { s.style.patch(plus) } else { s.style });
             let lit = if st.add_modifier.contains(Modifier::DIM) { hit.add_modifier(Modifier::DIM) } else { hit };
@@ -1010,6 +1014,19 @@ fn copy_indicator(buf: &mut Buffer, pane: &Pane, content: Rect) {
     let text = format!("[{}/{}]", grid.display_offset(), grid.history_size());
     let x = (content.x + content.width).saturating_sub(text.width() as u16);
     buf.set_string(x, content.y, &text, Style::default().bg(Color::Yellow).fg(Color::Black));
+}
+
+/// clip, with fzf's ellipsis (`··`, or --ellipsis).
+fn clip_fzf(text: &str, cols: usize) -> String {
+    let ell = &theme::fzf_opts().ellipsis;
+    if text.width() <= cols { return text.to_string() }
+    if cols <= ell.width() { return ell.chars().take(cols).collect() }
+    let mut out = String::new();
+    for ch in text.chars() {
+        if out.width() + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) + ell.width() > cols { break }
+        out.push(ch);
+    }
+    format!("{}{ell}", out.trim_end())
 }
 
 fn clip(text: &str, cols: usize) -> String {

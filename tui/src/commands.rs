@@ -185,7 +185,7 @@ fn listing(app: &App, command: &str) -> Vec<String> {
             format!("renumber-windows {}", if app.opts.renumber_windows == Some(true) { "on" } else { "off" }),
             format!("status {}", if app.opts.status == Some(false) { "off" } else { "on" }),
             format!("status-justify {}", app.opts.status_justify.clone().unwrap_or_else(|| "left".into())),
-            format!("pane-border-format {}", app.opts.pane_border_format.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "(tim's: index, title, state, machine)".into())),
+            format!("pane-border-format {}", app.opts.pane_border_format.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "(hn's: index, title, state, machine)".into())),
             format!("history-limit {}", 10_000),
             format!("escape-time 0"),
             format!("display-time {}", app.display_ms),
