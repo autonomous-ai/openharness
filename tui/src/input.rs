@@ -1271,7 +1271,7 @@ fn copy_action_key(action: &str) -> Option<KeyEvent> {
     let c = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     let code = |x: KeyCode| KeyEvent::new(x, KeyModifiers::NONE);
     Some(match action {
-        "begin-selection" => k('v'), "select-line" => k('V'), "rectangle-toggle" | "rectangle-on" => c('v'),
+        "begin-selection" => k(' '), "select-line" => k('V'), "rectangle-toggle" | "rectangle-on" => c('v'),
         a if a.starts_with("copy-selection") || a.starts_with("copy-pipe") || a == "copy-end-of-line" => k('y'),
         "cancel" => k('q'), "clear-selection" => code(KeyCode::Esc),
         "cursor-up" => k('k'), "cursor-down" => k('j'), "cursor-left" => k('h'), "cursor-right" => k('l'),
@@ -1282,6 +1282,9 @@ fn copy_action_key(action: &str) -> Option<KeyEvent> {
         "next-word" | "next-space" => k('w'), "previous-word" | "previous-space" => k('b'), "next-word-end" | "next-space-end" => k('e'),
         "search-forward" | "search-forward-incremental" => k('/'), "search-backward" | "search-backward-incremental" => k('?'),
         "search-again" => k('n'), "search-reverse" => k('N'), "next-paragraph" => k('}'), "previous-paragraph" => k('{'),
+        "next-matching-bracket" => k('%'), "jump-again" => k(';'), "jump-reverse" => k(','), "toggle-position" => k('P'),
+        "append-selection-and-cancel" => k('A'), "copy-pipe-end-of-line-and-cancel" | "copy-end-of-line-and-cancel" => k('D'),
+        "refresh-from-pane" => k('r'), "select-word" => k('w'),
         _ => return None,
     })
 }
@@ -1369,19 +1372,62 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         KeyCode::Char('c') if ctrl => { p.copy_end(); return }
         // Escape clears the selection and stays (tmux's copy-mode-vi); q leaves.
         KeyCode::Esc => { if p.copy.map(|c| c.selecting).unwrap_or(false) { p.copy_toggle(false) } }
-        KeyCode::Char('h') | KeyCode::Left => p.copy_move(-1, 0),
+        KeyCode::Char('h') | KeyCode::Left if !ctrl => p.copy_move(-1, 0),
         KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
-        KeyCode::Char('k') | KeyCode::Up => p.copy_move(0, -1),
-        KeyCode::Char('j') | KeyCode::Down => p.copy_move(0, 1),
+        KeyCode::Char('k') | KeyCode::Up if !ctrl => p.copy_move(0, -1),
+        KeyCode::Char('j') | KeyCode::Down if !ctrl => p.copy_move(0, 1),
         KeyCode::Char('u') if ctrl => p.copy_move(0, -half),
         KeyCode::Char('d') if ctrl => p.copy_move(0, half),
         KeyCode::Char('b') if ctrl => p.copy_move(0, -rows),
         KeyCode::Char('f') if ctrl => p.copy_move(0, rows),
         KeyCode::Char('y') if ctrl => p.copy_move(0, -1),
         KeyCode::Char('e') if ctrl => p.copy_move(0, 1),
-        KeyCode::Char('v') if ctrl => p.copy_toggle_block(),
+        // tmux's copy-mode-vi, key for key: v / C-v rectangle-toggle, Space begin-selection.
+        KeyCode::Char('v') if ctrl => p.copy_rect_toggle(),
+        KeyCode::Char('h') if ctrl => p.copy_move(-1, 0),
+        KeyCode::Backspace => p.copy_move(-1, 0),
         KeyCode::PageUp => p.copy_move(0, -rows),
         KeyCode::PageDown => p.copy_move(0, rows),
+        KeyCode::Up if ctrl => p.copy_scroll(1),
+        KeyCode::Down if ctrl => p.copy_scroll(-1),
+        KeyCode::Char('K') => p.copy_scroll(1),
+        KeyCode::Char('J') => p.copy_scroll(-1),
+        KeyCode::Char('z') => p.copy_scroll_middle(),
+        KeyCode::Char('o') => p.copy_other_end(),
+        KeyCode::Char('X') => p.copy_set_mark(),
+        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::ALT) => p.copy_jump_mark(),
+        KeyCode::Char('P') => { p.copy_hide_position = !p.copy_hide_position; p.dirty = true }
+        KeyCode::Char('r') => p.dirty = true,
+        KeyCode::Char('#') | KeyCode::Char('*') => {
+            // The word under the cursor, searched for up (#) or down (*).
+            let word = p.copy_word_here();
+            if word.is_empty() { app.modal = Some(Modal::Copy { pane }); return }
+            let up = key.code == KeyCode::Char('#');
+            if p.find(&word, up, true) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } }
+            app.last_search = Some(word);
+            app.last_search_up = up;
+        }
+        KeyCode::Char(':') => {
+            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: Some(format!("send-keys -X -t %{pane} goto-line \"%%\"")) }, "(goto line) ", "")));
+            return;
+        }
+        KeyCode::Char('D') => {
+            p.copy_select_to_eol();
+            let text = p.selection_text();
+            p.copy_end();
+            if let Some(text) = text { crate::clipboard::store(&text); app.buffers.insert(0, text) }
+            return;
+        }
+        KeyCode::Char('A') => {
+            // append-selection-and-cancel: onto the newest buffer.
+            let text = p.selection_text();
+            p.copy_end();
+            if let Some(text) = text {
+                match app.buffers.first_mut() { Some(b) => b.push_str(&text), None => app.buffers.insert(0, text.clone()) }
+                if let Some(b) = app.buffers.first() { crate::clipboard::store(b) }
+            }
+            return;
+        }
         KeyCode::Char('w') => p.copy_word(true),
         KeyCode::Char('b') => p.copy_word(false),
         KeyCode::Char('e') => p.copy_word_end(),
@@ -1396,7 +1442,8 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         KeyCode::Char('H') => p.copy_screen(0),
         KeyCode::Char('M') => p.copy_screen(1),
         KeyCode::Char('L') => p.copy_screen(2),
-        KeyCode::Char('v') | KeyCode::Char(' ') => p.copy_toggle(false),
+        KeyCode::Char('v') => p.copy_rect_toggle(),
+        KeyCode::Char(' ') => p.copy_begin(),
         KeyCode::Char('V') => p.copy_toggle(true),
         // copy-mode-vi: / searches down, ? up; n goes on the same way, N back (wrapping, as tmux).
         KeyCode::Char('/') | KeyCode::Char('?') => { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: key.code == KeyCode::Char('?') }); return }
@@ -1406,6 +1453,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
                 if p.find(&q, up, false) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } else { app.say(format!("No match: {q}"), theme::WARN) }
             }
         }
+        KeyCode::Char('j') if ctrl => { return copy_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), pane) }
         KeyCode::Char('y') | KeyCode::Enter => {
             let text = p.selection_text();
             p.copy_end();
@@ -1863,7 +1911,58 @@ pub fn paste_buffer(app: &mut App, index: usize) {
 }
 
 /// `send-keys`: words are typed as text, key names (`Enter`, `C-c`, `Up`) as keys.
+/// send-keys -X ACTION [ARG]: a copy-mode command on the target pane (tmux's menus and binds
+/// use them: history-top, goto-line, search-backward "word", begin-selection …), -N times.
+fn send_copy_action(app: &mut App, words: &[String]) {
+    let mut target = None;
+    let mut count = 1usize;
+    let mut rest = Vec::new();
+    let mut i = 1;
+    while i < words.len() {
+        match words[i].as_str() {
+            "-t" => { target = words.get(i + 1).cloned(); i += 1 }
+            "-N" => { count = words.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(1); i += 1 }
+            w if w.starts_with('-') && w.len() > 1 && rest.is_empty() => {}
+            w => rest.push(w.to_string()),
+        }
+        i += 1;
+    }
+    let pane = match target { Some(t) => crate::commands::pane_target(app, &t).map(|(_, p)| p), None => app.focused() };
+    let Some(pane) = pane else { return };
+    let Some(action) = rest.first().cloned() else { return };
+    let arg = rest.get(1).cloned().unwrap_or_default();
+    let Some(p) = app.panes.get_mut(&pane) else { return };
+    if p.copy.is_none() { if action == "cancel" { return } p.copy_start() }
+    app.modal = Some(Modal::Copy { pane });
+    match action.as_str() {
+        "goto-line" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_goto_line(arg.trim().parse().unwrap_or(0)) } }
+        "search-backward" | "search-forward" | "search-backward-text" | "search-forward-text" if !arg.is_empty() => {
+            let up = action.starts_with("search-backward");
+            if let Some(p) = app.panes.get_mut(&pane) { if p.find(&arg, up, true) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } }
+            app.last_search = Some(arg);
+            app.last_search_up = up;
+        }
+        "jump-forward" | "jump-backward" | "jump-to-forward" | "jump-to-backward" if !arg.is_empty() => {
+            let c = arg.chars().next().unwrap_or(' ');
+            let (fwd, till) = match action.as_str() { "jump-forward" => (true, false), "jump-backward" => (false, false), "jump-to-forward" => (true, true), _ => (false, true) };
+            if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { p.copy_find_char(c, fwd, till); } }
+        }
+        "begin-selection" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_begin() } }
+        "rectangle-toggle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_rect_toggle() } }
+        "other-end" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_other_end() } }
+        "set-mark" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_set_mark() } }
+        "jump-to-mark" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_jump_mark() } }
+        "scroll-middle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll_middle() } }
+        "scroll-up" | "scroll-down" => { let d = if action == "scroll-up" { 1 } else { -1 }; if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll(d * count as i32) } }
+        a => match copy_action_key(a) {
+            Some(k) => { for _ in 0..count { app.modal = None; copy_key(app, k, pane); if app.modal.is_none() { break } } }
+            None => app.say(format!("{a}: not a copy-mode command here"), theme::WARN),
+        },
+    }
+}
+
 pub fn send_keys(app: &mut App, words: &[String]) {
+    if words.iter().take_while(|w| w.starts_with('-')).any(|w| w == "-X") { return send_copy_action(app, &[vec!["send-keys".to_string()], words.to_vec()].concat()) }
     // send-keys [-lR] [-t target] key …: flags anywhere before the keys, -t takes its target.
     let mut literal = false;
     let mut target = None;

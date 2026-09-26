@@ -1158,6 +1158,8 @@ fn clock(buf: &mut Buffer, rect: Rect) {
 
 /// Copy mode's position, top right, in mode-style: `[offset/history]`.
 fn copy_indicator(buf: &mut Buffer, pane: &Pane, content: Rect) {
+    // toggle-position (P): tmux hides the position indicator.
+    if pane.copy_hide_position { return }
     let grid = pane.term.grid();
     let count = pane.find_count().map(|(i, n)| format!("({i}/{n} results) ")).unwrap_or_default();
     let text = format!("{count}[{}/{}]", grid.display_offset(), grid.history_size());

@@ -40,6 +40,10 @@ impl EventListener for Listener {
 pub struct CopyCursor {
     pub point: alacritty_terminal::index::Point,
     pub selecting: bool,
+    /// Where the selection began (o swaps it with the cursor).
+    pub anchor: alacritty_terminal::index::Point,
+    /// rectangle-toggle: selections are blocks.
+    pub rect: bool,
 }
 
 pub struct Size(pub u16, pub u16);
@@ -106,6 +110,9 @@ pub struct Pane {
     pub find_at: Option<alacritty_terminal::term::search::Match>,
     /// Copy mode was entered by the wheel (tmux's `copy-mode -e`): it ends at the bottom.
     pub copy_by_wheel: bool,
+    /// copy mode's mark (X sets it, M-x jumps to it) and whether the position shows (P).
+    pub copy_mark: Option<alacritty_terminal::index::Point>,
+    pub copy_hide_position: bool,
     /// Every match of the search (tmux 3.1+ lights them all and counts them), at most 1000.
     pub find_all: Vec<alacritty_terminal::term::search::Match>,
     /// Bumped on every open; a reply carrying an older one is stale.
@@ -186,6 +193,8 @@ impl Pane {
             queued: Vec::new(),
             find_all: Vec::new(),
             copy_by_wheel: false,
+            copy_mark: None,
+            copy_hide_position: false,
             cwd: None,
             fg_command: None,
             live_path: None,
@@ -485,7 +494,7 @@ impl Pane {
 
     pub fn copy_start(&mut self) {
         let cursor = self.term.grid().cursor.point;
-        self.copy = Some(CopyCursor { point: cursor, selecting: false });
+        self.copy = Some(CopyCursor { point: cursor, selecting: false, anchor: cursor, rect: false });
         self.term.selection = None;
         self.dirty = true;
     }
@@ -495,6 +504,106 @@ impl Pane {
         self.copy_by_wheel = false;
         self.clear_selection();
         self.scroll_bottom();
+    }
+
+    /// The copy-mode selection, anchor to cursor, both end cells in whichever direction it runs
+    /// (as vi's): the earlier end takes its cell's left side, the later its right.
+    fn copy_reselect(&mut self, lines: bool) {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let Some(copy) = self.copy else { return };
+        let (a, p) = (copy.anchor, copy.point);
+        let forward = p >= a;
+        let kind = if lines { SelectionType::Lines } else if copy.rect { SelectionType::Block } else { SelectionType::Simple };
+        let mut selection = Selection::new(kind, a, if forward { Side::Left } else { Side::Right });
+        selection.update(p, if forward { Side::Right } else { Side::Left });
+        self.term.selection = Some(selection);
+        self.dirty = true;
+    }
+
+    /// begin-selection (Space): a new selection here — a block when rectangle-toggle is on.
+    pub fn copy_begin(&mut self) {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let Some(copy) = self.copy.as_mut() else { return };
+        copy.selecting = true;
+        copy.anchor = copy.point;
+        let mut selection = Selection::new(if copy.rect { SelectionType::Block } else { SelectionType::Simple }, copy.point, Side::Left);
+        selection.update(copy.point, Side::Right);
+        self.term.selection = Some(selection);
+        self.dirty = true;
+    }
+
+    /// rectangle-toggle (v, C-v): blocks on or off — the selection there is keeps its ends.
+    pub fn copy_rect_toggle(&mut self) {
+        let Some(copy) = self.copy.as_mut() else { return };
+        copy.rect = !copy.rect;
+        if copy.selecting { self.copy_reselect(false) }
+        self.dirty = true;
+    }
+
+    /// other-end (o): the cursor goes to the selection's other end.
+    pub fn copy_other_end(&mut self) {
+        let Some(copy) = self.copy.as_mut() else { return };
+        if !copy.selecting { return }
+        let (from, to) = (copy.point, copy.anchor);
+        copy.anchor = from;
+        let lines = matches!(self.term.selection.as_ref().map(|s| s.ty), Some(alacritty_terminal::selection::SelectionType::Lines));
+        copy.selecting = false;
+        self.copy_set(to);
+        if let Some(c) = self.copy.as_mut() { c.selecting = true }
+        self.copy_reselect(lines);
+    }
+
+    /// The word under the copy cursor (# and * search for it).
+    pub fn copy_word_here(&self) -> String {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(copy) = self.copy else { return String::new() };
+        let (_, _, last) = self.copy_bounds();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        let at = |x: usize| self.copy_char(Point::new(copy.point.line, Column(x)));
+        let mut a = copy.point.column.0;
+        if !word(at(a)) { return String::new() }
+        while a > 0 && word(at(a - 1)) { a -= 1 }
+        let mut b = copy.point.column.0;
+        while b < last && word(at(b + 1)) { b += 1 }
+        (a..=b).map(at).collect()
+    }
+
+    /// scroll-middle (z): the view moved so the cursor's line is in its middle.
+    pub fn copy_scroll_middle(&mut self) {
+        let Some(copy) = self.copy else { return };
+        let offset = self.term.grid().display_offset() as i32;
+        let rows = self.term.screen_lines() as i32;
+        let view = copy.point.line.0 + offset;
+        self.term.scroll_display(Scroll::Delta(view - rows / 2));
+        self.dirty = true;
+    }
+
+    /// goto-line N: N lines up into the history (0 the bottom), as tmux counts it.
+    pub fn copy_goto_line(&mut self, n: usize) {
+        let h = self.term.grid().history_size();
+        let now = self.term.grid().display_offset() as i32;
+        self.copy_scroll(n.min(h) as i32 - now);
+    }
+
+    /// set-mark (X) / jump-to-mark (M-x, the cursor and the mark trading places).
+    pub fn copy_set_mark(&mut self) { if let Some(c) = self.copy { self.copy_mark = Some(c.point); self.dirty = true } }
+    pub fn copy_jump_mark(&mut self) {
+        let (Some(c), Some(m)) = (self.copy, self.copy_mark) else { return };
+        self.copy_mark = Some(c.point);
+        self.copy_set(m);
+    }
+
+    /// The copy cursor to the end of its line, selected from here (D copies it).
+    pub fn copy_select_to_eol(&mut self) {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(c) = self.copy else { return };
+        let (_, _, last) = self.copy_bounds();
+        let end = (0..=last).rev().find(|x| { let ch = self.copy_char(Point::new(c.point.line, Column(*x))); ch != ' ' && ch != '\0' }).unwrap_or(c.point.column.0);
+        if let Some(cc) = self.copy.as_mut() { cc.rect = false }
+        self.copy_begin();
+        self.copy_set(Point::new(c.point.line, Column(end.max(c.point.column.0))));
     }
 
     /// The wheel in copy mode: the view moves, the cursor kept on screen.
@@ -516,12 +625,13 @@ impl Pane {
     }
 
     fn copy_set(&mut self, point: alacritty_terminal::index::Point) {
-        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::index::{Column, Line, Point};
         let (top, bottom, last) = self.copy_bounds();
         let point = Point::new(Line(point.line.0.clamp(top, bottom)), Column(point.column.0.min(last)));
         let Some(copy) = self.copy.as_mut() else { return };
         copy.point = point;
-        if copy.selecting { if let Some(selection) = self.term.selection.as_mut() { selection.update(point, Side::Right) } }
+        let (selecting, lines) = (copy.selecting, matches!(self.term.selection.as_ref().map(|s| s.ty), Some(alacritty_terminal::selection::SelectionType::Lines)));
+        if selecting { self.copy_reselect(lines) }
         // Keep the copy cursor on screen.
         let offset = self.term.grid().display_offset() as i32;
         let rows = self.term.grid().screen_lines() as i32;
@@ -682,18 +792,6 @@ impl Pane {
     }
 
     /// `C-v`: a rectangle selection.
-    pub fn copy_toggle_block(&mut self) {
-        use alacritty_terminal::index::Side;
-        use alacritty_terminal::selection::{Selection, SelectionType};
-        let Some(copy) = self.copy.as_mut() else { return };
-        copy.selecting = true;
-        let point = copy.point;
-        let mut selection = Selection::new(SelectionType::Block, point, Side::Left);
-        selection.update(point, Side::Right);
-        self.term.selection = Some(selection);
-        self.dirty = true;
-    }
-
     /// `v` (characters) or `V` (lines): start a selection at the copy cursor, or drop the one there is.
     pub fn copy_toggle(&mut self, lines: bool) {
         use alacritty_terminal::index::Side;
@@ -702,7 +800,9 @@ impl Pane {
         if copy.selecting { copy.selecting = false; self.term.selection = None; self.dirty = true; return }
         copy.selecting = true;
         let point = copy.point;
-        let mut selection = Selection::new(if lines { SelectionType::Lines } else { SelectionType::Simple }, point, Side::Left);
+        copy.anchor = point;
+        let kind = if lines { SelectionType::Lines } else if copy.rect { SelectionType::Block } else { SelectionType::Simple };
+        let mut selection = Selection::new(kind, point, Side::Left);
         selection.update(point, Side::Right);
         self.term.selection = Some(selection);
         self.dirty = true;
@@ -944,5 +1044,28 @@ mod word_tests {
         assert_eq!(p.copy.unwrap().point.column.0, 11, "w to the dot");
         p.copy_word_by(true, true);
         assert_eq!(p.copy.unwrap().point.column.0, 16, "W past it to name");
+    }
+
+    #[test]
+    fn selections_keep_both_ends_either_way() {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let mut p = Pane::new(1, "m", "a", 40, 12);
+        p.feed(b"abcdefghij");
+        p.copy_start();
+        // Forward: c..f.
+        p.copy_jump(Point::new(Line(0), Column(2)));
+        p.copy_begin();
+        p.copy_move(3, 0);
+        assert_eq!(p.selection_text().as_deref(), Some("cdef"));
+        // o: the cursor to the other end, the same cells.
+        p.copy_other_end();
+        assert_eq!(p.copy.unwrap().point.column.0, 2);
+        assert_eq!(p.selection_text().as_deref(), Some("cdef"));
+        // Backward from f: b..f.
+        p.copy_move(-1, 0);
+        assert_eq!(p.selection_text().as_deref(), Some("bcdef"));
+        // v: a block, the same ends.
+        p.copy_rect_toggle();
+        assert_eq!(p.selection_text().as_deref(), Some("bcdef"));
     }
 }
