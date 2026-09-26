@@ -91,7 +91,18 @@ pub fn split(line: &str) -> Vec<Vec<String>> {
             (Some('"'), '\\') => { if let Some(n) = chars.next() { word.push(n) } }
             (Some(_), c) => word.push(c),
             (None, '"' | '\'') => { quote = Some(c); in_word = true }
-            (None, '\\') => { if let Some(n) = chars.next() { if n == ';' && word.is_empty() { commands.push(Vec::new()); in_word = false; continue } word.push(n); in_word = true } }
+            // `\;` is a `;` that belongs to the command being bound (`bind r source-file x \; display y`):
+            // a word of its own, split out only when that binding runs.
+            (None, '\\') => {
+                if let Some(n) = chars.next() {
+                    if n == ';' {
+                        if in_word || !word.is_empty() { commands.last_mut().unwrap().push(std::mem::take(&mut word)); in_word = false }
+                        commands.last_mut().unwrap().push(";".into());
+                        continue;
+                    }
+                    word.push(n); in_word = true
+                }
+            }
             (None, ';') if word.is_empty() && !in_word => commands.push(Vec::new()),
             (None, ';') if chars.peek().map(|n| n.is_whitespace()).unwrap_or(true) => { commands.last_mut().unwrap().push(std::mem::take(&mut word)); in_word = false; commands.push(Vec::new()) }
             (None, '#') if word.is_empty() && !in_word => break,
@@ -172,7 +183,10 @@ fn resolve(name: &str) -> &str {
 
 /// Run a command line (one or more commands separated by `;`).
 pub fn execute(app: &mut App, line: &str) {
-    for words in split(line) { run_words(app, &words) }
+    for words in split(line) {
+        // A bound `\;` runs here as the separator it stood for.
+        for part in words.split(|w| w == ";") { if !part.is_empty() { run_words(app, part) } }
+    }
 }
 
 fn flag(words: &[String], f: &str) -> bool { words.iter().skip(1).any(|w| w == f || (w.starts_with('-') && !w.starts_with("--") && w.len() > 2 && w[1..].contains(&f[1..]) && f.len() == 2)) }
@@ -407,7 +421,7 @@ mod tests {
         assert_eq!(split("split-window -h"), vec![vec!["split-window", "-h"]]);
         assert_eq!(split("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane"), vec![vec!["confirm-before", "-p", "kill-pane #P? (y/n)", "kill-pane"]]);
         assert_eq!(split("copy-mode ; search-backward"), vec![vec!["copy-mode"], vec!["search-backward"]]);
-        assert_eq!(split("copy-mode \\; send -X begin-selection"), vec![vec!["copy-mode"], vec!["send", "-X", "begin-selection"]]);
+        assert_eq!(split("copy-mode \\; send -X begin-selection"), vec![vec!["copy-mode", ";", "send", "-X", "begin-selection"]]);
         assert_eq!(split("send-keys 'make test' Enter"), vec![vec!["send-keys", "make test", "Enter"]]);
         assert_eq!(split("display 'a;b'"), vec![vec!["display", "a;b"]]);
     }

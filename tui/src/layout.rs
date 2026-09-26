@@ -122,8 +122,10 @@ impl Node {
                 if !in_a && !in_b { return false }
                 let deeper = if in_a { a.resize(target, dir, delta) } else { b.resize(target, dir, delta) };
                 if deeper { return true }
+                // tmux's resize-pane moves the border: -L (a negative delta) always moves it left,
+                // whether the pane is left of it (shrinks) or right of it (grows).
                 if *d == dir {
-                    *ratio = (*ratio + if in_a { delta } else { -delta }).clamp(0.1, 0.9);
+                    *ratio = (*ratio + delta).clamp(0.1, 0.9);
                     return true;
                 }
                 false
