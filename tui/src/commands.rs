@@ -359,6 +359,10 @@ pub fn is_command_name(name: &str) -> bool {
             | "customize-mode" | "refresh-client" | "refresh")
 }
 
+/// A command's full name from any alias (`splitw` → `split-window`), for comparing with tmux.
+#[cfg(test)]
+pub fn canonical_name(name: &str) -> String { resolve(name).to_string() }
+
 fn resolve(name: &str) -> &str {
     COMMANDS.iter().find(|(full, alias, _)| *full == name || *alias == name).map(|(full, _, _)| *full).unwrap_or(name)
 }
@@ -872,6 +876,8 @@ fn run_words(app: &mut App, words: &[String]) {
             }
             let template = template.iter().map(|w| if w.contains(' ') { w.clone() } else { w.clone() }).collect::<Vec<_>>().join(" ");
             let template = if format { expand(app, &template) } else { template };
+            // No -p: tmux names the prompt after the template's command, `(find-window)`.
+            let label = if label == ":" && !template.is_empty() && !key { format!("({})", template.split_whitespace().next().unwrap_or("")) } else { label };
             let label = if label == ":" { ":".to_string() } else { format!("{label} ") };
             let kind = if key { PromptKind::Key { template } } else { PromptKind::Command { template: (!template.is_empty()).then_some(template) } };
             app.modal = Some(Modal::Prompt(Prompt::status(kind, &label, &initial)));

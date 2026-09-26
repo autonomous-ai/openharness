@@ -81,7 +81,7 @@ impl Keymap {
         b(ch(']'), "paste-buffer -p", false, "Paste the most recent paste buffer");
         b(ch('c'), "new-window", false, "Create a new window (and choose its harness)");
         b(ch('d'), "detach-client", false, "Detach — everything keeps running");
-        b(ch('f'), "find-window", false, "Search every harness on every machine");
+        b(ch('f'), "command-prompt { find-window -Z \"%%\" }", false, "Search for a pane (every harness on every machine)");
         b(ch('i'), "display-message", false, "Display window information");
         b(ch('l'), "last-window", false, "Select the previously current window");
         b(ch('m'), "select-pane -m", false, "Toggle the marked pane");
@@ -275,3 +275,35 @@ mod tests {
         assert_eq!(km.hint("new-window").as_deref(), Some("C-b c"));
     }
 }
+
+#[cfg(test)]
+mod tmux_parity {
+    use super::*;
+
+    /// tmux 3.5a's own prefix table (`tmux -f /dev/null list-keys -T prefix`): every key in it does
+    /// in hn what it does in tmux — the same command, the same repeat.
+    #[test]
+    fn every_tmux_key_does_what_tmux_does() {
+        let km = Keymap::tmux_defaults();
+        let mut wrong = Vec::new();
+        for line in include_str!("../tests/fixtures/tmux-3.5a-prefix.txt").lines() {
+            let words: Vec<&str> = line.split(' ').collect();
+            let repeat = words.contains(&"-r");
+            let at = words.iter().position(|w| *w == "prefix").unwrap() + 1;
+            let key = words[at].strip_prefix('\\').unwrap_or(words[at]);
+            let tmux_cmd = crate::commands::canonical_name(words[at + 1]);
+            // C-b itself is the prefix (C-b C-b sends it); tested by the prefix handling instead.
+            if key == "C-b" { continue }
+            let chord = parse(key).unwrap_or_else(|e| panic!("{key}: {e}"));
+            match km.prefix_command(&chord) {
+                Some(b) => {
+                    let ours = crate::commands::canonical_name(b.command.split_whitespace().next().unwrap_or(""));
+                    if ours != tmux_cmd || b.repeat != repeat { wrong.push(format!("{key}: tmux `{tmux_cmd}`{} — hn `{}`{}", if repeat { " -r" } else { "" }, b.command, if b.repeat { " -r" } else { "" })) }
+                }
+                None => wrong.push(format!("{key}: unbound in hn (tmux: {tmux_cmd})")),
+            }
+        }
+        assert!(wrong.is_empty(), "keys that differ from tmux 3.5a:\n{}", wrong.join("\n"));
+    }
+}
+
