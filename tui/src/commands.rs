@@ -1261,7 +1261,7 @@ fn run_words(app: &mut App, words: &[String]) {
             input::paste_into(app, pane, &text, &sep, flag(words, "-p"));
             if flag(words, "-d") { app.paste.free(&name) }
         }
-        "list-buffers" if app.capture.is_some() => {
+        "list-buffers" => {
             // tmux's list-buffers [-F format] [-f filter]: newest first.
             let fmt = opt(words, "-F").unwrap_or_else(|| "#{buffer_name}: #{buffer_size} bytes: \"#{buffer_sample}\"".into());
             let filter = opt(words, "-f");
@@ -1275,7 +1275,7 @@ fn run_words(app: &mut App, words: &[String]) {
             app.format_buffer = None;
             app.print("list-buffers", lines)
         }
-        "list-buffers" | "choose-buffer" => input::run(app, "choose-buffer"),
+        "choose-buffer" => input::run(app, "choose-buffer"),
         "delete-buffer" => {
             let name = match opt(words, "-b") {
                 Some(b) => { if app.paste.get(&b).is_none() { return app.error(format!("unknown buffer: {b}")) } b }
