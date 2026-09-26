@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { CommandBarError, type CommandBarService } from './commandBar.js'
+import { isTrustedLocal } from './localSocket.js'
 
 /** Shared by the daemon and the isolated experiment server. Returns false for other routes. */
 export async function handleCommandBarHttp(
@@ -14,7 +15,7 @@ export async function handleCommandBarHttp(
   }
   const fail = (status: number, code: string, message: string) => json(status, { success: false, error: { code, message } })
   const peer = req.socket.remoteAddress
-  const loopback = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
+  const loopback = isTrustedLocal(req) || peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
   if (req.headers['x-adapter-local'] !== '1' || !loopback || req.headers.origin) {
     fail(403, 'FORBIDDEN', 'Native local client required.'); return true
   }

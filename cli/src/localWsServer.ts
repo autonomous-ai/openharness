@@ -6,6 +6,7 @@ import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { watchSocketLiveness } from './lib/wsLiveness.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
+import { isTrustedLocal } from './lib/localSocket.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
   decodeTerminalLocal,
@@ -40,6 +41,8 @@ export interface LocalWsBackend {
 export interface LocalWsServerOptions {
   machineId: string
   backend: LocalWsBackend
+  /** The daemon's Unix-socket server (lib/localSocket.ts), served the same endpoint beside TCP. */
+  localSocketServer?: http.Server | null
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
    *  backend's `/api/web-ws` — see lib/remoteRelay.ts. Omit to keep today's own-machine-only behavior. */
   relayPool?: RemoteRelayPool
@@ -239,6 +242,13 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const onUpgrade = (req: http.IncomingMessage, socket: Socket, head: Buffer): void => {
     const path = (req.url ?? '').split('?')[0]
     if (path !== LOCAL_WS_PATH) return
+    // Over the daemon's own socket (lib/localSocket.ts) the filesystem already vouched for the peer;
+    // it has no address or port to check. It still must not be a browser.
+    if (isTrustedLocal(req)) {
+      if (req.headers.origin) { rejectUpgrade(socket, 403, 'Forbidden'); return }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+      return
+    }
     if (!isLoopback(req.socket.remoteAddress)) {
       rejectUpgrade(socket, 403, 'Forbidden')
       return
@@ -251,7 +261,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
   }
-  server.on('upgrade', onUpgrade)
+  const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
+  for (const each of servers) each.on('upgrade', onUpgrade)
 
   wss.on('connection', (ws) => {
     const connId = `local:${randomUUID()}`
@@ -582,7 +593,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
 
   return {
     close: async () => {
-      server.off('upgrade', onUpgrade)
+      for (const each of servers) each.off('upgrade', onUpgrade)
       for (const client of wss.clients) client.close(1001, 'server shutting down')
       await new Promise<void>((resolve) => wss.close(() => resolve()))
     },

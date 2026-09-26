@@ -365,3 +365,57 @@ describe('requests must name this server', () => {
     expect(await send(base, 'GET', '/api/status', { host: `127.0.0.1:${port}`, origin: 'http://evil.example' })).toBe(403)
   })
 })
+
+describe('the daemon socket', () => {
+  function viaSocket(socketPath: string, method: string, path: string, headers: Record<string, string> = {}): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const r = request({ socketPath, path, method, headers }, (res) => { res.resume(); resolve(res.statusCode ?? 0) })
+      r.on('error', reject)
+      r.end()
+    })
+  }
+
+  it('serves the same routes with no loopback Host, and keeps every other guard', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const onStatus = vi.fn(() => ({ ok: true }))
+    const commandBar = { status: vi.fn(async () => ({ configured: false })), decide: vi.fn() }
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onCommandBar: commandBar as never }, { socketPath })
+    server = started.server
+    try {
+      expect(started.localSocket?.path).toBe(socketPath)
+      // Node sends `Host: localhost` without a port over a socket — refused on TCP, fine here.
+      expect(await viaSocket(socketPath, 'GET', '/api/status')).toBe(200)
+      expect(await viaSocket(socketPath, 'GET', '/api/status', { host: 'rebind.evil.example' })).toBe(200)
+      expect(onStatus).toHaveBeenCalledTimes(2)
+      // The command bar asked for a loopback PEER; a socket peer has no address and is let in.
+      expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status', { 'x-adapter-local': '1' })).toBe(200)
+      expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status')).toBe(403)
+      // Mutations still need the CSRF header, hooks still need their credential.
+      expect(await viaSocket(socketPath, 'POST', '/api/stop')).toBe(403)
+      expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)
+      // The TCP port is untouched: a foreign Host is still refused there.
+      const port = (started.server.address() as { port: number }).port
+      const tcp = await new Promise<number>((resolve, reject) => {
+        const r = request({ host: '127.0.0.1', port, path: '/api/status', headers: { host: 'rebind.evil.example' } }, (res) => { res.resume(); resolve(res.statusCode ?? 0) })
+        r.on('error', reject)
+        r.end()
+      })
+      expect(tcp).toBe(403)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('starts on TCP alone when the socket cannot be opened', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const blocked = join(dir, 'daemon.sock')
+    writeFileSync(blocked, 'not a socket')
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath: blocked })
+    server = started.server
+    expect(started.localSocket).toBeNull()
+    expect(started.port).toBeGreaterThan(0)
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

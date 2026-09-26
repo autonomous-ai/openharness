@@ -127,6 +127,16 @@ holds an SSO token:
   `LocalCliDiscovery`, which runs `harness start` when needed). The CLI terminates E2EE for relayed
   machines; the app carries no crypto. Close code `4404`/`NO_PEER_LINK` means the machine needs
   `harness link import` — surfaced as `MachineState.needsLink` and polled via `_linkRetryTimers`.
+- **Both REST and the local WS prefer the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
+  CLI `lib/localSocket.ts`): `~/.harness/cli/data/daemon-<port>.sock`, 0600, named for the port in
+  `localCliBaseUrl` so it always leads to the same daemon as the TCP fallback. The loopback port takes
+  any local user's process; the socket only this user's. One `LocalDaemonTransport`, owned by
+  `LocalCliDiscovery`, is shared by `ApiClient` (a Dio adapter that only routes the daemon's own
+  address) and `WsPool`/`WsConn`. Discovery probes the socket first and the port second; a request or
+  dial that cannot reach the socket retries on the port, and each WS connect re-checks whether the
+  socket file exists, so a daemon restart does not strand the app on TCP. Windows and paths over 96
+  bytes have no socket. The CLI, engine hooks and the dashboard stay on TCP. Under `flutter test`
+  `LocalDaemonTransport.detect` finds no socket, so tests never reach a real daemon.
 - The **only** direct-to-backend path is `LocalManualFixture` (`lib/main_local_manual.dart`), a
   compile-time-gated dev entrypoint fed by `scripts/start-terminal-local-manual.sh`. It fails closed
   unless every `--dart-define` is present.

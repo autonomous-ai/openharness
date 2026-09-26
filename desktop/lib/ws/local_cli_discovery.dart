@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/serial_port_lease.dart';
@@ -9,6 +10,7 @@ import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
 import '../core/harness_file_store.dart';
 import '../core/models.dart';
+import 'local_daemon_transport.dart';
 
 const localWsProtocolVersion = 1;
 const localTerminalProtocolVersion = 3;
@@ -35,6 +37,10 @@ class LocalCliEndpoint {
   /// project metadata in agent frames. This snapshot never describes a peer.
   final Map<String, AgentProject> agentProjects;
 
+  /// The daemon's Unix socket when it answered there, or null when it answered
+  /// on the loopback port. [wsUri] names the same endpoint either way.
+  final String? socketPath;
+
   const LocalCliEndpoint({
     required this.computerId,
     required this.wsUri,
@@ -43,6 +49,7 @@ class LocalCliEndpoint {
     this.machineId,
     this.backendOnline = true,
     this.agentProjects = const {},
+    this.socketPath,
   });
 }
 
@@ -186,12 +193,20 @@ class LocalCliDiscovery {
   final LocalMachineIdentity identity;
   final Future<void> Function() _spawnCommand;
 
+  /// Which way the daemon is reached — its socket or the loopback port. Shared
+  /// with REST and the local WebSocket; [probe] decides it.
+  final LocalDaemonTransport transport;
+
   LocalCliDiscovery({
     required this.config,
     Dio? dio,
     LocalMachineIdentity? identity,
     Future<void> Function()? spawnCommand,
+    LocalDaemonTransport? transport,
   }) : identity = identity ?? LocalMachineIdentity(),
+       transport =
+           transport ??
+           LocalDaemonTransport.detect(Uri.parse(config.localCliBaseUrl)),
        _spawnCommand = spawnCommand ?? _defaultSpawnCommand,
        _dio =
            dio ??
@@ -423,14 +438,71 @@ class LocalCliDiscovery {
       return const LocalCliProbe.down('computer id mismatch');
     }
     final base = Uri.parse(config.localCliBaseUrl);
+    // The socket first: only this user can have opened it. A daemon that
+    // answers there — ready or not — is the daemon; one that does not may
+    // predate the socket, so the port is asked next.
+    final socket = transport.candidate;
+    if (socket != null && transport.socketPresent) {
+      final viaSocket = await _probeStatus(
+        _socketDio(socket),
+        Uri.parse('http://localhost/api/status'),
+        base,
+        localComputerId,
+        socketPath: socket,
+      );
+      if (viaSocket.state != LocalCliProbeState.down) {
+        transport.useSocket();
+        return viaSocket;
+      }
+    }
+    transport.useTcp();
     if (base.host != '127.0.0.1' && base.host != 'localhost') {
       return const LocalCliProbe.down('the local CLI address is not loopback');
     }
+    return _probeStatus(
+      _dio,
+      base.resolve('/api/status'),
+      base,
+      localComputerId,
+      socketPath: null,
+    );
+  }
+
+  Dio? _socketProbe;
+  String? _socketProbePath;
+
+  Dio _socketDio(String path) {
+    if (_socketProbe == null || _socketProbePath != path) {
+      _socketProbe?.close(force: true);
+      _socketProbePath = path;
+      _socketProbe =
+          Dio(
+              BaseOptions(
+                connectTimeout: const Duration(milliseconds: 400),
+                receiveTimeout: const Duration(milliseconds: 400),
+                sendTimeout: const Duration(milliseconds: 400),
+              ),
+            )
+            ..httpClientAdapter = IOHttpClientAdapter(
+              createHttpClient: () => unixHttpClient(path),
+            );
+    }
+    return _socketProbe!;
+  }
+
+  /// Reads and validates `/api/status` from [statusUri] with [dio]. [base] is
+  /// the loopback address the WebSocket URI is named from, whichever way the
+  /// status was read.
+  Future<LocalCliProbe> _probeStatus(
+    Dio dio,
+    Uri statusUri,
+    Uri base,
+    String localComputerId, {
+    required String? socketPath,
+  }) async {
     final Map<String, dynamic>? body;
     try {
-      final response = await _dio.getUri<Map<String, dynamic>>(
-        base.resolve('/api/status'),
-      );
+      final response = await dio.getUri<Map<String, dynamic>>(statusUri);
       body = response.data;
     } on DioException catch (error) {
       switch (error.type) {
@@ -540,6 +612,7 @@ class LocalCliDiscovery {
           body['sessions'],
           identity.environment,
         ),
+        socketPath: socketPath,
       ),
       pid: pid,
       version: version,

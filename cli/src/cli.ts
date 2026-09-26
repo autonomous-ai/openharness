@@ -24,7 +24,7 @@ import { AutonomousDeviceDirect } from './lib/autonomous-device/direct.js'
  */
 
 import 'dotenv/config'
-import { readFileSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
@@ -154,6 +154,7 @@ import {
 import { readTerminalConfigSnapshot, writeTerminalConfigSnapshot } from './lib/terminalConfigSnapshot.js'
 import { Watcher, type HistoryEvent, type LineEvent } from './watcher/watcher.js'
 import { chooseHookAgent, startHookServer } from './hookServer.js'
+import { isLocalSocketName, localSocketPath, type LocalSocketServer } from './lib/localSocket.js'
 import { commandBarService } from './lib/commandBar.js'
 import { BackendSocket, isLocalClientId } from './backendSocket.js'
 import { AutonomousDeviceService } from './lib/autonomous-device/service.js'
@@ -476,13 +477,15 @@ const daemonBoot: {
   updater: Poller | null
   /** The hook server, once bound — the only thing a mid-boot handoff has to release. */
   hookServer: Server | null
+  /** Its Unix-socket twin (lib/localSocket.ts), when one could be opened. Read by `/api/status`. */
+  localSocket: LocalSocketServer | null
   /** Set by the body so a failed boot can flip its own `/api/status` to not-ready. */
   markNotReady: ((reason: string) => void) | null
   /** Why this daemon is in safe mode, or null while it is healthy. Read by `/api/status`. */
   safeMode: string | null
   handingOff: boolean
   applyStagedUpdate: (version: string) => void | Promise<void>
-} = { updater: null, hookServer: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
+} = { updater: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff }
 
 /**
  * Hand the machine to a newer build without finishing start-up.
@@ -505,6 +508,7 @@ function bootHandoff(version: string): void {
     closeServer: () => {
       try { (daemonBoot.hookServer as unknown as { closeAllConnections?: () => void } | null)?.closeAllConnections?.() } catch { /* already gone */ }
       try { daemonBoot.hookServer?.close() } catch { /* already gone */ }
+      try { daemonBoot.localSocket?.closeSync() } catch { /* already gone */ }
     },
     // Only if it still names us — a no-op when start-up never got as far as claiming it.
     removePidFile: () => { removePidFileIf(process.pid) },
@@ -3626,7 +3630,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
 
-  const { server: hookServer, port: hookPort } = await startHookServer(env.PORT, {
+  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(env.PORT, {
     onCommandBar: commandBarService,
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
@@ -3946,6 +3950,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         terminalProtocolVersion: TERMINAL_BINARY_VERSION,
         e2ee: false,
       },
+      // The same REST and local WS, over the daemon's Unix socket (lib/localSocket.ts). Null where
+      // none could be opened; clients then stay on this port.
+      localSocket: daemonBoot.localSocket?.path ?? null,
       backendUrl: env.BACKEND_WS_URL,
       webUrl: env.WEB_URL,
       connected: backend.isConnected(),
@@ -4019,7 +4026,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDeskRead: () => proxyBackend('GET', '/api/desk'),
     onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
-  })
+  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT) })
   // Claim the pid file for OURSELVES, and only now that the control port is bound. It used to be
   // written by whoever spawned us — so a parent that died mid-handover left a daemon nothing could
   // manage — and then, for a while, by us at the top of this function, before the bind — so a child
@@ -4030,6 +4037,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The one thing a handoff that happens before start-up finishes has to release: the port has no
   // fallback, so a successor that cannot bind it is a daemon that does not come up (see bootHandoff).
   daemonBoot.hookServer = hookServer
+  daemonBoot.localSocket = localSocket
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
   // Same on-disk identity `harness remote-password set`/`link connect` use (E2eeStore.init() is
   // idempotent per file, so a separate in-memory instance here just reads the one this machine
@@ -4059,6 +4067,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const localWsServer = attachLocalWsServer(hookServer, {
+    localSocketServer: localSocket?.server ?? null,
     shareRelay,
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
@@ -5696,6 +5705,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sharedViewers.stop()
     await localWsServer.close()
     hookServer.close()
+    await localSocket?.close()
     shutdownSummaryPool()
     shutdownVoiceRouter()
     // The new daemon starts its own viewers for the agents it restores; ours must not hold the ports.
@@ -5801,6 +5811,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sharedViewers.stop()
     await localWsServer.close()
     hookServer.close()
+    await localSocket?.close()
     shutdownSummaryPool()
     shutdownVoiceRouter()
     await dshViewers.stopAll()
@@ -6313,6 +6324,10 @@ function clearAdapterState(): void {
     ]) {
       rmSync(join(dir, name), { recursive: true, force: true })
     }
+    // One daemon socket per control port (lib/localSocket.ts) — whichever ports have run here.
+    try {
+      for (const name of readdirSync(dir)) if (isLocalSocketName(name)) rmSync(join(dir, name), { force: true })
+    } catch { /* no such directory */ }
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
   else rmSync(dataDir, { recursive: true, force: true })

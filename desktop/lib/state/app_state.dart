@@ -64,6 +64,7 @@ import '../update/manual_update_check.dart';
 import '../ws/ws_conn.dart';
 import 'retarget_refusal.dart';
 import '../ws/local_cli_discovery.dart';
+import '../ws/local_daemon_transport.dart';
 import '../ws/ws_pool.dart';
 import 'pane_preset.dart';
 import 'pane_arrangement.dart';
@@ -1743,8 +1744,17 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
-  ApiClient _newApiClient() =>
-      ApiClient(config: config, session: session, auth: viewer?.auth);
+  ApiClient _newApiClient() => ApiClient(
+    config: config,
+    session: session,
+    auth: viewer?.auth,
+    localTransport: localDaemonTransport,
+  );
+
+  /// How this app reaches the local CLI — its Unix socket or the loopback
+  /// port. Owned by discovery, which decides it; REST and the local WebSocket
+  /// follow it.
+  LocalDaemonTransport get localDaemonTransport => _discovery.transport;
 
   String? get lastError => _lastError;
 
@@ -3991,6 +4001,7 @@ class AppNotifier extends ChangeNotifier {
   void _ensurePool() {
     if (_pool != null) return;
     _pool = WsPool(
+      localTransport: localDaemonTransport,
       wsBaseUrl: config.wsBaseUrl,
       autonomousEnv: _autonomousEnv,
       // Every real desktop WsConn dials the local CLI's loopback WS (transportKind.localPlaintext, see
