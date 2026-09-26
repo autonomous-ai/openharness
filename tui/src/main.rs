@@ -201,14 +201,18 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
         if std::mem::take(&mut app.suspend) {
             // C-z: give the shell its terminal back, stop, and pick up where we were on `fg`.
+            if enhanced { execute!(term.backend_mut(), PopKeyboardEnhancementFlags)?; }
             execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape)?;
             terminal::disable_raw_mode()?;
             unsafe { libc_raise_tstp() };
             terminal::enable_raw_mode()?;
-            execute!(term.backend_mut(), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange)?;
+            execute!(term.backend_mut(), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange, terminal::Clear(terminal::ClearType::All))?;
+            if enhanced { execute!(term.backend_mut(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?; }
             if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; }
             app.cursor_shape.clear();
-            term.clear()?;
+            // A fresh Terminal repaints everything (ratatui's clear() asks the terminal where its
+            // cursor is, and the input reader would eat the answer).
+            term = Terminal::new(CrosstermBackend::new(BufWriter::with_capacity(256 * 1024, io::stdout())))?;
             need_draw = true;
         }
         app.flush_acks();
