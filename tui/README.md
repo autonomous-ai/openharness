@@ -43,7 +43,7 @@ and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same 
 pane numbers and the same active pane after each. Three defaults differ, and your `.tmux.conf`
 overrides each: `pane-border-status top` (each pane's title row names its harness),
 `allow-set-title off` (a pane's title is its harness's name, not what the program sets), and
-`mode-keys`/`status-keys` `vi` when `$EDITOR` is vi or vim.
+`history-limit 10000` (agents print a lot; tmux keeps 2000).
 
 | tmux keys | |
 |---|---|

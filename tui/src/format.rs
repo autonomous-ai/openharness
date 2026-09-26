@@ -34,6 +34,24 @@ pub fn expand(app: &App, fmt: &str, window: usize, pane: Option<u64>, time: bool
     expand1(&mut es, fmt)
 }
 
+/// tmux's format_table, in its order: what display -a lists.
+pub const TABLE_NAMES: &[&str] = &["active_window_index", "alternate_on", "alternate_saved_x", "alternate_saved_y", "buffer_created", "buffer_mode_format", "buffer_name", "buffer_sample", "buffer_size", "client_activity", "client_cell_height", "client_cell_width", "client_control_mode", "client_created", "client_discarded", "client_flags", "client_height", "client_key_table", "client_last_session", "client_mode_format", "client_name", "client_pid", "client_prefix", "client_readonly", "client_session", "client_termfeatures", "client_termname", "client_termtype", "client_tty", "client_uid", "client_user", "client_width", "client_written", "config_files", "cursor_character", "cursor_flag", "cursor_x", "cursor_y", "history_all_bytes", "history_bytes", "history_limit", "history_size", "host", "host_short", "insert_flag", "keypad_cursor_flag", "keypad_flag", "last_window_index", "mouse_all_flag", "mouse_any_flag", "mouse_button_flag", "mouse_hyperlink", "mouse_line", "mouse_pane", "mouse_sgr_flag", "mouse_standard_flag", "mouse_utf8_flag", "mouse_status_line", "mouse_status_range", "mouse_word", "mouse_x", "mouse_y", "next_session_id", "origin_flag", "pane_active", "pane_at_bottom", "pane_at_left", "pane_at_right", "pane_at_top", "pane_bg", "pane_bottom", "pane_current_command", "pane_current_path", "pane_dead", "pane_dead_signal", "pane_dead_status", "pane_dead_time", "pane_fg", "pane_format", "pane_height", "pane_id", "pane_in_mode", "pane_index", "pane_input_off", "pane_key_mode", "pane_last", "pane_left", "pane_marked", "pane_marked_set", "pane_mode", "pane_path", "pane_pid", "pane_pipe", "pane_right", "pane_search_string", "pane_start_command", "pane_start_path", "pane_synchronized", "pane_tabs", "pane_title", "pane_top", "pane_tty", "pane_unseen_changes", "pane_width", "pid", "scroll_region_lower", "scroll_region_upper", "server_sessions", "session_activity", "session_alerts", "session_attached", "session_attached_list", "session_created", "session_format", "session_group", "session_group_attached", "session_group_attached_list", "session_group_list", "session_group_many_attached", "session_group_size", "session_grouped", "session_id", "session_last_attached", "session_many_attached", "session_marked", "session_name", "session_path", "session_stack", "session_windows", "socket_path", "start_time", "tree_mode_format", "uid", "user", "version", "window_active", "window_active_clients", "window_active_clients_list", "window_active_sessions", "window_active_sessions_list", "window_activity", "window_activity_flag", "window_bell_flag", "window_bigger", "window_cell_height", "window_cell_width", "window_end_flag", "window_flags", "window_format", "window_height", "window_id", "window_index", "window_last_flag", "window_layout", "window_linked", "window_linked_sessions", "window_linked_sessions_list", "window_marked_flag", "window_name", "window_offset_x", "window_offset_y", "window_panes", "window_raw_flags", "window_silence_flag", "window_stack_index", "window_start_flag", "window_visible_layout", "window_width", "window_zoomed_flag", "wrap_flag"];
+
+/// display -a: every variable with a value here, `name=value`, in format_table's order (those
+/// with none in this context — a buffer's, a mouse event's, a dead pane's, a group's — left out),
+/// then the command's name, as format_each lists them.
+pub fn every(app: &App, window: usize, pane: Option<u64>) -> Vec<String> {
+    let dead = pane.and_then(|p| app.panes.get(&p)).map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false);
+    let skip = |n: &str| matches!(n, "buffer_created" | "buffer_name" | "buffer_sample" | "buffer_size") || (n.starts_with("mouse_") && !n.ends_with("_flag")) || (n.starts_with("pane_dead_") && !dead)
+        || (n.starts_with("session_group") && n != "session_grouped") || matches!(n, "client_last_session" | "window_bigger" | "window_offset_x" | "window_offset_y" | "session_attached_list" | "window_active_clients_list" | "pane_mode");
+    let mut out: Vec<String> = TABLE_NAMES.iter().filter(|n| !skip(n)).filter_map(|n| {
+        let v = match table(app, n, window, pane)? { Val::Str(s) => s, Val::Time(t) => t.to_string() };
+        Some(format!("{n}={v}"))
+    }).collect();
+    out.push("command=display-message".into());
+    out
+}
+
 /// A format as a config's %if reads it: no #() jobs run (tmux's FORMAT_NOJOBS).
 pub fn expand_nojobs(app: &App, fmt: &str) -> String {
     let mut es = Es { app, window: app.active, pane: app.focused(), time: true, nojobs: true, depth: 0, now: now_secs() };
@@ -833,6 +851,10 @@ pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layo
 /// one), or None when there is no such variable. Times are seconds since the epoch.
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
+    // list-commands -F's.
+    if let Some((n, a, u)) = &app.format_command {
+        match name { "command_list_name" => return Some(Val::Str(n.clone())), "command_list_alias" => return Some(Val::Str(a.clone())), "command_list_usage" => return Some(Val::Str(u.clone())), _ => {} }
+    }
     // A paste buffer's (list-buffers -F, choose-buffer).
     if let Some(b) = app.format_buffer.as_ref().and_then(|n| app.paste.get(n)) {
         match name {
@@ -893,6 +915,17 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_layout" | "window_visible_layout" => tab.and_then(|t| t.root.as_ref()).map(|r| r.to_tmux()).unwrap_or_default(),
         "history_size" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().history_size().to_string() }).unwrap_or_default(),
         "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
+        // format_cb_history_bytes: what the pane's lines take — its cells (five bytes each, as
+        // tmux's grid_cell_entry) and a line's own bookkeeping.
+        "history_bytes" => pane.map(|p| {
+            use alacritty_terminal::grid::Dimensions;
+            let g = p.term.grid();
+            let lines = g.history_size() + g.screen_lines();
+            (lines * g.columns() * 5 + lines * 48).to_string()
+        }).unwrap_or_default(),
+        "line" => app.format_line.map(|n| n.to_string()).unwrap_or_default(),
+        "uid" | "client_uid" => unsafe { libc::getuid() }.to_string(),
+        "client_user" | "user" => { let pw = unsafe { libc::getpwuid(libc::getuid()) }; if pw.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) }.to_string_lossy().into_owned() } }
         "pane_marked" => (focus.is_some() && app.marked == focus).then_some("1").unwrap_or("0").into(),
         "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
         "window_id" => tab.map(|t| format!("@{}", t.wid)).unwrap_or_default(),
@@ -937,6 +970,54 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_dead" => pane.map(|p| matches!(p.phase, crate::pane::Phase::Card { .. })).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_start_path" => agent.map(|a| a.cwd.clone()).unwrap_or_default(),
         "alternate_on" => pane.map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        // The pane's terminal modes, as tmux keeps them (MODE_INSERT, MODE_KCURSOR …).
+        "insert_flag" | "keypad_cursor_flag" | "keypad_flag" | "origin_flag" | "wrap_flag" | "cursor_flag"
+        | "mouse_standard_flag" | "mouse_button_flag" | "mouse_all_flag" | "mouse_any_flag" | "mouse_sgr_flag" | "mouse_utf8_flag" => {
+            use alacritty_terminal::term::TermMode as M;
+            let m = pane?.mode();
+            let on = match name {
+                "insert_flag" => m.contains(M::INSERT), "keypad_cursor_flag" => m.contains(M::APP_CURSOR), "keypad_flag" => m.contains(M::APP_KEYPAD),
+                "origin_flag" => m.contains(M::ORIGIN), "wrap_flag" => m.contains(M::LINE_WRAP), "cursor_flag" => m.contains(M::SHOW_CURSOR),
+                "mouse_standard_flag" => m.contains(M::MOUSE_REPORT_CLICK), "mouse_button_flag" => m.contains(M::MOUSE_DRAG), "mouse_all_flag" => m.contains(M::MOUSE_MOTION),
+                "mouse_any_flag" => m.intersects(M::MOUSE_REPORT_CLICK | M::MOUSE_DRAG | M::MOUSE_MOTION), "mouse_sgr_flag" => m.contains(M::SGR_MOUSE), _ => m.contains(M::UTF8_MOUSE),
+            };
+            if on { "1".into() } else { "0".into() }
+        }
+        "cursor_character" => pane.map(|p| { let c = p.term.grid().cursor.point; p.term.grid()[c].c }).map(|c| if c == '\0' { " ".to_string() } else { c.to_string() }).unwrap_or_default(),
+        "scroll_region_upper" => pane.map(|_| "0".to_string()).unwrap_or_default(),
+        "scroll_region_lower" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().screen_lines().saturating_sub(1).to_string() }).unwrap_or_default(),
+        "pane_tabs" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; (1..).map(|i| i * 8).take_while(|x| *x < p.term.grid().columns()).map(|x| x.to_string()).collect::<Vec<_>>().join(",") }).unwrap_or_default(),
+        "history_all_bytes" => pane.map(|p| {
+            use alacritty_terminal::grid::Dimensions;
+            let g = p.term.grid();
+            let lines = g.history_size() + g.screen_lines();
+            let cells: usize = (0..lines).map(|i| { let row = &g[alacritty_terminal::index::Line(i as i32 - g.history_size() as i32)]; (0..g.columns()).rev().find(|x| { let c = row[alacritty_terminal::index::Column(*x)].c; c != ' ' && c != '\0' }).map(|x| x + 1).unwrap_or(0) }).sum();
+            format!("{lines},{},{cells},{},0,0", lines * 40, cells * 5)
+        }).unwrap_or_default(),
+        "pane_key_mode" => pane.map(|_| "VT10x".to_string()).unwrap_or_default(),
+        "alternate_saved_x" | "alternate_saved_y" => pane.map(|_| "0".to_string()).unwrap_or_default(),
+        "pane_unseen_changes" => pane.map(|_| "0".to_string()).unwrap_or_default(),
+        "window_marked_flag" => tab.map(|t| app.marked.map(|m| t.panes().contains(&m)).unwrap_or(false)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "pane_fg" | "pane_bg" => pane.map(|_| "default".to_string()).unwrap_or_default(),
+        "pane_path" => pane.and_then(|p| p.cwd.clone()).unwrap_or_default(),
+        "pane_format" => (pane_id.is_some() || focus.is_some()).then_some("1").unwrap_or("0").into(),
+        "window_format" | "session_format" | "session_marked" => "0".into(),
+        "active_window_index" => app.win_num(app.active).to_string(),
+        "last_window_index" => (0..app.tabs.len()).map(|i| app.win_num(i)).max().map(|n| n.to_string()).unwrap_or_default(),
+        "next_session_id" => "$1".into(),
+        "buffer_mode_format" => "#{t/p:buffer_created}: #{buffer_sample}".into(),
+        "client_mode_format" => "#{t/p:client_activity}: session #{session_name}".into(),
+        "tree_mode_format" => "#{?pane_format,#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",},#{?window_format,#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",},#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}}}".into(),
+        "config_files" => app.config_files.join(","),
+        "session_alerts" => String::new(),
+        // The session's windows in the order they were last current (the current first).
+        "session_stack" => { let mut v = vec![app.win_num(app.active)]; if let Some(l) = app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|t| &t.id == id)) { v.push(app.win_num(l)) } v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",") }
+        "window_stack_index" => (if window == app.active { "0" } else if tab.map(|t| app.last_tab.as_ref() == Some(&t.id)).unwrap_or(false) { "1" } else { "0" }).into(),
+        "window_active_clients" => (window == app.active).then_some("1").unwrap_or("0").into(),
+        "window_active_sessions" => "1".into(),
+        "window_active_sessions_list" | "window_linked_sessions_list" => app.session_name(),
+        "window_linked_sessions" => "1".into(),
+        "window_cell_width" | "window_cell_height" | "client_cell_width" | "client_cell_height" => "0".into(),
         "cursor_x" | "cursor_y" => pane.map(|p| { let c = p.term.grid().cursor.point; if name == "cursor_x" { c.column.0.to_string() } else { c.line.0.to_string() } }).unwrap_or_default(),
         // Times: when this client started, and when a window last had something happen.
         "session_created" | "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),

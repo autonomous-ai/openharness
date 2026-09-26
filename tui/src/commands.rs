@@ -964,6 +964,11 @@ fn run_words(app: &mut App, words: &[String]) {
         "display-message" => {
             // tmux's display-message [-lp] [-F format] [-t target-pane] [message]: the format
             // (-l: as it is) against the target pane — one tmux can't find leaves it none.
+            if flag(words, "-a") {
+                let (w, p) = match opt(words, "-t").map(|t| pane_target(app, &t)) { Some(Some((w, p))) => (w, Some(p)), Some(None) => (usize::MAX, None), None => (app.active, app.focused()) };
+                let lines = crate::format::every(app, w, p);
+                return app.print("display", lines);
+            }
             if opt(words, "-F").is_some() && !positional(words).is_empty() { return app.say("only one of -F or argument must be given", theme::WARN) }
             let text = opt(words, "-F").or_else(|| positional(words).first().cloned()).unwrap_or_default();
             if text.is_empty() && app.capture.is_none() { input::run(app, "info"); return }
@@ -1082,21 +1087,38 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "list-windows" | "list-sessions" | "list-panes" | "list-clients" => {
-            // -F: a format, one line per window or pane.
-            let lines = match (command, opt(words, "-F")) {
-                ("list-windows", Some(f)) => (0..app.tabs.len()).map(|w| crate::format::expand(app, &f, w, None, false)).collect(),
-                ("list-panes", f) => {
-                    // -a / -s: every window's panes; -t: that window's; -F: a format per pane.
+            // tmux's list-* with its own templates (-F another), -f a filter, #{line} the count.
+            let filter = opt(words, "-f");
+            let rows: Vec<(usize, Option<u64>)> = match command {
+                "list-panes" => {
                     let windows: Vec<usize> = if flag(words, "-a") || flag(words, "-s") { (0..app.tabs.len()).collect() } else { vec![opt(words, "-t").and_then(|t| window_target(app, &t)).unwrap_or(app.active)] };
-                    let all = windows.len() > 1;
-                    let f = f.unwrap_or_else(|| if all { "#{session_name}:#{window_index}.#{pane_index}: [#{pane_width}x#{pane_height}] #{pane_id}#{?pane_active, (active),}".into() } else { "#{pane_index}: [#{pane_width}x#{pane_height}] #{pane_id}#{?pane_active, (active),}".into() });
-                    windows.into_iter().flat_map(|w| app.tabs[w].panes().into_iter().map(move |p| (w, p))).collect::<Vec<_>>().into_iter()
-                        .map(|(w, p)| crate::format::expand(app, &f, w, Some(p), false)).collect()
+                    windows.into_iter().flat_map(|w| app.tabs[w].panes().into_iter().map(move |p| (w, Some(p)))).collect()
                 }
-                ("list-clients", Some(f)) => vec![expand(app, &f)],
-                ("list-sessions", Some(f)) => vec![expand(app, &f)],
-                _ => listing(app, command),
+                "list-windows" => (0..app.tabs.len()).map(|w| (w, None)).collect(),
+                _ => vec![(app.active, None)],
             };
+            let history = "[#{pane_width}x#{pane_height}] [history #{history_size}/#{history_limit}, #{history_bytes} bytes] #{pane_id}#{?pane_active, (active),}#{?pane_dead, (dead),}";
+            let template = opt(words, "-F").unwrap_or_else(|| match command {
+                "list-panes" if flag(words, "-a") => format!("#{{session_name}}:#{{window_index}}.#{{pane_index}}: {history}"),
+                "list-panes" if flag(words, "-s") => format!("#{{window_index}}.#{{pane_index}}: {history}"),
+                "list-panes" => format!("#{{pane_index}}: {history}"),
+                "list-windows" if flag(words, "-a") => "#{session_name}:#{window_index}: #{window_name}#{window_raw_flags} (#{window_panes} panes) [#{window_width}x#{window_height}] ".into(),
+                "list-windows" => "#{window_index}: #{window_name}#{window_raw_flags} (#{window_panes} panes) [#{window_width}x#{window_height}] [layout #{window_layout}] #{window_id}#{?window_active, (active),}".into(),
+                "list-sessions" => "#{session_name}: #{session_windows} windows (created #{t:session_created})#{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}#{?session_attached, (attached),}".into(),
+                _ => "#{client_name}: #{session_name} [#{client_width}x#{client_height} #{client_termname}] #{?#{!=:#{client_uid},#{uid}},[user #{?client_user,#{client_user},#{client_uid},}] ,}#{?client_flags,(,}#{client_flags}#{?client_flags,),}".into(),
+            });
+            let mut lines = Vec::new();
+            let mut last_window = None;
+            let mut n = 0usize;
+            for (w, p) in rows {
+                // #{line}: the row's number — list-panes counts each window's panes from 0.
+                if command == "list-panes" && last_window != Some(w) { n = 0; last_window = Some(w) }
+                app.format_line = Some(n);
+                n += 1;
+                let keep = filter.as_ref().map(|f| { let v = crate::format::expand(app, f, w, p, true); !v.is_empty() && v != "0" }).unwrap_or(true);
+                if keep { lines.push(crate::format::expand(app, &template, w, p, true)) }
+            }
+            app.format_line = None;
             app.print(command, lines);
         }
         "set-option" | "set-window-option" => {
@@ -1206,7 +1228,23 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         // has-session: its -t was found (else tmux's error, and 1) before it ran.
         "has-session" => {}
-        "list-commands" => { let lines = COMMANDS.iter().map(|(n, a, d)| format!("{n} ({a}) — {d}")).collect(); app.print("list-commands", lines) }
+        "list-commands" => {
+            // tmux's list-commands [-F format] [command]: its commands in cmd.c's order, `name
+            // (alias) usage` — then hn's own, their usage what they do.
+            let fmt = opt(words, "-F").unwrap_or_else(|| "#{command_list_name}#{?command_list_alias, (#{command_list_alias}),} #{command_list_usage}".into());
+            let only = positional(words).first().cloned();
+            let mut rows: Vec<(String, String, String)> = crate::cmd::TABLE.iter().map(|e| (e.name.to_string(), e.alias.to_string(), e.usage.to_string())).collect();
+            rows.extend(COMMANDS.iter().filter(|(n, _, _)| hn_owned(n)).map(|(n, a, d)| (n.to_string(), if a == n { String::new() } else { a.to_string() }, d.to_string())));
+            let mut lines = Vec::new();
+            for (name, alias, usage) in rows {
+                if let Some(o) = &only { if *o != name && (alias.is_empty() || *o != alias) { continue } }
+                app.format_command = Some((name, alias, usage));
+                let line = expand(app, &fmt);
+                if !line.is_empty() { lines.push(line) }
+            }
+            app.format_command = None;
+            app.print("list-commands", lines)
+        }
         "set-environment" | "setenv" => {
             // tmux's set-environment [-Fhgru] [-t target-session] name [value]: -g the global
             // environment (else the session's), -u unset, -r cleared (taken from what runs),

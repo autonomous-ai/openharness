@@ -35,6 +35,8 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
             if !name.is_empty() { m.insert(name.to_string(), unescape(value)); }
         }
         m.insert("pane-border-status".into(), "top".into());
+        // Agents print a lot: ten thousand lines of scrollback (tmux keeps two).
+        m.insert("history-limit".into(), "10000".into());
         // A harness's name is its pane's title; a program's own (OSC 2) only if you say so.
         m.insert("allow-set-title".into(), "off".into());
         let editor = std::env::var("VISUAL").ok().filter(|s| !s.is_empty()).or_else(|| std::env::var("EDITOR").ok()).unwrap_or_default();

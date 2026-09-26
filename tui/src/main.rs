@@ -186,6 +186,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     // ~/.tmux.conf, read and run as tmux reads and runs it.
     app.update_environment();
     let read = commands::load_config(&mut app);
+    app.config_files = read.clone();
     if config.prefix_set { app.keymap.prefix = config.prefix }
     for (chord, command) in &config.keys {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
