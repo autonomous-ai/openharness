@@ -172,7 +172,9 @@ wss.on('connection', (ws) => {
         const streamId = randomUUID()
         streams.set(streamId, { seq: 1, agent: target })
         send('terminal_ready', { requestId: payload.requestId, streamId, agentId: target.id, readOnly: false })
-        ws.send(frame(3, streamId, 0, Buffer.from(DEMO ? demoScreen(target) : `\x1bc${target.name} (mock)\r\n$ `), [payload.cols, payload.rows]))
+        // MOCK_BANNER: bytes a terminal prints before its prompt (a test's colours, say).
+        const banner = (process.env.MOCK_BANNER || '').replace(/\\e/g, '\x1b').replace(/\\r\\n/g, '\r\n')
+        ws.send(frame(3, streamId, 0, Buffer.from(DEMO ? demoScreen(target) : `\x1bc${target.name} (mock)\r\n${banner}$ `), [payload.cols, payload.rows]))
         return
       }
       case 'terminal_close': streams.delete(payload.streamId); return

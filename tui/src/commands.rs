@@ -1560,12 +1560,30 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "clear-history" => { if let Some((_, p)) = target_pane(app, words) { if let Some(x) = app.panes.get_mut(&p) { x.clear_history() } } }
         "capture-pane" => {
-            // -p prints it; else it becomes a paste buffer. -t names the pane.
-            let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.error(format!("can't find pane: {t}")); return } }, None => app.focused() };
-            let range = (opt(words, "-S").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MIN) } else { None })), opt(words, "-E").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MAX) } else { None })));
-            let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.text_range(range.0, range.1)) else { return };
-            if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) }
-            else {
+            // cmd-capture-pane.c [-aCeJNpPqT] [-b buffer] [-S start] [-E end] [-t pane]: the lines
+            // from -S to -E (formats; `-` the history's first or the screen's last), trailing
+            // spaces trimmed unless -N or -J, wrapped lines joined with -J, colours and attributes
+            // as escape sequences with -e (escaped with -C) — printed with -p, else a buffer (each
+            // line ending in a newline). -a the screen a full-screen program hides: alacritty keeps
+            // it out of reach, so it is empty; -P what the pane has not finished writing: none.
+            let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.error(format!("can't find pane: {t}")); return } }, None => app.current().map(|(_, p)| p) };
+            let (start, end) = (opt(words, "-S").map(|v| expand(app, &v)), opt(words, "-E").map(|v| expand(app, &v)));
+            let Some(p) = pane.and_then(|p| app.panes.get(&p)) else { return };
+            let alt = p.term.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN);
+            let text = if flag(words, "-a") {
+                if !alt && !flag(words, "-q") { return app.error("no alternate screen") }
+                String::new()
+            } else if flag(words, "-P") { String::new() } else {
+                let (top, bottom) = (crate::capture::line_of(p, start.as_deref(), true), crate::capture::line_of(p, end.as_deref(), false));
+                let (top, bottom) = if bottom < top { (bottom, top) } else { (top, bottom) };
+                let join = flag(words, "-J");
+                let f = crate::capture::Flags2 { join, sequences: flag(words, "-e"), escape: flag(words, "-C"), empty_cells: !join && !flag(words, "-T"), trim: !join && !flag(words, "-N") };
+                crate::capture::history(p, top, bottom, f)
+            };
+            if flag(words, "-p") {
+                let t = text.strip_suffix('\n').unwrap_or(&text);
+                app.print("capture-pane", t.split('\n').map(str::to_string).collect())
+            } else {
                 let limit = app.buffer_limit();
                 if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.error(e) }
             }
