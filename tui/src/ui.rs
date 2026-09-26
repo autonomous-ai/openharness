@@ -686,7 +686,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let list_h = list_bottom.saturating_sub(list_top) as usize;
     let n = picker.visible.len();
     if n == 0 {
-        if !picker.empty.is_empty() && list_h > 0 { buf.set_string(area.x + 2, if reverse { list_top } else { list_bottom - 1 }, &picker.empty, Style::default().add_modifier(Modifier::DIM)); }
+        // A list with nothing in it says why; one the query emptied, or one still loading (its
+        // spinner turning), is blank, as fzf's is.
+        if !picker.empty.is_empty() && list_h > 0 && total == 0 && !reading { buf.set_string(area.x + 2, if reverse { list_top } else { list_bottom - 1 }, &picker.empty, Style::default().add_modifier(Modifier::DIM)); }
         picker.row_at.clear();
         return cursor;
     }
@@ -1341,5 +1343,33 @@ mod fzf_info_tests {
         assert_eq!(repeat_to_fill("-=", 5), "-=-=-");
         assert_eq!(repeat_to_fill("─", 3), "───");
         assert_eq!(repeat_to_fill("abc", 2), "ab");
+    }
+}
+
+#[cfg(test)]
+mod fzf_list_tests {
+    use super::*;
+    use crate::picker::Row;
+
+    fn screen(p: &mut Picker) -> String {
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        fzf(&mut buf, area, p, &PickerKind::Output { title: String::new(), lines: vec![] }, "");
+        (0..area.height).map(|y| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// A list with nothing in it says why; one the query emptied is blank, as fzf's is, and so is
+    /// one still loading (its spinner says so).
+    #[test]
+    fn a_list_the_query_emptied_is_blank() {
+        let mut p = Picker::new("t", "");
+        p.empty = "(empty)".into();
+        assert!(screen(&mut p).contains("(empty)"));
+        p.busy = Some("loading".into());
+        assert!(!screen(&mut p).contains("(empty)"));
+        p.busy = None;
+        p.set_rows(vec![Row::new("a", "alpha")]);
+        p.set_query("zzz");
+        assert!(!screen(&mut p).contains("(empty)"));
     }
 }
