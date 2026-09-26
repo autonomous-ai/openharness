@@ -115,30 +115,30 @@ pub fn split(line: &str) -> Vec<Vec<String>> {
     commands
 }
 
-/// `#W` window name, `#P` pane index, `#T` pane (harness) title, `#I` window index, `#S` session.
-pub fn expand(app: &App, text: &str) -> String {
-    let window = app.tab().name.clone();
-    let index = app.win_num(app.active).to_string();
-    let pane = app.focused().and_then(|f| app.tab().panes().iter().position(|p| *p == f)).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default();
-    let title = input::focused_title(app);
-    let session = app.session_name();
-    let host = crate::app::hostname();
-    let focused = app.focused().and_then(|f| app.panes.get(&f));
-    let agent = focused.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
-    let panes = app.tab().panes().len().to_string();
-    let zoomed = if app.tab().zoomed { "1" } else { "0" };
-    let path = agent.map(|a| a.cwd.clone()).unwrap_or_default();
-    let machine = focused.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default();
-    let pane_id = app.focused().map(|f| format!("%{f}")).unwrap_or_default();
-    let clients = [
-        ("#{window_name}", window.as_str()), ("#{pane_index}", &pane), ("#{pane_title}", &title), ("#{window_index}", &index),
-        ("#{session_name}", &session), ("#{window_panes}", &panes), ("#{window_zoomed_flag}", zoomed), ("#{pane_current_path}", &path),
-        ("#{host}", &host), ("#{host_short}", host.split('.').next().unwrap_or(&host)), ("#{pane_id}", &pane_id), ("#{machine}", &machine),
-        ("#W", window.as_str()), ("#P", &pane), ("#T", &title), ("#I", &index), ("#S", &session), ("#H", &host), ("#h", host.split('.').next().unwrap_or(&host)), ("#D", &pane_id),
-    ];
-    let mut out = text.to_string();
-    for (k, v) in clients { out = out.replace(k, v) }
-    out
+/// A tmux format, expanded (see format.rs).
+pub fn expand(app: &App, text: &str) -> String { crate::format::text(app, text, None) }
+
+/// A window target, as tmux reads one: `:2`, `=2`, `^` first, `$` last, `!` the last window,
+/// `+`/`-` (with a count) next/previous, or a name's start.
+fn window_target(app: &App, target: &str) -> Option<usize> {
+    let t = target.trim_start_matches(':').trim_start_matches('=');
+    let n = app.tabs.len();
+    if n == 0 { return None }
+    match t {
+        "" => Some(app.active),
+        "^" => Some(0),
+        "$" => Some(n - 1),
+        "!" => app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|x| &x.id == id)),
+        _ if t.starts_with('+') || t.starts_with('-') => {
+            let by: i64 = t[1..].parse().unwrap_or(1);
+            let by = if t.starts_with('-') { -by } else { by };
+            Some((app.active as i64 + by).rem_euclid(n as i64) as usize)
+        }
+        _ => match t.parse::<usize>() {
+            Ok(k) => app.tab_by_num(k),
+            Err(_) => app.tabs.iter().position(|x| x.name.to_lowercase().starts_with(&t.to_lowercase())),
+        },
+    }
 }
 
 /// What tmux's list-* commands print.
@@ -215,8 +215,11 @@ fn run_words(app: &mut App, words: &[String]) {
     let command = resolve(first);
     match command {
         "new-window" => {
+            let was = app.active;
             app.new_tab();
             if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
+            // -d: made, not gone to.
+            if flag(words, "-d") { let id = app.tabs[was.min(app.tabs.len() - 1)].id.clone(); if let Some(i) = app.tabs.iter().position(|t| t.id == id) { app.select_tab(i) } return }
             input::launch(app, "", Filter::All);
         }
         "split-window" => {
@@ -230,15 +233,8 @@ fn run_words(app: &mut App, words: &[String]) {
         "last-window" => input::run(app, "last-tab"),
         "select-window" => {
             let target = opt(words, "-t").or_else(|| Some(rest(words))).unwrap_or_default();
-            let target = target.trim_start_matches(':').trim_start_matches('=');
-            match target.parse::<usize>() {
-                Ok(n) => match app.tab_by_num(n) { Some(i) => app.select_tab(i), None => app.say(format!("Can't find window: {n}"), theme::WARN) },
-                Err(_) => {
-                    // By name, as tmux allows.
-                    if let Some(i) = app.tabs.iter().position(|t| t.name.to_lowercase().starts_with(&target.to_lowercase())) { app.select_tab(i) }
-                    else { app.say(format!("Can't find window: {target}"), theme::WARN) }
-                }
-            }
+            if flag(words, "-l") { input::run(app, "last-tab"); return }
+            match window_target(app, &target) { Some(i) => app.select_tab(i), None => app.say(format!("Can't find window: {}", target.trim_start_matches(':')), theme::WARN) }
         }
         "rename-window" => { let name = rest(words); if !name.trim().is_empty() { app.rename_tab(name.trim()) } }
         "move-window" => {
@@ -298,11 +294,23 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "choose-client" => input::run(app, "tree"),
         "find-window" => { input::launch(app, "", Filter::All); let q = rest(words); if !q.is_empty() { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in q.chars() { picker.type_char(c) } } } }
-        "display-message" => { let text = rest(words); if text.is_empty() { input::run(app, "info") } else { let t = expand(app, &text); app.say(t, theme::WARN) } }
+        "display-message" => {
+            // display [-p] [-d ms] [-t target] [format]: -p prints (here: to the status line too).
+            let mut text = Vec::new();
+            let mut i = 1;
+            while i < words.len() {
+                match words[i].as_str() { "-d" | "-c" | "-t" | "-F" => i += 1, w if w.starts_with('-') && w.len() > 1 && text.is_empty() => {}, w => text.push(w.to_string()) }
+                i += 1;
+            }
+            let text = text.join(" ");
+            if text.is_empty() { input::run(app, "info") } else { let t = expand(app, &text); app.say(t, theme::WARN) }
+        }
         "show-messages" => input::run(app, "messages"),
         "list-keys" => input::run(app, "keys"),
         "list-windows" | "list-sessions" | "list-panes" | "list-clients" | "show-options" => {
-            let lines = listing(app, command);
+            let mut lines = listing(app, command);
+            // show -g prefix: just that one.
+            if command == "show-options" { let want = rest(words); if !want.is_empty() { lines.retain(|l| l.split(' ').next() == Some(want.as_str())) } }
             input::picker(app, crate::modal::PickerKind::Output { title: command.to_string(), lines }, command, "");
         }
         "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" => {
@@ -310,7 +318,7 @@ fn run_words(app: &mut App, words: &[String]) {
             let mut words = words.to_vec();
             words[0] = command.to_string();
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
-                Ok(()) => app.apply_settings(&settings),
+                Ok(()) => { app.apply_settings(&settings); if let Some(n) = settings.notes.first() { app.say(n.clone(), theme::WARN) } }
                 Err(e) => app.say(e, theme::WARN),
             }
         }
@@ -329,12 +337,33 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "swap-window" => {
-            let Some(n) = opt(words, "-t").and_then(|t| t.trim_start_matches(':').trim_start_matches('=').parse::<usize>().ok()) else { app.say("swap-window -t N", theme::WARN); return };
-            match app.tab_by_num(n) { Some(j) => app.swap_tabs(app.active, j), None => app.say(format!("Can't find window: {n}"), theme::WARN) }
+            let src = opt(words, "-s").map(|t| window_target(app, &t)).unwrap_or(Some(app.active));
+            let dst = opt(words, "-t").map(|t| window_target(app, &t)).unwrap_or(Some(app.active));
+            match (src, dst) {
+                (Some(a), Some(b)) => {
+                    // -d leaves the current window where it was; without it, focus follows the move.
+                    let keep = flag(words, "-d");
+                    if a != app.active { let cur = app.active; app.active = a; app.swap_tabs(a, b); if keep { app.active = cur } } else { app.swap_tabs(a, b) }
+                }
+                _ => app.say("Can't find window", theme::WARN),
+            }
         }
         "join-pane" | "move-pane" => {
-            let Some(n) = opt(words, "-t").and_then(|t| t.trim_start_matches(':').trim_start_matches('=').split('.').next().and_then(|n| n.parse::<usize>().ok())) else { app.say("join-pane -t :N", theme::WARN); return };
-            let Some(to) = app.tab_by_num(n) else { app.say(format!("Can't find window: {n}"), theme::WARN); return };
+            // -s :N brings that window's pane here; -t :N sends this pane there.
+            if let Some(from) = opt(words, "-s").and_then(|t| window_target(app, t.split('.').next().unwrap_or(""))) {
+                let here = app.active;
+                if from == here { return }
+                let Some(p) = app.tabs[from].focus else { return };
+                let Some((machine, agent)) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };
+                let here_id = app.tabs[here].id.clone();
+                app.close_pane(p);
+                if let Some(i) = app.tabs.iter().position(|t| t.id == here_id) { app.select_tab(i) }
+                app.open_agent(&machine, &agent, Placement::Split(if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical }));
+                return;
+            }
+            let Some(target) = opt(words, "-t") else { app.say("join-pane -t :N (or -s :N)", theme::WARN); return };
+            let Some(to) = window_target(app, target.split('.').next().unwrap_or("")) else { app.say(format!("Can't find window: {target}"), theme::WARN); return };
+            let n = app.win_num(to);
             if to == app.active { return }
             let Some((machine, agent)) = input::focused_agent(app) else { return };
             if let Some(f) = app.focused() { app.close_pane(f) }
@@ -375,7 +404,9 @@ fn run_words(app: &mut App, words: &[String]) {
                 i += 1;
             }
             let Some(cond) = words.get(i) else { return };
-            let truth = format && !matches!(expand(app, cond).trim(), "" | "0");
+            // -F: a format. Else a shell command, run here — unless it asks about the pane's tty
+            // (vim-tmux-navigator), which lives on another machine: a harness pane is not vim.
+            let truth = if format { !matches!(expand(app, cond).trim(), "" | "0") } else if cond.contains("#{") || cond.contains("pane_tty") || cond.contains("is_vim") { false } else { crate::tmuxconf::shell_true(&expand(app, cond)) };
             let pick = if truth { words.get(i + 1) } else { words.get(i + 2) };
             if let Some(command) = pick.cloned() { execute(app, &command) }
         }

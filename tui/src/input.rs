@@ -245,6 +245,8 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
                 match pane.selection_text() {
                     Some(text) => {
                         crate::clipboard::store(&text);
+                        // tmux puts a mouse copy in a paste buffer too (C-b ] pastes it).
+                        app.buffers.insert(0, text.clone());
                         let n = text.chars().count();
                         app.say(format!("Copied {n} character{}", if n == 1 { "" } else { "s" }), theme::ONLINE);
                     }
@@ -404,7 +406,8 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Output { title, lines } => {
             picker.keep_order = true;
             picker.status = title.clone();
-            picker.set_rows(lines.iter().enumerate().map(|(i, l)| crate::picker::Row::new(i.to_string(), l.clone())).collect());
+            // Output reads top-down, as tmux prints it: the list's bottom-up rows, reversed.
+            picker.set_rows(lines.iter().enumerate().rev().map(|(i, l)| crate::picker::Row::new(i.to_string(), l.clone())).collect());
             picker.empty = "(empty)".into();
             picker.hints = vec![];
         }
@@ -951,7 +954,38 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
 }
 
 /// Copy mode, `mode-keys vi`: tmux's copy-mode-vi table.
+/// copy-mode's emacs table, as the vi one it mirrors (`set -g mode-keys emacs`, or tmux's own
+/// choice when EDITOR is not vi).
+fn emacs_copy(key: KeyEvent) -> Option<KeyEvent> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let k = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    let code = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+    Some(match key.code {
+        KeyCode::Char('f') if ctrl => k('l'), KeyCode::Char('b') if ctrl => k('h'),
+        KeyCode::Char('n') if ctrl => k('j'), KeyCode::Char('p') if ctrl => k('k'),
+        KeyCode::Char('a') if ctrl => k('0'), KeyCode::Char('e') if ctrl => k('$'),
+        KeyCode::Char('v') if ctrl => code(KeyCode::PageDown), KeyCode::Char('v') if alt => code(KeyCode::PageUp),
+        KeyCode::Char(' ') if ctrl => k('v'), KeyCode::Char('@') if ctrl => k('v'),
+        KeyCode::Char('w') if alt => k('y'), KeyCode::Char('w') if ctrl => k('y'),
+        KeyCode::Char('f') if alt => k('w'), KeyCode::Char('b') if alt => k('b'),
+        KeyCode::Char('<') if alt => k('g'), KeyCode::Char('>') if alt => k('G'),
+        KeyCode::Char('s') if ctrl => k('/'), KeyCode::Char('r') if ctrl => k('?'),
+        KeyCode::Char('g') if ctrl => code(KeyCode::Esc),
+        KeyCode::Esc => k('q'),
+        KeyCode::Char('q') | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Enter => key,
+        KeyCode::Char('n') => k('n'), KeyCode::Char('N') => k('N'),
+        _ => return None,
+    })
+}
+
 fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
+    let emacs = app.opts.mode_keys_emacs.unwrap_or_else(|| {
+        // tmux: vi keys when $VISUAL or $EDITOR mentions vi, else emacs.
+        let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default();
+        !editor.is_empty() && !editor.contains("vi")
+    });
+    let key = if emacs { match emacs_copy(key) { Some(k) => k, None => return } } else { key };
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let Some(p) = app.panes.get_mut(&pane) else { return };
     let rows = p.rows as i32;
