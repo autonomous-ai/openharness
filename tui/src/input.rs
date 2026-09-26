@@ -59,9 +59,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
     if app.prefix {
         app.prefix = false;
         if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 {
-            // `send-prefix`: C-b C-b gives the pane a C-b.
-            if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| encode_key(&key, p.mode())) { send_to_focused(app, bytes) }
-            return;
+            // `send-prefix`: C-b C-b gives the prefix key to what has the keyboard.
+            return send_prefix_key(app, key);
         }
         if let Some(binding) = app.keymap.prefix_command(&chord).cloned() {
             // A list or view on screen gives way to the command, as tmux's choose modes do.
@@ -2022,6 +2021,14 @@ fn send_copy_action(app: &mut App, pane: u64, args: &crate::cmd::Args) {
             None => app.say(format!("{a}: not a copy-mode command here"), theme::WARN),
         },
     }
+}
+
+/// send-prefix to the active pane: the key goes where tmux would send it — to a list or tree open
+/// over the pane (what fzf in the pane would get: C-b is backward-char, C-a beginning-of-line), to
+/// copy mode through its table (C-b is page-up in copy-mode-vi), else to the pane's program.
+pub fn send_prefix_key(app: &mut App, key: KeyEvent) {
+    if matches!(app.modal, Some(Modal::Picker { .. }) | Some(Modal::Tree { .. }) | Some(Modal::Copy { .. })) { return modal_key(app, key) }
+    if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| encode_key(&key, p.mode())) { send_to_focused(app, bytes) }
 }
 
 /// One key to a pane, as the pane's program reads it (send-prefix).

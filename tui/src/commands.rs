@@ -1662,7 +1662,10 @@ fn run_words(app: &mut App, words: &[String]) {
             // The prefix key (-2: prefix2) to the pane, as if typed there.
             let Some((_, pane)) = target_pane(app, words) else { return };
             let key = if flag(words, "-2") { app.keymap.prefix2 } else { Some(app.keymap.prefix) };
-            if let Some(key) = key { input::send_chord(app, pane, key) }
+            // To the active pane: what has the keyboard there (a list open over it) gets it.
+            if let Some(key) = key {
+                if Some(pane) == app.focused() { input::send_prefix_key(app, crossterm::event::KeyEvent::new(key.code, key.mods)) } else { input::send_chord(app, pane, key) }
+            }
         }
         "command-prompt" => {
             // tmux's command-prompt [-1bFikN] [-I inputs] [-p prompts] [-T type] [template]: one
