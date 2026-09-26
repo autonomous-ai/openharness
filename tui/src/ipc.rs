@@ -53,7 +53,6 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
                 let cwd = request.get("cwd").and_then(Value::as_str).map(str::to_string);
                 let stdin = request.get("stdin").and_then(Value::as_str).map(str::to_string);
                 let (tx, rx) = oneshot::channel::<crate::app::Reply>();
-                let command = words.iter().map(|w| crate::tmuxconf::quote_word(w)).collect::<Vec<_>>().join(" ");
                 let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| {
                     app.capture = Some(Vec::new());
                     app.capture_err = Some(Vec::new());
@@ -61,7 +60,7 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
                     app.cli_code = 0;
                     app.cli_cwd = cwd;
                     app.cli_stdin = stdin;
-                    crate::commands::execute(app, &command);
+                    crate::commands::execute_args(app, &words);
                     // Still waiting on a job (run-shell, if-shell): it answers when it is done.
                     if app.capture.is_some() { app.finish_cli() }
                 })));

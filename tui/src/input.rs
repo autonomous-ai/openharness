@@ -48,7 +48,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2 { app.prefix = true; app.prefix_at = Some(std::time::Instant::now()); return }
         if let Some(b) = app.keymap.named.get(&table).and_then(|l| l.iter().rev().find(|b| b.chord == chord)).cloned() {
             if b.repeat { app.key_table = Some(table) }
-            commands::execute(app, &b.command);
+            commands::execute_bound(app, &b.command);
             return;
         }
     }
@@ -64,7 +64,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
             // A list or view on screen gives way to the command, as tmux's choose modes do.
             if matches!(app.modal, Some(Modal::Clock { .. }) | Some(Modal::DisplayPanes { .. }) | Some(Modal::Picker { .. }) | Some(Modal::Tree { .. })) { app.modal = None }
             app.repeat_until = binding.repeat.then(|| Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
-            commands::execute(app, &binding.command);
+            commands::execute_bound(app, &binding.command);
         }
         return;
     }
@@ -73,7 +73,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
         if Instant::now() < until {
             if let Some(binding) = app.keymap.prefix_command(&chord).filter(|b| b.repeat).cloned() {
                 app.repeat_until = Some(Instant::now() + Duration::from_millis(app.keymap.repeat_ms));
-                commands::execute(app, &binding.command);
+                commands::execute_bound(app, &binding.command);
                 return;
             }
         }
@@ -88,7 +88,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
         return;
     }
     if !typing(app) {
-        if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute(app, &binding.command); return }
+        if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command); return }
     }
     if app.modal.is_some() { modal_key(app, key); return }
     // A shell is on its way (split-window, new-window): what is typed meanwhile is its.
@@ -927,9 +927,9 @@ fn create(app: &mut App, machine: String, what: What, cwd: Option<String>, messa
 fn modal_key(app: &mut App, key: KeyEvent) {
     let Some(modal) = app.modal.take() else { return };
     match modal {
-        Modal::Confirm { command, .. } => {
-            // tmux: y runs it; any other key says no.
-            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) { commands::execute(app, &command) }
+        Modal::Confirm { command, key: yes, enter_yes, .. } => {
+            // tmux: the confirm key (y, or -c's) runs it, Enter too with -y; any other says no.
+            if key.code == KeyCode::Char(yes) || (enter_yes && key.code == KeyCode::Enter) { commands::execute(app, &command) }
         }
         Modal::DisplayPanes { .. } => {
             if let KeyCode::Char(c @ '0'..='9') = key.code {
@@ -1007,6 +1007,20 @@ fn modal_key(app: &mut App, key: KeyEvent) {
 fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // command-prompt -1: the first key is the answer (-N: a digit, else nothing).
+    if let PromptKind::Command { one: true, digits, .. } = &p.kind {
+        let digits = *digits;
+        match key.code {
+            KeyCode::Esc => return,
+            KeyCode::Char('c' | 'g') if ctrl => return,
+            KeyCode::Char(c) if !ctrl && !alt && (!digits || c.is_ascii_digit()) => { p.value = c.to_string(); submit_prompt(app, p); return }
+            _ => { if digits { return } app.modal = Some(Modal::Prompt(p)); return }
+        }
+    }
+    // command-prompt -N: numbers only.
+    if let PromptKind::Command { digits: true, .. } = &p.kind {
+        if let KeyCode::Char(c) = key.code { if !ctrl && !alt && !c.is_ascii_digit() { app.modal = Some(Modal::Prompt(p)); return } }
+    }
     // command-prompt -k: the key itself is the answer, by its tmux name (C-b / then x → "x").
     if let PromptKind::Key { template } = &p.kind {
         let name = keys::name(&keys::of(&key));
@@ -1015,7 +1029,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         return;
     }
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
-    let vi = app.opts.status_keys_vi.unwrap_or_else(|| { let e = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default(); e.contains("vi") });
+    let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
     if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; p.vi_pending = None; app.modal = Some(Modal::Prompt(p)); return }
     let chars: Vec<char> = p.value.chars().collect();
@@ -1027,7 +1041,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         KeyCode::Esc => return,
         KeyCode::Char('c' | 'g') if ctrl => return,
         KeyCode::Enter => {
-            if matches!(p.kind, PromptKind::Command { template: None }) && !p.value.trim().is_empty() {
+            if matches!(p.kind, PromptKind::Command { template: None, .. }) && !p.value.trim().is_empty() {
                 app.history.retain(|h| h != &p.value);
                 app.history.push(p.value.clone());
             }
@@ -1055,8 +1069,8 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         // tmux's status prompt: C-u clears the whole line.
         KeyCode::Char('u') if ctrl => { set(&mut p, Vec::new(), 0) }
         KeyCode::Char('w') if ctrl => { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
-        KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None }) => prompt_history(app, &mut p, key.code == KeyCode::Up),
-        KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None }) => {
+        KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None, .. }) => prompt_history(app, &mut p, key.code == KeyCode::Up),
+        KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None, .. }) => {
             // Complete the command name: the only match, or the part every match shares.
             if !p.value.contains(' ') {
                 let typed = p.value.clone();
@@ -1119,7 +1133,7 @@ fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
         (None, KeyCode::Esc) => return,
         (None, KeyCode::Char('c' | 'g')) if ctrl => return,
         (None, KeyCode::Enter) => {
-            if matches!(p.kind, PromptKind::Command { template: None }) && !p.value.trim().is_empty() { app.history.retain(|h| h != &p.value); app.history.push(p.value.clone()) }
+            if matches!(p.kind, PromptKind::Command { template: None, .. }) && !p.value.trim().is_empty() { app.history.retain(|h| h != &p.value); app.history.push(p.value.clone()) }
             submit_prompt(app, p);
             return;
         }
@@ -1141,8 +1155,8 @@ fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
         (None, KeyCode::Char('C')) => { let v = chars[..at].to_vec(); set(&mut p, v, at); insert(&mut p) }
         (None, KeyCode::Char('S')) => { set(&mut p, Vec::new(), 0); insert(&mut p) }
         (None, KeyCode::Char(op @ ('d' | 'c' | 'r'))) => p.vi_pending = Some(op),
-        (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { if matches!(p.kind, PromptKind::Command { template: None }) { prompt_history(app, &mut p, true) } }
-        (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { if matches!(p.kind, PromptKind::Command { template: None }) { prompt_history(app, &mut p, false) } }
+        (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { if matches!(p.kind, PromptKind::Command { template: None, .. }) { prompt_history(app, &mut p, true) } }
+        (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { if matches!(p.kind, PromptKind::Command { template: None, .. }) { prompt_history(app, &mut p, false) } }
         (None, KeyCode::Char('p')) => { if let Some(b) = app.paste.top().map(|b| b.data.clone()) { let mut v = chars.clone(); let ins: Vec<char> = b.chars().filter(|c| *c != '\n').collect(); let k = ins.len(); for (i, c) in ins.into_iter().enumerate() { v.insert((at + 1 + i).min(v.len()), c) } set(&mut p, v, at + k) } }
         _ => {}
     }
@@ -1371,7 +1385,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             } else {
                 // Any other command (select-pane -L): copy mode ends where tmux's would lose focus.
                 let before = app.focused();
-                commands::execute(app, &b.command);
+                commands::execute_bound(app, &b.command);
                 if app.focused() == before && app.modal.is_none() { app.modal = Some(Modal::Copy { pane }) }
             }
             return;
@@ -1458,7 +1472,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             app.last_search_up = up;
         }
         KeyCode::Char(':') => {
-            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: Some(format!("send-keys -X -t %{pane} goto-line \"%%\"")) }, "(goto line) ", "")));
+            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: Some(format!("send-keys -X -t %{pane} goto-line \"%%\"")), more: Vec::new(), answers: Vec::new(), one: false, digits: false }, "(goto line) ", "")));
             return;
         }
         KeyCode::Char('D') => {
@@ -1561,8 +1575,8 @@ fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<
         KeyCode::Char('x') => {
             if let Some(r) = rows.get(cursor) {
                 app.modal = Some(match r.pane {
-                    Some(p) => { let idx = app.tabs[r.window].panes().iter().position(|x| *x == p).unwrap_or(0) + app.pane_base_index; app.focus_pane(r.window, p); Modal::Confirm { prompt: format!("kill-pane {idx}? (y/n)"), command: "kill-pane".into() } }
-                    None => { app.select_tab(r.window); Modal::Confirm { prompt: format!("kill-window {}? (y/n)", app.tabs[r.window].name), command: "kill-window".into() } }
+                    Some(p) => { let idx = app.tabs[r.window].panes().iter().position(|x| *x == p).unwrap_or(0) + app.pane_base_index; app.focus_pane(r.window, p); Modal::Confirm { prompt: format!("kill-pane {idx}? (y/n)"), command: "kill-pane".into(), key: 'y', enter_yes: false } }
+                    None => { app.select_tab(r.window); Modal::Confirm { prompt: format!("kill-window {}? (y/n)", app.tabs[r.window].name), command: "kill-window".into(), key: 'y', enter_yes: false } }
                 });
                 return;
             }
@@ -1678,11 +1692,11 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         PickerKind::Palette => {
             let Some(id) = id else { return };
             // A command that needs words goes to the prompt with its name typed; the rest run.
-            if modal::NEEDS_ARGS.contains(&id.as_str()) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None }, ":", &format!("{id} ")))) }
+            if modal::NEEDS_ARGS.contains(&id.as_str()) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None, more: Vec::new(), answers: Vec::new(), one: false, digits: false }, ":", &format!("{id} ")))) }
             else if is_command(&id) { run(app, &id) } else { commands::execute(app, &id) }
         }
         PickerKind::Messages | PickerKind::Output { .. } => {}
-        PickerKind::Keys => { if let Some(id) = id { if let Some((_, command)) = id.split_once('\t') { commands::execute(app, command) } } }
+        PickerKind::Keys => { if let Some(id) = id { if let Some((_, command)) = id.split_once('\t') { commands::execute_bound(app, command) } } }
         PickerKind::Buffers => { if let Some(name) = id { let name = name.to_string(); paste_buffer(app, &name) } }
         PickerKind::Help => {
             // A prefix row switches the box to that mode; a shortcut row is just a reminder.
@@ -1854,13 +1868,20 @@ fn submit_prompt(app: &mut App, p: Prompt) {
     match p.kind {
         // Answered by a key press in prompt_key; nothing to submit.
         PromptKind::Key { .. } => {}
-        PromptKind::Command { template } => {
-            match template {
-                // `%%` (or the end of the template) takes what was typed, as tmux's command-prompt does.
-                Some(t) if t.contains("%%") => commands::execute(app, &t.replace("%%", &value)),
-                Some(t) => { if !value.is_empty() { commands::execute(app, &format!("{t} {}", quote(&value))) } }
-                None => { if !value.is_empty() { commands::execute(app, &value) } }
+        PromptKind::Command { template, mut more, mut answers, one, digits } => {
+            // The answer as typed (tmux keeps its spaces); the next prompt, if there is one.
+            answers.push(p.value.clone());
+            if !more.is_empty() {
+                let (label, initial) = more.remove(0);
+                app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template, more, answers, one, digits }, &label, &initial)));
+                return;
             }
+            // args_make_commands: each answer into the template (cmd_template_replace).
+            let command = match template {
+                Some(t) => answers.iter().enumerate().fold(t, |cmd, (i, a)| crate::commands::template_replace(&cmd, a, i + 1)),
+                None => answers.first().cloned().unwrap_or_default(),
+            };
+            if !command.trim().is_empty() { commands::execute(app, &command) }
         }
         PromptKind::RenameTab => { if !value.is_empty() { app.rename_tab(&value) } }
         PromptKind::RenameHarness { machine, agent } => {

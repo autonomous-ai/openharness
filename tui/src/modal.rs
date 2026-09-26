@@ -67,9 +67,11 @@ pub enum PromptKind {
     Send,
     Broadcast,
     LinkPassword { machine: String },
-    /// tmux `command-prompt`: with a template, the typed text fills it (`rename-window %%`);
-    /// without one, the typed text is the command.
-    Command { template: Option<String> },
+    /// tmux `command-prompt`: with a template, the answers fill it (`%1` `%2` …, `%%` the first
+    /// not yet used, `%%%` quoted); without one, the typed text is the command. `more`: the
+    /// prompts still to ask (label, initial text); `answers`: those given; `one`: -1, a single
+    /// key is the answer; `digits`: -N, only numbers.
+    Command { template: Option<String>, more: Vec<(String, String)>, answers: Vec<String>, one: bool, digits: bool },
     /// command-prompt -k: the next key pressed, by its tmux name, fills the template.
     Key { template: String },
 }
@@ -106,8 +108,9 @@ pub enum Modal {
     Menu { title: String, items: Vec<MenuItem>, cursor: usize },
     Picker { kind: PickerKind, picker: Picker },
     Prompt(Prompt),
-    /// tmux `confirm-before`: `kill-pane 0? (y/n)` in the status line.
-    Confirm { prompt: String, command: String },
+    /// tmux `confirm-before`: `Confirm 'kill-pane'? (y/n)` in the status line; `key` answers
+    /// yes (-c), and with `enter_yes` (-y) so does Enter.
+    Confirm { prompt: String, command: String, key: char, enter_yes: bool },
     /// tmux `display-panes` (C-b q): a big number on every pane; press one to go there.
     DisplayPanes { until: std::time::Instant },
     /// tmux `clock-mode` (C-b t).

@@ -389,8 +389,26 @@ fn resolve(name: &str) -> &str {
 /// Run a command line (one or more commands separated by `;`), in order. A shell command tmux
 /// waits for (if-shell, run-shell) runs off the screen's thread, and the commands after it wait for
 /// it, as tmux's command queue does; from a shell (`hn <command>`) it is simply waited for.
+/// A command string, as tmux's cmd_parse_from_string reads one (the `:` prompt, if-shell's
+/// commands, a menu's, a prompt's filled template): its commands run in order.
 pub fn execute(app: &mut App, line: &str) {
-    run_queue(app, queue_of(line));
+    let q = queue_of(app, line);
+    run_queue(app, q);
+}
+
+/// A key binding's command: read as a string, then (as bind-key's arguments are) split where an
+/// argument ends with `;` — `display a \; display b` is two commands.
+pub fn execute_bound(app: &mut App, line: &str) {
+    let q: Queue = queue_of(app, line).into_iter()
+        .flat_map(|item| crate::cmdparse::from_arguments(&item.words).into_iter().map(|words| Item { words, origin: None }).collect::<Vec<_>>())
+        .collect();
+    run_queue(app, q);
+}
+
+/// A command given as arguments (`hn <command> …` from a shell), split as tmux splits them.
+pub fn execute_args(app: &mut App, words: &[String]) {
+    let q: Queue = crate::cmdparse::from_arguments(words).into_iter().map(|words| Item { words, origin: None }).collect();
+    run_queue(app, q);
 }
 
 /// A command waiting in the queue, and the file and line it was read from (a config's).
@@ -399,13 +417,13 @@ pub struct Item { pub words: Vec<String>, pub origin: Option<(std::sync::Arc<str
 
 pub type Queue = std::collections::VecDeque<Item>;
 
-/// A command line as the queue's commands: blocks split where `\;` or `;` stood.
-fn queue_of(line: &str) -> Queue {
-    // A bound `\;` runs here as the separator it stood for.
-    crate::tmuxconf::split_marked(line).into_iter()
-        .flat_map(|words| words.split(|w| w == ";").filter(|p| !p.is_empty()).map(|p| p.to_vec()).collect::<Vec<_>>())
-        .map(|words| Item { words, origin: None })
-        .collect()
+/// A command string as the queue's commands, parsed by tmux's grammar (cmdparse); its error
+/// said, and nothing run, when it has one.
+fn queue_of(app: &mut App, line: &str) -> Queue {
+    match crate::cmdparse::parse(line, app, false) {
+        Ok(cmds) => cmds.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None }).collect(),
+        Err((_, e)) => { app.say(e, theme::WARN); Queue::new() }
+    }
 }
 
 fn run_queue(app: &mut App, mut queue: Queue) {
@@ -490,7 +508,7 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             Ok(Some(Job { command: Some(expand(&cond)), cwd, delay: 0.0, background, done: Box::new(move |app, o| {
                 if let Some(e) = o.failed { app.say(e, theme::WARN); return Default::default() }
                 let pick = if o.code == 0 && o.signal.is_none() { yes } else { no };
-                pick.map(|c| queue_of(&c)).unwrap_or_default()
+                pick.map(|c| queue_of(app, &c)).unwrap_or_default()
             }) }))
         }
         _ => {
@@ -499,7 +517,7 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             if args.has('C') > 0 {
                 // -C: after the delay, the argument runs as tmux commands.
                 let c = args.values.first().cloned();
-                return Ok(Some(Job { command: None, cwd: None, delay, background, done: Box::new(move |_, _| c.map(|c| queue_of(&c)).unwrap_or_default()) }));
+                return Ok(Some(Job { command: None, cwd: None, delay, background, done: Box::new(move |app, _| c.map(|c| queue_of(app, &c)).unwrap_or_default()) }));
             }
             let command = args.values.first().map(|c| expand(c));
             let shown = command.clone().unwrap_or_default();
@@ -518,6 +536,32 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             }) }))
         }
     }
+}
+
+/// cmd_template_replace: the answer for `%idx` — and for the first `%%` not yet used — into a
+/// template (`%%%` and `%N%`… quoted: " \ $ ; ~ escaped).
+pub fn template_replace(template: &str, s: &str, idx: usize) -> String {
+    if !template.contains('%') { return template.to_string() }
+    let b: Vec<char> = template.chars().collect();
+    let (mut out, mut replaced, mut i) = (String::new(), false, 0);
+    while i < b.len() {
+        let ch = b[i];
+        i += 1;
+        if ch == '%' {
+            let here = b.get(i).copied();
+            let numbered = matches!(here, Some(c @ '1'..='9') if (c as usize - '0' as usize) == idx);
+            if numbered || (here == Some('%') && !replaced) {
+                if !numbered { replaced = true }
+                i += 1;
+                let quoted = b.get(i) == Some(&'%');
+                if quoted { i += 1 }
+                for c in s.chars() { if quoted && "\"\\$;~".contains(c) { out.push('\\') } out.push(c) }
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// A path as tmux's file_read/file_write take it: from the folder of the shell that ran the
@@ -1470,26 +1514,25 @@ fn run_words(app: &mut App, words: &[String]) {
             if let Some(key) = key { input::send_chord(app, pane, key) }
         }
         "command-prompt" => {
-            // command-prompt [-1bFikN] [-I initial] [-p prompt] [-T type] [template]:
-            // -k takes one key (its name fills %%), -F expands the template as a format first.
-            let (mut label, mut initial, mut template, mut key, mut format) = (":".to_string(), String::new(), Vec::new(), false, false);
-            let mut i = 1;
-            while i < words.len() {
-                match words[i].as_str() {
-                    "-p" => { label = words.get(i + 1).cloned().unwrap_or_default(); i += 1 }
-                    "-I" => { initial = expand(app, words.get(i + 1).map(String::as_str).unwrap_or("")); i += 1 }
-                    "-T" | "-t" => i += 1,
-                    w if w.starts_with('-') && w.len() > 1 && template.is_empty() => { if w.contains('k') { key = true } if w.contains('F') { format = true } }
-                    w => template.push(w.to_string()),
-                }
-                i += 1;
-            }
-            let template = template.iter().map(|w| if w.contains(' ') { w.clone() } else { w.clone() }).collect::<Vec<_>>().join(" ");
-            let template = if format { expand(app, &template) } else { template };
-            // No -p: tmux names the prompt after the template's command, `(find-window)`.
-            let label = if label == ":" && !template.is_empty() && !key { format!("({})", template.split_whitespace().next().unwrap_or("")) } else { label };
-            let label = if label == ":" { ":".to_string() } else { format!("{label} ") };
-            let kind = if key { PromptKind::Key { template } } else { PromptKind::Command { template: (!template.is_empty()).then_some(template) } };
+            // tmux's command-prompt [-1bFikN] [-I inputs] [-p prompts] [-T type] [template]: one
+            // prompt per comma in -p (their initial text -I's, comma for comma, expanded as
+            // formats), the answers filling the template's %1 %2 … (%% the first, %%% quoted);
+            // no -p: `(command)` from the template, else `:`. -1 one key, -N numbers, -k a key's
+            // name, -F the template expanded first.
+            // The template is command text (a block's, or the string as it is).
+            let template = positional(words).first().map(|w| w.strip_prefix(crate::tmuxconf::BLOCK).unwrap_or(w).to_string()).unwrap_or_default();
+            let template = if flag(words, "-F") { expand(app, &template) } else { template };
+            let name = crate::cmdparse::parse(&template, app, true).ok().and_then(|c| c.first().and_then(|c| c.args.first().cloned())).and_then(|a| match a { crate::cmdparse::Arg::Str(s) => Some(s), _ => None });
+            let (labels, spaced): (Vec<String>, bool) = match opt(words, "-p") {
+                Some(p) => (p.split(',').map(|l| expand(app, l)).collect(), true),
+                None if !template.is_empty() => (vec![format!("({})", name.unwrap_or_default())], true),
+                None => (vec![":".into()], false),
+            };
+            let inputs: Vec<String> = opt(words, "-I").map(|i| i.split(',').map(|v| expand(app, v)).collect()).unwrap_or_default();
+            let mut prompts: Vec<(String, String)> = labels.into_iter().enumerate().map(|(k, l)| (if spaced { format!("{l} ") } else { l }, inputs.get(k).cloned().unwrap_or_default())).collect();
+            if flag(words, "-k") { return app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Key { template }, &prompts[0].0, ""))) }
+            let (label, initial) = prompts.remove(0);
+            let kind = PromptKind::Command { template: (!template.is_empty()).then_some(template), more: prompts, answers: Vec::new(), one: flag(words, "-1"), digits: flag(words, "-N") };
             app.modal = Some(Modal::Prompt(Prompt::status(kind, &label, &initial)));
         }
         "display-menu" | "menu" => {
@@ -1534,11 +1577,15 @@ fn run_words(app: &mut App, words: &[String]) {
             app.print("customize-mode", lines);
         }
         "confirm-before" => {
-            let prompt = opt(words, "-p").map(|p| expand(app, &p));
-            let command = rest(words);
+            // tmux's confirm-before [-by] [-c confirm-key] [-p prompt] command: `Confirm 'name'?
+            // (y/n)` (or -p's, expanded), the confirm key (-c) or Enter with -y running it.
+            let command = positional(words).first().map(|w| w.strip_prefix(crate::tmuxconf::BLOCK).unwrap_or(w).to_string()).unwrap_or_default();
             if command.is_empty() { return }
-            let prompt = prompt.unwrap_or_else(|| format!("{}? (y/n)", command.split_whitespace().next().unwrap_or("")));
-            app.modal = Some(Modal::Confirm { prompt, command });
+            let key = opt(words, "-c").and_then(|c| { let mut it = c.chars(); match (it.next(), it.next()) { (Some(k), None) if k.is_ascii_graphic() => Some(k), _ => None } });
+            let Some(key) = key.or(if opt(words, "-c").is_some() { None } else { Some('y') }) else { return app.say("invalid confirm key", theme::WARN) };
+            let name = crate::cmdparse::parse(&command, app, true).ok().and_then(|c| c.first().and_then(|c| c.args.first().cloned())).and_then(|a| match a { crate::cmdparse::Arg::Str(s) => Some(resolve(&s).to_string()), _ => None }).unwrap_or_default();
+            let prompt = match opt(words, "-p") { Some(p) => expand(app, &p), None => format!("Confirm '{name}'? ({key}/n)") };
+            app.modal = Some(Modal::Confirm { prompt, command, key, enter_yes: flag(words, "-y") });
         }
         "new-harness" => { let args = rest(words); if args.is_empty() { input::run(app, "new") } else { input::new_harness_from(app, &args) } }
         "new-terminal" => input::run(app, "terminal"),

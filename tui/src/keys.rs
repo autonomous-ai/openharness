@@ -146,8 +146,8 @@ impl Keymap {
         b(ch('A'), "choose-tree -a", false, "Harnesses waiting on you — answer from the list");
         b(ch('I'), "choose-tree -i", false, "Models: this harness's model and effort, local models");
         b(ch('S'), "choose-tree -S", false, "The Harness Store");
-        b(ch('g'), "command-prompt -p (send) send-task", false, "Send a task — Harness picks the harness");
-        b(ch('B'), "command-prompt -p (broadcast) broadcast", false, "Send one message to every harness in this window");
+        b(ch('g'), "command-prompt -p (send) { send-task \"%%\" }", false, "Send a task — Harness picks the harness");
+        b(ch('B'), "command-prompt -p (broadcast) { broadcast \"%%\" }", false, "Send one message to every harness in this window");
         b(ch('R'), "confirm-before -p \"restart #T? (y/n)\" restart-harness", false, "Restart this harness");
         b(ch('P'), "confirm-before -p \"pause #T? (y/n)\" pause-harness", false, "Pause this harness (the conversation is kept)");
         b(ch('K'), "clone-harness", false, "Clone this harness (a second one with its history)");
