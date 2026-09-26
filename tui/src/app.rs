@@ -185,6 +185,8 @@ pub struct App {
     pub mouse_changed: bool,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
+    /// The Harness device on this desk, and hn's half of talking to it (dial.rs).
+    pub dial: crate::dial::Dial,
     pub fleet_marked: bool,
 }
 
@@ -276,6 +278,7 @@ impl App {
             desk_stale: false,
             last_tab: None,
             terminal_focused: true,
+            dial: Default::default(),
             fleet_marked: false,
         }
     }
@@ -396,7 +399,7 @@ impl App {
             MachineEvent::Connected => {
                 if let Some(state) = self.links.get_mut(&machine_id) { state.attempts = 0 }
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
-                if machine_id == self.fleet.local_id { self.daemon_down = false }
+                if machine_id == self.fleet.local_id { self.daemon_down = false; crate::dial::reconnected(self) }
                 self.relist(&machine_id);
                 // Its home folder, so its paths read `~/…` like this machine's do.
                 if !self.homes.contains_key(&machine_id) {
@@ -464,6 +467,8 @@ impl App {
     }
 
     fn on_frame(&mut self, machine_id: &str, ty: &str, payload: Value) {
+        // The dial's frames come from this computer's daemon, to the windows on it.
+        if machine_id == self.fleet.local_id && crate::dial::on_frame(self, ty, &payload) { return }
         match ty {
             "agent_synced" | "agent_created" | "agent_renamed" => {
                 let row = payload.get("agent").cloned().unwrap_or(payload.clone());
@@ -802,6 +807,8 @@ impl App {
     /// Tell the daemon which harness is in front of the person: its terminal gets the short (2ms)
     /// output window instead of 8ms. Local machine only — a relayed machine keeps its own.
     fn report_focus(&mut self) {
+        // The dial's ring before its focus: a focus the ring does not hold yet is dropped.
+        crate::dial::announce(self, false);
         let Some(id) = self.focused() else { return };
         let Some(pane) = self.panes.get(&id) else { return };
         let key = (pane.machine_id.clone(), pane.agent_id.clone());
@@ -809,6 +816,12 @@ impl App {
         if let Some(link) = self.link(&pane.machine_id) {
             if link.send("app_focus", json!({ "agentId": pane.agent_id })) { self.last_focus_sent = Some(key) }
         }
+    }
+
+    /// Say the active pane again, as when this terminal comes back to the front.
+    pub fn announce_focus(&mut self) {
+        self.last_focus_sent = None;
+        self.report_focus();
     }
 
     // ── tabs & panes ─────────────────────────────────────────────────────────
@@ -1049,8 +1062,11 @@ impl App {
     }
 
     fn seen(&mut self, pane: u64) {
-        if let Some(p) = self.panes.get(&pane) {
-            if let Some(agent) = self.fleet.agents.get_mut(&(p.machine_id.clone(), p.agent_id.clone())) { agent.unread = false }
+        let Some(p) = self.panes.get(&pane) else { return };
+        let key = (p.machine_id.clone(), p.agent_id.clone());
+        if let Some(agent) = self.fleet.agents.get_mut(&key) {
+            // Looked at here: the dial takes its notification away too.
+            if std::mem::take(&mut agent.unread) { crate::dial::seen(self, &key.1) }
         }
     }
 
@@ -1515,6 +1531,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        crate::dial::tick(self);
         // What the panes on screen run (vim? a build?) moves as you work: asked every two seconds.
         if self.tick % 8 == 4 { for p in self.tab().panes() { self.refresh_pane_info(p) } }
         // display-panes goes away after display-panes-time, as in tmux.

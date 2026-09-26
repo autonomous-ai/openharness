@@ -52,6 +52,10 @@ const question = (machine) => {
   return a && { type: 'commander_question', agentId: a.id, dbSessionId: a.sessionId, payload: { requestId: 'q-demo', questions: [{ q: 'Rate limit per API key or per IP?', options: ['Per API key', 'Per IP', 'Both'] }] } }
 }
 const desk = { revision: 1, tabs: [] }
+// The dial's side of the daemon, for the e2e: what the windows told it (the ring, the tabs, the
+// focus, spoken-task replies, messages sent), and every local window to push dial frames at.
+const dial = { said: {}, replies: [], messages: [] }
+const windows = new Set()
 
 const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ success: true, data: body })) }
 const server = http.createServer((req, res) => {
@@ -60,6 +64,13 @@ const server = http.createServer((req, res) => {
     { machineId: LOCAL, name: DEMO ? 'studio' : 'mock-local', status: 'running' },
     { machineId: REMOTE, name: DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },
   ] })
+  if (req.url === '/test/dial' && req.method === 'GET') return json(res, dial)
+  if (req.url === '/test/dial' && req.method === 'POST') {
+    let body = ''
+    req.on('data', (c) => { body += c })
+    req.on('end', () => { for (const ws of windows) ws.send(body); json(res, { windows: windows.size }) })
+    return
+  }
   if (req.url === '/api/desk' && req.method === 'GET') return json(res, desk)
   if (req.url === '/api/desk/ops') { desk.revision++; return json(res, desk) }
   res.writeHead(404); res.end('{}')
@@ -100,6 +111,12 @@ wss.on('connection', (ws) => {
       machine = payload.machineId
       if (!agents[machine]) return ws.close(4403, 'machine mismatch')
       send('connected', { machineId: machine, transport: 'local', localProtocolVersion: 1 })
+      // This machine's own connections are the daemon's windows (backend.sendLocal's audience).
+      if (machine === LOCAL) {
+        windows.add(ws)
+        ws.on('close', () => windows.delete(ws))
+        send('dial_status', { attached: true, fw: '1.0.0-mock' })
+      }
       if (DEMO) {
         const asked = question(machine)
         if (asked) setTimeout(() => ws.send(JSON.stringify(asked)), 300)
@@ -124,7 +141,20 @@ wss.on('connection', (ws) => {
         agents[machine].push(created)
         return reply({ agent: created })
       }
-      case 'route_task': return send('route_result', { requestId: payload.requestId, candidates: [], reason: 'mock' })
+      case 'route_task': {
+        // `sure: …` routes to the first harness here with confidence, `unsure: …` offers it, else none.
+        const text = String(payload.text || '')
+        const pick = agents[LOCAL][0]
+        const confidence = text.startsWith('sure:') ? 0.95 : 0.4
+        if (!text.startsWith('sure:') && !text.startsWith('unsure:')) return send('route_result', { requestId: payload.requestId, candidates: [], reason: 'mock' })
+        return send('route_result', { requestId: payload.requestId, agentId: pick.id, machineId: LOCAL, name: pick.name, confidence,
+          candidates: [{ agentId: pick.id, machineId: LOCAL, name: pick.name, machine: 'mock-local', engine: pick.engine, confidence }] })
+      }
+      case 'app_panes': case 'app_swarms': case 'app_focus': case 'app_unread': case 'agent_seen':
+        dial.said[type] = { machine, ...payload }
+        return
+      case 'voice_route_reply': dial.replies.push(payload); return
+      case 'message': dial.messages.push({ machine, ...payload }); return
       case 'terminal_open': {
         const target = agents[machine].find((a) => a.id === payload.agentId)
         if (!target || target.status !== 'active') return send('terminal_error', { requestId: payload.requestId, code: 'TERMINAL_AGENT_NOT_FOUND' })

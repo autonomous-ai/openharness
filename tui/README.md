@@ -94,6 +94,26 @@ over SSH too.
 A terminal has one keyboard. Opening a harness another window is driving shows it read-only
 ("watching"); the first key you type takes it over, and the other window starts watching.
 
+## The dial
+
+The Harness device, plugged into this computer: the daemon holds it, and hn is the window it
+talks to while the desktop app is not running. (With the app open, the app keeps the dial; hn
+still follows it while hn's terminal is the one in front.)
+
+- **Turn it** to a harness: its pane is selected, in its window. A zoomed window stays zoomed, so
+  the dial flips through panes full size.
+- **A finger on the glass** scrolls the active pane the way tmux's wheel does: a shell's history in
+  copy mode (left again at the bottom), a full-screen program its wheel or arrow keys, an open
+  list its rows. A flick keeps going and slows down.
+- **Tap a notification**: that harness comes forward, or opens in a new window.
+- **Pick a window** on the dial: it is selected here.
+- **Speak** on a harness and the words go to it. Speak with none chosen and hn routes them as
+  `send-task` does: sent at once when the router is sure, otherwise the list asks (Enter sends,
+  Esc cancels).
+
+The dial turns through the panes of the window you are on, in pane order, and its window list is
+hn's windows.
+
 ## Speed
 
 Each pane's header shows its measured keystroke → echo latency. On this machine that is about a
@@ -128,6 +148,7 @@ notify = true              # OS notifications through the terminal
 | `HARNESS_TUI_PREDICT` | `off` / `always` (see Speed) |
 | `HARNESS_TUI_BIN` | the binary `harness tui` runs |
 | `PORT` | the daemon's port (default 18473) |
+| `HN_DESKTOP=on` / `off` | whether the desktop app is running, instead of looking (see The dial) |
 
 ## Building
 
@@ -150,6 +171,7 @@ arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 | `app.rs` | all state: machines, streams, tabs, desk sync |
 | `fleet.rs` | machines and harnesses, kept live from the daemon's frames |
 | `input.rs` | keys, mouse, the launcher's modes and actions |
+| `dial.rs` | the Harness device: the ring and windows it turns through, its focus, scroll, taps and spoken tasks |
 | `modal.rs` / `picker.rs` | the launcher's rows and its fzf matching (nucleo) |
 | `ui.rs` | drawing |
 | `layout.rs` | the split tree |
