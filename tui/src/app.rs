@@ -988,8 +988,14 @@ impl App {
                 let mut tab = Tab::new(&name);
                 tab.root = Some(Node::Leaf(id));
                 tab.focus = Some(id);
-                self.tabs.insert(self.active + 1, tab);
-                self.active += 1;
+                // As new-window: the first free index, in its place in the order.
+                self.renumber();
+                self.last_tab = Some(self.tabs[self.active].id.clone());
+                let n = self.free_num();
+                self.nums.insert(tab.id.clone(), n);
+                let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
+                self.tabs.insert(at, tab);
+                self.active = at;
             }
             (_, true) => {
                 let tab = self.tab_mut();
