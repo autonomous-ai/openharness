@@ -170,7 +170,13 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
     // A drag ends wherever the button comes up — the tab strip included.
     if matches!(mouse.kind, MouseEventKind::Up(_)) && app.mouse_drag.is_some() { app.mouse_drag = None; return }
     // The status line's window list.
-    if y == if app.status_top { 0 } else { app.size.1.saturating_sub(1) } {
+    if y == if app.status_top { 0 } else { app.size.1.saturating_sub(1) } && app.opts.status != Some(false) {
+        // The wheel over the status line walks the windows, as tmux's WheelUpStatus does.
+        match mouse.kind {
+            MouseEventKind::ScrollUp => { commands::execute(app, "previous-window"); return }
+            MouseEventKind::ScrollDown => { commands::execute(app, "next-window"); return }
+            _ => {}
+        }
         let Some(index) = crate::ui::tab_at(app, x) else { return };
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
