@@ -274,7 +274,7 @@ fn window_in_session(app: &App, window: &str, exact: bool, index_ok: bool, f: &m
     }
     if !exact {
         let pick = match window {
-            "!" => app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|t| &t.id == id)).map(Some),
+            "!" => app.last_tab().and_then(|id| app.tabs.iter().position(|t| &t.id == id)).map(Some),
             "^" => Some(order.first().copied()),
             "$" => Some(order.last().copied()),
             _ => None,

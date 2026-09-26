@@ -887,7 +887,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "window_flags" => flags(app, window).replacen('#', "##", 1),
         "window_raw_flags" => flags(app, window),
         "window_active" => (window == app.active).then_some("1").unwrap_or("0").into(),
-        "window_last_flag" => (tab.map(|t| app.last_tab.as_ref() == Some(&t.id)).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
+        "window_last_flag" => (tab.map(|t| app.last_tab() == Some(&t.id)).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
         "window_zoomed_flag" => (tab.map(|t| t.zoomed).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
         "window_panes" => tab.map(|t| t.panes().len().to_string()).unwrap_or_default(),
         "window_bell_flag" => flags(app, window).contains('!').then_some("1").unwrap_or("0").into(),
@@ -1038,8 +1038,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // format_cb_session_alerts: each window with an alert, its number and its # ! ~.
         "session_alerts" => (0..app.tabs.len()).filter_map(|i| { let f: String = flags(app, i).chars().filter(|c| matches!(c, '#' | '!' | '~')).collect(); (!f.is_empty()).then(|| format!("{}{f}", app.win_num(i))) }).collect::<Vec<_>>().join(","),
         // The session's windows in the order they were last current (the current first).
-        "session_stack" => { let mut v = vec![app.win_num(app.active)]; if let Some(l) = app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|t| &t.id == id)) { v.push(app.win_num(l)) } v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",") }
-        "window_stack_index" => (if window == app.active { "0" } else if tab.map(|t| app.last_tab.as_ref() == Some(&t.id)).unwrap_or(false) { "1" } else { "0" }).into(),
+        // The current window's number, then the lastw stack's.
+        "session_stack" => std::iter::once(app.win_num(app.active)).chain(app.lastw.iter().filter_map(|id| app.tabs.iter().position(|t| &t.id == id)).map(|p| app.win_num(p))).map(|n| n.to_string()).collect::<Vec<_>>().join(","),
+        // Where the window is on the lastw stack, from 1; 0 when it isn't (the current one).
+        "window_stack_index" => tab.and_then(|t| app.lastw.iter().position(|id| *id == t.id)).map(|i| (i + 1).to_string()).unwrap_or_else(|| "0".into()),
         "window_active_clients" => (window == app.active).then_some("1").unwrap_or("0").into(),
         "window_active_sessions" => "1".into(),
         "window_active_sessions_list" | "window_linked_sessions_list" => app.session_name(),
@@ -1106,7 +1108,7 @@ pub fn flags(app: &App, window: usize) -> String {
     if activity { out.push('#') }
     if bell { out.push('!') }
     if tab.alerts & crate::app::SILENCE != 0 { out.push('~') }
-    if window == app.active { out.push('*') } else if app.last_tab.as_ref() == Some(&tab.id) { out.push('-') }
+    if window == app.active { out.push('*') } else if app.last_tab() == Some(&tab.id) { out.push('-') }
     if app.marked.map(|m| tab.panes().contains(&m)).unwrap_or(false) { out.push('M') }
     if tab.zoomed { out.push('Z') }
     out

@@ -1379,7 +1379,7 @@ fn tree(buf: &mut Buffer, app: &App, body: Rect, cursor: usize, collapsed: &[Str
                 let branch = if i == last_window { "└─>" } else { "├─>" };
                 let fold = if panes.len() < 2 { " " } else if collapsed.contains(&tab.id) { "+" } else { "-" };
                 let mut flags = String::new();
-                if row.window == app.active { flags.push('*') } else if app.last_tab.as_ref() == Some(&tab.id) { flags.push('-') }
+                if row.window == app.active { flags.push('*') } else if app.last_tab() == Some(&tab.id) { flags.push('-') }
                 if tab.zoomed { flags.push('Z') }
                 let tail = match panes.as_slice() { [only] => format!(": {}", pane_title(*only)), [] => String::new(), _ => format!(" ({} panes)", panes.len()) };
                 format!("({n}) {branch} {fold} {}: {}{flags}{tail}", app.win_num(row.window), tab.name)

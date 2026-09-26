@@ -205,17 +205,47 @@ fn is_vim_command(cmd: &str) -> bool {
 }
 
 /// split-window's and join-pane's -l (cells, or n%) and -p (a percentage).
-fn split_size(words: &Words) -> Result<Option<(u16, bool)>, String> {
-    let Some(l) = opt(words, "-l").or_else(|| opt(words, "-p").map(|p| format!("{p}%"))) else { return Ok(None) };
-    match l.strip_suffix('%') {
-        Some(n) => match n.parse::<u16>() { Ok(n) if n <= 100 => Ok(Some((n, true))), _ => Err(format!("size {l}")) },
-        None => match l.parse::<u16>() { Ok(n) => Ok(Some((n, false))), Err(_) => Err(format!("size {l}")) },
+/// split-window's and join-pane's -l (cells, or n% — expanded as a format first) or -p (a
+/// percentage): the size and whether it is a percentage, or tmux's error ("size invalid").
+fn split_size(app: &App, words: &Words) -> Result<Option<(u16, bool)>, String> {
+    let fit = |n: i64| n.min(u16::MAX as i64) as u16;
+    if let Some(l) = opt(words, "-l") {
+        // args_percentage_and_expand: no "empty" here — an empty size is an invalid number.
+        let l = expand(app, &l);
+        return match l.strip_suffix('%') {
+            Some(n) => strtonum(n, 0, 100).map(|n| Some((fit(n), true))),
+            None => strtonum(&l, 0, i32::MAX as i64).map(|n| Some((fit(n), false))),
+        }.map_err(|e| format!("size {e}"));
+    }
+    match opt(words, "-p") {
+        Some(p) => strtonum(&expand(app, &p), 0, 100).map(|n| Some((fit(n), true))).map_err(|e| format!("size {e}")),
+        None => Ok(None),
     }
 }
 
-/// `40` or `30%` of `total`.
-fn size_arg(v: &str, total: u16) -> Option<u16> {
-    match v.strip_suffix('%') { Some(p) => p.parse::<u32>().ok().map(|p| (total as u32 * p / 100) as u16), None => v.parse().ok() }
+/// OpenBSD's strtonum, as tmux calls it: the number, or why not.
+pub fn strtonum(s: &str, min: i64, max: i64) -> Result<i64, &'static str> {
+    use std::num::IntErrorKind::{NegOverflow, PosOverflow};
+    match s.trim_start().parse::<i64>() {
+        Ok(n) if n < min => Err("too small"),
+        Ok(n) if n > max => Err("too large"),
+        Ok(n) => Ok(n),
+        Err(e) if *e.kind() == PosOverflow => Err("too large"),
+        Err(e) if *e.kind() == NegOverflow => Err("too small"),
+        Err(_) => Err("invalid"),
+    }
+}
+
+/// arguments.c's args_string_percentage: `n` cells, or `n%` of [cur], within min..=max.
+pub fn percentage(value: &str, min: i64, max: i64, cur: i64) -> Result<i64, &'static str> {
+    if value.is_empty() { return Err("empty") }
+    match value.strip_suffix('%') {
+        Some(n) => {
+            let n = cur * strtonum(n, 0, 100)? / 100;
+            if n < min { Err("too small") } else if n > max { Err("too large") } else { Ok(n) }
+        }
+        None => strtonum(value, min, max),
+    }
 }
 
 /// A pane target: `:W.P`, `W.P`, `.P`, `P` (index), `%N` (id), `!` (the last pane).
@@ -254,7 +284,7 @@ fn respawn(app: &mut App, p: u64) {
     let Some(link) = app.link(&machine) else { return app.say("That machine is not connected", theme::WARN) };
     app.spawn(async move { link.rpc("agent_restart", serde_json::json!({ "agentId": agent }), std::time::Duration::from_secs(120)).await }, move |app, reply| match reply {
         Ok(_) => app.relist(&machine),
-        Err(e) => app.say(format!("respawn pane failed: {e}"), theme::WARN),
+        Err(e) => app.error(format!("respawn pane failed: {e}")),
     });
 }
 
@@ -262,7 +292,7 @@ fn respawn(app: &mut App, p: u64) {
 fn listing(app: &App, command: &str) -> Vec<String> {
     let window = |i: usize| {
         let tab = &app.tabs[i];
-        let flag = if i == app.active { "*" } else if app.last_tab.as_ref() == Some(&tab.id) { "-" } else { "" };
+        let flag = if i == app.active { "*" } else if app.last_tab() == Some(&tab.id) { "-" } else { "" };
         format!("{}: {}{flag} ({} panes){}", app.win_num(i), tab.name, tab.panes().len(), if i == app.active { " (active)" } else { "" })
     };
     match command {
@@ -499,7 +529,7 @@ fn queue_of(app: &mut App, line: &str) -> Queue {
         // Commands a command queues (if-shell's, a menu's) keep its mouse event, as tmux's
         // inserted items keep their state.
         Ok(cmds) => cmds.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: None, mouse: app.mouse_ev.clone() }).collect(),
-        Err((_, e)) => { app.say(e, theme::WARN); Queue::new() }
+        Err((_, e)) => { app.error(e); Queue::new() }
     }
 }
 
@@ -507,7 +537,7 @@ fn run_queue(app: &mut App, mut queue: Queue) {
     while let Some(Item { words, origin, mouse }) = queue.pop_front() {
         app.origin = origin;
         let saved = std::mem::replace(&mut app.mouse_ev, mouse);
-        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.say(e, theme::WARN); app.origin = None; app.mouse_ev = saved; continue } };
+        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.error(e); app.origin = None; app.mouse_ev = saved; continue } };
         let Some(Job { command, cwd, delay, background, done }) = job else {
             run_words(app, &words);
             app.origin = None;
@@ -594,7 +624,7 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             if (cond.contains("pane_tty") && tty_unknown) || cond.contains("$is_vim") { return Ok(None) }
             let (yes, no) = (args.values.get(1).cloned(), args.values.get(2).cloned());
             Ok(Some(Job { command: Some(expand(&cond)), cwd, delay: 0.0, background, done: Box::new(move |app, o| {
-                if let Some(e) = o.failed { app.say(e, theme::WARN); return Default::default() }
+                if let Some(e) = o.failed { app.error(e); return Default::default() }
                 let pick = if o.code == 0 && o.signal.is_none() { yes } else { no };
                 pick.map(|c| queue_of(app, &c)).unwrap_or_default()
             }) }))
@@ -610,7 +640,7 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             let command = args.values.first().map(|c| expand(c));
             let shown = command.clone().unwrap_or_default();
             Ok(Some(Job { command, cwd, delay, background, done: Box::new(move |app, o| {
-                if let Some(e) = o.failed { app.say(e, theme::WARN); return Default::default() }
+                if let Some(e) = o.failed { app.error(e); return Default::default() }
                 // Each line it printed, then how it failed, to the shell that asked (else shown).
                 let mut lines: Vec<String> = o.out.lines().map(str::to_string).collect();
                 match o.signal {
@@ -710,7 +740,7 @@ pub fn load_config(app: &mut App) -> Vec<String> {
     for file in files {
         match source(app, &file, false, false) {
             Ok(items) => { queue.extend(items); read.push(file) }
-            Err(e) => app.say(e, theme::WARN),
+            Err(e) => app.error(e),
         }
     }
     run_queue(app, queue);
@@ -812,12 +842,12 @@ fn run_words(app: &mut App, words: &[String]) {
     // args_parse reads them, their -t and -s found as cmd-find.c finds them — or tmux's error,
     // and nothing is done.
     let words = match crate::cmd::find(first) {
-        Err(e) if e.starts_with("ambiguous") => return app.say(e, theme::WARN),
+        Err(e) if e.starts_with("ambiguous") => return app.error(e),
         Ok(entry) if !hn_owned(first) => {
-            let args = match crate::cmd::parse(entry, &list) { Ok(a) => a, Err(e) => return app.say(e, theme::WARN) };
+            let args = match crate::cmd::parse(entry, &list) { Ok(a) => a, Err(e) => return app.error(e) };
             for (spec, f) in [(entry.target, 't'), (entry.source, 's')] {
                 let Some(spec) = spec else { continue };
-                if let Err(e) = crate::cmd::resolve(app, args.get(f), spec) { if !spec.can_fail { return app.say(e, theme::WARN) } }
+                if let Err(e) = crate::cmd::resolve(app, args.get(f), spec) { if !spec.can_fail { return app.error(e) } }
             }
             let mut list = list;
             list[0] = entry.name.to_string();
@@ -840,13 +870,13 @@ fn run_words(app: &mut App, words: &[String]) {
                 if let Some(n) = &name {
                     let want = expand(app, n);
                     let hits: Vec<usize> = (0..app.tabs.len()).filter(|i| app.tabs[*i].name == want).collect();
-                    if hits.len() > 1 { return app.say(format!("multiple windows named {n}"), theme::WARN) }
+                    if hits.len() > 1 { return app.error(format!("multiple windows named {n}")) }
                     if let Some(&i) = hits.first() { if !flag(words, "-d") { app.select_tab(i) } return }
                 }
             }
             // The pane this came from decides the machine and folder — read before the new window.
             let from = input::focused_agent(app);
-            let last_before = app.last_tab.clone();
+            let last_before = app.lastw.clone();
             let was_id = app.tab().id.clone();
             let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
             let found = crate::cmd::resolve(app, opt(words, "-t").as_deref(), spec).unwrap_or_default();
@@ -859,7 +889,7 @@ fn run_words(app: &mut App, words: &[String]) {
             }
             if let Some(n) = idx {
                 if let Some(i) = app.tab_by_num(n) {
-                    if !flag(words, "-k") { return app.say(format!("create window failed: index {n} in use"), theme::WARN) }
+                    if !flag(words, "-k") { return app.error(format!("create window failed: index {n} in use")) }
                     app.close_tab(i);
                 }
             }
@@ -876,10 +906,10 @@ fn run_words(app: &mut App, words: &[String]) {
             // -f across the whole window, -l its size (cells, or n%), -d not gone to, -P printed.
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
             let (w, p) = match opt(words, "-t") {
-                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
+                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.error(format!("can't find pane: {t}")) },
                 None => app.current().unwrap_or((app.active, 0)),
             };
-            let size = match split_size(words) { Ok(s) => s, Err(e) => return app.say(e, theme::WARN) };
+            let size = match split_size(app, words) { Ok(s) => s, Err(e) => return app.error(e) };
             if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let command = shell_command(words);
@@ -890,7 +920,7 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "kill-pane" => {
             // -t: that pane; -a: every pane but it (tmux's order of reading).
-            let target = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => Some(x), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.current() };
+            let target = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => Some(x), None => { app.error(format!("can't find pane: {t}")); return } }, None => app.current() };
             match target {
                 Some((w, p)) if flag(words, "-a") => { let others: Vec<u64> = app.tabs[w].panes().into_iter().filter(|x| *x != p).collect(); for o in others { app.close_pane(o) } }
                 Some((_, p)) => app.close_pane(p),
@@ -898,7 +928,7 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "kill-window" => {
-            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => { app.say(format!("can't find window: {t}"), theme::WARN); return } }, None => app.active };
+            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => { app.error(format!("can't find window: {t}")); return } }, None => app.active };
             if flag(words, "-a") {
                 let keep = app.tabs[target].id.clone();
                 while let Some(i) = app.tabs.iter().position(|t| t.id != keep) { app.close_tab(i) }
@@ -912,7 +942,7 @@ fn run_words(app: &mut App, words: &[String]) {
             if flag(words, "-a") {
                 let mut i = step(app.active);
                 while i != app.active && !crate::format::flags(app, i).contains(['#', '!', '~']) { i = step(i) }
-                if i == app.active { return app.say(format!("no {} window", if command == "next-window" { "next" } else { "previous" }), theme::WARN) }
+                if i == app.active { return app.error(format!("no {} window", if command == "next-window" { "next" } else { "previous" })) }
                 return app.select_tab(i);
             }
             app.select_tab(step(app.active))
@@ -921,25 +951,33 @@ fn run_words(app: &mut App, words: &[String]) {
         "select-window" => {
             let target = opt(words, "-t").or_else(|| Some(rest(words))).unwrap_or_default();
             if flag(words, "-l") { input::run(app, "last-tab"); return }
-            match window_target(app, &target) { Some(i) => app.select_tab(i), None => app.say(format!("can't find window: {}", target.trim_start_matches(':')), theme::WARN) }
+            match window_target(app, &target) { Some(i) => app.select_tab(i), None => app.error(format!("can't find window: {}", target.trim_start_matches(':'))) }
         }
         "rename-window" => {
             // rename-window [-t target-window] new-name
-            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
+            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
             let name = positional(words).join(" ");
             app.rename_tab_at(target, &name);
         }
         "move-window" => {
-            // -r renumbers every window; -s moves that window (you stay put); else this one.
+            // cmd-move-window.c: -r renumbers the windows; else the source (-s, else this window)
+            // takes the target's number (-t: a number that may be free; none: the first free
+            // one), -a after it or -b before it (the windows from there moving up one), -k
+            // replacing a window there; it is made the current window unless -d.
             if flag(words, "-r") { app.renumber_all(); return }
-            if flag(words, "-L") { app.move_tab(-1) } else if flag(words, "-R") { app.move_tab(1) }
-            else if let Some(n) = opt(words, "-t").or_else(|| Some(rest(words))).and_then(|t| t.trim_start_matches(':').parse::<usize>().ok()) {
-                let cur = app.tab().id.clone();
-                if let Some(src) = opt(words, "-s").and_then(|t| window_target(app, &t)) { app.active = src }
-                let moved = app.move_tab_to(n);
-                if let Some(i) = app.tabs.iter().position(|t| t.id == cur) { app.active = i }
-                if let Err(e) = moved { app.say(e, theme::WARN) }
+            let src = match opt(words, "-s") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
+            let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: true, default_marked: false };
+            let found = match crate::cmd::resolve(app, opt(words, "-t").as_deref(), spec) { Ok(f) => f, Err(e) => return app.error(e) };
+            let id = app.tabs[src].id.clone();
+            let mut idx = found.idx;
+            if flag(words, "-a") || flag(words, "-b") {
+                let at = found.window.map(|w| app.win_num(w)).unwrap_or_else(|| app.win_num(app.active));
+                let at = if flag(words, "-b") { at } else { at + 1 };
+                app.shuffle_up(at);
+                idx = Some(at);
             }
+            let Some(src) = app.tabs.iter().position(|t| t.id == id) else { return };
+            if let Err(e) = app.move_window(src, idx, flag(words, "-k"), !flag(words, "-d")) { app.error(e) }
         }
         "select-pane" => {
             // tmux's select-pane [-DdeLlMmRUZ] [-T title] [-t target-pane]. -M clears the mark,
@@ -949,7 +987,7 @@ fn run_words(app: &mut App, words: &[String]) {
             // window is unzoomed unless -Z.
             if flag(words, "-M") { app.marked = None; return }
             let (w, p) = match opt(words, "-t") {
-                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
+                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.error(format!("can't find pane: {t}")) },
                 None => match app.current() { Some(x) => x, None => return },
             };
             let keep_zoom = flag(words, "-Z");
@@ -971,7 +1009,7 @@ fn run_words(app: &mut App, words: &[String]) {
             app.fit_panes();
         }
         "last-pane" => {
-            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
+            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
             if flag(words, "-e") || flag(words, "-d") {
                 let last = app.tabs[w].last_focus();
                 if let Some(x) = last.and_then(|l| app.panes.get_mut(&l)) { x.input_off = flag(words, "-d") }
@@ -987,7 +1025,7 @@ fn run_words(app: &mut App, words: &[String]) {
                 return;
             }
             let (w, p) = match opt(words, "-t") {
-                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
+                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.error(format!("can't find pane: {t}")) },
                 None => match app.current() { Some(x) => x, None => return },
             };
             if flag(words, "-Z") {
@@ -995,11 +1033,19 @@ fn run_words(app: &mut App, words: &[String]) {
                 input::run(app, "zoom");
                 return;
             }
-            // -x / -y: that many cells (or n% of the window).
+            // cmd-resize-pane.c: the adjustment read first; then -x, then -y (cells, or n% of the
+            // window), then -L/-R/-U/-D by the adjustment — each that is given, in that order.
+            let n = match positional(words).first() {
+                None => 1,
+                Some(v) => match strtonum(v, 1, i32::MAX as i64) { Ok(n) => n as i32, Err(e) => return app.error(format!("adjustment {e}")) },
+            };
             let body = app.body();
-            if let Some(cols) = opt(words, "-x").and_then(|v| size_arg(&v, body.width)) { return app.size_pane(w, p, Dir::Horizontal, cols) }
-            if let Some(rows) = opt(words, "-y").and_then(|v| size_arg(&v, body.height)) { return app.size_pane(w, p, Dir::Vertical, rows) }
-            let n: i32 = positional(words).first().and_then(|v| v.parse().ok()).unwrap_or(1);
+            if let Some(v) = opt(words, "-x") {
+                match percentage(&v, 0, i32::MAX as i64, body.width as i64) { Ok(x) => app.size_pane(w, p, Dir::Horizontal, x.min(u16::MAX as i64) as u16), Err(e) => return app.error(format!("width {e}")) }
+            }
+            if let Some(v) = opt(words, "-y") {
+                match percentage(&v, 0, i32::MAX as i64, body.height as i64) { Ok(y) => app.size_pane(w, p, Dir::Vertical, y.min(u16::MAX as i64) as u16), Err(e) => return app.error(format!("height {e}")) }
+            }
             let (dir, sign) = if flag(words, "-L") { (Dir::Horizontal, -1) } else if flag(words, "-R") { (Dir::Horizontal, 1) } else if flag(words, "-U") { (Dir::Vertical, -1) } else if flag(words, "-D") { (Dir::Vertical, 1) } else { return };
             app.resize_pane(w, p, dir, sign * n);
         }
@@ -1007,9 +1053,9 @@ fn run_words(app: &mut App, words: &[String]) {
             // tmux's swap-pane [-dDUZ] [-s src] [-t dst]: the target (the current pane) and the
             // source (the marked pane, else the current one) trade places — in one window or
             // across two; -U/-D the source is the previous / next pane in the target's list.
-            let dst = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) }, None => match app.current() { Some(x) => x, None => return } };
+            let dst = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.error(format!("can't find pane: {t}")) }, None => match app.current() { Some(x) => x, None => return } };
             let src = match opt(words, "-s") {
-                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.say(format!("can't find pane: {t}"), theme::WARN) },
+                Some(t) => match pane_target(app, &t) { Some(x) => x, None => return app.error(format!("can't find pane: {t}")) },
                 None => pane_target(app, "{marked}").unwrap_or(dst),
             };
             let (detached, keep_zoom) = (flag(words, "-d"), flag(words, "-Z"));
@@ -1025,44 +1071,45 @@ fn run_words(app: &mut App, words: &[String]) {
         "break-pane" => {
             // tmux's break-pane [-d] [-n name] [-s src] [-t dst-window]: the pane (this one, or
             // -s's) becomes a window of its own, keeping its id — at the first free index, or -t's.
-            let src = match opt(words, "-s") { Some(t) => match pane_target(app, &t) { Some((_, p)) => p, None => return app.say(format!("can't find pane: {t}"), theme::WARN) }, None => match app.focused() { Some(f) => f, None => return } };
-            let num = match opt(words, "-t") { Some(t) => match t.trim_start_matches(':').trim_start_matches('=').parse::<usize>() { Ok(n) => Some(n), Err(_) => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => None };
-            if let Err(e) = app.break_pane(src, opt(words, "-n"), num, flag(words, "-d")) { app.say(e, theme::WARN) }
+            let src = match opt(words, "-s") { Some(t) => match pane_target(app, &t) { Some((_, p)) => p, None => return app.error(format!("can't find pane: {t}")) }, None => match app.focused() { Some(f) => f, None => return } };
+            let num = match opt(words, "-t") { Some(t) => match t.trim_start_matches(':').trim_start_matches('=').parse::<usize>() { Ok(n) => Some(n), Err(_) => return app.error(format!("can't find window: {t}")) }, None => None };
+            if let Err(e) = app.break_pane(src, opt(words, "-n"), num, flag(words, "-d")) { app.error(e) }
         }
         "rotate-window" => {
             // -t: that window; -D the other way; -Z keeps a zoomed window zoomed.
-            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
+            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
             app.rotate(w, if flag(words, "-D") { -1 } else { 1 }, flag(words, "-Z"))
         }
-        "next-layout" => app.next_layout(),
+        // -t: that window's layout, the current window staying where it is.
+        "next-layout" | "previous-layout" => {
+            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
+            app.step_layout(target, command == "next-layout")
+        }
         "select-layout" => {
             // -t: that window (else this one).
             // select-layout [-Enop] [-t target-window] [layout-name]: tmux's seven by name (or the
             // one a prefix names), -n/-p the next/previous, -E spread out, or a layout string.
-            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.say(format!("can't find window: {t}"), theme::WARN) }, None => app.active };
-            if flag(words, "-n") || flag(words, "-p") {
-                if target != app.active { app.select_tab(target) }
-                return app.step_layout(if flag(words, "-p") { -1 } else { 1 });
-            }
+            let target = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
+            if flag(words, "-n") || flag(words, "-p") { return app.step_layout(target, !flag(words, "-p")) }
             if flag(words, "-E") {
                 if let Some(f) = app.tabs[target].focus { if let Some(root) = app.tabs[target].root.as_mut() { root.spread_out(f) } }
                 return app.fit_panes();
             }
             let name = positional(words).join(" ");
             let name = name.trim();
-            if name.is_empty() { if target == app.active { input::run(app, "layout") } return }
-            if let Some(named) = crate::layout::Named::lookup(name) { return app.arrange_tab(target, named) }
-            // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
-            if name.contains('x') && name.contains(',') {
-                let ids = app.tabs[target].panes();
-                let body = app.body();
-                match crate::layout::Node::from_tmux(name, &ids, body.width, body.height) {
-                    Some(root) => { let tab = &mut app.tabs[target]; tab.root = Some(root); tab.zoomed = false; app.fit_panes() }
-                    None => app.say(format!("invalid layout: {name}"), theme::WARN),
-                }
+            // No name: the layout last applied, again (nothing if there was none).
+            if name.is_empty() {
+                if let Some(at) = app.tabs[target].layout_at { app.arrange_tab(target, crate::layout::Named::ALL[at]) }
                 return;
             }
-            app.say(format!("unknown layout: {name}"), theme::WARN);
+            if let Some(named) = crate::layout::Named::lookup(name) { return app.arrange_tab(target, named) }
+            // A tmux layout string (#{window_layout}, tmux-resurrect's): the panes take its cells.
+            let ids = app.tabs[target].panes();
+            let body = app.body();
+            match crate::layout::Node::from_tmux(name, &ids, body.width, body.height) {
+                Some(root) => { let tab = &mut app.tabs[target]; tab.root = Some(root); tab.zoomed = false; app.fit_panes() }
+                None => app.error(format!("invalid layout: {name}")),
+            }
         }
         "display-panes" => app.modal = Some(Modal::DisplayPanes { until: std::time::Instant::now() + std::time::Duration::from_millis(app.display_panes_ms) }),
         "copy-mode" => {
@@ -1105,7 +1152,7 @@ fn run_words(app: &mut App, words: &[String]) {
             // newline with -r, else a carriage return; -p bracketed; -d the buffer then deleted.
             let Some((_, pane)) = target_pane(app, words) else { return };
             let name = match opt(words, "-b") {
-                Some(b) => { if app.paste.get(&b).is_none() { return app.say(format!("no buffer {b}"), theme::WARN) } Some(b) }
+                Some(b) => { if app.paste.get(&b).is_none() { return app.error(format!("no buffer {b}")) } Some(b) }
                 None => app.paste.top().map(|b| b.name.clone()),
             };
             let Some(name) = name else { return };
@@ -1131,8 +1178,8 @@ fn run_words(app: &mut App, words: &[String]) {
         "list-buffers" | "choose-buffer" => input::run(app, "choose-buffer"),
         "delete-buffer" => {
             let name = match opt(words, "-b") {
-                Some(b) => { if app.paste.get(&b).is_none() { return app.say(format!("unknown buffer: {b}"), theme::WARN) } b }
-                None => match app.paste.top() { Some(b) => b.name.clone(), None => return app.say("no buffer", theme::WARN) },
+                Some(b) => { if app.paste.get(&b).is_none() { return app.error(format!("unknown buffer: {b}")) } b }
+                None => match app.paste.top() { Some(b) => b.name.clone(), None => return app.error("no buffer") },
             };
             app.paste.free(&name);
         }
@@ -1154,7 +1201,7 @@ fn run_words(app: &mut App, words: &[String]) {
                 let lines = crate::format::every(app, w, p);
                 return app.print("display", lines);
             }
-            if opt(words, "-F").is_some() && !positional(words).is_empty() { return app.say("only one of -F or argument must be given", theme::WARN) }
+            if opt(words, "-F").is_some() && !positional(words).is_empty() { return app.error("only one of -F or argument must be given") }
             let text = opt(words, "-F").or_else(|| positional(words).first().cloned()).unwrap_or_default();
             if text.is_empty() && app.capture.is_none() { input::run(app, "info"); return }
             let text = if text.is_empty() { "[#S] #I:#W, current pane #P - (%H:%M %d-%b-%y)".to_string() } else { text };
@@ -1201,9 +1248,9 @@ fn run_words(app: &mut App, words: &[String]) {
             }
             // In the client, asked for nothing in particular: the list to look through (C-b ?).
             if app.capture.is_none() && !one && key.is_none() && table.is_none() { return input::run(app, "keys") }
-            let only = match &key { Some(k) => match crate::keys::parse(k) { Ok(c) => Some(c), Err(_) => return app.say(format!("invalid key: {k}"), theme::WARN) }, None => None };
+            let only = match &key { Some(k) => match crate::keys::parse(k) { Ok(c) => Some(c), Err(_) => return app.error(format!("invalid key: {k}")) }, None => None };
             let tables = app.keymap.tables();
-            if let Some(t) = &table { if !tables.iter().any(|(n, _)| n == t) { return app.say(format!("table {t} doesn't exist"), theme::WARN) } }
+            if let Some(t) = &table { if !tables.iter().any(|(n, _)| n == t) { return app.error(format!("table {t} doesn't exist")) } }
             let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
             let keyname = |b: &crate::keys::Binding| crate::keys::name(&b.chord);
             let mut lines: Vec<String> = Vec::new();
@@ -1237,7 +1284,7 @@ fn run_words(app: &mut App, words: &[String]) {
                     lines.push(format!("bind-key {r}-T {n}{} {k}{} {}", " ".repeat(tw - width(n)), " ".repeat(kw - width(&k)), canonical(&b.command)));
                 }
             }
-            if only.is_some() && lines.is_empty() { return app.say(format!("unknown key: {}", key.unwrap_or_default()), theme::WARN) }
+            if only.is_some() && lines.is_empty() { return app.error(format!("unknown key: {}", key.unwrap_or_default())) }
             if one {
                 lines.truncate(1);
                 // -1 in a client: the line goes to the status line.
@@ -1257,18 +1304,18 @@ fn run_words(app: &mut App, words: &[String]) {
                     for c in w[1..].chars() {
                         match c { 'g' => f.global = true, 's' => f.server = true, 'w' => f.window = true, 'p' => f.pane = true, 'v' => values_only = true, 'A' => inherited = true, 'q' => quiet = true, 't' => { i += 1; target = words.get(i).cloned() } _ => {} }
                     }
-                } else if name.is_none() { name = Some(w.clone()) } else { return app.say("command show-options: too many arguments (need at most 1)", theme::WARN) }
+                } else if name.is_none() { name = Some(w.clone()) } else { return app.error("command show-options: too many arguments (need at most 1)") }
                 i += 1;
             }
             let (tab, pane) = match target.as_deref() {
-                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.say(format!("can't find window: {t}"), theme::WARN) },
+                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(format!("can't find window: {t}")) },
                 None => app.current().unwrap_or((app.active, 0)),
             };
             let tab_id = app.tabs[tab].id.clone();
             match app.options.show(name.as_deref(), &f, inherited, values_only, &tab_id, pane) {
                 Ok(lines) => { if !lines.is_empty() { app.print("show-options", lines) } }
                 Err(_) if quiet => {}
-                Err(e) => app.say(e, theme::WARN),
+                Err(e) => app.error(e),
             }
         }
         "list-windows" | "list-sessions" | "list-panes" | "list-clients" => {
@@ -1310,18 +1357,18 @@ fn run_words(app: &mut App, words: &[String]) {
             // tmux's set-option: checked, kept where the flags say (the session, the window, the
             // pane, or globally), then the options hn acts on read the value now in force.
             let (f, quiet, format, target, args) = crate::tmuxconf::set_flags(&words[1..], command == "set-window-option");
-            let Some(name) = args.first().cloned() else { return app.say("command set-option: too few arguments (need at least 1)", theme::WARN) };
+            let Some(name) = args.first().cloned() else { return app.error("command set-option: too few arguments (need at least 1)") };
             let value = args.get(1).map(|v| if format { expand(app, v) } else { v.clone() });
             // -t: the window (or pane) the option is for; else the one here.
             let (tab, pane) = match target.as_deref() {
-                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.say(format!("can't find window: {t}"), theme::WARN) },
+                Some(t) => match pane_target(app, t) { Some(tp) => tp, None => return app.error(format!("can't find window: {t}")) },
                 None => app.current().unwrap_or((app.active, 0)),
             };
             let tab_id = app.tabs[tab].id.clone();
             let now = match app.options.set(&name, value.as_deref(), &f, &tab_id, pane) {
                 Ok(now) => now,
                 Err(e) if quiet && e.starts_with("invalid option") => return,
-                Err(e) => return app.say(e, theme::WARN),
+                Err(e) => return app.error(e),
             };
             // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
             if name == "@tim" { app.tim.set_off(matches!(now.as_deref(), Some("off" | "0" | "no"))); return }
@@ -1339,7 +1386,7 @@ fn run_words(app: &mut App, words: &[String]) {
             let words = vec!["set".to_string(), "-g".to_string(), name, now.unwrap_or_default()];
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
                 Ok(()) => app.apply_settings(&settings),
-                Err(e) => app.say(e, theme::WARN),
+                Err(e) => app.error(e),
             }
         }
         "bind-key" | "unbind-key" => {
@@ -1348,7 +1395,7 @@ fn run_words(app: &mut App, words: &[String]) {
             words[0] = command.to_string();
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
                 Ok(()) => { app.apply_settings(&settings); if let Some(n) = settings.notes.first() { app.say(n.clone(), theme::WARN) } }
-                Err(e) => app.say(e, theme::WARN),
+                Err(e) => app.error(e),
             }
         }
         "source-file" => {
@@ -1364,29 +1411,36 @@ fn run_words(app: &mut App, words: &[String]) {
                 if path == "-" { app.say("-: reading the shell's input is not supported", theme::WARN); continue }
                 let pattern = if path.starts_with('/') { path.clone() } else { format!("{cwd}/{path}") };
                 let found = glob(&pattern);
-                if found.is_empty() { if !quiet { app.say(format!("{path}: No such file or directory"), theme::WARN) } continue }
+                if found.is_empty() { if !quiet { app.error(format!("{path}: No such file or directory")) } continue }
                 files.extend(found);
             }
             for file in files {
                 match source(app, &file, parse_only, verbose) {
                     Ok(items) => app.insert_next.extend(items),
-                    Err(e) => app.say(e, theme::WARN),
+                    Err(e) => app.error(e),
                 }
             }
         }
         "swap-window" => {
-            let src = opt(words, "-s").map(|t| window_target(app, &t)).unwrap_or(Some(app.active));
-            // No target: the window holding the marked pane, as tmux's.
+            // cmd-swap-window.c: the source (-s, else the marked pane's window, else this one) and
+            // the target (-t, else this one) trade numbers. The current window number stays
+            // current, so the window swapped in is the one shown; -d goes with the moved window
+            // instead (the target's number is selected).
             let marked = app.marked.and_then(|m| app.tabs.iter().position(|t| t.panes().contains(&m)));
-            let dst = match opt(words, "-t") { Some(t) => window_target(app, &t), None => marked.or(Some(app.active)) };
-            match (src, dst) {
-                (Some(a), Some(b)) => {
-                    // -d leaves the current window where it was; without it, focus follows the move.
-                    let keep = flag(words, "-d");
-                    if a != app.active { let cur = app.active; app.active = a; app.swap_tabs(a, b); if keep { app.active = cur } } else { app.swap_tabs(a, b) }
-                }
-                _ => app.say("can't find window", theme::WARN),
-            }
+            let src = match opt(words, "-s") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => marked.unwrap_or(app.active) };
+            let dst = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(i) => i, None => return app.error(format!("can't find window: {t}")) }, None => app.active };
+            if src == dst { return }
+            // What tmux keeps on the winlink stays with the number, not the window: which one is
+            // current, which was last (the - flag), and the alerts flagged there.
+            let current = app.active;
+            let (a, b) = (app.tabs[src].id.clone(), app.tabs[dst].id.clone());
+            let (alerts_src, alerts_dst) = (app.tabs[src].alerts, app.tabs[dst].alerts);
+            app.swap_tabs(src, dst);
+            app.active = current;
+            app.tabs[src].alerts = alerts_src;
+            app.tabs[dst].alerts = alerts_dst;
+            for x in app.lastw.iter_mut() { if *x == a { *x = b.clone() } else if *x == b { *x = a.clone() } }
+            if flag(words, "-d") { app.select_tab(dst) } else { app.fit_panes() }
         }
         "join-pane" | "move-pane" => {
             // tmux's join-pane [-bdfhv] [-l size] [-s src] [-t dst]: the source (the marked pane,
@@ -1396,21 +1450,21 @@ fn run_words(app: &mut App, words: &[String]) {
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
             let src = match opt(words, "-s") { Some(t) => pane_target(app, &t), None => pane_target(app, "{marked}").or_else(|| app.current()) };
             let dst = match opt(words, "-t") { Some(t) => pane_target(app, &t), None => app.tabs[app.active].focus.map(|f| (app.active, f)) };
-            let (Some((_, sp)), Some((dw, dp))) = (src, dst) else { return app.say("can't find pane", theme::WARN) };
-            let size = match split_size(words) { Ok(s) => s, Err(e) => return app.say(e, theme::WARN) };
+            let (Some((_, sp)), Some((dw, dp))) = (src, dst) else { return app.error("can't find pane") };
+            let size = match split_size(app, words) { Ok(s) => s, Err(e) => return app.error(e) };
             let at = crate::app::At { tab: app.tabs[dw].id.clone(), pane: Some(dp), dir, before: flag(words, "-b"), full: flag(words, "-f"), size, detached: flag(words, "-d"), zoom: false };
-            if let Err(e) = app.join_pane(sp, at) { app.say(e, theme::WARN) }
+            if let Err(e) = app.join_pane(sp, at) { app.error(e) }
         }
         "clear-history" => { if let Some((_, p)) = target_pane(app, words) { if let Some(x) = app.panes.get_mut(&p) { x.clear_history() } } }
         "capture-pane" => {
             // -p prints it; else it becomes a paste buffer. -t names the pane.
-            let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.focused() };
+            let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.error(format!("can't find pane: {t}")); return } }, None => app.focused() };
             let range = (opt(words, "-S").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MIN) } else { None })), opt(words, "-E").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MAX) } else { None })));
             let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.text_range(range.0, range.1)) else { return };
             if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) }
             else {
                 let limit = app.buffer_limit();
-                if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.say(e, theme::WARN) }
+                if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.error(e) }
             }
         }
         // has-session: its -t was found (else tmux's error, and 1) before it ran.
@@ -1438,18 +1492,18 @@ fn run_words(app: &mut App, words: &[String]) {
             // -h hidden, -F the value expanded.
             let args = positional(words);
             let name = args.first().cloned().unwrap_or_default();
-            if name.is_empty() { return app.say("empty variable name", theme::WARN) }
-            if name.contains('=') { return app.say("variable name contains =", theme::WARN) }
+            if name.is_empty() { return app.error("empty variable name") }
+            if name.contains('=') { return app.error("variable name contains =") }
             let value = args.get(1).map(|v| if flag(words, "-F") { expand(app, v) } else { v.clone() });
             let env = if flag(words, "-g") { &mut app.global_env } else { &mut app.session_env };
             if flag(words, "-u") {
-                if value.is_some() { return app.say("can't specify a value with -u", theme::WARN) }
+                if value.is_some() { return app.error("can't specify a value with -u") }
                 env.remove(&name);
             } else if flag(words, "-r") {
-                if value.is_some() { return app.say("can't specify a value with -r", theme::WARN) }
+                if value.is_some() { return app.error("can't specify a value with -r") }
                 env.insert(name, crate::app::EnvVar { value: None, hidden: false });
             } else {
-                let Some(value) = value else { return app.say("no value specified", theme::WARN) };
+                let Some(value) = value else { return app.error("no value specified") };
                 env.insert(name, crate::app::EnvVar { value: Some(value), hidden: flag(words, "-h") });
             }
         }
@@ -1468,20 +1522,20 @@ fn run_words(app: &mut App, words: &[String]) {
                 })
             };
             let lines: Vec<String> = match positional(words).first() {
-                Some(name) => match env.get(name) { Some(e) => show(name, e).into_iter().collect(), None => return app.say(format!("unknown variable: {name}"), theme::WARN) },
+                Some(name) => match env.get(name) { Some(e) => show(name, e).into_iter().collect(), None => return app.error(format!("unknown variable: {name}")) },
                 None => env.iter().filter_map(|(k, e)| show(k, e)).collect(),
             };
             app.print("show-environment", lines)
         }
         "set-hook" | "show-hooks" => {}
         "wait-for" | "wait" => {}
-        "pipe-pane" => app.say("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)", theme::WARN),
+        "pipe-pane" => app.error("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)"),
         "save-buffer" | "saveb" | "show-buffer" => {
             // tmux's save-buffer [-a] [-b buffer-name] path (show-buffer: to the shell, or a view):
             // the newest automatic buffer without -b; a path from the shell's folder (- its stdout).
             let b = match opt(words, "-b") {
-                Some(n) => match app.paste.get(&n) { Some(b) => b.clone(), None => return app.say(format!("no buffer {n}"), theme::WARN) },
-                None => match app.paste.top() { Some(b) => b.clone(), None => return app.say("no buffers", theme::WARN) },
+                Some(n) => match app.paste.get(&n) { Some(b) => b.clone(), None => return app.error(format!("no buffer {n}")) },
+                None => match app.paste.top() { Some(b) => b.clone(), None => return app.error("no buffers") },
             };
             let path = if command == "show-buffer" { "-".to_string() } else { expand(app, &positional(words).first().cloned().unwrap_or_default()) };
             if path == "-" { return app.print_data(command, &b.data) }
@@ -1490,25 +1544,24 @@ fn run_words(app: &mut App, words: &[String]) {
                 use std::io::Write;
                 std::fs::OpenOptions::new().append(true).create(true).open(&path).and_then(|mut f| f.write_all(b.data.as_bytes()))
             } else { std::fs::write(&path, &b.data) };
-            if let Err(e) = written { app.say(format!("{path}: {}", io_error(&e)), theme::WARN) }
+            if let Err(e) = written { app.error(format!("{path}: {}", io_error(&e))) }
         }
         "load-buffer" | "loadb" => {
             // tmux's load-buffer [-w] [-b buffer-name] path: the file (from the shell's folder)
             // into a buffer — named, or a new automatic one.
             let path = client_path(app, &expand(app, &positional(words).first().cloned().unwrap_or_default()));
             let text = if path == "-" { app.cli_stdin.clone().unwrap_or_default() } else {
-                match std::fs::read(&path) { Ok(t) => String::from_utf8_lossy(&t).into_owned(), Err(e) => return app.say(format!("{path}: {}", io_error(&e)), theme::WARN) }
+                match std::fs::read(&path) { Ok(t) => String::from_utf8_lossy(&t).into_owned(), Err(e) => return app.error(format!("{path}: {}", io_error(&e))) }
             };
             let limit = app.buffer_limit();
-            if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.say(e, theme::WARN) }
+            if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.error(e) }
         }
-        "previous-layout" => { let at = (app.tab().layout_at + 3) % 5; app.tab_mut().layout_at = at; app.next_layout() }
-        "resize-window" => app.say("resize-window: a window is the terminal's size here", theme::WARN),
+        "resize-window" => app.error("resize-window: a window is the terminal's size here"),
         "respawn-window" => {
             // tmux's respawn-window: refused while anything runs in the window, unless -k.
             let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(w) => w, None => return }, None => app.active };
             let panes = app.tabs[w].panes();
-            if !flag(words, "-k") && panes.iter().any(|p| pane_alive(app, *p)) { return app.say(format!("respawn window failed: window {}:{} still active", app.session_name(), app.win_num(w)), theme::WARN) }
+            if !flag(words, "-k") && panes.iter().any(|p| pane_alive(app, *p)) { return app.error(format!("respawn window failed: window {}:{} still active", app.session_name(), app.win_num(w))) }
             for p in panes { respawn(app, p) }
         }
         "set-buffer" => {
@@ -1519,29 +1572,29 @@ fn run_words(app: &mut App, words: &[String]) {
             if let Some(new) = opt(words, "-n") {
                 let old = match &name {
                     Some(n) if exists => n.clone(),
-                    Some(n) => return app.say(format!("unknown buffer: {n}"), theme::WARN),
-                    None => match app.paste.top() { Some(b) => b.name.clone(), None => return app.say("no buffer", theme::WARN) },
+                    Some(n) => return app.error(format!("unknown buffer: {n}")),
+                    None => match app.paste.top() { Some(b) => b.name.clone(), None => return app.error("no buffer") },
                 };
-                if let Err(e) = app.paste.rename(&old, &new) { app.say(e, theme::WARN) }
+                if let Err(e) = app.paste.rename(&old, &new) { app.error(e) }
                 return;
             }
             let args = positional(words);
-            if args.len() != 1 { return app.say("no data specified", theme::WARN) }
+            if args.len() != 1 { return app.error("no data specified") }
             if args[0].is_empty() { return }
             let mut data = String::new();
             if flag(words, "-a") && exists { data = app.paste.get(name.as_deref().unwrap_or("")).map(|b| b.data.clone()).unwrap_or_default() }
             data.push_str(&args[0]);
             let limit = app.buffer_limit();
-            if let Err(e) = app.paste.set(data, name.as_deref(), limit) { app.say(e, theme::WARN) }
+            if let Err(e) = app.paste.set(data, name.as_deref(), limit) { app.error(e) }
         }
         "respawn-pane" => {
             // tmux's respawn-pane: a pane whose harness still runs needs -k.
             let Some((w, p)) = target_pane(app, words) else { return };
-            if !flag(words, "-k") && pane_alive(app, p) { return app.say(format!("respawn pane failed: pane {} still active", pane_name(app, w, p)), theme::WARN) }
+            if !flag(words, "-k") && pane_alive(app, p) { return app.error(format!("respawn pane failed: pane {} still active", pane_name(app, w, p))) }
             respawn(app, p);
         }
         "suspend-client" => app.suspend = true,
-        "rename-session" => { let name = rest(words); if name.trim().is_empty() { app.say("rename-session: a name", theme::WARN) } else { app.session_alias = Some(name.trim().to_string()) } }
+        "rename-session" => { let name = rest(words); if name.trim().is_empty() { app.error("rename-session: a name") } else { app.session_alias = Some(name.trim().to_string()) } }
         "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }
         "kill-server" => app.quit = true,
@@ -1562,7 +1615,7 @@ fn run_words(app: &mut App, words: &[String]) {
             else if let Some(t) = opt(words, "-t") {
                 let t = t.strip_suffix(':').unwrap_or(&t).to_string();
                 let tty = crate::app::tty_name();
-                if t != tty && Some(t.as_str()) != tty.strip_prefix("/dev/") { return app.say(format!("can't find client: {t}"), theme::WARN) }
+                if t != tty && Some(t.as_str()) != tty.strip_prefix("/dev/") { return app.error(format!("can't find client: {t}")) }
             }
             app.quit = true;
         }
@@ -1573,7 +1626,7 @@ fn run_words(app: &mut App, words: &[String]) {
                     "root" => { app.key_table = None; app.prefix = false }
                     "prefix" => { app.key_table = None; app.prefix = true; app.prefix_at = Some(std::time::Instant::now()) }
                     _ if app.keymap.named.contains_key(&t) => { app.key_table = Some(t); app.prefix = false }
-                    _ => app.say(format!("table {t} doesn't exist"), theme::WARN),
+                    _ => app.error(format!("table {t} doesn't exist")),
                 }
                 return;
             }
@@ -1591,7 +1644,7 @@ fn run_words(app: &mut App, words: &[String]) {
                         (Some(w), _) if kind == crate::cmd::Kind::Pane => app.select_tab(w),
                         _ => {}
                     },
-                    Err(e) => app.say(e, theme::WARN),
+                    Err(e) => app.error(e),
                 }
             }
         }
@@ -1600,7 +1653,7 @@ fn run_words(app: &mut App, words: &[String]) {
             // its program, if it asked for the mouse; nothing for a pane in copy mode).
             if flag(words, "-M") {
                 let m = app.mouse_ev.clone().filter(|m| m.valid);
-                let Some((m, (_, pane))) = m.and_then(|m| crate::mouse::mouse_pane(app, &m).map(|t| (m, t))) else { return app.say("no mouse target", theme::WARN) };
+                let Some((m, (_, pane))) = m.and_then(|m| crate::mouse::mouse_pane(app, &m).map(|t| (m, t))) else { return app.error("no mouse target") };
                 if app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false) || m.wp != Some(pane) { return }
                 return crate::mouse::input_key_mouse(app, pane, &m);
             }
@@ -1699,7 +1752,7 @@ fn run_words(app: &mut App, words: &[String]) {
             // or a number); nothing over another menu; -O stays open; -C the item chosen first.
             if matches!(app.modal, Some(Modal::Menu(_)) | Some(Modal::Popup { .. })) { return }
             let Some(args) = words.args.clone() else { return };
-            let starting: i64 = match args.get('C') { None => 0, Some("-") => -1, Some(c) => match c.parse::<u32>() { Ok(n) => n as i64, Err(_) => return app.say(format!("starting choice {c} is invalid"), theme::WARN) } };
+            let starting: i64 = match args.get('C') { None => 0, Some("-") => -1, Some(c) => match c.parse::<u32>() { Ok(n) => n as i64, Err(_) => return app.error(format!("starting choice {c} is invalid")) } };
             let title = args.get('T').map(|t| expand(app, t)).unwrap_or_default();
             let mut items: Vec<crate::modal::MenuItem> = Vec::new();
             let vals = &args.values;
@@ -1712,7 +1765,7 @@ fn run_words(app: &mut App, words: &[String]) {
                     if items.last().map(|it| !it.separator).unwrap_or(false) { items.push(crate::modal::MenuItem { label: String::new(), key: String::new(), command: String::new(), disabled: true, separator: true }) }
                     continue;
                 }
-                if vals.len() - i < 2 { return app.say("not enough arguments", theme::WARN) }
+                if vals.len() - i < 2 { return app.error("not enough arguments") }
                 let (key, command) = (vals[i].clone(), vals[i + 1].clone());
                 i += 2;
                 let label = expand(app, &name);
@@ -1752,7 +1805,7 @@ fn run_words(app: &mut App, words: &[String]) {
             let command = positional(words).first().map(|w| w.strip_prefix(crate::tmuxconf::BLOCK).unwrap_or(w).to_string()).unwrap_or_default();
             if command.is_empty() { return }
             let key = opt(words, "-c").and_then(|c| { let mut it = c.chars(); match (it.next(), it.next()) { (Some(k), None) if k.is_ascii_graphic() => Some(k), _ => None } });
-            let Some(key) = key.or(if opt(words, "-c").is_some() { None } else { Some('y') }) else { return app.say("invalid confirm key", theme::WARN) };
+            let Some(key) = key.or(if opt(words, "-c").is_some() { None } else { Some('y') }) else { return app.error("invalid confirm key") };
             let name = crate::cmdparse::parse(&command, app, true).ok().and_then(|c| c.first().and_then(|c| c.args.first().cloned())).and_then(|a| match a { crate::cmdparse::Arg::Str(s) => Some(resolve(&s).to_string()), _ => None }).unwrap_or_default();
             let prompt = match opt(words, "-p") { Some(p) => expand(app, &p), None => format!("Confirm '{name}'? ({key}/n)") };
             app.modal = Some(Modal::Confirm { prompt, command, key, enter_yes: flag(words, "-y") });
@@ -1770,7 +1823,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "send-message" => { let text = rest(words); input::message_focused(app, &text) }
         // Harness-era command ids still work, for old configs and the palette.
         other if input::is_command(other) => input::run(app, other),
-        other => app.say(format!("unknown command: {other}"), theme::WARN),
+        other => app.error(format!("unknown command: {other}")),
     }
 }
 

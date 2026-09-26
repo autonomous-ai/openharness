@@ -619,8 +619,9 @@ pub fn run(app: &mut App, command: &str) {
         "tab-left" => app.move_tab(-1),
         "tab-right" => app.move_tab(1),
         "last-tab" => {
-            let at = app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|t| &t.id == id));
-            if let Some(index) = at { app.select_tab(index) }
+            // session_last: the top of the stack, or tmux's error.
+            let at = app.last_tab().and_then(|id| app.tabs.iter().position(|t| &t.id == id));
+            match at { Some(index) => app.select_tab(index), None => app.error("no last window") }
         }
         "next-waiting" => {
             // Oldest question first; the one in front of you counts as handled, so repeated presses walk the queue.
@@ -785,7 +786,7 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
                 if let Some((back, last)) = app.return_to.take() {
                     if let Some(i) = app.tabs.iter().position(|t| t.id == back) {
                         app.active = i;
-                        app.last_tab = last;
+                        app.lastw = last;
                         app.home_order.borrow_mut().clear();
                         if let Some(f) = app.tabs[i].focus { app.seen(f) }
                         app.fit_panes();

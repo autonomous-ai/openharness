@@ -77,8 +77,9 @@ pub struct Tab {
     pub last_output: Instant,
     /// The same, in seconds since the epoch: #{window_activity}.
     pub activity: i64,
-    /// Where `next-layout` (Space) is in its cycle.
-    pub layout_at: usize,
+    /// The named layout last applied (tmux's w->lastlayout): where `next-layout` (Space) goes on
+    /// from, none until one is chosen — the cycle then starts at even-horizontal.
+    pub layout_at: Option<usize>,
     /// Whether the desk knows this tab yet (a new, empty tab is local until its first harness).
     pub on_desk: bool,
     /// synchronize-panes: keys go to every pane here.
@@ -92,7 +93,7 @@ impl Tab {
     pub fn new(name: &str) -> Tab {
         static WID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let wid = WID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Tab { id: Uuid::new_v4().simple().to_string(), wid, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, layout: json!({}) }
     }
     /// window_update_activity: something happened in the window just now — its activity time,
     /// and the silence timer starts again (alerts_reset).
@@ -240,8 +241,9 @@ pub struct App {
     desk_inflight: u32,
     /// The desk moved while writes were out: fetch it once they land.
     desk_stale: bool,
-    /// The tab before this one, by id — ⌥` goes back to it.
-    pub last_tab: Option<String>,
+    /// tmux's s->lastw: the windows current before, the most recent first, by tab id — C-b l goes
+    /// back to the first (the - flag's); closing the current window lands there.
+    pub lastw: Vec<String>,
     /// tmux's window indexes, by tab id: given once, kept until the window closes (a gap stays).
     pub nums: HashMap<String, usize>,
     /// The cursor shape last sent to the terminal.
@@ -260,7 +262,7 @@ pub struct App {
     /// copy-pipe's command, for the copy about to happen.
     pub copy_pipe: Option<String>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
-    pub return_to: Option<(String, Option<String>)>,
+    pub return_to: Option<(String, Vec<String>)>,
     pub held_reply: Option<tokio::sync::oneshot::Sender<Reply>>,
     /// A command that waits for what it opened (display-menu; command-prompt and confirm-before
     /// without -b): the shell that ran it is answered when that closes (CMD_RETURN_WAIT).
@@ -427,7 +429,7 @@ impl App {
             orphans: HashMap::new(),
             desk_inflight: 0,
             desk_stale: false,
-            last_tab: None,
+            lastw: Vec::new(),
             terminal_focused: true,
             dial: Default::default(),
             options: Default::default(),
@@ -462,6 +464,17 @@ impl App {
         self.messages.push((std::time::SystemTime::now(), text.clone()));
         if self.messages.len() > 200 { self.messages.remove(0); }
         self.toast = Some((text, color, Instant::now()));
+    }
+
+    /// A command's error (cmdq_error): to a shell that ran the command as it is, and on the status
+    /// line with its first letter a capital, as tmux shows it there ("Invalid layout: foo"); a
+    /// config file's keeps its file:line and its case.
+    pub fn error(&mut self, text: impl Into<String>) {
+        let mut text = text.into();
+        if self.capture_err.is_none() && self.origin.is_none() {
+            if let Some(c) = text.chars().next() { text = c.to_uppercase().collect::<String>() + &text[c.len_utf8()..] }
+        }
+        self.say(text, theme::WARN)
     }
 
     pub fn link(&self, machine_id: &str) -> Option<Link> {
@@ -1149,7 +1162,7 @@ impl App {
         let tab = &mut self.tabs[index];
         tab.root = layout::arrange(named, &ids, body.width, body.height, status, (&mw, &mh), (&ow, &oh));
         tab.zoomed = false;
-        tab.layout_at = layout::Named::ALL.iter().position(|n| *n == named).unwrap_or(0);
+        tab.layout_at = layout::Named::ALL.iter().position(|n| *n == named);
         self.fit_panes();
     }
 
@@ -1188,17 +1201,55 @@ impl App {
 
     pub fn tab_by_num(&self, n: usize) -> Option<usize> { (0..self.tabs.len()).find(|i| self.win_num(*i) == n) }
 
-    /// move-window -t N: the window takes index N (if free) and its place in the order.
-    pub fn move_tab_to(&mut self, n: usize) -> Result<(), String> {
+    /// server_link_window then server_unlink_window, as move-window does them: the window at
+    /// [src] takes number [idx] (the first free one from base-index when none — its own number
+    /// still taken while it is looked for), a window already there replaced with [kill] ("index
+    /// in use: N" without; "same index: N" when it is this one), made current if [select] (or if
+    /// the one replaced was current); a current window moved without it leaves for the last one.
+    pub fn move_window(&mut self, src: usize, idx: Option<usize>, kill: bool, select: bool) -> Result<(), String> {
         self.renumber();
-        if self.tab_by_num(n).map(|i| i != self.active).unwrap_or(false) { return Err(format!("index in use: {n}")) }
-        let id = self.tab().id.clone();
-        self.nums.insert(id, n);
-        let to = (0..self.tabs.len()).filter(|i| *i != self.active && self.win_num(*i) < n).count();
-        while self.active > to { self.move_tab(-1) }
-        while self.active < to { self.move_tab(1) }
+        let id = self.tabs[src].id.clone();
+        let mut select = select;
+        if let Some(n) = idx {
+            if let Some(i) = self.tab_by_num(n) {
+                if i == src { return Err(format!("same index: {n}")) }
+                if !kill { return Err(format!("index in use: {n}")) }
+                // -k: that window goes (its harnesses keep running); if it was current, the moved
+                // one takes its place as current.
+                let gone = self.tabs.remove(i);
+                self.lastw.retain(|x| *x != gone.id);
+                if i == self.active { select = true; self.active = self.tabs.iter().position(|t| t.id == id).unwrap_or(0) }
+                else if i < self.active { self.active -= 1 }
+                for p in gone.panes() { self.drop_pane(p) }
+                if gone.on_desk { self.desk_op(json!({ "op": "tab.close", "id": gone.id })) }
+            }
+        }
+        let n = idx.unwrap_or_else(|| self.free_num());
+        let old = self.nums.get(&id).copied().unwrap_or(n);
+        let current = self.tabs[self.active].id.clone();
+        // session_detach of the old place: the current window moved and not selected goes to the
+        // last one, else the one before it by number, round to the highest.
+        let leave = !select && current == id;
+        self.nums.insert(id.clone(), n);
+        let nums = self.nums.clone();
+        self.tabs.sort_by_key(|t| nums.get(&t.id).copied().unwrap_or(usize::MAX));
+        let at = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);
+        self.active = self.tabs.iter().position(|t| t.id == current).unwrap_or(at);
+        if let Some(tab) = self.tabs.get(at).filter(|t| t.on_desk) { let op = json!({ "op": "tab.move", "id": tab.id, "index": at }); self.desk_op(op) }
+        if select { self.select_tab(at) }
+        else if leave {
+            // session_last, else session_previous from the old number (the moved window, at its
+            // new one, counts), round to the highest.
+            let last = self.lastw.first().and_then(|x| self.tabs.iter().position(|t| &t.id == x)).filter(|p| *p != at);
+            let before = (0..self.tabs.len()).filter(|p| self.win_num(*p) < old).max_by_key(|p| self.win_num(*p));
+            let to = last.or(before).unwrap_or(self.tabs.len() - 1);
+            self.select_tab(to);
+            self.lastw.retain(|x| *x != id);
+        }
+        self.fit_panes();
         Ok(())
     }
+
     pub fn tab_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
     pub fn focused(&self) -> Option<u64> { self.tab().focus }
 
@@ -1297,7 +1348,7 @@ impl App {
             if self.panes.get(&pane).map(|p| (p.machine_id.clone(), p.agent_id.clone())) != Some(prev.clone()) { self.last_harness = Some(prev) }
         }
         let changed = tab != self.active;
-        if changed { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
+        if changed { self.lastw_leave(tab); self.home_order.borrow_mut().clear() }
         self.active = tab;
         self.tabs[tab].alerts = 0;
         if changed { self.tabs[tab].touch(); self.alert(tab, ACTIVITY) }
@@ -1346,7 +1397,7 @@ impl App {
         let id = self.new_pane(machine_id, agent_id);
         if let Placement::At(at) = &placement {
             let Some(t) = self.tabs.iter().position(|x| x.id == at.tab) else { self.drop_pane(id); return };
-            if !self.split_at(t, id, at) { self.drop_pane(id); self.say("no space for new pane", theme::WARN); return }
+            if !self.split_at(t, id, at) { self.drop_pane(id); self.error("no space for new pane"); return }
             let tab = &mut self.tabs[t];
             tab.add_pane(id, at.pane, at.before, at.full);
             // tmux takes a zoomed window out of zoom (-Z: zooms its active pane after); the new
@@ -1368,7 +1419,7 @@ impl App {
                 tab.focus = Some(id);
                 // As new-window: the first free index, in its place in the order.
                 self.renumber();
-                self.last_tab = Some(self.tabs[self.active].id.clone());
+                { let id = self.tabs[self.active].id.clone(); self.lastw_push(id) }
                 let n = self.free_num();
                 self.nums.insert(tab.id.clone(), n);
                 let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|m| *m > n).unwrap_or(false)).unwrap_or(self.tabs.len());
@@ -1395,10 +1446,10 @@ impl App {
                 self.drop_pane(old);
             }
             (Placement::At(_), _) => {}
-            (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => { if !self.split_focused(id, dir) { self.drop_pane(id); self.say("no space for new pane", theme::WARN); return } }
+            (Placement::Split(dir), false) | (Placement::Auto(Some(dir)), false) => { if !self.split_focused(id, dir) { self.drop_pane(id); self.error("no space for new pane"); return } }
             (Placement::Auto(None), false) => {
                 let dir = self.smart_dir();
-                if !self.split_focused(id, dir) { self.drop_pane(id); self.say("no space for new pane", theme::WARN); return }
+                if !self.split_focused(id, dir) { self.drop_pane(id); self.error("no space for new pane"); return }
             }
         }
         self.tab_mut().zoomed = false;
@@ -1605,21 +1656,42 @@ impl App {
 
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() { return }
+        // session_detach: closing the current window goes to the last one (session_last), else
+        // the one before it by number, round to the highest (session_previous).
+        if index == self.active && self.tabs.len() > 1 {
+            let last = self.lastw.first().and_then(|id| self.tabs.iter().position(|t| &t.id == id)).filter(|p| *p != index);
+            let to = last.unwrap_or(if index > 0 { index - 1 } else { self.tabs.len() - 1 });
+            self.select_tab(to);
+        }
         let tab = self.tabs.remove(index);
+        self.lastw.retain(|id| *id != tab.id);
         for id in tab.panes() { self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
         if self.tabs.is_empty() { self.tabs.push(Tab::new("home")) }
-        // Closing the current window lands on the last one, as tmux does; else keep our place.
-        let last = self.last_tab.as_ref().and_then(|id| self.tabs.iter().position(|t| &t.id == id));
-        if index == self.active && last.is_some() { self.active = last.unwrap_or(0); self.last_tab = None }
-        else if self.active >= self.tabs.len() || (index < self.active) { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
+        if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
         self.fit_panes();
+    }
+
+    /// The last window (the top of tmux's lastw stack): C-b l's, the - flag's.
+    pub fn last_tab(&self) -> Option<&String> { self.lastw.first() }
+
+    /// winlink_stack_push: a window to the top of the stack, once.
+    pub fn lastw_push(&mut self, id: String) {
+        self.lastw.retain(|x| *x != id);
+        self.lastw.insert(0, id);
+    }
+
+    /// session_set_current's stack: the window chosen comes off it, the current one goes on top.
+    fn lastw_leave(&mut self, to: usize) {
+        let (to, from) = (self.tabs[to].id.clone(), self.tabs[self.active].id.clone());
+        self.lastw.retain(|x| *x != to);
+        self.lastw_push(from);
     }
 
     /// new-window's window at index `n` (the first free one without), in its place in the order.
     pub fn new_tab_at(&mut self, n: Option<usize>) {
         self.renumber();
-        self.last_tab = Some(self.tabs[self.active].id.clone());
+        { let id = self.tabs[self.active].id.clone(); self.lastw_push(id) }
         let tab = Tab::new("home");
         let n = n.unwrap_or_else(|| self.free_num());
         self.nums.insert(tab.id.clone(), n);
@@ -1646,7 +1718,7 @@ impl App {
     pub fn new_tab(&mut self) {
         // tmux's new-window: the first free index; the others keep their numbers.
         self.renumber();
-        self.last_tab = Some(self.tabs[self.active].id.clone());
+        { let id = self.tabs[self.active].id.clone(); self.lastw_push(id) }
         let tab = Tab::new("home");
         let n = self.free_num();
         self.nums.insert(tab.id.clone(), n);
@@ -1702,7 +1774,7 @@ impl App {
             // session_set_current: the window's alerts are seen, and choosing it is activity.
             self.tabs[index].alerts = 0;
             let changed = index != self.active;
-            if changed { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
+            if changed { self.lastw_leave(index); self.home_order.borrow_mut().clear() }
             self.active = index;
             if changed { self.tabs[index].touch(); self.alert(index, ACTIVITY) }
             if let Some(f) = self.tabs[index].focus { self.seen(f) }
@@ -1826,7 +1898,7 @@ impl App {
         let Some(tab) = self.tabs.get(w) else { return };
         let ids = tab.panes();
         let other = || if ids.len() == 2 { ids.iter().copied().find(|p| Some(*p) != tab.focus) } else { None };
-        let Some(last) = tab.last_focus().filter(|l| ids.contains(l)).or_else(other) else { self.say("no last pane", theme::WARN); return };
+        let Some(last) = tab.last_focus().filter(|l| ids.contains(l)).or_else(other) else { self.error("no last pane"); return };
         let zoomed = tab.zoomed;
         if w == self.active { self.focus_pane(w, last) } else { self.tabs[w].set_active(last) }
         self.tabs[w].zoomed = zoomed && keep_zoom;
@@ -1933,14 +2005,19 @@ impl App {
         self.fit_panes();
     }
 
-    /// `next-layout` (C-b Space): even-horizontal → even-vertical → main-horizontal → main-vertical → tiled.
-    /// next-layout / previous-layout: tmux's seven named layouts in its order.
-    pub fn next_layout(&mut self) { self.step_layout(1) }
-    pub fn step_layout(&mut self, by: i64) {
-        let n = layout::Named::ALL.len() as i64;
-        let at = (self.tab().layout_at as i64 + by).rem_euclid(n) as usize;
-        let i = self.active;
-        self.arrange_tab(i, layout::Named::ALL[at]);
+    /// next-layout / previous-layout (layout_set_next/previous): tmux's seven named layouts in its
+    /// order, on from the one last applied — a window that has had none starts at even-horizontal
+    /// going forward, tiled going back.
+    pub fn step_layout(&mut self, index: usize, next: bool) {
+        let Some(tab) = self.tabs.get(index) else { return };
+        let last = layout::Named::ALL.len() - 1;
+        let at = match (tab.layout_at, next) {
+            (None, true) => 0,
+            (None, false) => last,
+            (Some(at), true) => if at >= last { 0 } else { at + 1 },
+            (Some(at), false) => if at == 0 { last } else { at - 1 },
+        };
+        self.arrange_tab(index, layout::Named::ALL[at]);
     }
 
     pub fn apply_preset(&mut self, preset: Preset) { let i = self.active; self.apply_preset_at(i, preset) }
@@ -2047,6 +2124,7 @@ impl App {
         let gone: Vec<usize> = self.tabs.iter().enumerate().filter(|(_, t)| t.on_desk && !seen.contains(&t.id)).map(|(i, _)| i).collect();
         for index in gone.into_iter().rev() {
             let tab = self.tabs.remove(index);
+            self.lastw.retain(|id| *id != tab.id);
             for id in tab.panes() { self.drop_pane(id) }
             if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1) }
         }
