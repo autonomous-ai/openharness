@@ -187,6 +187,12 @@ pub struct App {
     pub terminal_focused: bool,
     /// The Harness device on this desk, and hn's half of talking to it (dial.rs).
     pub dial: crate::dial::Dial,
+    /// A key table of your own the next key is looked up in (`switch-client -T`).
+    pub key_table: Option<String>,
+    /// tmux's options, as set (options.rs): what show-options prints and formats read.
+    pub options: crate::options::Store,
+    /// `#()` commands in formats: their last output, run again every status-interval.
+    pub jobs: std::cell::RefCell<std::collections::HashMap<String, crate::format::Job>>,
     pub fleet_marked: bool,
 }
 
@@ -279,6 +285,9 @@ impl App {
             last_tab: None,
             terminal_focused: true,
             dial: Default::default(),
+            options: Default::default(),
+            jobs: Default::default(),
+            key_table: None,
             fleet_marked: false,
         }
     }
@@ -891,6 +900,11 @@ impl App {
             if from.is_some() { *to = from }
         }
         for (k, v) in &s.options.user { self.opts.user.insert(k.clone(), v.clone()); }
+        // What tmux.conf set, into the options as tmux keeps them.
+        let (to, from) = (&mut self.options, &s.options.store);
+        for (a, b) in [(&mut to.server, &from.server), (&mut to.global_session, &from.global_session), (&mut to.global_window, &from.global_window), (&mut to.session, &from.session)] {
+            for (k, v) in b { a.insert(k.clone(), v.clone()); }
+        }
         let (o, n) = (&mut self.opts, &s.options);
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
         if let Some(off) = s.options.tim_off { self.tim.off = off }

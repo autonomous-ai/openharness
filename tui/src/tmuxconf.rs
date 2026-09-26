@@ -56,6 +56,8 @@ pub struct Options {
     pub main_pane_height: Option<u16>,
     pub copy_command: Option<String>,
     pub status_keys_vi: Option<bool>,
+    /// Every option set, as tmux keeps them (show-options, formats).
+    pub store: crate::options::Store,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -113,9 +115,22 @@ fn style(text: &str) -> (Option<Color>, Option<Color>) {
 fn on_off(v: &str) -> Option<bool> { match v { "on" | "yes" | "1" | "true" => Some(true), "off" | "no" | "0" | "false" => Some(false), _ => None } }
 
 /// A word as it must be written to read back as itself.
+/// Marks a word that was a `{ … }` block, until it is written back (quote_word) or used.
+pub const BLOCK: char = '\u{1}';
+
+/// A command's words with their block marks taken off (what every command but bind sees).
+pub fn unblock(words: &[String]) -> Vec<String> { words.iter().map(|w| w.strip_prefix(BLOCK).unwrap_or(w).to_string()).collect() }
+
+/// A line's commands, blocks marked (split_blocks).
+pub fn split_marked(line: &str) -> Vec<Vec<String>> {
+    crate::commands::split_blocks(line).into_iter().map(|c| c.into_iter().map(|(w, b)| if b { format!("{BLOCK}{w}") } else { w }).collect()).collect()
+}
+
 pub fn quote_word(w: &str) -> String {
+    if let Some(block) = w.strip_prefix(BLOCK) { return format!("{{ {block} }}") }
     if w == ";" { return w.to_string() }
-    if !w.is_empty() && !w.chars().any(|c| c.is_whitespace() || matches!(c, '#' | '"' | '\'' | ';' | '\\')) { return w.to_string() }
+    // A lone brace would open (or close) a block when read back.
+    if !w.is_empty() && w != "{" && w != "}" && !w.chars().any(|c| c.is_whitespace() || matches!(c, '#' | '"' | '\'' | ';' | '\\')) { return w.to_string() }
     if !w.contains('\'') { return format!("'{w}'") }
     format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -169,7 +184,7 @@ fn truthy(v: &str) -> bool { let v = v.trim(); !v.is_empty() && v != "0" }
 fn unquote(s: &str) -> &str { s.trim().trim_matches('"').trim_matches('\'') }
 
 /// The tmux level hn speaks, for version-gated configs (`%if #{>=:#{version},3.2}`).
-pub const TMUX_VERSION: &str = "3.5";
+pub const TMUX_VERSION: &str = "3.5a";
 
 /// Formats as tmux.conf can ask them at load: #{version}, #{@user}, #{==: != < > <= >= && ||},
 /// #{?c,a,b}, #{e|op:a,b}. Anything else is empty (no window exists yet).
@@ -235,7 +250,10 @@ pub fn expand_home(path: &str) -> String {
 /// Run a condition with sh, a second at most; true when it exits 0.
 pub fn shell_true(cond: &str) -> bool {
     use std::process::{Command, Stdio};
-    let Ok(mut child) = Command::new("sh").arg("-c").arg(cond).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else { return false };
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(cond).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
+    let Ok(mut child) = c.spawn() else { return false };
     let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
         match child.try_wait() {
@@ -282,7 +300,7 @@ pub fn apply(text: &str, keymap: &mut Keymap, settings: &mut Settings) {
         if line.starts_with("%endif") { stack.pop(); continue }
         if line.starts_with("%hidden") { continue }
         if !live { continue }
-        for words in split(line) {
+        for words in split_marked(line) {
             // `\;` chains commands: part of the command a bind binds, else one directive after another.
             let parts: Vec<&[String]> = if matches!(words.first().map(|w| w.as_str()), Some("bind" | "bind-key")) { vec![&words[..]] } else { words.split(|w| w == ";").filter(|p| !p.is_empty()).collect() };
             for part in parts {
@@ -294,10 +312,23 @@ pub fn apply(text: &str, keymap: &mut Keymap, settings: &mut Settings) {
 
 pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Result<(), String> {
     let Some(cmd) = words.first() else { return Ok(()) };
+    // Only a binding keeps its blocks as blocks (written back into the command it binds).
+    let plain;
+    let words = if matches!(cmd.as_str(), "bind" | "bind-key") { words } else { plain = unblock(words); &plain[..] };
     match cmd.as_str() {
         "set" | "set-option" | "setw" | "set-window-option" => {
-            let args: Vec<&String> = words[1..].iter().filter(|w| !w.starts_with('-')).collect();
-            let (Some(name), value) = (args.first(), args.get(1).map(|v| v.as_str()).unwrap_or("")) else { return Ok(()) };
+            // tmux's flags, then the option and its value — checked and kept as tmux keeps them
+            // (show-options, formats); then the options hn acts on read the value now in force. In a
+            // file there is no current session yet, so everything is global.
+            let (f, quiet, _format, _target, args) = set_flags(&words[1..], matches!(cmd.as_str(), "setw" | "set-window-option"));
+            let Some(name) = args.first().cloned() else { return Err("command set-option: too few arguments (need at least 1)".into()) };
+            let f = crate::options::SetFlags { global: true, ..f };
+            let now = match s.options.store.set(&name, args.get(1).map(|v| v.as_str()), &f, "", 0) {
+                Ok(now) => now.unwrap_or_default(),
+                Err(e) if quiet && e.starts_with("invalid option") => return Ok(()),
+                Err(e) => return Err(e),
+            };
+            let (name, value) = (&name, now.as_str());
             match name.as_str() {
                 "prefix" => keymap.prefix = keys::parse(value)?,
                 "prefix2" => keymap.prefix2 = if value == "None" { None } else { Some(keys::parse(value)?) },
@@ -336,20 +367,12 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "pane-border-status" => s.options.border_titles = Some(value != "off"),
                 "mode-keys" => s.options.mode_keys_emacs = Some(value == "emacs"),
                 "status" => s.options.status = on_off(value),
-                // Options with no effect here (the terminal's, the server's): accepted quietly.
-                "escape-time" | "default-terminal" | "terminal-overrides" | "terminal-features" | "focus-events" | "set-clipboard"
-                | "allow-passthrough" | "extended-keys" | "default-shell" | "default-command" | "aggressive-resize" | "status-interval"
-                | "monitor-activity" | "visual-activity" | "visual-bell" | "bell-action" | "automatic-rename" | "allow-rename"
-                | "set-titles" | "set-titles-string" | "update-environment" | "destroy-unattached" | "exit-empty" | "word-separators" | "wrap-search"
-                | "status-left-style" | "status-right-style" | "window-status-activity-style" | "window-status-bell-style"
-                | "mode-style" | "message-command-style" | "clock-mode-colour" | "clock-mode-style" | "display-panes-colour" | "display-panes-active-colour"
-                | "pane-border-lines" | "popup-style" | "popup-border-style" => {}
                 "@tim" => s.options.tim_off = Some(matches!(value, "off" | "0" | "no")),
                 // A user option (themes, plugins): kept, for #{@name} and show -v.
                 n if n.starts_with('@') => { s.options.user.insert(n.to_string(), value.to_string()); }
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
-                // Not an error in your tmux.conf: noted (`hn --keys` lists them, `:set` says so).
-                other => s.notes.push(format!("set {other}: not used here")),
+                // Every other tmux option is kept as tmux keeps it, for show-options and formats.
+                _ => {}
             }
         }
         // Another file, as tmux reads it (-q: quiet when missing). Depth-limited against loops.
@@ -382,12 +405,19 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
         "run-shell" | "run" => s.notes.push(format!("{}: not run (tmux plugins do not load here)", words[1..].join(" "))),
         "bind" | "bind-key" => {
             let mut table = Table::Prefix;
+            // A table of your own (`bind -T resize h …`), reached with switch-client -T.
+            let mut named: Option<String> = None;
             let mut repeat = false;
+            let mut note = String::new();
             let mut i = 1;
             while i < words.len() && words[i].starts_with('-') && words[i].len() > 1 {
                 let flag = &words[i];
-                if flag == "-T" { i += 1; table = match words.get(i).and_then(|t| keys::table_named(t)) { Some(t) => t, None => return Ok(()) } }
-                else if flag == "-N" { i += 1 }
+                if flag == "-T" {
+                    i += 1;
+                    let Some(t) = words.get(i) else { return Err("command bind-key: -T expects an argument".into()) };
+                    match keys::table_named(t) { Some(t) => table = t, None => named = Some(t.clone()) }
+                }
+                else if flag == "-N" { i += 1; note = words.get(i).cloned().unwrap_or_default() }
                 else { if flag.contains('n') { table = Table::Root } if flag.contains('r') { repeat = true } }
                 i += 1;
             }
@@ -395,9 +425,22 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             let chord = keys::parse(key)?;
             // Stored as a command line again: anything the tokenizer would read differently (a space,
             // a `#` that would start a comment, a quote) goes back in quotes.
-            let command = words[i + 1..].iter().map(|w| quote_word(w)).collect::<Vec<_>>().join(" ");
+            // One argument (a `{ }` block, or a quoted string) is a command list of its own, as
+            // tmux parses it; several are one command's words.
+            let rest = &words[i + 1..];
+            let command = if rest.len() == 1 { rest[0].strip_prefix(BLOCK).unwrap_or(&rest[0]).trim().to_string() } else { rest.iter().map(|w| quote_word(w)).collect::<Vec<_>>().join(" ") };
             if command.is_empty() { return Err(format!("bind {key} without a command")) }
-            keymap.bind(table, chord, command, repeat);
+            match named {
+                Some(t) => {
+                    let list = keymap.named.entry(t).or_default();
+                    list.retain(|b| b.chord != chord);
+                    list.push(keys::Binding { chord, command, repeat, note });
+                }
+                None => {
+                    keymap.bind(table, chord, command, repeat);
+                    if !note.is_empty() { if let Some(b) = keymap.table_mut(table).iter_mut().rev().find(|b| b.chord == chord) { b.note = note } }
+                }
+            }
         }
         "unbind" | "unbind-key" => {
             let mut table = Table::Prefix;
@@ -408,7 +451,20 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 match words[i].as_str() {
                     "-a" => all = true,
                     "-n" => table = Table::Root,
-                    "-T" => { i += 1; table = match words.get(i).and_then(|t| keys::table_named(t)) { Some(t) => t, None => return Ok(()) } }
+                    "-T" => {
+                        i += 1;
+                        match words.get(i).and_then(|t| keys::table_named(t)) {
+                            Some(t) => table = t,
+                            None => {
+                                // A table of your own: its key (or with -a all of it) goes.
+                                let name = words.get(i).cloned().unwrap_or_default();
+                                let rest: Vec<&String> = words[i + 1..].iter().filter(|w| !w.starts_with('-')).collect();
+                                if words.iter().any(|w| w == "-a") { keymap.named.remove(&name); }
+                                else if let Some(k) = rest.first() { let chord = keys::parse(k)?; if let Some(list) = keymap.named.get_mut(&name) { list.retain(|b| b.chord != chord) } }
+                                return Ok(());
+                            }
+                        }
+                    }
                     w => key = Some(w.to_string()),
                 }
                 i += 1;
@@ -424,6 +480,40 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
         _ => {}
     }
     Ok(())
+}
+
+/// set-option's flags (`-aFgopqsuUw`, `-t target`), and the words after them: the flags, quiet
+/// (-q), format (-F), the target, the option and its value.
+pub fn set_flags(words: &[String], window: bool) -> (crate::options::SetFlags, bool, bool, Option<String>, Vec<String>) {
+    let mut f = crate::options::SetFlags { window, ..Default::default() };
+    let (mut quiet, mut format, mut target) = (false, false, None);
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let w = &words[i];
+        if rest.is_empty() && w == "--" { i += 1; rest.extend(words[i..].iter().cloned()); break }
+        if rest.is_empty() && w.starts_with('-') && w.len() > 1 {
+            let chars: Vec<char> = w[1..].chars().collect();
+            for (k, c) in chars.iter().enumerate() {
+                match c {
+                    'g' => f.global = true, 's' => f.server = true, 'w' => f.window = true, 'p' => f.pane = true,
+                    'u' | 'U' => f.unset = true, 'a' => f.append = true, 'o' => f.only_if_unset = true,
+                    'q' => quiet = true, 'F' => format = true,
+                    't' => {
+                        let tail: String = chars[k + 1..].iter().collect();
+                        target = if tail.is_empty() { i += 1; words.get(i).cloned() } else { Some(tail) };
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            i += 1;
+            continue;
+        }
+        rest.push(w.clone());
+        i += 1;
+    }
+    (f, quiet, format, target, rest)
 }
 
 #[cfg(test)]

@@ -14,6 +14,11 @@ use crate::event::Event;
 unsafe extern "C" { fn getuid() -> u32; }
 
 /// Where the sockets live: short enough for a socket path (104 bytes on macOS), private to you.
+/// This client's own socket, once it listens: what HN_SOCKET says to the commands it runs, and
+/// #{socket_path}.
+static HERE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+pub fn here() -> Option<PathBuf> { HERE.get().cloned() }
+
 pub fn dir() -> PathBuf {
     let base = std::env::var("HN_TMPDIR").or_else(|_| std::env::var("TMUX_TMPDIR")).unwrap_or_else(|_| "/tmp".into());
     PathBuf::from(base).join(format!("hn-{}", unsafe { getuid() }))
@@ -33,6 +38,7 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
     let path = dir.join(format!("{name}.sock"));
     let _ = std::fs::remove_file(&path);
     let listener = tokio::net::UnixListener::bind(&path).ok()?;
+    let _ = HERE.set(path.clone());
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)); }
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
