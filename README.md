@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.autonomous.ai/harness"><b>Download</b></a> ·
+  <a href="https://harness.autonomous.ai/desktop"><b>Download</b></a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#beyond-code">Beyond code</a> ·
   <a href="#domain-specific-harnesses-dsh">Harnesses</a> ·
@@ -108,7 +108,7 @@ The [architecture guide](docs/architecture.md) has the details.
 <a id="run-it"></a>
 ## Get started
 
-**[Download the app](https://www.autonomous.ai/harness)** for macOS or Linux.
+**[Download the app](https://harness.autonomous.ai/desktop)** for macOS or Linux.
 
 Add a machine. Run this on it, then **Machines → Link Machine** in the app:
 
@@ -256,7 +256,7 @@ Press **⌘N → Hello World** and say hello. The [authoring guide](store/README
 
 ## Harness device
 
-[**Get a Harness device**](https://www.autonomous.ai/harness), or build your own from the files below. The
+[**Get a Harness device**](https://www.autonomous.ai/harness-device), or build your own from the files below. The
 [firmware guide](devices/harness-device/firmware/README.md) lists the supported boards and build
 commands, and the [hardware guide](devices/harness-device/hardware/README.md) covers the design files.
 
