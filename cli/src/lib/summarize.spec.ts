@@ -42,7 +42,7 @@ vi.mock('./oneshot.js', () => ({
   shutdownOneShotPool: vi.fn(),
 }))
 
-import { deriveTurnBody, summarizeTurnText, syncSummaryPoolSessions, deriveTurnSummary } from './summarize.js'
+import { deriveReaderText, deriveTurnBody, summarizeTurnText, syncSummaryPoolSessions, deriveTurnSummary } from './summarize.js'
 
 beforeEach(() => {
   mocks.runClaude.mockReset()
@@ -340,5 +340,17 @@ describe('deriveTurnSummary (the local recap)', () => {
   it('skips a label at the top', () => {
     const text = 'Kết quả:\nĐã sửa xong file cấu hình.'
     expect(deriveTurnSummary(text)?.split('\n')[0]).toBe('Đã sửa xong file cấu hình.')
+  })
+})
+
+describe('deriveReaderText', () => {
+  it('keeps every word and the paragraphs, and drops only the markdown', () => {
+    const answer = '## Result\n\nFixed the **login** screen.\n\n- token refresh\n- `session` cleanup\n\n```ts\nconst x = 1\n```\n\nSee [the PR](https://x.y/1).'
+    expect(deriveReaderText(answer)).toBe('Result\n\nFixed the login screen.\n\n• token refresh\n• session cleanup\n\nconst x = 1\n\nSee the PR.')
+  })
+
+  it('never clips, however long the answer', () => {
+    const long = 'word '.repeat(2000).trim()
+    expect(deriveReaderText(long)).toBe(long)
   })
 })

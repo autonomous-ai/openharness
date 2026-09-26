@@ -203,6 +203,86 @@ void config_save_swipe_reversed(bool reversed)
 #define K_FACH   "fach"
 #define K_FDCH   "fdch"
 
+bool config_load_wifi(char *ssid, size_t ssid_cap, char *pass, size_t pass_cap)
+{
+    if (ssid && ssid_cap) memset(ssid, 0, ssid_cap);
+    if (pass && pass_cap) memset(pass, 0, pass_cap);
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    if (ssid && ssid_cap) read_str(h, "wssid", ssid, ssid_cap);
+    if (pass && pass_cap) read_str(h, "wpass", pass, pass_cap);
+    nvs_close(h);
+    return ssid && ssid[0];
+}
+
+void config_save_wifi(const char *ssid, const char *pass)
+{
+    if (!ssid) return;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    bool ok = nvs_set_str(h, "wssid", ssid) == ESP_OK &&
+              nvs_set_str(h, "wpass", pass ? pass : "") == ESP_OK &&
+              nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    ESP_LOGI(TAG, "save_wifi ssid='%s': %s", ssid, ok ? "ok" : "FAILED");
+}
+
+void config_clear_bind(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, "wbind");
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "bind cleared");
+}
+
+void config_save_bind(const char *hex)
+{
+    if (!hex || strlen(hex) < 16) return;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    bool ok = nvs_set_str(h, "wbind", hex) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    ESP_LOGI(TAG, "save_bind: %s", ok ? "ok" : "FAILED");
+}
+
+bool config_has_bind(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    char buf[CFG_BIND_MAX] = "";
+    read_str(h, "wbind", buf, sizeof(buf));
+    nvs_close(h);
+    return buf[0] != '\0';
+}
+
+bool config_bind_matches(const char *hex)
+{
+    if (!hex || !hex[0]) return false;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    char want[CFG_BIND_MAX] = "";
+    read_str(h, "wbind", want, sizeof(want));
+    nvs_close(h);
+    size_t n = strlen(want);
+    if (!n || n != strlen(hex)) return false;
+    unsigned d = 0;
+    for (size_t i = 0; i < n; i++) d |= (unsigned char)want[i] ^ (unsigned char)hex[i];
+    return d == 0;
+}
+
+void config_clear_wifi(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, "wssid");
+    nvs_erase_key(h, "wpass");
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "wifi creds cleared");
+}
+
 bool config_clear_all(void)
 {
     nvs_handle_t h;

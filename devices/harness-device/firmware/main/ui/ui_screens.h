@@ -137,6 +137,12 @@ bool ui_reader_is_open(void);
 int ui_notif_pull_zone_px(void);
 /** True while a chooser wheel covers the face — its own controls own the top band, not the pull-down. */
 bool ui_picker_is_open(void);
+// True while a full-face overlay on lv_layer_top owns the pointer (Brightness, WiFi).
+// touch.c skips the notification band and carousel swipe so those screens keep their taps.
+bool ui_modal_is_open(void);
+#if defined(DEVICE_BOARD_M5CORES3)
+void ui_service_wifi(void);   // drain scan/join on refresh_task
+#endif
 // Circular swipe (driven by touch.c): begin records the tile at press-down; end(+1 right / -1 left)
 // wraps first-project↔Settings when the swipe was an edge swipe (position unchanged since press-down).
 void ui_swipe_begin(void);
@@ -372,7 +378,8 @@ void ui_stop_active_turn(void);
 
 // Physical BOOT button pressed. Routes to "back" (cancel voice / dismiss the question) while a
 // question is on screen, otherwise to ui_stop_active_turn(). Safe from a non-LVGL task.
-void ui_boot_pressed(void);
+// Returns whether it did anything (the CoreS3's on-screen key goes on to "back" when it did not).
+bool ui_boot_pressed(void);
 
 // --- Screen lock (3×3 pattern passcode) ---
 // Wire the sleep/wake power hook and lock now if a passcode is set (called once at the end of ui_init).
@@ -385,3 +392,8 @@ bool ui_lock_active(void);
 // One line on the log whenever what covers the face changes (screen, overlay, drawer, lock, sleep).
 // Called from the LVGL task every loop; cheap when nothing changed.
 void ui_log_state_if_changed(void);
+
+#if defined(DEVICE_BOARD_M5CORES3)
+// Debug: put the face in a named state (cable `debug.show`), for screenshots.
+void ui_debug_show(const char *what);
+#endif

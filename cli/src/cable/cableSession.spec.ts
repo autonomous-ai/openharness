@@ -11,13 +11,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
-import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CableSession, fitText, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import { bindTokenForUsb, setDialBindDirForTest } from './dialBind.js'
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
-  readonly path = '/dev/loopback'
   isOpen = true
   /** Everything the daemon wrote, decoded back into messages. */
   readonly sent: Array<Record<string, unknown>> = []
@@ -30,6 +30,7 @@ class LoopbackPort implements CablePort {
   constructor(
     private readonly onData: (chunk: Buffer) => void,
     private readonly onClosed: (why: string) => void = () => {},
+    readonly path = '/dev/loopback',
   ) {}
 
   async write(bytes: Uint8Array): Promise<void> {
@@ -114,6 +115,7 @@ function makeHost(over: Partial<CableHost> = {}) {
 function tmpLog() { return new DialLog(mkdtempSync(join(tmpdir(), 'cable-'))) }
 
 async function connect(host: CableHost = makeHost(), log = tmpLog()) {
+  setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
   let port!: LoopbackPort
   const session = new CableSession(host, log, async (onData, onClosed) => {
     port = new LoopbackPort(onData, onClosed)
@@ -145,9 +147,48 @@ describe('cable session', () => {
     )
     const welcome = port.sent[0]
     expect(welcome).toMatchObject({ t: 'welcome', app: 'harness', machine: { name: 'MacBook Pro' } })
+    expect(welcome.bind).toMatch(/^[0-9a-f]{64}$/)
+    // The computer's clock, for a device that shows the time (the CoreS3).
+    expect(Math.abs((welcome.now as number) - Date.now())).toBeLessThan(5000)
+    expect(welcome.tzOffsetMin).toBe(-new Date().getTimezoneOffset())
     // Streamed one per message: a hundred agents do not fit in one 8 KB frame, and the dial must not have
     // to reassemble anything.
     expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ t: 'agent', id: 'a1', name: 'Fix login screen', engine: 'claude' })
+    await session.stop()
+  })
+
+  it('refuses a tcp dial this computer never USB-paired', async () => {
+    setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
+    let port!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed) => {
+      port = new LoopbackPort(onData, onClosed, 'tcp:10.0.0.8:17420')
+      return port
+    })
+    session.start()
+    await vi.waitFor(() => expect(port).toBeDefined())
+    await settle()
+    port.say({ t: 'hello', product: 'harness', mac: 'AA:BB:CC:DD:EE:FF' })
+    await vi.waitFor(() => expect(port.closedWith).toBe('not usb-paired'))
+    expect(port.types()).toEqual([])
+    await session.stop()
+  })
+
+  it('welcomes a tcp dial after USB pairing minted the bind', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bind-'))
+    setDialBindDirForTest(dir)
+    bindTokenForUsb('AA:BB:CC:DD:EE:FF')
+    let port!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed) => {
+      port = new LoopbackPort(onData, onClosed, 'tcp:10.0.0.8:17420')
+      return port
+    })
+    session.start()
+    await vi.waitFor(() => expect(port).toBeDefined())
+    await settle()
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb:cc:dd:ee:ff' })
+    await vi.waitFor(() => expect(port.types()).toContain('welcome'))
+    expect(port.sent[0]).toMatchObject({ t: 'welcome' })
+    expect((port.sent[0] as { bind: string }).bind).toBe(bindTokenForUsb('AA:BB:CC:DD:EE:FF'))
     await session.stop()
   })
 
@@ -275,6 +316,62 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('passes over a foreign USB port and keeps looking, instead of waiting on it', async () => {
+    // Found on a desk with a second ESP32 board plugged in: it shares the dial's USB ids, the daemon
+    // rejected it, then sat out a minute and went straight back to it, and never reached the dial that was
+    // advertising itself on WiFi the whole time.
+    setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
+    const asked: Array<string | undefined> = []
+    let foreign!: LoopbackPort
+    const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed, avoid) => {
+      asked.push(avoid)
+      if (asked.length === 1) {
+        foreign = new LoopbackPort(onData, onClosed, '/dev/cu.other-board')
+        return foreign
+      }
+      return null   // nothing else here; what matters is that it looked, and past which port
+    })
+    session.start()
+    await vi.waitFor(() => expect(foreign).toBeDefined())
+    await settle()   // the session takes the port before it can hear it
+    foreign.say({ t: 'hello', product: 'grid', fw: '0.1.2', proto: 1, mac: 'aa:bb' })
+    await vi.waitFor(() => expect(foreign.closedWith).toBe('another product'))
+
+    // The next attempt comes on the usual reopen cadence, not a minute later, and skips that port.
+    await vi.waitFor(() => expect(asked.length).toBeGreaterThan(1), { timeout: 5000 })
+    expect(asked[1]).toBe('/dev/cu.other-board')
+    await session.stop()
+  })
+
+  it('passes over a USB port that never says anything, too', async () => {
+    // The same board, gone quiet: no bytes at all, so it never earns the "not ours" verdict above and was
+    // reopened after every silence, forever.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    try {
+      setDialBindDirForTest(mkdtempSync(join(tmpdir(), 'bind-')))
+      const asked: Array<string | undefined> = []
+      let quiet!: LoopbackPort
+      const session = new CableSession(makeHost(), tmpLog(), async (onData, onClosed, avoid) => {
+        asked.push(avoid)
+        if (asked.length === 1) {
+          quiet = new LoopbackPort(onData, onClosed, '/dev/cu.quiet-board')
+          return quiet
+        }
+        return null
+      })
+      session.start()
+      await vi.waitFor(() => expect(quiet).toBeDefined())
+      await settle()
+      for (let s = 0; s < 25 && !quiet.closedWith; s++) { vi.advanceTimersByTime(1_000); await settle() }
+      expect(quiet.closedWith).toBe('silence')
+      for (let s = 0; s < 5 && asked.length < 2; s++) { vi.advanceTimersByTime(1_000); await settle() }
+      expect(asked[1]).toBe('/dev/cu.quiet-board')
+      await session.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refuses a greeting that names no product at all', async () => {
     // Absence has to mean no. Reading it as "probably ours" puts the hole straight back: the firmware
     // that predates this field is exactly the firmware the sibling product can still capture.
@@ -306,6 +403,19 @@ describe('cable session', () => {
     port.sent.length = 0
     port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb' })
     await settle()
+    expect(port.types()).not.toContain('fw.offer')
+    await session.stop()
+  })
+
+  it('never offers the dial\'s image to a CoreS3', async () => {
+    const image = Buffer.alloc(2048, 9)
+    const host = makeHost({
+      firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }),
+    })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'cc:dd', hw: 'm5stack-cores3' })
+    await settle()
+    expect(port.types()).toContain('welcome')
     expect(port.types()).not.toContain('fw.offer')
     await session.stop()
   })
@@ -1358,5 +1468,23 @@ describe('cable session', () => {
 
     await session.stop()
     expect(host.onDialGone).toHaveBeenCalled()
+  })
+})
+
+describe('fitText', () => {
+  it('leaves a summary that fits alone', () => {
+    const msg = { t: 'summary', agentId: 'a1', recap: 'r', text: 'short answer' }
+    expect(fitText(msg)).toBe(msg)
+  })
+
+  it('cuts a long answer to one frame, marks the cut, and never splits a letter', () => {
+    const text = 'Tiếng Việt có dấu, "quoted"\n'.repeat(600)
+    const fitted = fitText({ t: 'summary', agentId: 'a1', recap: 'r', text })
+    expect(Buffer.byteLength(JSON.stringify(fitted))).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD)
+    expect(fitted.text.endsWith('…')).toBe(true)
+    expect(fitted.text).not.toContain('\uFFFD')
+    expect(text.startsWith(fitted.text.slice(0, -1))).toBe(true)
+    // Close to the cap, not far under it: the reader loses as little as it can.
+    expect(Buffer.byteLength(JSON.stringify(fitted))).toBeGreaterThan(CABLE_MAX_PAYLOAD - 64)
   })
 })

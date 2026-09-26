@@ -1,9 +1,15 @@
 #include "cable_client.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "display.h"
+#include "display_cores3.h"
+#include "board/cores3_clock.h"
+#endif
 
 #include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
+#include "cable_frame.h"
 #include "cable_link.h"
 #include "cable_machines.h"
 #include "device_mac.h"
@@ -18,6 +24,10 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "ui/ui_screens.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "config_store.h"
+#include "wifi_cable.h"
+#endif
 
 static const char *TAG = "cable_client";
 
@@ -34,9 +44,9 @@ static const char *TAG = "cable_client";
 #define HELLO_SESSION_MS 15000   // session up: a keepalive, and a re-introduction if the daemon restarted
 #define SILENCE_MS       15000   // nothing of any kind for this long → the daemon is gone
 
-// One JSON message. Comfortably over anything the vocabulary sends; a `question` with several options is
-// the largest, and the daemon is expected to have trimmed it for a 466 px screen long before here.
-#define JSON_MAX 2048
+// One JSON message. `voice.transcript` carries the spoken text; over WiFi a long utterance easily
+// exceeded 2048 and was dropped with no overlay teardown. Cap at the frame payload limit.
+#define JSON_MAX (CABLE_MAX_PAYLOAD + 1)
 
 typedef struct {
     char id[ID_MAX];
@@ -428,6 +438,38 @@ static void handle_swarms(const cJSON *p)
 
 static void session_up(const cJSON *p)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The computer's clock, for the chrome's time (and the RTC that keeps it between sessions).
+    const cJSON *now = p ? cJSON_GetObjectItemCaseSensitive(p, "now") : NULL;
+    const cJSON *tz = p ? cJSON_GetObjectItemCaseSensitive(p, "tzOffsetMin") : NULL;
+    if (cJSON_IsNumber(now)) cores3_clock_set((int64_t)now->valuedouble, cJSON_IsNumber(tz) ? (int)tz->valuedouble : 0);
+#endif
+#if defined(DEVICE_BOARD_M5CORES3)
+    const char *bind = str_of(p, "bind");
+    const bool tcp = cable_link_rx_is_tcp() && !cable_link_host_present();
+    if (tcp) {
+        // LAN is not authorization. Only the Mac that minted `bind` over USB may sit on TCP.
+        if (!config_bind_matches(bind)) {
+            ESP_LOGW(TAG, "tcp welcome rejected — plug into this Mac over USB first");
+            wifi_cable_drop();
+            return;
+        }
+    } else if (bind && bind[0]) {
+        // LAST USB host wins: plugging the cable into a machine binds WiFi to THAT machine, overwriting
+        // whoever held it. Re-binding on the cable is safe precisely because the cable is the thing a
+        // stranger on the LAN cannot fake — minting the token over USB is the whole authorization story.
+        //
+        // Unpair in Settings stays, and is now the only way to leave the dial bound to nobody: hand it to
+        // a colleague unpaired and their daemon cannot reach your agents until they plug in themselves.
+        //
+        // Write only on a CHANGE. `welcome` repeats on every keepalive, so saving unconditionally rewrote
+        // this key every HELLO_SESSION_MS — NVS wear buying no new information.
+        if (!config_bind_matches(bind)) {
+            config_save_bind(bind);
+            ESP_LOGI(TAG, "wifi bind → this computer (usb)");
+        }
+    }
+#endif
     const char *app = str_of(p, "app");
     const cJSON *machine = p ? cJSON_GetObjectItemCaseSensitive(p, "machine") : NULL;
     const char *name = str_of(machine, "name");
@@ -444,6 +486,12 @@ static void session_up(const cJSON *p)
     const bool was = s_session;
     s_session = true;
     ui_set_connected(true);
+    // EVERY welcome, not just the first. A welcome is proof a daemon is listening RIGHT NOW, which is
+    // the only condition the backlog waits on. Hanging this off the `!was` branch below meant a link
+    // that dropped and came back while s_session stayed true — a USB re-open, a TCP redial — never
+    // flushed, so the lines explaining the drop were still sitting in RAM when the next one happened.
+    // Cheap to repeat: an empty backlog sends nothing at all.
+    cable_link_flush_backlog();
     if (!was) {
         // Route the log through the link only once a peer is listening. Unplugged — or plugged into a
         // machine with no daemon — the port stays an ordinary console and `idf.py monitor` behaves as it
@@ -614,6 +662,11 @@ static void handle_message(const cJSON *root)
     if (!p) p = root;   // flat messages are legal; `p` is a convenience, not a requirement
 
     if (strcmp(t, "welcome") == 0) { session_up(p); return; }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // Debug: what is on the glass, back over the cable (scripts/cores3-snap.py).
+    if (strcmp(t, "debug.snap") == 0) { display_lock(); display_cores3_snapshot(); display_unlock(); return; }
+    if (strcmp(t, "debug.show") == 0) { ui_debug_show(str_of(p, "what")); return; }
+#endif
     if (strcmp(t, "ping") == 0) { send_json(msg("pong")); return; }
     if (strcmp(t, "agents.begin") == 0) { handle_agents_begin(); return; }
     if (strcmp(t, "agent") == 0) { handle_agent(p); return; }
@@ -778,6 +831,12 @@ static void handle_message(const cJSON *root)
     }
     if (strcmp(t, "toast") == 0) { ui_cable_toast(str_of(p, "text")); return; }
     if (strcmp(t, "fw.offer") == 0) {
+#if defined(DEVICE_BOARD_M5CORES3)
+        // The daemon's images are the round dial's, and this board would install one: flashed directly it
+        // has two OTA slots. Declined, silently as every refusal here is — a CoreS3 is updated over USB.
+        ESP_LOGW(TAG, "fw.offer %s declined: dial images are not for a CoreS3", str_of(p, "version") ? str_of(p, "version") : "?");
+        return;
+#endif
         const cJSON *size = cJSON_GetObjectItemCaseSensitive(p, "size");
         // Declining is silence: fw_update_offer() answers with `fw.accept` only when it is willing, and
         // the daemon offers again on the next hello.
@@ -813,7 +872,11 @@ static void on_frame(uint8_t version, uint8_t type, const uint8_t *payload, size
 
     // cJSON needs a nul-terminated string and the payload is not one. Copied rather than parsed in place:
     // the decoder's buffer is reused the moment this returns.
-    if (payload_len == 0 || payload_len >= JSON_MAX) { s_bad++; return; }
+    if (payload_len == 0 || payload_len >= JSON_MAX) {
+        ESP_LOGW(TAG, "json dropped (%u B, max %d)", (unsigned)payload_len, JSON_MAX - 1);
+        s_bad++;
+        return;
+    }
     static char text[JSON_MAX];   // only ever touched on the reader task
     memcpy(text, payload, payload_len);
     text[payload_len] = '\0';

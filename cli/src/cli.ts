@@ -169,6 +169,7 @@ import { CommanderMirror, SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from './l
 import {
   setSummaryPoolDeviceConnected,
   shutdownSummaryPool,
+  deriveReaderText,
   deriveTurnSummary,
   summarizeTurnText,
   syncSummaryPoolSessions,
@@ -6053,7 +6054,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Quiet when the window already has this agent on screen; silent when the
       // turn was a sub-agent's. The tile still updates — the recap is what it
       // draws — only the beep and the drawer entry are withheld.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent)
+      // The reader shows the whole answer, not the 250-character body the tile's glance is cut from.
+      const full = mirror.lastFullText(registry.byAgent(event.agentId)?.sessionId ?? event.agentId)
+      void cable.summary(event.agentId, event.recap || event.text, full ? deriveReaderText(full) : event.text,
+        alreadyOnScreen(event.agentId), event.subagent)
     }
     else void cable.turnError(event.agentId, event.text)
   }

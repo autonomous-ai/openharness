@@ -40,9 +40,10 @@ export interface DialPort {
  * this arms a subtree at the matching node's indentation and takes the first path inside it. A flat scan
  * pairs a vendor id with whatever path happens to come next in the dump, which is a different device.
  */
-export async function findDialPort(): Promise<DialPort | null> {
-  if (process.platform === 'darwin') return findDarwin()
-  if (process.platform === 'linux') return findLinux()
+/** `avoid`: a port already found to be somebody else's, passed over so the search goes on past it. */
+export async function findDialPort(avoid?: string): Promise<DialPort | null> {
+  if (process.platform === 'darwin') return findDarwin(avoid)
+  if (process.platform === 'linux') return findLinux(avoid)
   return null
 }
 
@@ -52,7 +53,7 @@ function depthOf(line: string): number {
   return m ? m[0].length : 0
 }
 
-async function findDarwin(): Promise<DialPort | null> {
+async function findDarwin(avoid?: string): Promise<DialPort | null> {
   let dump: string
   try {
     const { stdout } = await runFile('ioreg', ['-p', 'IOService', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024 })
@@ -62,35 +63,43 @@ async function findDarwin(): Promise<DialPort | null> {
   }
 
   const lines = dump.split('\n')
-  let armedAt: number | null = null
+  // Arm on the IOUSBHostDevice that carries 303a:1001, not on a child interface. Composite CDC
+  // exposes several IOUSBHostInterface siblings at the same depth; treating the first as the
+  // subtree root unarmed before IOCalloutDevice (under interface@1) was reached, so the opener
+  // skipped USB and jumped to mDNS unpaired.
+  let hostDepth: number | null = null
+  let hostMatch = false
   let sawVendor = false
   let sawProduct = false
-  let nodeDepth = 0
 
   for (const line of lines) {
-    // A new node resets what we have seen about the current one. `+-o` opens a node in this dump.
     if (line.includes('+-o')) {
       const d = depthOf(line)
-      if (armedAt !== null && d <= armedAt) armedAt = null // left the armed subtree without a path
-      nodeDepth = d
-      sawVendor = false
-      sawProduct = false
+      if (hostMatch && hostDepth !== null && d <= hostDepth) {
+        hostMatch = false
+        hostDepth = null
+      }
+      if (line.includes('IOUSBHostDevice')) {
+        hostDepth = d
+        sawVendor = false
+        sawProduct = false
+        hostMatch = false
+      }
       continue
     }
-
+    if (hostDepth === null) continue
     if (line.includes('"idVendor"')) sawVendor = Number(line.split('=')[1]?.trim()) === DIAL_VENDOR_ID
     if (line.includes('"idProduct"')) sawProduct = Number(line.split('=')[1]?.trim()) === DIAL_PRODUCT_ID
-    if (sawVendor && sawProduct && armedAt === null) armedAt = nodeDepth
-
-    if (armedAt !== null && line.includes('"IOCalloutDevice"')) {
+    if (sawVendor && sawProduct) hostMatch = true
+    if (hostMatch && line.includes('"IOCalloutDevice"')) {
       const path = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
-      if (path) return { path, vendorId: DIAL_VENDOR_ID, productId: DIAL_PRODUCT_ID }
+      if (path && path !== avoid) return { path, vendorId: DIAL_VENDOR_ID, productId: DIAL_PRODUCT_ID }
     }
   }
   return null
 }
 
-function findLinux(): DialPort | null {
+function findLinux(avoid?: string): DialPort | null {
   // /sys is the id, /dev/ttyACM* is the path, and the symlink between them is the only honest pairing.
   const base = '/sys/class/tty'
   if (!existsSync(base)) return null
@@ -102,7 +111,7 @@ function findLinux(): DialPort | null {
       try {
         const vid = parseInt(readFileSync(`${dir}/idVendor`, 'utf8').trim(), 16)
         const pid = parseInt(readFileSync(`${dir}/idProduct`, 'utf8').trim(), 16)
-        if (vid === DIAL_VENDOR_ID && pid === DIAL_PRODUCT_ID) {
+        if (vid === DIAL_VENDOR_ID && pid === DIAL_PRODUCT_ID && `/dev/${name}` !== avoid) {
           return { path: `/dev/${name}`, vendorId: vid, productId: pid }
         }
         break

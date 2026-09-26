@@ -15,7 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef enum { TOUCH_NONE = 0, TOUCH_CST9217, TOUCH_CST816S } touch_chip_t;
+typedef enum { TOUCH_NONE = 0, TOUCH_CST9217, TOUCH_CST816S, TOUCH_FT5X06 } touch_chip_t;
 
 typedef struct {
     const char  *name;          // goes up the cable in `hello.hw`, and into the boot log

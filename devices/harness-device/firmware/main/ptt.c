@@ -22,6 +22,10 @@ static const char *TAG = "ptt";
 //     the screen. Only where there is an AXP2101; a long press restarts the device in PMIC hardware and
 //     never reaches us.
 // Voice is gesture-driven (touch.c); neither key touches it.
+//
+// CoreS3 (DEVICE_BOARD_M5CORES3): the PWR key is the only physical button, and it is the dial's Button A —
+// a tap toggles the screen. The BOOT key's back / stop turn is on the glass instead (the chrome's key,
+// ui_screens.c). A long press is left to AXP2101 hardware (power-off / reset).
 #define BOOT_LONG_PRESS_MS 800
 
 static void screen_toggle(const char *why)
@@ -34,22 +38,30 @@ static void screen_toggle(const char *why)
     display_unlock();
 }
 
+static void pwr_action(void)
+{
+    screen_toggle("PWR tap");
+}
+
 static void ptt_task(void *arg)
 {
+#if BSP_HAS_BOOT_BUTTON
     gpio_config_t bcfg = {
         .pin_bit_mask = 1ULL << BSP_BOOT_BUTTON,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };
     gpio_config(&bcfg);
+#endif
     int boot_prev = 1;       // released (active-low: 1 = up, 0 = pressed)
     int64_t press_start_us = 0;
     bool long_fired = false;
     const bool pwr_key = board()->has_pmic;
 
     while (1) {
-        if (pwr_key && power_take_pwrkey_tap()) screen_toggle("PWR tap");
+        if (pwr_key && power_take_pwrkey_tap()) pwr_action();
 
+#if BSP_HAS_BOOT_BUTTON
         int boot_now = gpio_get_level(BSP_BOOT_BUTTON);
         if (boot_prev == 1 && boot_now == 0) {                 // fresh press
             if (display_is_asleep()) { display_lock(); display_wake(); display_unlock(); }
@@ -63,6 +75,7 @@ static void ptt_task(void *arg)
             screen_toggle("BOOT hold");
         }
         boot_prev = boot_now;
+#endif
 
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }

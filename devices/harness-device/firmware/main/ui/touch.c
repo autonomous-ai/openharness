@@ -8,8 +8,12 @@
 #include "ui_screens.h"   // ui_swipe_begin/end for the circular edge-swipe
 #include "driver/i2c_master.h"
 #include "esp_lcd_panel_io.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "esp_lcd_touch_ft5x06.h"   // CoreS3: FT6336U, FT5x06-register-compatible
+#else
 #include "esp_lcd_touch_cst816s.h"
 #include "esp_lcd_touch_cst9217.h"
+#endif
 #include "esp_log.h"
 #include "lvgl.h"
 #include <stdlib.h>
@@ -35,6 +39,13 @@ static uint32_t s_read_fail_run;      // consecutive; reset by any good read
 static uint32_t s_noack_run;
 static uint32_t s_inferred_releases;  // lifetime, for the heartbeat: how often the fix above fired
 #define NOACK_RELEASE_READS 3
+#define LIFT_RELEASE_MS     60         // CoreS3: how long no finger must last before a lift is believed; see touch_read
+#if defined(DEVICE_BOARD_M5CORES3)
+static bool s_bezel_entry;            // this press came on from the bottom edge, moving (decided in touch_read)
+#define HOME_START(sy, edge)  ((void)(sy), (void)(edge), s_bezel_entry)
+#else
+#define HOME_START(sy, edge)  ((sy) >= (edge))
+#endif
 #define READ_FAIL_REINIT   50         // ~1s of nothing but errors → tear the controller down and bring it back
 #define READ_FAIL_LOG_EVERY 100
 #define REINIT_RETRY_MS    5000       // a reinit that failed is tried again this often
@@ -52,6 +63,11 @@ static bool     s_stuck_warned;       // the ">held 5s" line for this press alre
 #define LONG_MOVE_PX  30
 
 #define DOUBLE_TAP_MS 500   // two taps within this window (and close in position) = a double-tap. Also the
+#if defined(DEVICE_BOARD_M5CORES3)
+#define DOUBLE_TAP_RADIUS_PX 40     // the dial's 80, at the CoreS3's coarser pixel (see below)
+#else
+#define DOUBLE_TAP_RADIUS_PX 80
+#endif
                             // delay before a single tap opens the detail reader — 500ms so a (slightly slow)
                             // double-tap-to-voice is recognised first instead of the 1st tap firing detail.
 // Single writer (LVGL touch task), lock-free readers. A 32-bit aligned load/store is atomic on ESP32-S3;
@@ -74,7 +90,7 @@ static bool double_tap(bool pressed, uint16_t x, uint16_t y)
     if (pressed && !prev) {                          // rising edge = a tap
         uint32_t now = lv_tick_get();
         int dx = (int)x - lx, dy = (int)y - ly;
-        if (now - last_ms < DOUBLE_TAP_MS && dx * dx + dy * dy < 80 * 80) {
+        if (now - last_ms < DOUBLE_TAP_MS && dx * dx + dy * dy < DOUBLE_TAP_RADIUS_PX * DOUBLE_TAP_RADIUS_PX) {
             hit = true; last_ms = 0;                 // consumed — a 3rd tap won't re-trigger
         } else {
             last_ms = now; lx = x; ly = y;
@@ -108,6 +124,31 @@ static bool double_tap(bool pressed, uint16_t x, uint16_t y)
 // On the detail reader the ONLY non-scroll vertical gesture is a tight bottom-edge up-swipe → Overview, so it
 // uses a much narrower band than the carousel screens: a swipe that STARTS within the bottom ~20px (panel 466).
 #define READER_HOME_EDGE_PX 446
+
+#if defined(DEVICE_BOARD_M5CORES3)
+// The same finger travel on the CoreS3's glass: its pixels are about twice the dial's (0.127 mm against
+// 0.067 mm), so every distance halves, and the edge bands are measured up from the real bottom edge.
+// Scroll deltas go out in the dial's pixels, so the desktop scrolls as far for the same stroke.
+#undef LONG_MOVE_PX
+#undef SCROLL_MIN_PX
+#undef SWIPE_MIN_PX
+#undef BOTTOM_EDGE_PX
+#undef READER_HOME_EDGE_PX
+#define LONG_MOVE_PX          15
+#define SCROLL_MIN_PX         4
+#define SWIPE_MIN_PX          28
+// The CoreS3's touch stops at the glass (y never passes 239), so there is no bezel to start on. A swipe
+// from off the glass is told apart by how it arrives: first seen in the last 16px, already moving up (see
+// s_bezel_entry). One band for every screen; a scroll that happens to start low is not a way home.
+#define BOTTOM_EDGE_PX        (BSP_LCD_V_RES - 16)
+#define READER_HOME_EDGE_PX   BOTTOM_EDGE_PX
+#define BEZEL_ENTRY_MS        20      // look this long after the first contact...
+#define BEZEL_ENTRY_PX        6       // ...for this much upward travel (300 px/s): a finger coming on from the edge
+#define TOUCH_READ_MS         10      // FT6336U polled at 100 Hz, so an entry is caught within a few px of the edge
+#define SCROLL_OUT(v)         ((v) * 2)
+#else
+#define SCROLL_OUT(v)         (v)
+#endif
 // A single tap toggles the detail reader (open on projects / close on the reader), but a double-tap
 // starts voice. They're indistinguishable until the double-tap window passes, so DEFER the tap's action
 // by DOUBLE_TAP_MS and cancel it if a 2nd tap arrives (that's a start-voice). A tap while RECORDING is
@@ -214,7 +255,7 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
             // A window with no travel still counts toward the speed above (that is what lets a resting
             // finger decay), but there is nothing to send.
             if (s_scroll_acc) {
-                cable_client_send_scroll(CABLE_SCROLL_MOVE, scroll_sign() * s_scroll_acc, 0);
+                cable_client_send_scroll(CABLE_SCROLL_MOVE, SCROLL_OUT(scroll_sign() * s_scroll_acc), 0);
                 s_scroll_sent += scroll_sign() * s_scroll_acc;
             }
             s_scroll_acc = 0;
@@ -227,7 +268,7 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
             scroll_measure(s_scroll_acc, lv_tick_elaps(s_scroll_at));
             // The throw is signed with the drag. Flipping only the travel would send the flick off in the
             // opposite direction to the finger that made it.
-            cable_client_send_scroll(CABLE_SCROLL_UP, scroll_sign() * s_scroll_acc, scroll_sign() * s_scroll_v);
+            cable_client_send_scroll(CABLE_SCROLL_UP, SCROLL_OUT(scroll_sign() * s_scroll_acc), SCROLL_OUT(scroll_sign() * s_scroll_v));
             s_scroll_sent += scroll_sign() * s_scroll_acc;
             // One line per STROKE, at the lift — the proof of which way this went. A setting whose whole
             // effect happens on another computer is otherwise judged by eye alone, and "it didn't work"
@@ -252,7 +293,7 @@ static void swipe_track(bool pressed, uint16_t x, uint16_t y)
         int home_edge = reader ? READER_HOME_EDGE_PX : BOTTOM_EDGE_PX;
         // HOME gesture: an upward swipe that STARTED at the bottom edge → jump to Overview. (y grows downward;
         // the driver already applies the panel mirror, so sy near y_max = the physical bottom.)
-        if (!voice && sy >= home_edge && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
+        if (!voice && HOME_START(sy, home_edge) && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
             ESP_LOGI(TAG, "gesture: home (dy=%d)", dy);
             ui_home_overview();
         } else if (!voice && (dx > SWIPE_MIN_PX || dx < -SWIPE_MIN_PX) && abs(dx) > abs(dy)) {
@@ -365,6 +406,45 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
             touch_reinit();
         }
     }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The FT6336U drops a sample early in a quick drag: one read says no finger, the next has it again
+    // 50px on. Taken at its word that is a 34ms tap where the stroke began and a second stroke after it,
+    // and the tap lands on whatever was under the thumb (a tab row, a card). Measured on the tab picker,
+    // 2026-09-22: every unwanted pick was `held=34ms acked=1` with the rest of the swipe 50ms behind it.
+    // So a lift counts only once it has lasted LIFT_RELEASE_MS; until then the finger is held where it
+    // was last seen, and when it reappears the jump is a move, which LVGL scrolls.
+    static bool lifting;
+    static uint32_t lift_t0, entry_t0;
+    static uint16_t held_x, held_y, entry_y;
+    static bool entry_open;
+    if (pressed) {
+        lifting = false;
+        held_x = x;
+        held_y = y;
+    } else if (activity_prev) {
+        if (!lifting) { lifting = true; lift_t0 = lv_tick_get(); }
+        if (lv_tick_elaps(lift_t0) < LIFT_RELEASE_MS) {
+            pressed = true;
+            x = held_x;
+            y = held_y;
+        } else {
+            lifting = false;
+        }
+    }
+    // Home is a swipe from off the glass, and a finger coming on from the edge is already moving when
+    // the panel first sees it; a scroll starts from a finger at rest. Decided once, BEZEL_ENTRY_MS in.
+    if (pressed && !activity_prev) {
+        s_bezel_entry = false;
+        entry_open = y >= BOTTOM_EDGE_PX;
+        entry_y = y;
+        entry_t0 = lv_tick_get();
+    } else if (pressed && entry_open && lv_tick_elaps(entry_t0) >= BEZEL_ENTRY_MS) {
+        entry_open = false;
+        s_bezel_entry = (int)entry_y - (int)y >= BEZEL_ENTRY_PX;
+        ESP_LOGI(TAG, "edge press: %s (moved %d px in %u ms)", s_bezel_entry ? "bezel entry" : "resting, not home",
+                 (int)entry_y - (int)y, (unsigned)lv_tick_elaps(entry_t0));
+    }
+#endif
     if (pressed && !activity_prev) {
         s_activity_gen++;
         s_presses++;
@@ -399,12 +479,25 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     // state for LVGL below. This prevents Voice-button holds/double-taps from also firing the hidden global
     // Goal/Voice gestures. A drag can still leave the button and scroll the carousel through LVGL normally.
     static bool action_prev;
+    static int ax0, ay0, axl, ayl;           // where an action press began, and where it last was
     if (pressed && !action_prev) {
         s_action_capture = ui_action_hit(x, y);
         if (s_action_capture) { s_tap_pending = false; ESP_LOGI(TAG, "press on a round action — LVGL's until release"); }
+        ax0 = axl = x; ay0 = ayl = y;
     }
+    if (pressed) { axl = x; ayl = y; }
     bool action_touch = s_action_capture && (pressed || action_prev);
     bool gesture_pressed = pressed && !action_touch;
+    if (!pressed && action_prev && s_action_capture) {
+        // The Voice buttons sit on the bottom edge, where the home swipe starts. A press that begins on one
+        // and leaves as a swipe up is the home gesture, not a tap: the button lost it the moment the finger
+        // slid off (no PRESS_LOCK, ui_screens.c), and the recognisers never saw it, so it is decided here.
+        int dx = axl - ax0, dy = ayl - ay0;
+        if (!ui_voice_is_active() && HOME_START(ay0, BOTTOM_EDGE_PX) && dy < -SWIPE_MIN_PX && abs(dy) > abs(dx)) {
+            ESP_LOGI(TAG, "gesture: home (from a round action, dy=%d)", dy);
+            ui_home_overview();
+        }
+    }
     if (!pressed && action_prev) s_action_capture = false;
     action_prev = pressed;
 
@@ -431,7 +524,7 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
             // that leaves the screen could never be pressed. A modal chooser also has no business
             // offering a pull-to-notifications on top of itself.
             s_band_drag = !display_is_asleep() && !ui_reader_is_open() && !ui_switch_is_open() &&
-                    !ui_picker_is_open() && !ui_notif_pill_hit(x, y) &&
+                    !ui_picker_is_open() && !ui_modal_is_open() && !ui_notif_pill_hit(x, y) &&
                     (ui_notif_is_open() || y < ui_notif_pull_zone_px());
             ndy0 = ndyl = y; ncap = s_band_drag;
             if (s_band_drag) ESP_LOGI(TAG, "band: captured at y=%u (drawer %s)", y, ui_notif_is_open() ? "open" : "closed");
@@ -464,7 +557,8 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     // ...and not under the TABS picker, whose rows are LVGL's to dispatch: swipe_track would read a row
     // tap as the tap that opens the detail reader, and a scroll of the list as a carousel swipe, both
     // happening to the tile UNDERNEATH the overlay.
-    if (!display_is_asleep() && !s_swallow_until_release && !ui_switch_is_open())
+    if (!display_is_asleep() && !s_swallow_until_release && !ui_switch_is_open() &&
+        !ui_picker_is_open() && !ui_modal_is_open())
         swipe_track(gesture_pressed, x, y);
 
     // A still hold used to start a GOAL voice command here (owner, 2026-09-15: "remove luôn cái long
@@ -536,6 +630,35 @@ static bool touch_open(void)
         return false;
     }
 
+#if defined(DEVICE_BOARD_M5CORES3)
+    (void)b;
+    // FT6336U behind the AW9523B (which board power bring-up already enabled and took out of
+    // reset). The panel is rendered 1:1, so the driver's coordinates are LVGL's.
+    esp_lcd_panel_io_i2c_config_t io_cfg = (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
+    io_cfg.scl_speed_hz = BSP_I2C_FREQ_HZ;
+    if (esp_lcd_new_panel_io_i2c(bus, &io_cfg, &s_tp_io) != ESP_OK) {
+        ESP_LOGW(TAG, "touch panel io failed — touch disabled");
+        s_tp_io = NULL;
+        return false;
+    }
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = BSP_LCD_H_RES,
+        .y_max = BSP_LCD_V_RES,
+        .rst_gpio_num = -1,                  // reset handled by the board bring-up (AW9523B)
+        .int_gpio_num = -1,                  // INT reaches the ESP via the expander; poll instead
+        .flags = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
+    };
+    esp_err_t err = esp_lcd_touch_new_i2c_ft5x06(s_tp_io, &tp_cfg, &s_tp);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "FT5x06 init failed (%s) — touch disabled", esp_err_to_name(err));
+        s_tp = NULL;
+        esp_lcd_panel_io_del(s_tp_io);
+        s_tp_io = NULL;
+        return false;
+    }
+    return true;
+#else
     esp_lcd_panel_io_i2c_config_t io_cfg = b->touch == TOUCH_CST816S
         ? (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG()
         : (esp_lcd_panel_io_i2c_config_t)ESP_LCD_TOUCH_IO_I2C_CST9217_CONFIG();
@@ -567,6 +690,7 @@ static bool touch_open(void)
         return false;
     }
     return true;
+#endif  // DEVICE_BOARD_M5CORES3
 }
 
 // Tear the controller down and bring it back. Runs on the LVGL task (the indev read), where the driver's
@@ -591,12 +715,18 @@ void touch_stats(touch_stats_t *out)
     out->held_now = s_stuck_warned;
 }
 
+static lv_indev_t *s_indev;
+
 void touch_init(void)
 {
     if (!touch_open()) return;
 
     lv_indev_t *indev = lv_indev_create();
+    s_indev = indev;
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, touch_read);
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_timer_set_period(lv_indev_get_read_timer(indev), TOUCH_READ_MS);
+#endif
     ESP_LOGI(TAG, "%s touch ready", touch_chip_name());
 }

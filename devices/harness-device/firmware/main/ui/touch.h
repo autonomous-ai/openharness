@@ -1,6 +1,8 @@
 // CST9217 capacitive touch → LVGL pointer indev (enables tileview swipe).
 #pragma once
 
+#include "lvgl.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -24,3 +26,4 @@ typedef struct {
     bool     held_now;         // a press has been down past the stuck threshold
 } touch_stats_t;
 void touch_stats(touch_stats_t *out);
+

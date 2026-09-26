@@ -238,6 +238,26 @@ export function deriveTurnBody(text: string): string {
   return clip(stripMarkdown(text).replace(/\s+/g, ' ').trim(), BODY_MAX_CHARS)
 }
 
+/**
+ * The whole answer, for the device's reader: every word kept, only the markdown syntax taken out.
+ *
+ * Unlike [deriveTurnBody] this is for READING, not glancing: paragraphs and line breaks stay, code
+ * keeps its lines (only the fences go), and list items keep a bullet so a list still reads as one.
+ */
+export function deriveReaderText(text: string): string {
+  return text
+    .replace(/^\s*```.*$/gm, '')              // fence lines; the code between them stays
+    .replace(/^\s*\|?[\s:|-]*-{3,}[\s:|-]*$/gm, '')  // a table's --- separator row
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')        // heading markers
+    .replace(/^(\s*)[-*+]\s+/gm, '$1• ')        // bullets, as a bullet
+    .replace(/^\s*>\s?/gm, '')                // block quotes
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')  // links and images → their label
+    .replace(/\*\*|__|~~|`/g, '')              // bold, strike and inline-code marks
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /** The headline in a one-shot's output: its first non-empty line. A model that still writes a second
  *  paragraph is tolerated, not concatenated — and not judged for language drift either. */
 function headlineOf(output: string): string {

@@ -11,6 +11,37 @@
 
 static const char *TAG = "board";
 
+#if defined(DEVICE_BOARD_M5CORES3)
+// M5Stack CoreS3: a fixed SKU, not a detected one. The panel, touch, PMIC, amp and expander
+// are what the launcher build targets; nothing on this board needs the two-dial I2C census.
+// (AXP2101 @0x34, FT6336U @0x38, AW9523B @0x58, ES7210 @0x40, AW88298 @0x36.)
+#include "board_pins.h"
+
+static const board_t s_board = {
+    .name = "m5stack-cores3", .lcd_rst = -1, .touch_rst = -1,
+    .touch = TOUCH_FT5X06, .touch_mirror = false, .has_pmic = true,
+};
+static bool s_detected;
+static char s_describe[64];
+
+const board_t *board(void) { return &s_board; }
+
+void board_detect(void)
+{
+    if (s_detected) return;
+    s_detected = true;
+    ESP_LOGI(TAG, "%s (fixed SKU — no bus detection)", board_describe());
+}
+
+const char *board_describe(void)
+{
+    const board_t *b = &s_board;
+    snprintf(s_describe, sizeof s_describe, "board %s: touch=ft5x06 pmic=yes rst=expander", b->name);
+    return s_describe;
+}
+
+#else  // round Harness dial: detect the board from the bus
+
 // Until board_detect() runs: the dial this code grew up on.
 static board_t s_board = {
     .name = "cst9217+axp2101", .lcd_rst = 39, .touch_rst = 40,
@@ -76,3 +107,5 @@ const char *board_describe(void)
              b->has_pmic ? "yes" : "no", b->lcd_rst, b->touch_rst);
     return s_describe;
 }
+
+#endif  // DEVICE_BOARD_M5CORES3

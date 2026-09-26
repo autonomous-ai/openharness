@@ -43,4 +43,26 @@ digits() {  # digits <src> <tag> <size>
   printf "  %-26s %6.0f KB\n" "$out" "$(($(stat -f%z "$out")/1024))"
 }
 digits "$MED" med 64
+
+# CoreS3 (DEVICE_BOARD_M5CORES3): the same faces at 0.6x, which keeps the dial's PHYSICAL text size on
+# the CoreS3's glass (466 px across 1.43" is ~326 ppi; 320x240 on 2.0" is ~200 ppi). ui_fonts.h maps each
+# dial face to its CoreS3 twin, so ui_screens.c names one set for both boards.
+gen3() {  # gen3 <src> <tag> <size>
+  local out="main/ui/geist_c3_$2_$3.c"
+  [ -s "$out" ] && { echo "  skip $out"; return; }
+  npx --yes lv_font_conv@1.5.3 --bpp 4 --size "$3" --format lvgl --no-compress --no-prefilter \
+    --font "$1" --range "$RANGE" --font "$ARIAL" --range "$FB" \
+    -o "$out" --lv-include lvgl.h
+  sed -i '' "s/\bgeist_$2_$3\b/geist_c3_$2_$3/g" "$out"
+  printf "  %-26s %6.0f KB\n" "$out" "$(($(stat -f%z "$out")/1024))"
+}
+for s in 10 12 15 18 20 21 23; do gen3 "$REG" reg "$s"; done
+for s in 17 20 23 29;       do gen3 "$MED" med "$s"; done
+for s in 15;                do gen3 "$SEM" sem "$s"; done
+out="main/ui/geist_c3_med_39.c"
+if [ ! -s "$out" ]; then
+  npx --yes lv_font_conv@1.5.3 --bpp 4 --size 39 --format lvgl --no-compress --no-prefilter \
+    --font "$MED" --range 0x20,0x30-0x39 -o "$out" --lv-include lvgl.h
+  sed -i '' "s/\bgeist_med_39\b/geist_c3_med_39/g" "$out"
+fi
 echo "xong"

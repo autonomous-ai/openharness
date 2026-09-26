@@ -21,10 +21,12 @@
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer } from './fwPush.js'
 import { SerialLink, findDialPort } from './serial.js'
+import { TcpLink, findDialTcp } from './tcpLink.js'
+import { bindTokenForTcp, bindTokenForUsb, isTcpDialPath } from './dialBind.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -338,13 +340,39 @@ export interface CablePort {
 export type PortOpener = (
   onData: (chunk: Buffer) => void,
   onClosed: (why: string) => void,
+  /** A USB port already found to be somebody else's: pass it over and keep looking, WiFi included. */
+  avoid?: string,
 ) => Promise<CablePort | null>
 
-/** The real one: find the tty by USB id, open it raw. */
-export const openDialPort: PortOpener = async (onData, onClosed) => {
-  const port = await findDialPort()
-  if (!port) return null
-  return SerialLink.open(port.path, onData, onClosed)
+/**
+ * A summary whose `text` is cut, marked with "…", until the whole message fits one cable frame. The text
+ * is the complete answer now, for the device's reader, and a frame the encoder refuses would lose all of
+ * it rather than the tail.
+ */
+export function fitText<T extends { text?: string }>(msg: T): T {
+  const fits = (m: T) => Buffer.byteLength(JSON.stringify(m)) <= CABLE_MAX_PAYLOAD
+  if (fits(msg) || !msg.text) return msg
+  // The longest prefix, in whole letters, that fits with its mark. Searched rather than computed: JSON
+  // escaping and multi-byte letters make the text's bytes and the frame's bytes differ.
+  const letters = Array.from(msg.text)
+  const cut = (n: number) => ({ ...msg, text: `${letters.slice(0, n).join('').trimEnd()}…` })
+  let lo = 0
+  let hi = letters.length - 1
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (fits(cut(mid))) lo = mid
+    else hi = mid - 1
+  }
+  return lo > 0 ? cut(lo) : { ...msg, text: '' }
+}
+
+/** USB first. If the cable is out, browse `_harness-dial._tcp` — welcome still requires a USB-minted bind. */
+export const openDialPort: PortOpener = async (onData, onClosed, avoid) => {
+  const port = await findDialPort(avoid)
+  if (port) return SerialLink.open(port.path, onData, onClosed)
+  const tcp = await findDialTcp()
+  if (!tcp) return null
+  return TcpLink.open(tcp.host, tcp.port, onData, onClosed)
 }
 
 export class CableSession {
@@ -492,7 +520,16 @@ export class CableSession {
     }
     // Rule 2. The read never fails on a dead handle, so silence is the only symptom there is.
     if (Date.now() - this.lastRx > SILENCE_MS) {
-      this.log('cable: silent, reopening the port')
+      // Silent from the moment it opened, not a word in our framing: nothing says it is a dial at all, and
+      // going straight back to it is how a quiet second board on USB kept the daemon off WiFi. Passed over
+      // for the same minute as a port that talks but not to us; a dial of ours greets every two seconds.
+      if (this.framesSinceOpen === 0 && !isTcpDialPath(this.link.path)) {
+        this.foreignPort = this.link.path
+        this.foreignRetryAt = Date.now() + 60_000
+        this.log(`cable: ${this.link.path} said nothing in ${SILENCE_MS / 1000}s — passing over it`)
+      } else {
+        this.log('cable: silent, reopening the port')
+      }
       // close() runs onClosed, which is where onDialGone fires — one path for "the dial is not there",
       // whether the cable was pulled or the far end simply stopped answering.
       await this.link.close('silence')
@@ -560,7 +597,12 @@ export class CableSession {
    */
   private async tryOpen(): Promise<void> {
     if (this.opening) return
-    if (this.foreignPort && Date.now() < this.foreignRetryAt) return
+    // A port that turned out to be somebody else's is passed over, not waited on. Waiting held off every
+    // other way in as well: with a second ESP32 board on USB (same USB ids), the daemon rejected it, sat
+    // out the minute, went back to it, and never reached the dial advertising itself on WiFi. A foreign
+    // TCP dial is the one case that still waits, since skipping it leaves nothing else to try.
+    const avoid = this.foreignPort && Date.now() < this.foreignRetryAt ? this.foreignPort : undefined
+    if (avoid && isTcpDialPath(avoid)) return
     if (Date.now() - this.openAt < REOPEN_EVERY_MS) return
     this.opening = true
     this.openAt = Date.now()
@@ -572,6 +614,7 @@ export class CableSession {
       const attempt = this.openPort(
         (chunk) => this.onBytes(chunk),
         (why) => this.onClosed(why),
+        avoid,
       )
       let timer: ReturnType<typeof setTimeout> | undefined
       const expiry = new Promise<never>((_, reject) => {
@@ -599,7 +642,8 @@ export class CableSession {
     if (this.link) await this.link.close('replaced')
     // A port that earned the verdict once is presumed foreign until it proves otherwise, but the evidence
     // is gathered fresh every time: a dial that was replaced behind the same path gets a clean hearing.
-    if (opened.path !== this.foreignPort) this.foreignPort = null
+    // Kept while its window runs, so a WiFi session that drops does not send the next attempt back to it.
+    if (opened.path !== this.foreignPort && Date.now() >= this.foreignRetryAt) this.foreignPort = null
     this.bytesSinceOpen = 0
     this.framesSinceOpen = 0
     this.link = opened
@@ -704,6 +748,17 @@ export class CableSession {
           return
         }
         const mac = str('mac') ?? ''
+        const tcp = isTcpDialPath(this.link?.path ?? '')
+        const bind = tcp ? bindTokenForTcp(mac) : bindTokenForUsb(mac)
+        if (tcp && !bind) {
+          // Another OpenHarness on this LAN, or this Mac never USB-paired the dial.
+          this.log(`cable: tcp dial ${mac || '?'} is not USB-paired to this machine — releasing`)
+          this.foreignPort = this.link?.path ?? null
+          this.foreignRetryAt = Date.now() + 60_000
+          await this.link?.close('not usb-paired')
+          this.link = null
+          return
+        }
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
           t: 'welcome',
@@ -716,6 +771,11 @@ export class CableSession {
           // matters after a dial reboot that lands mid-session on a remote selection.
           selected: this.host.selectedMachine(),
           voiceLang: this.host.voiceLang(),
+          // The computer's clock and UTC offset, for a device with a clock face and no network time of
+          // its own (the CoreS3 keeps them in its RTC). The dial ignores both.
+          now: Date.now(),
+          tzOffsetMin: -new Date().getTimezoneOffset(),
+          ...(bind ? { bind } : {}),
         })
         // Log a dial that is new OR that came back running something else. The version half of that test
         // is not decoration: a dial reboots into its new image after an update and greets with the SAME
@@ -742,7 +802,8 @@ export class CableSession {
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
         // hardware every fifteen seconds, and nothing about the next greeting changes what went wrong.
-        await this.maybeOfferFirmware(str('fw') ?? '')
+        // Never to a CoreS3: the images on offer are the dial's, and a CoreS3 declines them anyway.
+        if (!(hw ?? '').startsWith('m5stack')) await this.maybeOfferFirmware(str('fw') ?? '')
         return
       }
       case 'pong':
@@ -1041,7 +1102,8 @@ export class CableSession {
         await this.send({
           t: 'voice.transcript',
           routeId: '',
-          text: transcript,
+          // Dial ignores `text` for routing; keep the frame under JSON_MAX (was 2 KiB on device).
+          text: transcript.length > 400 ? `${transcript.slice(0, 400)}…` : transcript,
           agentId: inWindow.agentId,
           // Only a name the DIAL's own list knows: it draws this, and an agent the window reached on a
           // machine the carousel has not been told about yet has no tile here to put a name on. The ring
@@ -1080,7 +1142,14 @@ export class CableSession {
     }
     const text = turn.cmd ? `/${turn.cmd} ${transcript}` : transcript
     this.host.sendTurn(agentId, text)
-    await this.send({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
+    await this.send({
+      t: 'voice.transcript',
+      routeId: '',
+      text: transcript.length > 400 ? `${transcript.slice(0, 400)}…` : transcript,
+      agentId,
+      agentName,
+      needsConfirm: false,
+    })
   }
 
   // ── outbound ──────────────────────────────────────────────────────────────────────────────────────
@@ -1226,7 +1295,7 @@ export class CableSession {
         // Oldest first, so the newest ends up on top of the tile's stack.
         for (const s of [...row.past].reverse()) {
           if (!s.recap && !s.text) continue
-          await this.send({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true })
+          await this.send(fitText({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true }))
         }
       }
     })
@@ -1398,7 +1467,7 @@ export class CableSession {
    */
   async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
     const who = this.whoIs(agentId)
-    await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+    await this.send(fitText({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) }))
   }
 
   /**

@@ -10,6 +10,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "wifi_cable.h"
+#endif
 
 static const char *TAG = "cable";
 
@@ -78,6 +81,9 @@ static const char *TAG = "cable";
 #define LOG_LINE_MAX 512
 
 static cable_decoder_t s_decoder;
+#if defined(DEVICE_BOARD_M5CORES3)
+static cable_decoder_t s_tcp_decoder;   // separate from USB so a LAN probe cannot shred the cable
+#endif
 static cable_frame_cb  s_cb;
 static void           *s_ctx;
 static bool            s_running;
@@ -86,6 +92,8 @@ static bool            s_running;
 // halves of two frames onto the wire. A frame split down the middle by a second sender is not something
 // the far end can resync out of — both halves have valid magic and neither has a valid CRC.
 static SemaphoreHandle_t s_tx_lock;
+static SemaphoreHandle_t s_rx_lock;
+static volatile bool s_rx_tcp;
 
 // 8.2 KB of BSS rather than a stack array (it would not fit) or a malloc (a failed allocation mid-session
 // on a microcontroller is a worse outcome than a known, always-paid 8 KB).
@@ -103,10 +111,46 @@ static vprintf_like_t s_prev_vprintf;
 // only one task is ever inside it.
 static volatile bool s_in_log_sink;
 
+// ── offline backlog ─────────────────────────────────────────────────────────────────────────────────
+//
+// Lines logged while no transport was up, kept until one is. The whole reason it exists: on a LAN dial
+// the interesting log line is the one explaining a drop, and a drop is BY DEFINITION a moment when
+// nothing is listening to carry it. Without this, "why did it disconnect" is answerable only by plugging
+// the cable back in — the one action that destroys the conditions being investigated.
+//
+// Deliberately small. This is internal RAM on a board with ~24 KB of it free, and the value is in the
+// handful of lines around the drop, not in a transcript. When it overflows the COUNT is kept and
+// reported: a flush that silently lost lines would read as a complete story that is missing its middle.
+#define BACKLOG_LINES    16
+#define BACKLOG_LINE_MAX 128
+static char     s_backlog[BACKLOG_LINES][BACKLOG_LINE_MAX];
+static uint8_t  s_backlog_len[BACKLOG_LINES];
+static uint16_t s_backlog_head;      // next slot to write
+static uint16_t s_backlog_count;     // live entries, <= BACKLOG_LINES
+static uint32_t s_backlog_dropped;   // overwritten before anyone could read them
+
+// Caller holds s_tx_lock.
+static void backlog_add(const char *line, size_t len)
+{
+    if (len > BACKLOG_LINE_MAX) len = BACKLOG_LINE_MAX;
+    memcpy(s_backlog[s_backlog_head], line, len);
+    s_backlog_len[s_backlog_head] = (uint8_t)len;
+    s_backlog_head = (uint16_t)((s_backlog_head + 1) % BACKLOG_LINES);
+    if (s_backlog_count < BACKLOG_LINES) s_backlog_count++;
+    else s_backlog_dropped++;
+}
+
 static bool send_locked(uint8_t type, const uint8_t *payload, size_t payload_len, TickType_t wait)
 {
     int len = cable_frame_encode(type, payload, payload_len, s_tx_frame, sizeof(s_tx_frame));
     if (len < 0) return false;
+#if defined(DEVICE_BOARD_M5CORES3)
+    // After unplug, do not touch the JTAG FIFO. write_bytes can block/watchdog-reset when the host
+    // has just gone. TCP if a client is up; otherwise drop the frame (hello retries in 2s).
+    if (!usb_serial_jtag_is_connected()) {
+        return wifi_cable_write(s_tx_frame, (size_t)len);
+    }
+#endif
     return usb_serial_jtag_write_bytes(s_tx_frame, (size_t)len, wait) == len;
 }
 
@@ -130,7 +174,12 @@ static int log_vprintf(const char *fmt, va_list args)
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) len--;
         // Into the RTC ring first — that copy survives the reboot the next line may be the last before.
         if (len > 0) last_words_add(line, len);
-        if (len > 0) send_locked(CABLE_TYPE_LOG, (const uint8_t *)line, len, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS));
+        // Nobody listening yet → hold it. cable_link_flush_backlog() replays these the moment a
+        // transport appears, which on a cable-less dial is the only way the line is ever seen.
+        if (len > 0 && !send_locked(CABLE_TYPE_LOG, (const uint8_t *)line, len,
+                                    pdMS_TO_TICKS(LOG_WRITE_WAIT_MS))) {
+            backlog_add(line, len);
+        }
     }
     s_in_log_sink = false;
     xSemaphoreGive(s_tx_lock);
@@ -152,6 +201,43 @@ void cable_link_set_log_framing(bool on)
     }
 }
 
+void cable_link_flush_backlog(void)
+{
+    if (!s_running || !s_tx_lock) return;
+    if (xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS)) != pdTRUE) return;
+    // Same guard the sink uses: a failed send in here logs, and that log must not come back round and
+    // try to take a lock this task already holds.
+    s_in_log_sink = true;
+
+    const uint32_t dropped = s_backlog_dropped;
+    const uint16_t n = s_backlog_count;
+    uint16_t idx = (uint16_t)((s_backlog_head + BACKLOG_LINES - n) % BACKLOG_LINES);
+    // Clear BEFORE sending. A send that fails half way would otherwise replay the surviving half on the
+    // next connect, and a log that repeats itself is a log nobody trusts about ordering.
+    s_backlog_count = 0;
+    s_backlog_dropped = 0;
+
+    if (n) {
+        char hdr[96];
+        int hn = snprintf(hdr, sizeof(hdr), "I (0) cable_link: --- %u buffered line(s) while offline%s ---",
+                          (unsigned)n, dropped ? ", older ones lost" : "");
+        // snprintf reports what it WOULD have written, not what it did. Handing that number straight to
+        // send_locked would read past hdr on any truncation — clamp it to what is actually in the buffer.
+        if (hn > 0) {
+            size_t hl = (size_t)hn < sizeof(hdr) ? (size_t)hn : sizeof(hdr) - 1;
+            send_locked(CABLE_TYPE_LOG, (const uint8_t *)hdr, hl, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS));
+        }
+    }
+    for (uint16_t i = 0; i < n; i++) {
+        const uint8_t len = s_backlog_len[idx];
+        if (len) send_locked(CABLE_TYPE_LOG, (const uint8_t *)s_backlog[idx], len, pdMS_TO_TICKS(LOG_WRITE_WAIT_MS));
+        idx = (uint16_t)((idx + 1) % BACKLOG_LINES);
+    }
+
+    s_in_log_sink = false;
+    xSemaphoreGive(s_tx_lock);
+}
+
 // ── link ────────────────────────────────────────────────────────────────────────────────────────────
 
 static void reader_task(void *arg)
@@ -163,7 +249,7 @@ static void reader_task(void *arg)
         if (n <= 0) continue;
         // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
         // every boot, and the only useful response to a byte that makes no sense is to step over it.
-        cable_decoder_feed(&s_decoder, chunk, (size_t)n, s_cb, s_ctx);
+        cable_link_feed(chunk, (size_t)n, false);
     }
 }
 
@@ -174,9 +260,13 @@ bool cable_link_start(cable_frame_cb cb, void *ctx)
     s_cb = cb;
     s_ctx = ctx;
     cable_decoder_init(&s_decoder);
+#if defined(DEVICE_BOARD_M5CORES3)
+    cable_decoder_init(&s_tcp_decoder);
+#endif
 
     s_tx_lock = xSemaphoreCreateMutex();
-    if (!s_tx_lock) {
+    s_rx_lock = xSemaphoreCreateMutex();
+    if (!s_tx_lock || !s_rx_lock) {
         ESP_LOGE(TAG, "no memory for the tx lock — link disabled");
         return false;
     }
@@ -192,7 +282,8 @@ bool cable_link_start(cable_frame_cb cb, void *ctx)
         ESP_LOGE(TAG, "usb_serial_jtag driver install failed (%s) — no link to the daemon",
                  esp_err_to_name(err));
         vSemaphoreDelete(s_tx_lock);
-        s_tx_lock = NULL;
+        vSemaphoreDelete(s_rx_lock);
+        s_tx_lock = s_rx_lock = NULL;
         return false;
     }
 
@@ -248,5 +339,38 @@ void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
 
 void cable_link_reset_decoder(void)
 {
+    if (s_rx_lock) xSemaphoreTake(s_rx_lock, portMAX_DELAY);
     cable_decoder_reset(&s_decoder);
+    if (s_rx_lock) xSemaphoreGive(s_rx_lock);
+}
+
+void cable_link_feed(const uint8_t *data, size_t n, bool from_tcp)
+{
+    if (!s_running || !data || !n) return;
+    if (s_rx_lock) xSemaphoreTake(s_rx_lock, portMAX_DELAY);
+#if defined(DEVICE_BOARD_M5CORES3)
+    if (from_tcp) {
+        // USB is the session while the cable is in. Ignore LAN bytes so a bind probe cannot
+        // interleave with the daemon's agent list.
+        if (usb_serial_jtag_is_connected()) {
+            if (s_rx_lock) xSemaphoreGive(s_rx_lock);
+            return;
+        }
+        s_rx_tcp = true;
+        cable_decoder_feed(&s_tcp_decoder, data, n, s_cb, s_ctx);
+    } else {
+        s_rx_tcp = false;
+        cable_decoder_feed(&s_decoder, data, n, s_cb, s_ctx);
+    }
+#else
+    (void)from_tcp;
+    s_rx_tcp = false;
+    cable_decoder_feed(&s_decoder, data, n, s_cb, s_ctx);
+#endif
+    if (s_rx_lock) xSemaphoreGive(s_rx_lock);
+}
+
+bool cable_link_rx_is_tcp(void)
+{
+    return s_rx_tcp;
 }

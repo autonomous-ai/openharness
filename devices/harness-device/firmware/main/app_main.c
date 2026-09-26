@@ -36,6 +36,10 @@
 #include "ui/display.h"
 #include "ui/touch.h"
 #include "ui/ui_screens.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "wifi_sta.h"
+#include "board/cores3_clock.h"
+#endif
 
 static const char *TAG = "app";
 
@@ -47,8 +51,12 @@ static const char *TAG = "app";
 
 // BOOT (GPIO0) held at power-on = factory reset. All that is left to clear is the screen brightness and
 // the voice language — the credentials this used to wipe do not exist any more.
+// CoreS3 has no exposed BOOT key (GPIO0 is the ES7210 MCLK), so the gesture is dial-only.
 static bool boot_button_held(void)
 {
+#if !BSP_HAS_BOOT_BUTTON
+    return false;
+#else
     gpio_config_t io = {
         .pin_bit_mask = 1ULL << BSP_BOOT_BUTTON,
         .mode = GPIO_MODE_INPUT,
@@ -59,6 +67,7 @@ static bool boot_button_held(void)
     if (gpio_get_level(BSP_BOOT_BUTTON) != 0) return false;
     vTaskDelay(pdMS_TO_TICKS(50));
     return gpio_get_level(BSP_BOOT_BUTTON) == 0;
+#endif  // BSP_HAS_BOOT_BUTTON
 }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
@@ -162,6 +171,9 @@ static void refresh_task(void *arg)
 
         // Chip and settings actions, tapped on the LVGL task and executed here off it.
         ui_service_model_picker();
+#if defined(DEVICE_BOARD_M5CORES3)
+        ui_service_wifi();
+#endif
 
         // A machine.select the daemon never answered. Drained here rather than on the LVGL task so the
         // bounce (spinner down, wheel back, toast) happens off the render path, like every other action.
@@ -187,6 +199,9 @@ void app_main(void)
     last_words_boot();   // before the first log line, so the previous boot's ring is read, not overwritten
     board_detect();      // which dial this is — the panel's reset pin comes from here, so before display_init
     config_store_init();
+#if defined(DEVICE_BOARD_M5CORES3)
+    wifi_sta_init();   // STA only — join saved network if any; setup UI is Settings → WiFi
+#endif
 
     if (boot_button_held()) {
         ESP_LOGW(TAG, "BOOT held — factory reset");
@@ -197,8 +212,14 @@ void app_main(void)
     board_probe_run();   // bring-up only — see board/board_probe.c
 #endif
     display_init();
+#if defined(DEVICE_BOARD_M5CORES3)
+    cores3_clock_init();   // the RTC's time, so the chrome can show it before a daemon says
+#endif
     ui_init();
     ui_set_brightness(config_load_brightness());
+#if defined(DEVICE_BOARD_M5CORES3)
+    display_wake();   // PWR is back/stop — never boot into a dark panel
+#endif
     ram_telemetry_checkpoint("ui_ready");
 
     // Reserve the PSRAM voice buffer now, while the heap is still unfragmented — a large contiguous block

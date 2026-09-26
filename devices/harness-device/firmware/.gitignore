@@ -15,6 +15,10 @@ sdkconfig.old
 sdkconfig.superseded
 sdkconfig.defaults.stamp
 build-arm
+# The two the CoreS3 port added. Each build dir is enumerated here rather than globbed, matching the
+# entries above; both hold hundreds of MB of objects and neither is a build input.
+build-cores3/
+build-dial/
 
 # Local pairing secrets (WiFi password / API key) — do not commit.
 # Copy main/provisioned_config.h.example → main/provisioned_config.h and fill in.

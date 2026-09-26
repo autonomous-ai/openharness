@@ -1,6 +1,8 @@
 // Display bring-up: CO5300 AMOLED over QSPI + LVGL v9 port.
 #pragma once
 
+#include "lvgl.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -33,3 +35,4 @@ void display_set_power_cb(void (*cb)(bool on));
 // Reset the idle-off timer without a touch — ui_screens calls this while a voice turn is recording/
 // uploading/processing (voice uses the PWR key, not the touchscreen, so the screen must not auto-off).
 void display_bump_activity(void);
+

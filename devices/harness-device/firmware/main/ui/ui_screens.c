@@ -20,11 +20,19 @@
 #include "spinner_spokes.h"   // 12 pre-rotated spinner bars (see the .c for why they are baked)
 #include "icons_voice.h"      // Figma voice-state icons (mic/recording/tick)
 #include "icons_engine.h"     // engine product marks
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "icons_c3.h"         // the same icons at 0.6x, under the same names (tools/gen_c3_icons.py)
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"   // esp_restart() for the WiFi-portal Cancel
 #include "esp_app_desc.h"   // esp_app_get_description() → firmware version shown on Settings
 #include "esp_attr.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "wifi_sta.h"
+#include "wifi_cable.h"
+#include "display_cores3.h"
+#endif
 
 static const char *TAG = "ui";
 
@@ -39,23 +47,26 @@ static const char *TAG = "ui";
 // a narrow one — measured, 0.534 em against 0.453 em average ASCII advance, so every line is ~18% longer
 // than the surrounding geometry was tuned for. Those clip limits and max_widths are deliberately untouched.
 //
-// LVGL's Montserrat faces stay linked for LV_SYMBOL_* only: those are private-use codepoints that exist in
-// no other font, so a label carrying one keeps a Montserrat face or its glyph draws as an empty box.
-extern const lv_font_t geist_reg_16;
-extern const lv_font_t geist_reg_20;
-extern const lv_font_t geist_reg_24;  // small labels / muted meta
-extern const lv_font_t geist_reg_25;  // main body: project-screen content, event cards, settings rows
-extern const lv_font_t geist_med_28;
-extern const lv_font_t geist_med_32;  // titles, section headers, agent name in the reader, status verb
-extern const lv_font_t geist_reg_32;
-extern const lv_font_t geist_reg_34;
-extern const lv_font_t geist_reg_38;  // large body: reader detail, "No activity" placeholder, the "+" glyph
-extern const lv_font_t geist_med_38;
-extern const lv_font_t geist_med_48;
-extern const lv_font_t geist_med_64;  // DIGITS ONLY (0-9 and space) — the Overview's agent count, nothing else
-// The only SemiBold on the device: the reset confirm's primary, which the design sets one weight
-// above its neighbours to mark it as the safe, committing action.
-extern const lv_font_t geist_sem_24;  // largest display: tile agent name + overview agent count
+#include "ui_fonts.h"
+#include "board_pins.h"
+#if defined(DEVICE_BOARD_M5CORES3)
+#include "board/cores3_clock.h"
+#include "display_cores3.h"
+#endif
+
+// The screen, and the dial's pixels on it. Every geometry number in this file is written in the round
+// dial's 466-pixel design and passed through PX(): the identity on the dial, 0.6x on the CoreS3 — the
+// scale at which the dial's physical sizes land on the CoreS3's glass (fonts are mapped to match in
+// ui_fonts.h). SCR_* is the real screen, for what must span or centre on it.
+#define SCR_W   BSP_LCD_H_RES
+#define SCR_H   BSP_LCD_V_RES
+#define SCR_CX  (SCR_W / 2)
+#define SCR_CY  (SCR_H / 2)
+#if defined(DEVICE_BOARD_M5CORES3)
+#define PX(v)   ((int32_t)(((v) * 3 + ((v) >= 0 ? 2 : -2)) / 5))
+#else
+#define PX(v)   (v)
+#endif
 
 // Round 466x466 AMOLED: keep ALL content inside the inscribed square (~330px, r·√2) and CENTRE it,
 // so nothing reaches the curved edge. 330px is the widest column whose corners never clip; centred
@@ -64,6 +75,17 @@ extern const lv_font_t geist_sem_24;  // largest display: tile agent name + over
 #define SCREEN_PAD   18
 #define SAFE_CONTENT_W 384       // centred column for readable content — wide, since content sits in the
                                  // circle's mid band where the usable width is much larger than the inscribed square
+#if defined(DEVICE_BOARD_M5CORES3)
+// The CoreS3's glass is a 320x240 rectangle, not a circle: columns run nearly edge to edge (500 dial px
+// is 300 panel px, 10 px in from each side).
+#undef SAFE_CONTENT_W
+#define SAFE_CONTENT_W 500
+#define TILE_COL_W     SAFE_CONTENT_W
+#define STATUS_LINE_W  TILE_COL_W
+#else
+#define TILE_COL_W     SAFE_CONTENT_W
+#define STATUS_LINE_W  SAFE_CONTENT_W
+#endif
 // The Overview's seats (mockup/overview-v3.html, "H · Halo, no ring"). FIXED, not a growing column: nothing
 // moves when the status changes, the words change. Every number is a device pixel on the 466 face; the far
 // corner of every control is inside the 233px rim, above the home-swipe band (y ≥ 400) and below the
@@ -72,6 +94,22 @@ extern const lv_font_t geist_sem_24;  // largest display: tile agent name + over
 // The shape follows what round devices agree on — the centre is one number, the lower arc is for the
 // hand: Inbox · Voice · Settings on one arc, Voice larger and on the axis, wearing the same 44px mic the
 // agent tile wears. Goal and Loop are gone from this face: they are ways of speaking, not things to see.
+#if defined(DEVICE_BOARD_M5CORES3)
+// The CoreS3's Overview, in dial px (PX() lands them on the 320x240 panel): the count under the chrome
+// row, the status under it, and Inbox · Voice · Settings along the bottom edge, Voice lower and larger,
+// the way the dial's arc sits them. Panel px: count row at y 58, status 108, sides 164, Voice 172.
+#define OV_ROW_Y      97
+#define OV_NUM_H      72
+#define OV_ROW_GAP    14
+#define OV_STATUS_Y   180
+#define OV_SIDE_D     64
+#define OV_BELL_X     102
+#define OV_GEAR_X     368
+#define OV_SIDE_Y     273
+#define OV_VOICE_D    88
+#define OV_VOICE_X    223
+#define OV_VOICE_Y    287
+#else
 #define OV_ROW_Y      118   // "8 agents" on one baseline: the count in the 64px digits face, the word at 38
 #define OV_NUM_H      72    // the row's height — the digit's line box
 #define OV_ROW_GAP    14    // between the digit and the word
@@ -89,6 +127,7 @@ extern const lv_font_t geist_sem_24;  // largest display: tile agent name + over
 #define OV_VOICE_D    88
 #define OV_VOICE_X    189
 #define OV_VOICE_Y    346
+#endif
 #define SAFE_W       lv_pct(72)  // ~335px — wrapped text on the side screens stays inside the curve
 // MAX_PROJECTS comes from commander_client.h (shared with app_main's fetch buffers) so the UI tile
 // array and the WS fetch never disagree; the UI keeps only a shell per project + a materialized window.
@@ -133,7 +172,11 @@ extern const lv_font_t geist_sem_24;  // largest display: tile agent name + over
 // Settings list geometry (Figma): uniform rows, stacked contiguously, four of them inside the round face.
 // 320 wide only fits the circle between y~64 and y~402 — 338px, i.e. exactly four 84px rows, which is why
 // the fifth has to be scrolled to rather than squeezed in.
+#if defined(DEVICE_BOARD_M5CORES3)
+#define SET_ROW_W    500   // the rectangle's column, not the circle's chord
+#else
 #define SET_ROW_W    320
+#endif
 #define SET_ROW_H    84
 #define SET_LIST_PAD 65    // first row starts where the design puts it; the list scrolls by one row
 // The label font of a settings row, referenced ONCE so the one-line height pin, the default trailing
@@ -245,6 +288,7 @@ static lv_obj_t *s_no_agents_hint_lbl; // the closing line under the command / t
 static lv_obj_t *s_na_eyebrow;       // machine name above the no-agents headline (remote only)
 static lv_obj_t *s_na_title;         // "Start on your computer" / "No agents yet"
 static lv_obj_t *s_na_cmd_lbl;       // the "New Harness" label inside the action pill (hidden while not connected)
+static void swarm_line_tap(lv_event_t *e);   // tab picker — CoreS3 empty-tab pill also uses this
 static lv_obj_t *s_na_marks;         // the engines' marks under the pill: what will appear here
 static lv_obj_t *s_overview_tile;      // persistent leading "overview" tile (ring 0): MACHINE eyebrow + "N agents"
 static lv_obj_t *s_overview_count_lbl; // the "N agents" label inside the overview tile (updated on count change)
@@ -265,6 +309,9 @@ static lv_obj_t *s_overview_settings_btn;
 static lv_obj_t *s_overview_bell_btn, *s_overview_bell_glyph, *s_overview_bell_badge, *s_overview_bell_badge_lbl;   // Inbox, and its unread badge
 static lv_obj_t *s_overview_agents_lbl;   // the word under the count
 static void overview_settings_tap(lv_event_t *e);
+#if defined(DEVICE_BOARD_M5CORES3)
+static void rebuild_settings_tile(void);
+#endif
 static lv_obj_t *s_overview_goal_btn;
 static lv_obj_t *s_overview_loop_btn;
 // Kept so the disabled state can be painted with COLOUR. Never reach for lv_obj_set_style_opa() here:
@@ -316,6 +363,12 @@ static lv_obj_t *s_voice_overlay;    // voice-mode overlay: shown while recordin
 static lv_obj_t *s_bright_fill;      // white fill of the brightness control; its width = the level
 static lv_obj_t *s_bright_box;       // the visible track; presses on it drive the level
 static lv_obj_t *s_bright_screen;    // Brightness on its own screen (top layer), opened from the Settings row
+#if defined(DEVICE_BOARD_M5CORES3)
+static lv_obj_t *s_wifi_screen, *s_wifi_status, *s_wifi_list, *s_wifi_trail;
+static lv_obj_t *s_wifi_pass_box, *s_wifi_ta;
+static lv_timer_t *s_wifi_timer;
+static char s_wifi_pending_ssid[WIFI_STA_SSID_MAX];
+#endif
 
 // Raise an lv_layer_top overlay, then put the software dim BACK on top of it.
 //
@@ -324,9 +377,16 @@ static lv_obj_t *s_bright_screen;    // Brightness on its own screen (top layer)
 // FULL brightness whatever the user set — which is how the reset confirm came up blinding on a device
 // dimmed right down. Nothing warns about it; the overlay looks perfectly correct in isolation.
 // Use this instead of lv_obj_move_foreground() for anything parented to lv_layer_top().
+#if defined(DEVICE_BOARD_M5CORES3)
+static void chrome_raise(void);
+static void chrome_refresh(void);
+#endif
 static void overlay_raise(lv_obj_t *o)
 {
     if (o) lv_obj_move_foreground(o);
+#if defined(DEVICE_BOARD_M5CORES3)
+    chrome_raise();   // the time and the key stay over every overlay: the key is how you leave one
+#endif
     if (s_dim) lv_obj_move_foreground(s_dim);
 }
 #define BRIGHT_MIN 0x14              // slider floor → the screen never dims to fully unreadable
@@ -440,6 +500,9 @@ static const lv_image_dsc_t *engine_mark(const char *engine, bool *recolor);   /
 static void clear_removed_project_transients_locked(const char *project_id, bool voice_aborted);
 static void settings_vlang_tap(lv_event_t *e);   // toggle voice language (defined below)
 static void settings_close_tap(lv_event_t *e);   // the Settings tile's X → back to the Overview (defined below)
+#if defined(DEVICE_BOARD_M5CORES3)
+static void settings_reset_tap(lv_event_t *e);   // the dial's own, dormant there; a Settings row here
+#endif
 static void settings_scroll_tap(lv_event_t *e);  // flip which way a drag moves the scrollback (defined below)
 static void settings_swipe_tap(lv_event_t *e);   // flip which way a swipe walks the carousel (defined below)
 static void model_chip_tap(lv_event_t *e);       // tap the per-agent Model chip → open the model picker (defined below)
@@ -591,8 +654,8 @@ static const char *tile_resting_text(const proj_t *p)
 // LV_SCROLL_SNAP_CENTER + LV_OBJ_FLAG_SCROLL_ONE (exactly what lv_tileview uses internally, so the feel
 // is identical), and each tile is positioned at column*width. carousel_goto centers a column;
 // carousel_col reads which column is centered from the scroll position.
-static int32_t carousel_w(void) { int32_t w = tileview ? lv_obj_get_width(tileview) : 0; return w > 0 ? w : 466; }
-static int32_t carousel_h(void) { int32_t h = tileview ? lv_obj_get_height(tileview) : 0; return h > 0 ? h : 466; }
+static int32_t carousel_w(void) { int32_t w = tileview ? lv_obj_get_width(tileview) : 0; return w > 0 ? w : SCR_W; }
+static int32_t carousel_h(void) { int32_t h = tileview ? lv_obj_get_height(tileview) : 0; return h > 0 ? h : SCR_H; }
 // A REPORT LEAVES THE DIAL ONLY WHEN A FINGER MOVED THE CAROUSEL.
 //
 // Everything that moves it from code — a rebuilt list re-anchoring, the ring count changing, a tile being
@@ -771,11 +834,13 @@ static lv_obj_t *make_screen(void)
     lv_obj_set_style_bg_color(s, COL_BG, 0);
     lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s, 0, 0);
+#if !defined(DEVICE_BOARD_M5CORES3)   // the dial's glass is round; the CoreS3's is not
     lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(s, SCREEN_PAD, 0);
+#endif
+    lv_obj_set_style_pad_all(s, PX(SCREEN_PAD), 0);
     lv_obj_set_flex_flow(s, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s, 10, 0);
+    lv_obj_set_style_pad_row(s, PX(10), 0);
     lv_obj_clear_flag(s, LV_OBJ_FLAG_SCROLLABLE);
     return s;
 }
@@ -810,6 +875,7 @@ static void spinner_del(lv_event_t *e)
 // iOS-style spinner sized size×size. Returns the container — hide/show/align it like any object.
 static lv_obj_t *make_spinner(lv_obj_t *parent, int size)
 {
+    size = PX(size);   // callers speak dial px
     lv_obj_t *c = lv_obj_create(parent);
     lv_obj_remove_style_all(c);
     lv_obj_set_size(c, size, size);
@@ -860,8 +926,8 @@ static lv_obj_t *make_close_pill(lv_obj_t *parent, lv_event_cb_t on_tap, int y)
 {
     lv_obj_t *cls = lv_button_create(parent);
     lv_obj_add_flag(cls, LV_OBJ_FLAG_FLOATING);   // never scrolls with the content it closes
-    lv_obj_set_size(cls, 60, 32);
-    lv_obj_align(cls, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_set_size(cls, PX(60), PX(32));
+    lv_obj_align(cls, LV_ALIGN_TOP_MID, 0, PX(y));
     lv_obj_set_style_bg_color(cls, COL_FG, 0);
     lv_obj_set_style_bg_opa(cls, LV_OPA_10, 0);
     lv_obj_set_style_bg_opa(cls, LV_OPA_20, LV_STATE_PRESSED);
@@ -905,14 +971,14 @@ static lv_obj_t *action_pill(lv_obj_t *parent, const char *key, const char *text
     lv_obj_set_size(box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(box, lv_color_hex(0x23252f), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_width(box, PX(1), 0);
     lv_obj_set_style_border_color(box, lv_color_hex(0x3a3f4b), 0);
     lv_obj_set_style_radius(box, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_hor(box, 22, 0);
-    lv_obj_set_style_pad_ver(box, 10, 0);
+    lv_obj_set_style_pad_hor(box, PX(22), 0);
+    lv_obj_set_style_pad_ver(box, PX(10), 0);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(box, 10, 0);
+    lv_obj_set_style_pad_column(box, PX(10), 0);
 
     lv_obj_t *cap = lv_obj_create(box);
     lv_obj_remove_style_all(cap);
@@ -920,11 +986,11 @@ static lv_obj_t *action_pill(lv_obj_t *parent, const char *key, const char *text
     lv_obj_set_size(cap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(cap, lv_color_hex(0x0e1013), 0);
     lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(cap, 1, 0);
+    lv_obj_set_style_border_width(cap, PX(1), 0);
     lv_obj_set_style_border_color(cap, lv_color_hex(0x4a5160), 0);
-    lv_obj_set_style_radius(cap, 8, 0);
-    lv_obj_set_style_pad_hor(cap, 10, 0);
-    lv_obj_set_style_pad_ver(cap, 2, 0);
+    lv_obj_set_style_radius(cap, PX(8), 0);
+    lv_obj_set_style_pad_hor(cap, PX(10), 0);
+    lv_obj_set_style_pad_ver(cap, PX(2), 0);
     lv_obj_t *k = lv_label_create(cap);
     lv_obj_set_style_text_font(k, &geist_sem_24, 0);
     lv_obj_set_style_text_color(k, COL_FG, 0);
@@ -948,17 +1014,17 @@ static lv_obj_t *pair_pill(lv_obj_t *parent, int32_t h)
     lv_obj_t *box = lv_obj_create(parent);
     lv_obj_remove_style_all(box);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(box, PAIR_W, h);
+    lv_obj_set_size(box, PX(PAIR_W), PX(h));
     lv_obj_set_style_bg_color(box, COL_SET_PILL, 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(box, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_width(box, PX(1), 0);
     lv_obj_set_style_border_color(box, COL_SET_BORD, 0);
-    lv_obj_set_style_pad_hor(box, 20, 0);
-    lv_obj_set_style_pad_ver(box, 10, 0);
+    lv_obj_set_style_pad_hor(box, PX(20), 0);
+    lv_obj_set_style_pad_ver(box, PX(10), 0);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(box, 2, 0);
+    lv_obj_set_style_pad_row(box, PX(2), 0);
     return box;
 }
 
@@ -1031,6 +1097,12 @@ static void statusbar_tick(lv_timer_t *t)
     ext_prev = ext;
 
     refresh_conn_ui();   // project dot colors + the "Reconnecting…" badge
+#if defined(DEVICE_BOARD_M5CORES3)
+    // Plugged in, not charging: the charger stops when the cell is full, and a bolt that came and went at
+    // 100% read as a fault.
+    display_cores3_set_battery(power_battery_pct(), power_is_charging() || power_is_on_external());
+    display_cores3_set_wifi(wifi_sta_state() == WIFI_STA_CONNECTED, wifi_sta_rssi());
+#endif
 }
 
 // Claude-Code-style rotating gerunds for the working-status verb row (ASCII only → font renders them).
@@ -1175,10 +1247,10 @@ static void wave_tick(lv_timer_t *t)
         int16_t ang = (int16_t)((s_wave_phase + k * 40) % 360);   // 40° phase step per bar → travelling wave
         int32_t s   = lv_trigo_sin(ang);                          // -32767..32767
         int32_t amp = 675 + (s * 325 / 32767);                    // permille 350..1000 → 0.35×..1.0× rest
-        int32_t h   = (int32_t)s_wave_rest[k] * amp / 1000;
+        int32_t h   = (int32_t)PX(s_wave_rest[k]) * amp / 1000;
         if (h < 2) h = 2;
         lv_obj_set_height(s_wave[k], h);
-        lv_obj_set_y(s_wave[k], 233 - h / 2);             // stay centred on the midline as it grows/shrinks
+        lv_obj_set_y(s_wave[k], SCR_CY - h / 2);          // stay centred on the midline as it grows/shrinks
     }
 }
 // Start/stop the waveform: spin up the shared travelling-phase timer and seed one frame immediately (so nothing
@@ -1251,8 +1323,9 @@ static void busy_dots_tick(lv_timer_t *t)
     } else {
         // Route voice: mark the moment the upload finished and hold the loading state until the router
         // answers; if it never does (STT/LLM failure with no terminal frame), release after the budget.
-        if (s_voice_routing && s_vic_state == VIC_SEND && !audio_client_active()) {
-            if (!s_voice_route_ms) s_voice_route_ms = lv_tick_get();
+        if (s_voice_routing) {
+            if (!s_voice_route_ms && s_vic_state == VIC_SEND && !audio_client_active())
+                s_voice_route_ms = lv_tick_get();
             // THE ONE CONDITION: is the tile ready to show Working? Asked of the model, three times a
             // second, so it cannot be missed by the order two messages happen to arrive in.
             //
@@ -1263,7 +1336,12 @@ static void busy_dots_tick(lv_timer_t *t)
             // the bug — not the overlay, which was up the whole time.
             const int ai = s_active_idx;
             const bool tile_working = ai >= 0 && ai < s_proj_count && s_proj[ai].busy_model;
-            if (tile_working || lv_tick_elaps(s_voice_route_ms) > VOICE_ROUTE_WAIT_MS) {
+            const bool timed_out = s_voice_route_ms && lv_tick_elaps(s_voice_route_ms) > VOICE_ROUTE_WAIT_MS;
+            // Only once the words are UP (s_voice_route_ms marks the upload finishing). Asked while still
+            // recording, "is the tile working?" is already yes for an agent that was busy before you spoke —
+            // and the overlay vanished 80 ms into the capture, leaving the mic open with nothing on screen
+            // to say so. Measured on the CoreS3: 225 s recorded before anything noticed.
+            if ((tile_working && s_voice_route_ms) || timed_out) {
                 s_voice_routing = false; s_voice_route_ms = 0;
                 voice_icon_apply(VIC_NONE);
                 voice_overlay_set(false);
@@ -1327,14 +1405,22 @@ static void busy_dots_tick(lv_timer_t *t)
 // security: a smudge trail on the AMOLED or a shoulder-surf can leak the shape — enough to stop a
 // passer-by poking your agents, not a determined attacker.
 enum { LK_UNLOCK, LK_SET, LK_CONFIRM, LK_DISABLE };
+#if defined(DEVICE_BOARD_M5CORES3)
+#define LK_GAP        88       // the grid fits between the message and Cancel on a 240px-tall glass
+#else
 #define LK_GAP        113      // dot spacing (px) — matches the "Create your pattern" Figma grid
+#endif
 #define COL_LOCK_DOT   lv_color_hex(0xffffff)   // idle pattern dot (white, per Figma)
 #define COL_LOCK_GREEN lv_color_hex(0x75f958)   // selected dot + line (bright green, per Figma)
 #define LK_HIT        44       // finger hit radius around a dot (< GAP/2 so adjacent dots don't co-trigger)
 #define LK_MIN        4        // minimum dots in a valid pattern
 #define LK_MAX_FAIL   5        // wrong unlock tries → unpair (wipe token + passcode) + reboot to pairing
-#define LK_CX         233      // grid centre x
-#define LK_CY         233      // grid centre y — screen centre (flat, dots-only)
+#define LK_CX         SCR_CX   // grid centre x
+#if defined(DEVICE_BOARD_M5CORES3)
+#define LK_CY         (SCR_CY - PX(6))    // clear of Cancel below; the message sits above the grid
+#else
+#define LK_CY         SCR_CY   // grid centre y — screen centre (flat, dots-only)
+#endif
 
 static lv_obj_t *s_lk_overlay;
 static lv_obj_t *s_lk_msg;                 // single message line ABOVE the grid (instruction / error). Empty
@@ -1405,6 +1491,9 @@ static void lk_hide(void)
 {
     s_lk_shown = false;
     if (s_lk_overlay) lv_obj_add_flag(s_lk_overlay, LV_OBJ_FLAG_HIDDEN);
+#if defined(DEVICE_BOARD_M5CORES3)
+    chrome_refresh();   // the key and the time come back with the face, not a tick later
+#endif
 }
 
 // One-shot timer (armed after LK_MAX_FAIL wrong unlocks): wipe the account link + passcode and reboot so
@@ -1478,7 +1567,7 @@ static void lk_pressing(lv_event_t *e)
     for (int k = 0; k < 9; k++) {
         if (s_lk_sel[k]) continue;
         int32_t dx = p.x - s_lk_dcx[k], dy = p.y - s_lk_dcy[k];
-        if (dx * dx + dy * dy <= LK_HIT * LK_HIT) lk_add_dot(k);
+        if (dx * dx + dy * dy <= PX(LK_HIT) * PX(LK_HIT)) lk_add_dot(k);
     }
     // No live finger-tracking "tail" line: updating a full-screen line every pointer move forced a
     // full-screen repaint each frame → jank on this render-bound panel. Dots light up + segments connect
@@ -1504,7 +1593,7 @@ static void lk_build(void)
     if (s_lk_overlay) return;
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(ov);
-    lv_obj_set_size(ov, 466, 466);
+    lv_obj_set_size(ov, SCR_W, SCR_H);
     lv_obj_set_pos(ov, 0, 0);
     lv_obj_set_style_bg_color(ov, COL_BG, 0);   // flat black, like the original
     lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
@@ -1518,17 +1607,17 @@ static void lk_build(void)
     s_lk_msg = lv_label_create(ov);
     lv_obj_set_style_text_font(s_lk_msg, &geist_reg_25, 0);
     lv_obj_set_style_text_color(s_lk_msg, COL_FG, 0);
-    lv_obj_set_width(s_lk_msg, 340);                                  // bound to the round-safe width
+    lv_obj_set_width(s_lk_msg, PX(340));                                  // bound to the round-safe width
     lv_obj_set_style_text_align(s_lk_msg, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_lk_msg, LV_LABEL_LONG_WRAP);             // any long message wraps, never clips the UI
     lv_label_set_text(s_lk_msg, "");
-    lv_obj_align(s_lk_msg, LV_ALIGN_TOP_MID, 0, 46);   // title y per the "Create your pattern" Figma
+    lv_obj_align(s_lk_msg, LV_ALIGN_TOP_MID, 0, PX(46));   // title y per the "Create your pattern" Figma
 
     // Segment lines first (below the dots in z-order). Positioned + sized tightly per segment in lk_add_dot.
     for (int k = 0; k < 9; k++) {
         lv_obj_t *ln = lv_line_create(ov);
         lv_obj_set_style_line_color(ln, COL_LOCK_GREEN, 0);
-        lv_obj_set_style_line_width(ln, 5, 0);
+        lv_obj_set_style_line_width(ln, PX(5), 0);
         lv_obj_set_style_line_rounded(ln, true, 0);
         lv_obj_add_flag(ln, LV_OBJ_FLAG_HIDDEN);
         s_lk_seg[k] = ln;
@@ -1537,12 +1626,12 @@ static void lk_build(void)
     // 9 flat dots (3×3), centred on the screen.
     for (int k = 0; k < 9; k++) {
         int r = k / 3, c = k % 3;
-        s_lk_dcx[k] = LK_CX + (c - 1) * LK_GAP;
-        s_lk_dcy[k] = LK_CY + (r - 1) * LK_GAP;
+        s_lk_dcx[k] = LK_CX + (c - 1) * PX(LK_GAP);
+        s_lk_dcy[k] = LK_CY + (r - 1) * PX(LK_GAP);
         lv_obj_t *d = lv_obj_create(ov);
         lv_obj_remove_style_all(d);
         lv_obj_clear_flag(d, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(d, 16, 16);
+        lv_obj_set_size(d, PX(16), PX(16));
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(d, COL_LOCK_DOT, 0);
@@ -1555,12 +1644,12 @@ static void lk_build(void)
     lv_obj_set_style_bg_color(s_lk_cancel, COL_SET_PILL, 0);
     lv_obj_set_style_bg_color(s_lk_cancel, lv_color_hex(0x2c2c2c), LV_STATE_PRESSED);
     lv_obj_set_style_radius(s_lk_cancel, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(s_lk_cancel, 1, 0);
+    lv_obj_set_style_border_width(s_lk_cancel, PX(1), 0);
     lv_obj_set_style_border_color(s_lk_cancel, COL_SET_BORD, 0);
-    lv_obj_set_style_pad_hor(s_lk_cancel, 34, 0);
-    lv_obj_set_style_pad_ver(s_lk_cancel, 16, 0);
-    lv_obj_align(s_lk_cancel, LV_ALIGN_BOTTOM_MID, 0, -26);   // lower, clear of the bottom dot row
-    lv_obj_set_ext_click_area(s_lk_cancel, 28);   // forgiving hit zone (tap drift near the edge still counts)
+    lv_obj_set_style_pad_hor(s_lk_cancel, PX(34), 0);
+    lv_obj_set_style_pad_ver(s_lk_cancel, PX(16), 0);
+    lv_obj_align(s_lk_cancel, LV_ALIGN_BOTTOM_MID, 0, PX(-26));   // lower, clear of the bottom dot row
+    lv_obj_set_ext_click_area(s_lk_cancel, PX(28));   // forgiving hit zone (tap drift near the edge still counts)
     lv_obj_add_flag(s_lk_cancel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_lk_cancel, lk_cancel_tap, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cl = lv_label_create(s_lk_cancel);
@@ -1617,6 +1706,174 @@ void ui_lock_setup(void)
 
 bool ui_lock_active(void) { return s_lk_shown; }
 
+#if defined(DEVICE_BOARD_M5CORES3)
+// ── the CoreS3's chrome ─────────────────────────────────────────────────────────────────────────────
+//
+// The watch's frame, on a rectangle: the time in the top-left corner and the dial's one key as a circle in
+// the top-right, with WiFi and battery small beside it. The key is on the glass because the CoreS3's only
+// physical key is back to being what it is on the dial — the screen's on/off. It lives on the top layer,
+// above every overlay (overlay_raise), because it is how you leave most of them.
+static lv_obj_t *s_chrome, *s_chrome_time, *s_chrome_key, *s_chrome_batt, *s_chrome_batt_ico, *s_chrome_wifi;
+static void picker_close_tap(lv_event_t *e);
+static void brightness_close(lv_event_t *e);
+static void wifi_overlay_hide(void);
+static bool s_chrome_key_stops;
+static lv_obj_t *s_chrome_corners[2];   // WiFi and battery, on the top layer beside the chrome
+
+// The key: the dial's key first — abort voice, dismiss the question, offer to cancel a busy tile's turn —
+// and beyond that, which the dial ignores, back: it closes what is open, then leaves for the Overview.
+static void ui_key_pressed(void)
+{
+    if (ui_boot_pressed()) return;
+    if (s_cancel_confirm && !lv_obj_has_flag(s_cancel_confirm, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(s_cancel_confirm, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (ui_reader_is_open()) { reader_close_tap(NULL); return; }
+    if (ui_notif_is_open()) { ui_notif_close(); return; }
+    if (ui_switch_is_open()) { swarm_picker_close(); return; }
+    if (ui_picker_is_open()) { picker_close_tap(NULL); return; }
+    if (s_bright_screen && !lv_obj_has_flag(s_bright_screen, LV_OBJ_FLAG_HIDDEN)) { brightness_close(NULL); return; }
+    if (s_wifi_screen && !lv_obj_has_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN)) { wifi_overlay_hide(); return; }
+    if (s_settings_active) { settings_close_tap(NULL); return; }
+    if (!s_overview_active) ui_home_overview();
+}
+
+static void chrome_key_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    ui_key_pressed();
+}
+
+bool ui_chrome_key_hit(uint16_t x, uint16_t y)
+{
+    if (!s_chrome_key || lv_obj_has_flag(s_chrome, LV_OBJ_FLAG_HIDDEN)) return false;
+    lv_point_t pt = { .x = x, .y = y };
+    return lv_obj_hit_test(s_chrome_key, &pt);
+}
+
+static void chrome_raise(void)
+{
+    if (s_chrome) lv_obj_move_foreground(s_chrome);
+    for (int i = 0; i < 2; i++) if (s_chrome_corners[i]) lv_obj_move_foreground(s_chrome_corners[i]);
+}
+
+// Red while the key would stop something (a voice turn, or the busy agent on screen), as on the watch.
+static void chrome_key_style(bool stops)
+{
+    lv_color_t c = stops ? COL_RED : COL_FG;
+    lv_obj_set_style_border_color(s_chrome_key, c, 0);
+    lv_obj_set_style_border_opa(s_chrome_key, stops ? LV_OPA_80 : LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(s_chrome_key, c, 0);
+    lv_obj_set_style_bg_opa(s_chrome_key, LV_OPA_20, 0);
+}
+
+static void chrome_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_chrome) return;
+    // The pattern lock covers everything, the chrome included, as on the dial.
+    bool locked = s_lk_overlay && !lv_obj_has_flag(s_lk_overlay, LV_OBJ_FLAG_HIDDEN);
+    if (locked != lv_obj_has_flag(s_chrome, LV_OBJ_FLAG_HIDDEN)) {
+        set_hidden(s_chrome, locked);
+        for (int i = 0; i < 2; i++) set_hidden(s_chrome_corners[i], locked);
+    }
+
+    struct tm tm;
+    char buf[16];
+    if (cores3_clock_local(&tm)) {
+        snprintf(buf, sizeof buf, "%02d:%02d", tm.tm_hour, tm.tm_min);
+        if (strcmp(lv_label_get_text(s_chrome_time), buf)) lv_label_set_text(s_chrome_time, buf);
+    }
+    int pct = -1, bars = -1;
+    bool chg = false;
+    display_cores3_status(&pct, &chg, &bars);
+    if (pct >= 0) {
+        snprintf(buf, sizeof buf, "%d%%", pct);
+        if (strcmp(lv_label_get_text(s_chrome_batt), buf)) lv_label_set_text(s_chrome_batt, buf);
+        lv_obj_set_style_text_color(s_chrome_batt, chg ? COL_GREEN : (pct <= 15 ? COL_YELLOW : COL_MUTED), 0);
+        lv_label_set_text(s_chrome_batt_ico, chg ? LV_SYMBOL_CHARGE : LV_SYMBOL_BATTERY_FULL);
+        lv_obj_set_style_text_color(s_chrome_batt_ico, chg ? COL_GREEN : (pct <= 15 ? COL_YELLOW : COL_MUTED), 0);
+    }
+    // WiFi and battery belong to the home faces — the Overview, an agent, the empty tab. Over a list
+    // (Settings, the drawer, a picker) they would sit on its last row as it scrolls under them.
+    bool home = !locked && lv_screen_active() == scr_projects && !s_settings_active && !s_machines_active
+             && !ui_notif_is_open() && !ui_switch_is_open() && !ui_reader_is_open() && !ui_picker_is_open()
+             && !(s_bright_screen && !lv_obj_has_flag(s_bright_screen, LV_OBJ_FLAG_HIDDEN))
+             && !(s_wifi_screen && !lv_obj_has_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN))
+             && !(s_cancel_confirm && !lv_obj_has_flag(s_cancel_confirm, LV_OBJ_FLAG_HIDDEN))
+             && !(s_reset_confirm && !lv_obj_has_flag(s_reset_confirm, LV_OBJ_FLAG_HIDDEN))
+             && !(s_voice_overlay && !lv_obj_has_flag(s_voice_overlay, LV_OBJ_FLAG_HIDDEN));
+    set_hidden(s_chrome_corners[1], !home || pct < 0);
+    set_hidden(s_chrome_wifi, !home || bars < 0);
+
+    int idx = (s_active_idx >= 0 && s_active_idx < s_proj_count) ? s_active_idx : 0;
+    bool stops = s_voice_routing || ui_voice_is_active()
+              || (s_voice_overlay && !lv_obj_has_flag(s_voice_overlay, LV_OBJ_FLAG_HIDDEN))
+              || (s_proj_count > 0 && !s_overview_active && !s_settings_active && !s_machines_active
+                  && lv_screen_active() == scr_projects && s_proj[idx].busy != NULL);
+    if (stops != s_chrome_key_stops) { s_chrome_key_stops = stops; chrome_key_style(stops); }
+}
+
+static void chrome_refresh(void) { chrome_tick(NULL); }
+
+static void chrome_build(void)
+{
+    s_chrome = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_chrome);
+    lv_obj_set_size(s_chrome, SCR_W, PX(56));
+    lv_obj_set_pos(s_chrome, 0, 0);
+    lv_obj_clear_flag(s_chrome, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    s_chrome_time = lv_label_create(s_chrome);
+    lv_obj_set_style_text_font(s_chrome_time, &geist_med_28, 0);
+    lv_obj_set_style_text_color(s_chrome_time, COL_FG, 0);
+    lv_label_set_text(s_chrome_time, "");
+    lv_obj_align(s_chrome_time, LV_ALIGN_TOP_LEFT, PX(20), PX(12));
+
+    s_chrome_key = lv_button_create(s_chrome);
+    lv_obj_remove_style_all(s_chrome_key);
+    lv_obj_set_size(s_chrome_key, PX(46), PX(46));
+    lv_obj_set_style_radius(s_chrome_key, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(s_chrome_key, PX(3), 0);
+    lv_obj_align(s_chrome_key, LV_ALIGN_TOP_RIGHT, -PX(18), PX(6));
+    lv_obj_set_ext_click_area(s_chrome_key, PX(20));
+    lv_obj_add_event_cb(s_chrome_key, chrome_key_tap, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_bg_opa(s_chrome_key, LV_OPA_40, LV_STATE_PRESSED);
+    chrome_key_style(false);
+
+    // WiFi in the bottom-left corner and the battery in the bottom-right: the top row is the watch's —
+    // the time, the badge in the middle, the key — and the bottom corners are free on every face.
+    s_chrome_wifi = lv_label_create(lv_layer_top());
+    lv_obj_set_style_text_font(s_chrome_wifi, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_chrome_wifi, COL_MUTED, 0);
+    lv_label_set_text(s_chrome_wifi, LV_SYMBOL_WIFI);
+    lv_obj_align(s_chrome_wifi, LV_ALIGN_BOTTOM_LEFT, PX(16), -PX(12));
+    lv_obj_t *batt = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(batt);
+    lv_obj_clear_flag(batt, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(batt, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(batt, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(batt, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(batt, PX(6), 0);
+    lv_obj_align(batt, LV_ALIGN_BOTTOM_RIGHT, -PX(16), -PX(10));
+    s_chrome_batt_ico = lv_label_create(batt);
+    lv_obj_set_style_text_font(s_chrome_batt_ico, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_chrome_batt_ico, LV_SYMBOL_BATTERY_FULL);
+    s_chrome_batt = lv_label_create(batt);
+    lv_obj_set_style_text_font(s_chrome_batt, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(s_chrome_batt, COL_MUTED, 0);
+    lv_label_set_text(s_chrome_batt, "");
+    s_chrome_corners[0] = s_chrome_wifi;
+    s_chrome_corners[1] = batt;
+
+    lv_timer_create(chrome_tick, 250, NULL);   // the key's stop state follows a swipe, not a second later
+    chrome_tick(NULL);
+    chrome_raise();
+}
+#endif
+
 void ui_init(void)
 {
     display_lock();
@@ -1653,9 +1910,9 @@ void ui_init(void)
 
     // Account pairing screen. Same code-pill pattern as machine E2EE pairing, but without the CLI command row.
     scr_pairing = make_screen();
-    lv_obj_set_style_pad_row(scr_pairing, 8, 0);
+    lv_obj_set_style_pad_row(scr_pairing, PX(8), 0);
     pair_title_lbl = make_label(scr_pairing, "Pair device", COL_FG, &geist_med_32);
-    lv_obj_set_width(pair_title_lbl, PAIR_W);
+    lv_obj_set_width(pair_title_lbl, PX(PAIR_W));
 
     lv_obj_t *account_code_box = pair_pill(scr_pairing, 104);
     pair_code_lbl = lv_label_create(account_code_box);
@@ -1665,7 +1922,7 @@ void ui_init(void)
     lv_obj_set_style_text_align(pair_code_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(pair_code_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text(pair_code_lbl, "------");
-    lv_obj_set_style_text_letter_space(pair_code_lbl, 4, 0);
+    lv_obj_set_style_text_letter_space(pair_code_lbl, PX(4), 0);
     pair_sub_lbl = lv_label_create(account_code_box);
     lv_obj_set_width(pair_sub_lbl, lv_pct(100));
     lv_obj_set_style_text_font(pair_sub_lbl, &geist_reg_20, 0);
@@ -1674,14 +1931,14 @@ void ui_init(void)
     lv_label_set_long_mode(pair_sub_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text(pair_sub_lbl, "Enter on web");
     pair_count_lbl = make_label(scr_pairing, "0:00 remaining", COL_MUTED, &geist_reg_20);
-    lv_obj_set_width(pair_count_lbl, PAIR_W);
+    lv_obj_set_width(pair_count_lbl, PX(PAIR_W));
 
     // E2EE pair-code screen (shown when a remote/adapter machine isn't end-to-end paired yet). Uses the same
     // pill rhythm as Settings/Machines so it reads like a main device screen on the round display.
     scr_e2ee_pair = make_screen();
-    lv_obj_set_style_pad_row(scr_e2ee_pair, 8, 0);
+    lv_obj_set_style_pad_row(scr_e2ee_pair, PX(8), 0);
     e2e_title_lbl = make_label(scr_e2ee_pair, "Pair machine", COL_FG, &geist_med_32);
-    lv_obj_set_width(e2e_title_lbl, PAIR_W);
+    lv_obj_set_width(e2e_title_lbl, PX(PAIR_W));
 
     lv_obj_t *code_box = pair_pill(scr_e2ee_pair, 104);
     e2e_code_lbl = lv_label_create(code_box);
@@ -1691,7 +1948,7 @@ void ui_init(void)
     lv_obj_set_style_text_align(e2e_code_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(e2e_code_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text(e2e_code_lbl, "------");
-    lv_obj_set_style_text_letter_space(e2e_code_lbl, 4, 0);
+    lv_obj_set_style_text_letter_space(e2e_code_lbl, PX(4), 0);
     e2e_sub_lbl = lv_label_create(code_box);
     lv_obj_set_width(e2e_sub_lbl, lv_pct(100));
     lv_obj_set_style_text_font(e2e_sub_lbl, &geist_reg_20, 0);
@@ -1710,15 +1967,15 @@ void ui_init(void)
     lv_label_set_text(e2e_cmd_lbl, "$ harness pair ------");
 
     e2e_info_lbl = make_label(scr_e2ee_pair, "End-to-end encrypted", COL_MUTED, &geist_reg_20);
-    lv_obj_set_width(e2e_info_lbl, PAIR_W);
+    lv_obj_set_width(e2e_info_lbl, PX(PAIR_W));
 
     // Cancel → back to the machine picker.
     e2e_cancel_btn = lv_button_create(scr_e2ee_pair);
-    lv_obj_set_size(e2e_cancel_btn, 300, 64);
+    lv_obj_set_size(e2e_cancel_btn, PX(300), PX(64));
     lv_obj_set_style_bg_color(e2e_cancel_btn, COL_SET_PILL, 0);
     lv_obj_set_style_bg_color(e2e_cancel_btn, lv_color_hex(0x2c2c2c), LV_STATE_PRESSED);
     lv_obj_set_style_radius(e2e_cancel_btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(e2e_cancel_btn, 1, 0);
+    lv_obj_set_style_border_width(e2e_cancel_btn, PX(1), 0);
     lv_obj_set_style_border_color(e2e_cancel_btn, COL_SET_BORD, 0);
     lv_obj_set_style_pad_all(e2e_cancel_btn, 0, 0);
     { lv_obj_t *cl = lv_label_create(e2e_cancel_btn);
@@ -1765,7 +2022,7 @@ void ui_init(void)
     // agent tiles are ever materialized, so this is what keeps scroll positions absolute (one per column).
     s_carousel_spacer = lv_obj_create(tileview);
     lv_obj_remove_style_all(s_carousel_spacer);
-    lv_obj_set_size(s_carousel_spacer, carousel_w(), 1);
+    lv_obj_set_size(s_carousel_spacer, carousel_w(), PX(1));
     lv_obj_set_pos(s_carousel_spacer, 0, 0);
     lv_obj_clear_flag(s_carousel_spacer, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SNAPPABLE);
     lv_obj_move_background(s_carousel_spacer);   // behind the real tiles
@@ -1779,7 +2036,7 @@ void ui_init(void)
     lv_obj_set_style_bg_color(s_no_agents_tile, COL_BG, 0);
     lv_obj_set_flex_flow(s_no_agents_tile, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_no_agents_tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s_no_agents_tile, 8, 0);
+    lv_obj_set_style_pad_row(s_no_agents_tile, PX(8), 0);
     lv_obj_clear_flag(s_no_agents_tile, LV_OBJ_FLAG_SCROLLABLE);
     // Four parts, matching the design: the machine's name, what to do, the command to type, what happens
     // next. It used to be a title plus ONE recoloured wrapped label carrying all three lines — which made
@@ -1787,13 +2044,13 @@ void ui_init(void)
     s_na_eyebrow = lv_label_create(s_no_agents_tile);
     lv_obj_set_style_text_font(s_na_eyebrow, &geist_reg_20, 0);
     lv_obj_set_style_text_color(s_na_eyebrow, COL_MUTED, 0);
-    lv_obj_set_style_text_letter_space(s_na_eyebrow, 2, 0);
-    lv_obj_set_style_max_width(s_na_eyebrow, SAFE_CONTENT_W, 0);   // a tab or machine name: one line, dots after
+    lv_obj_set_style_text_letter_space(s_na_eyebrow, PX(2), 0);
+    lv_obj_set_style_max_width(s_na_eyebrow, PX(SAFE_CONTENT_W), 0);   // a tab or machine name: one line, dots after
     lv_obj_set_height(s_na_eyebrow, lv_font_get_line_height(&geist_reg_20));
     lv_label_set_long_mode(s_na_eyebrow, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_na_eyebrow, "");
     s_na_title = lv_label_create(s_no_agents_tile);
-    lv_obj_set_width(s_na_title, SAFE_CONTENT_W);
+    lv_obj_set_width(s_na_title, PX(SAFE_CONTENT_W));
     lv_obj_set_style_text_font(s_na_title, &geist_med_38, 0);   // the tiles' own title face
     lv_obj_set_style_text_color(s_na_title, COL_FG, 0);
     lv_obj_set_style_text_align(s_na_title, LV_TEXT_ALIGN_CENTER, 0);
@@ -1803,6 +2060,13 @@ void ui_init(void)
     // in OpenHarness, not a thing to type — the old "$ tmux new" was an instruction for a product that
     // no longer exists (herdr is retired; the daemon starts tmux itself; a harness is made with ⌘N).
     s_na_cmd_lbl = action_pill(s_no_agents_tile, "Cmd N", "New Harness");
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *pill = lv_obj_get_parent(s_na_cmd_lbl);
+      lv_obj_add_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(pill, swarm_line_tap, LV_EVENT_CLICKED, NULL); }
+    lv_obj_add_flag(s_na_eyebrow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_na_eyebrow, swarm_line_tap, LV_EVENT_CLICKED, NULL);
+#endif
     // The engines' marks, at their native 20px: a wordless "these are the kinds of thing that will
     // appear here". Three is enough to read as a set; the row does not try to be the whole catalogue.
     s_na_marks = lv_obj_create(s_no_agents_tile);
@@ -1811,8 +2075,8 @@ void ui_init(void)
     lv_obj_set_size(s_na_marks, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(s_na_marks, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_na_marks, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(s_na_marks, 14, 0);
-    lv_obj_set_style_pad_top(s_na_marks, 4, 0);
+    lv_obj_set_style_pad_column(s_na_marks, PX(14), 0);
+    lv_obj_set_style_pad_top(s_na_marks, PX(4), 0);
     {
         static const char *const engines[] = { "claude", "codex", "cursor" };
         for (size_t k = 0; k < sizeof engines / sizeof engines[0]; k++) {
@@ -1826,7 +2090,7 @@ void ui_init(void)
         }
     }
     s_no_agents_hint_lbl = lv_label_create(s_no_agents_tile);
-    lv_obj_set_width(s_no_agents_hint_lbl, SAFE_CONTENT_W);
+    lv_obj_set_width(s_no_agents_hint_lbl, PX(SAFE_CONTENT_W));
     lv_obj_set_style_text_font(s_no_agents_hint_lbl, &geist_reg_20, 0);
     lv_obj_set_style_text_color(s_no_agents_hint_lbl, COL_MUTED, 0);
     lv_obj_set_style_text_align(s_no_agents_hint_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -1851,10 +2115,10 @@ void ui_init(void)
         var = lv_label_create(s_overview_tile); \
         lv_obj_set_style_text_font(var, font, 0); \
         lv_obj_set_style_text_color(var, col, 0); \
-        lv_obj_set_width(var, SAFE_CONTENT_W); \
+        lv_obj_set_width(var, PX(SAFE_CONTENT_W)); \
         lv_label_set_long_mode(var, LV_LABEL_LONG_DOT); \
         lv_obj_set_style_text_align(var, LV_TEXT_ALIGN_CENTER, 0); \
-        lv_obj_align(var, LV_ALIGN_TOP_MID, 0, y); \
+        lv_obj_align(var, LV_ALIGN_TOP_MID, 0, PX(y)); \
     } while (0)
 
     // The machine line is OFF this face (owner, 2026-09-14: "bỏ luôn line All machines"): the swarm line on
@@ -1868,22 +2132,22 @@ void ui_init(void)
     lv_obj_t *row = lv_obj_create(s_overview_tile);
     lv_obj_remove_style_all(row);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(row, SAFE_CONTENT_W, OV_NUM_H);
+    lv_obj_set_size(row, PX(SAFE_CONTENT_W), PX(OV_NUM_H));
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, OV_ROW_GAP, 0);
-    lv_obj_align(row, LV_ALIGN_TOP_MID, 0, OV_ROW_Y);
+    lv_obj_set_style_pad_column(row, PX(OV_ROW_GAP), 0);
+    lv_obj_align(row, LV_ALIGN_TOP_MID, 0, PX(OV_ROW_Y));
     s_overview_count_lbl = lv_label_create(row);
     lv_obj_set_style_text_font(s_overview_count_lbl, &geist_med_64, 0);
     lv_obj_set_style_text_color(s_overview_count_lbl, COL_FG, 0);
-    lv_obj_set_style_text_letter_space(s_overview_count_lbl, -2, 0);
+    lv_obj_set_style_text_letter_space(s_overview_count_lbl, PX(-2), 0);
     lv_label_set_text(s_overview_count_lbl, "0");
     s_overview_agents_lbl = lv_label_create(row);
     lv_obj_set_style_text_font(s_overview_agents_lbl, &geist_reg_38, 0);
     lv_obj_set_style_text_color(s_overview_agents_lbl, COL_MUTED, 0);
     // Geist's 38 line box is taller under the baseline than the 64's is proportionally; a small lift
     // puts the two baselines on one line. Measured on the panel, not derived.
-    lv_obj_set_style_pad_bottom(s_overview_agents_lbl, 6, 0);
+    lv_obj_set_style_pad_bottom(s_overview_agents_lbl, PX(6), 0);
     lv_label_set_text(s_overview_agents_lbl, "agents");
     // The status line: how many are working, or that none are. overview_working_apply writes it.
     OV_LINE(s_overview_working_lbl, &geist_reg_38, COL_VOICE, OV_STATUS_Y);
@@ -1897,11 +2161,11 @@ void ui_init(void)
     lv_obj_t *guide = lv_obj_create(s_overview_tile);
     lv_obj_remove_style_all(guide);
     lv_obj_clear_flag(guide, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(guide, SAFE_CONTENT_W, LV_SIZE_CONTENT);
+    lv_obj_set_size(guide, PX(SAFE_CONTENT_W), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(guide, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(guide, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(guide, 8, 0);
-    lv_obj_align(guide, LV_ALIGN_TOP_MID, 0, OV_STATUS_Y);
+    lv_obj_set_style_pad_row(guide, PX(8), 0);
+    lv_obj_align(guide, LV_ALIGN_TOP_MID, 0, PX(OV_STATUS_Y));
     #define OV_GUIDE(var, font, col, txt) do { \
         var = lv_label_create(guide); \
         lv_obj_set_style_text_font(var, font, 0); \
@@ -1922,24 +2186,27 @@ void ui_init(void)
     s_overview_actions = lv_obj_create(s_overview_tile);
     lv_obj_remove_style_all(s_overview_actions);
     lv_obj_clear_flag(s_overview_actions, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_overview_actions, 466, 466);
+    lv_obj_set_size(s_overview_actions, SCR_W, SCR_H);
     lv_obj_set_pos(s_overview_actions, 0, 0);
 
     // A round control: transparent-ish ghost for the two sides, Voice's own green pair for the middle.
-    #define OV_ROUND(var, x, y, d, cb) do { \
-        var = lv_button_create(s_overview_actions); \
-        lv_obj_remove_style_all(var); \
-        lv_obj_set_size(var, d, d); \
-        lv_obj_set_pos(var, x, y); \
-        lv_obj_set_style_radius(var, LV_RADIUS_CIRCLE, 0); \
+    #define OV_ROUND_FILL(var) do { \
         lv_obj_set_style_bg_color(var, COL_FG, 0); \
         lv_obj_set_style_bg_opa(var, LV_OPA_10, 0); \
         lv_obj_set_style_bg_opa(var, LV_OPA_20, LV_STATE_PRESSED); \
-        lv_obj_set_style_border_width(var, 1, 0); \
+    } while (0)
+    #define OV_ROUND(var, x, y, d, cb) do { \
+        var = lv_button_create(s_overview_actions); \
+        lv_obj_remove_style_all(var); \
+        lv_obj_set_size(var, PX(d), PX(d)); \
+        lv_obj_set_pos(var, PX(x), PX(y)); \
+        lv_obj_set_style_radius(var, LV_RADIUS_CIRCLE, 0); \
+        lv_obj_set_style_border_width(var, PX(1), 0); \
         lv_obj_set_style_border_color(var, COL_FG, 0); \
         lv_obj_set_style_border_opa(var, LV_OPA_10, 0); \
-        lv_obj_set_ext_click_area(var, 16); \
-        lv_obj_clear_flag(var, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE); \
+        OV_ROUND_FILL(var); \
+        lv_obj_set_ext_click_area(var, PX(16)); \
+        lv_obj_clear_flag(var, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_PRESS_LOCK); \
         lv_obj_add_event_cb(var, cb, LV_EVENT_CLICKED, NULL); \
     } while (0)
 
@@ -1955,13 +2222,13 @@ void ui_init(void)
       s_overview_bell_badge = lv_obj_create(s_overview_actions);
       lv_obj_remove_style_all(s_overview_bell_badge);
       lv_obj_clear_flag(s_overview_bell_badge, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-      lv_obj_set_size(s_overview_bell_badge, LV_SIZE_CONTENT, 24);
-      lv_obj_set_style_min_width(s_overview_bell_badge, 24, 0);
-      lv_obj_set_style_pad_hor(s_overview_bell_badge, 6, 0);
+      lv_obj_set_size(s_overview_bell_badge, LV_SIZE_CONTENT, PX(24));
+      lv_obj_set_style_min_width(s_overview_bell_badge, PX(24), 0);
+      lv_obj_set_style_pad_hor(s_overview_bell_badge, PX(6), 0);
       lv_obj_set_style_radius(s_overview_bell_badge, LV_RADIUS_CIRCLE, 0);
       lv_obj_set_style_bg_color(s_overview_bell_badge, lv_color_hex(0x006fff), 0);
       lv_obj_set_style_bg_opa(s_overview_bell_badge, LV_OPA_COVER, 0);
-      lv_obj_set_pos(s_overview_bell_badge, OV_BELL_X + 48, OV_SIDE_Y - 8);
+      lv_obj_set_pos(s_overview_bell_badge, PX(OV_BELL_X + 48), PX(OV_SIDE_Y - 8));
       s_overview_bell_badge_lbl = lv_label_create(s_overview_bell_badge);
       lv_obj_set_style_text_font(s_overview_bell_badge_lbl, &lv_font_montserrat_18, 0);
       lv_obj_set_style_text_color(s_overview_bell_badge_lbl, lv_color_white(), 0);
@@ -1989,6 +2256,7 @@ void ui_init(void)
       lv_label_set_text(g, LV_SYMBOL_SETTINGS);
       lv_obj_center(g); }
     #undef OV_ROUND
+    #undef OV_ROUND_FILL
     // The modifiers left this face with their pills; their handlers and marks stay for the day they return.
     s_overview_goal_btn = s_overview_loop_btn = NULL;
     s_ov_goal_lbl = s_ov_loop_lbl = NULL; s_ov_loop_ico = NULL;
@@ -2004,8 +2272,8 @@ void ui_init(void)
     lv_obj_set_size(page_dots, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(page_dots, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(page_dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(page_dots, 8, 0);
-    lv_obj_align(page_dots, LV_ALIGN_BOTTOM_MID, 0, -36);
+    lv_obj_set_style_pad_column(page_dots, PX(8), 0);
+    lv_obj_align(page_dots, LV_ALIGN_BOTTOM_MID, 0, PX(-36));
     lv_obj_clear_flag(page_dots, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(page_dots, LV_OBJ_FLAG_HIDDEN);
 
@@ -2013,8 +2281,8 @@ void ui_init(void)
     // Mic indicator: shown (red) ONLY while recording — physical button B toggles voice; tapping
     // the on-screen mic while it's visible also stops. Hidden the rest of the time.
     mic_btn = lv_button_create(scr_projects);
-    lv_obj_set_size(mic_btn, 88, 88);
-    lv_obj_align(mic_btn, LV_ALIGN_BOTTOM_MID, 0, -22);
+    lv_obj_set_size(mic_btn, PX(88), PX(88));
+    lv_obj_align(mic_btn, LV_ALIGN_BOTTOM_MID, 0, PX(-22));
     lv_obj_set_style_radius(mic_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(mic_btn, COL_RED, 0);
     lv_obj_set_style_border_width(mic_btn, 0, 0);
@@ -2047,7 +2315,7 @@ void ui_init(void)
     lv_image_set_src(s_voice_img, &icon_v_mic);
     lv_image_set_inner_align(s_voice_img, LV_IMAGE_ALIGN_CENTER);
     // Asset is native 72px (1.5× the 48px original, circular-masked) → no LVGL upscale.
-    lv_obj_set_size(s_voice_img, 72, 72);
+    lv_obj_set_size(s_voice_img, PX(72), PX(72));
     lv_obj_align(s_voice_img, LV_ALIGN_CENTER, 0, 0);   // dead-centre (voice now runs full-screen over the dark overlay); dots + glow align_to this
     lv_obj_remove_flag(s_voice_img, LV_OBJ_FLAG_CLICKABLE);   // pure indicator, not a button
     // Initial state = idle (hidden), applied by voice_icon_apply(VIC_NONE) below.
@@ -2056,7 +2324,7 @@ void ui_init(void)
     for (int i = 0; i < 3; i++) {
         s_send_dots[i] = lv_obj_create(lv_layer_top());
         lv_obj_remove_style_all(s_send_dots[i]);
-        lv_obj_set_size(s_send_dots[i], 12, 12);
+        lv_obj_set_size(s_send_dots[i], PX(12), PX(12));
         lv_obj_set_style_radius(s_send_dots[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(s_send_dots[i], COL_FG, 0);
         lv_obj_set_style_bg_opa(s_send_dots[i], LV_OPA_COVER, 0);
@@ -2070,7 +2338,7 @@ void ui_init(void)
     for (int i = 0; i < 2; i++) {
         s_pulse[i] = lv_obj_create(lv_layer_top());
         lv_obj_remove_style_all(s_pulse[i]);
-        lv_obj_set_size(s_pulse[i], 72, 72);
+        lv_obj_set_size(s_pulse[i], PX(72), PX(72));
         lv_obj_align_to(s_pulse[i], s_voice_img, LV_ALIGN_CENTER, 0, 0);
         lv_obj_set_style_radius(s_pulse[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(s_pulse[i], COL_ACCENT, 0);
@@ -2086,12 +2354,12 @@ void ui_init(void)
     for (int k = 0; k < 7; k++) {
         s_wave[k] = lv_obj_create(lv_layer_top());
         lv_obj_remove_style_all(s_wave[k]);
-        lv_obj_set_size(s_wave[k], 6, s_wave_rest[k]);
+        lv_obj_set_size(s_wave[k], PX(6), PX(s_wave_rest[k]));
         lv_obj_set_style_radius(s_wave[k], LV_RADIUS_CIRCLE, 0);   // rounded caps
         lv_obj_set_style_bg_color(s_wave[k], COL_VOICE, 0);
         lv_obj_set_style_bg_opa(s_wave[k], LV_OPA_COVER, 0);
-        int cx = 233 + (k - 3) * 224 / 10;                        // pitch 22.4px, symmetric about centre
-        lv_obj_set_pos(s_wave[k], cx - 3, 233 - s_wave_rest[k] / 2);
+        int cx = SCR_CX + PX((k - 3) * 224 / 10);                 // pitch 22.4px, symmetric about centre
+        lv_obj_set_pos(s_wave[k], cx - PX(3), SCR_CY - PX(s_wave_rest[k]) / 2);
         lv_obj_remove_flag(s_wave[k], LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_wave[k], LV_OBJ_FLAG_HIDDEN);
     }
@@ -2099,9 +2367,9 @@ void ui_init(void)
     s_voice_goal_lbl = lv_label_create(lv_layer_top());
     lv_obj_set_style_text_font(s_voice_goal_lbl, &geist_reg_25, 0);
     lv_obj_set_style_text_color(s_voice_goal_lbl, COL_ORANGE, 0);
-    lv_obj_set_style_text_letter_space(s_voice_goal_lbl, 4, 0);
+    lv_obj_set_style_text_letter_space(s_voice_goal_lbl, PX(4), 0);
     lv_label_set_text(s_voice_goal_lbl, "GOAL");   // retitled per capture in voice_start_impl
-    lv_obj_align(s_voice_goal_lbl, LV_ALIGN_CENTER, 0, -120);
+    lv_obj_align(s_voice_goal_lbl, LV_ALIGN_CENTER, 0, PX(-120));
     lv_obj_remove_flag(s_voice_goal_lbl, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_voice_goal_lbl, LV_OBJ_FLAG_HIDDEN);
 
@@ -2129,11 +2397,13 @@ void ui_init(void)
     lv_obj_set_style_bg_color(s_cancel_confirm, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_cancel_confirm, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_cancel_confirm, 0, 0);
+#if !defined(DEVICE_BOARD_M5CORES3)   // full-screen: round on the dial, the glass's own rectangle on the CoreS3
     lv_obj_set_style_radius(s_cancel_confirm, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(s_cancel_confirm, SCREEN_PAD, 0);
+#endif
+    lv_obj_set_style_pad_all(s_cancel_confirm, PX(SCREEN_PAD), 0);
     lv_obj_set_flex_flow(s_cancel_confirm, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_cancel_confirm, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s_cancel_confirm, 16, 0);
+    lv_obj_set_style_pad_row(s_cancel_confirm, PX(16), 0);
     lv_obj_clear_flag(s_cancel_confirm, LV_OBJ_FLAG_SCROLLABLE);
     { lv_obj_t *ql = lv_label_create(s_cancel_confirm);
       lv_obj_set_style_text_font(ql, &geist_med_32, 0);
@@ -2145,7 +2415,7 @@ void ui_init(void)
       lv_obj_set_width(yb, lv_pct(80));
       lv_obj_set_style_bg_color(yb, lv_color_hex(0x3378ff), 0);   // Figma "Done" blue
       lv_obj_set_style_radius(yb, LV_RADIUS_CIRCLE, 0);
-      lv_obj_set_style_pad_ver(yb, 14, 0);
+      lv_obj_set_style_pad_ver(yb, PX(14), 0);
       lv_obj_set_style_border_width(yb, 0, 0);
       lv_obj_t *yl = lv_label_create(yb);
       lv_obj_set_width(yl, lv_pct(100));
@@ -2158,7 +2428,7 @@ void ui_init(void)
       lv_obj_set_width(nb, lv_pct(80));
       lv_obj_set_style_bg_color(nb, lv_color_hex(0x2a3245), 0);   // Figma "Redo" dark navy
       lv_obj_set_style_radius(nb, LV_RADIUS_CIRCLE, 0);
-      lv_obj_set_style_pad_ver(nb, 14, 0);
+      lv_obj_set_style_pad_ver(nb, PX(14), 0);
       lv_obj_set_style_border_width(nb, 0, 0);
       lv_obj_t *nl2 = lv_label_create(nb);
       lv_obj_set_width(nl2, lv_pct(100));
@@ -2178,11 +2448,13 @@ void ui_init(void)
     lv_obj_set_style_bg_color(s_reset_confirm, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_reset_confirm, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_reset_confirm, 0, 0);
+#if !defined(DEVICE_BOARD_M5CORES3)   // full-screen: round on the dial, the glass's own rectangle on the CoreS3
     lv_obj_set_style_radius(s_reset_confirm, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(s_reset_confirm, SCREEN_PAD, 0);
+#endif
+    lv_obj_set_style_pad_all(s_reset_confirm, PX(SCREEN_PAD), 0);
     lv_obj_set_flex_flow(s_reset_confirm, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_reset_confirm, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s_reset_confirm, 14, 0);
+    lv_obj_set_style_pad_row(s_reset_confirm, PX(14), 0);
     lv_obj_clear_flag(s_reset_confirm, LV_OBJ_FLAG_SCROLLABLE);
     // READ THE CALLBACKS BEFORE CHANGING ANYTHING HERE. The design inverts the old weighting: the big
     // coloured button is now the SAFE one ("Keep it" -> reset_confirm_back, dismiss) and the destructive
@@ -2194,7 +2466,7 @@ void ui_init(void)
       lv_obj_set_style_text_color(warn, COL_RED, 0);
       lv_label_set_text(warn, LV_SYMBOL_WARNING);
       lv_obj_t *ql = lv_label_create(s_reset_confirm);
-      lv_obj_set_width(ql, 302);
+      lv_obj_set_width(ql, PX(302));
       lv_label_set_long_mode(ql, LV_LABEL_LONG_WRAP);
       lv_obj_set_style_text_font(ql, &geist_med_32, 0);
       lv_obj_set_style_text_color(ql, COL_FG, 0);
@@ -2202,7 +2474,7 @@ void ui_init(void)
       lv_label_set_text(ql, "Are you sure you want to reset your device?");
 
       lv_obj_t *keep = lv_button_create(s_reset_confirm);
-      lv_obj_set_size(keep, 320, 64);
+      lv_obj_set_size(keep, PX(320), PX(64));
       lv_obj_set_style_bg_color(keep, COL_SET_BLUE, 0);
       lv_obj_set_style_radius(keep, LV_RADIUS_CIRCLE, 0);
       lv_obj_set_style_border_width(keep, 0, 0);
@@ -2215,7 +2487,7 @@ void ui_init(void)
       lv_obj_add_event_cb(keep, reset_confirm_back, LV_EVENT_CLICKED, NULL);   // SAFE
 
       lv_obj_t *go = lv_button_create(s_reset_confirm);
-      lv_obj_set_size(go, 320, 56);
+      lv_obj_set_size(go, PX(320), PX(56));
       lv_obj_set_style_bg_opa(go, LV_OPA_TRANSP, 0);
       lv_obj_set_style_bg_color(go, COL_FG, LV_STATE_PRESSED);
       lv_obj_set_style_bg_opa(go, LV_OPA_10, LV_STATE_PRESSED);
@@ -2235,9 +2507,9 @@ void ui_init(void)
     // exclusive with the mic: hidden while recording (see update_stop_btn).
     build_agent_actions();
     stop_btn = lv_button_create(scr_projects);
-    lv_obj_set_size(stop_btn, 80, 80);
-    lv_obj_align(stop_btn, LV_ALIGN_BOTTOM_MID, 0, -22);
-    lv_obj_set_style_radius(stop_btn, 14, 0);          // rounded SQUARE (vs the mic's circle)
+    lv_obj_set_size(stop_btn, PX(80), PX(80));
+    lv_obj_align(stop_btn, LV_ALIGN_BOTTOM_MID, 0, PX(-22));
+    lv_obj_set_style_radius(stop_btn, PX(14), 0);          // rounded SQUARE (vs the mic's circle)
     lv_obj_set_style_bg_color(stop_btn, COL_RED, 0);
     lv_obj_set_style_border_width(stop_btn, 0, 0);
     lv_obj_add_flag(stop_btn, LV_OBJ_FLAG_HIDDEN);     // hidden until the active tile is processing
@@ -2246,9 +2518,9 @@ void ui_init(void)
         lv_obj_t *g = lv_obj_create(stop_btn);
         lv_obj_remove_style_all(g);
         lv_obj_clear_flag(g, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(g, 28, 28);
+        lv_obj_set_size(g, PX(28), PX(28));
         lv_obj_center(g);
-        lv_obj_set_style_radius(g, 4, 0);
+        lv_obj_set_style_radius(g, PX(4), 0);
         lv_obj_set_style_bg_color(g, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(g, LV_OPA_COVER, 0);
     }
@@ -2260,7 +2532,7 @@ void ui_init(void)
     s_sending_lbl = lv_label_create(scr_projects);
     lv_obj_set_style_text_font(s_sending_lbl, &geist_reg_20, 0);
     lv_obj_set_style_text_color(s_sending_lbl, COL_ACCENT, 0);
-    lv_obj_align(s_sending_lbl, LV_ALIGN_BOTTOM_MID, 0, -34);
+    lv_obj_align(s_sending_lbl, LV_ALIGN_BOTTOM_MID, 0, PX(-34));
     lv_obj_clear_flag(s_sending_lbl, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(s_sending_lbl, "Sending");
     lv_obj_add_flag(s_sending_lbl, LV_OBJ_FLAG_HIDDEN);
@@ -2280,9 +2552,9 @@ void ui_init(void)
     // left/right curve; 64px top/bottom keeps the first/last lines off the arc. Vertically scroll.
     scr_reader = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr_reader, COL_BG, 0);
-    lv_obj_set_style_pad_hor(scr_reader, 46, 0);   // wider text column (was 68) — less empty side space
-    lv_obj_set_style_pad_top(scr_reader, 62, 0);   // the name pill sits here, under the X (16..48)
-    lv_obj_set_style_pad_bottom(scr_reader, 64, 0);
+    lv_obj_set_style_pad_hor(scr_reader, PX(46), 0);   // wider text column (was 68) — less empty side space
+    lv_obj_set_style_pad_top(scr_reader, PX(62), 0);   // the name pill sits here, under the X (16..48)
+    lv_obj_set_style_pad_bottom(scr_reader, PX(64), 0);
     lv_obj_add_flag(scr_reader, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(scr_reader, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(scr_reader, LV_SCROLLBAR_MODE_OFF);
@@ -2293,7 +2565,7 @@ void ui_init(void)
     // Stack the name pill over the full text (Figma "detail screen" adds the project name at the top).
     lv_obj_set_flex_flow(scr_reader, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(scr_reader, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(scr_reader, 24, 0);
+    lv_obj_set_style_pad_row(scr_reader, PX(24), 0);
     // Name pill: green dot + project/agent name in a dark glass pill (same as the main-screen header).
     lv_obj_t *rhdr = lv_obj_create(scr_reader);
     lv_obj_remove_style_all(rhdr);
@@ -2301,47 +2573,53 @@ void ui_init(void)
     lv_obj_set_size(rhdr, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(rhdr, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(rhdr, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(rhdr, 8, 0);
+    lv_obj_set_style_pad_column(rhdr, PX(8), 0);
     lv_obj_set_style_bg_color(rhdr, lv_color_hex(0x1c1e24), 0);
     lv_obj_set_style_bg_opa(rhdr, LV_OPA_70, 0);
     lv_obj_set_style_radius(rhdr, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_hor(rhdr, 16, 0);
-    lv_obj_set_style_pad_ver(rhdr, 7, 0);
-    lv_obj_set_style_border_width(rhdr, 1, 0);
+    lv_obj_set_style_pad_hor(rhdr, PX(16), 0);
+    lv_obj_set_style_pad_ver(rhdr, PX(7), 0);
+    lv_obj_set_style_border_width(rhdr, PX(1), 0);
     lv_obj_set_style_border_color(rhdr, lv_color_hex(0xa6a6a6), 0);
     lv_obj_set_style_border_opa(rhdr, LV_OPA_20, 0);
     lv_obj_t *rdot = lv_obj_create(rhdr);
     lv_obj_remove_style_all(rdot);
-    lv_obj_set_size(rdot, 8, 8);
+    lv_obj_set_size(rdot, PX(8), PX(8));
     lv_obj_set_style_radius(rdot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(rdot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(rdot, COL_GREEN, 0);
     s_reader_name = lv_label_create(rhdr);
     lv_obj_set_style_text_color(s_reader_name, COL_FG, 0);
     lv_obj_set_style_text_font(s_reader_name, &geist_med_32, 0);   // agent name (32px)
-    lv_obj_set_style_max_width(s_reader_name, 320, 0);
+    lv_obj_set_style_max_width(s_reader_name, PX(320), 0);
     lv_label_set_long_mode(s_reader_name, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_reader_name, "");
     reader_lbl = lv_label_create(scr_reader);
     lv_label_set_long_mode(reader_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(reader_lbl, lv_pct(100));
+#if defined(DEVICE_BOARD_M5CORES3)
+    // A step smaller than the dial's 34 at 0.6x (21): the reader carries the whole message now, and 18px
+    // fits a few more words a line on the narrower glass while staying comfortable to read.
+    lv_obj_set_style_text_font(reader_lbl, &geist_c3_reg_18, 0);
+#else
     lv_obj_set_style_text_font(reader_lbl, &geist_reg_34, 0);   // full-text detail body
+#endif
     lv_obj_set_style_text_color(reader_lbl, COL_FG, 0);
     lv_obj_set_style_text_align(reader_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_line_space(reader_lbl, 4, 0);   // readable long-form text
+    lv_obj_set_style_text_line_space(reader_lbl, PX(4), 0);   // readable long-form text
     lv_label_set_text(reader_lbl, "");
 
     // Question screen: a vertical, scrollable flex column of tappable rows (rebuilt each render).
     scr_question = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr_question, COL_BG, 0);
-    lv_obj_set_style_pad_hor(scr_question, 54, 0);
+    lv_obj_set_style_pad_hor(scr_question, PX(54), 0);
     // Top-anchored (not centred) + scrollable so a tall question (text + options + Done) can
     // ALWAYS be scrolled to — a centred column clips its lower rows below the round screen's bottom
     // arc, leaving the last option / "Done" untappable. Generous top/bottom pad keeps the first/last
     // row out of the curve.
-    lv_obj_set_style_pad_top(scr_question, 70, 0);
-    lv_obj_set_style_pad_bottom(scr_question, 90, 0);
-    lv_obj_set_style_pad_row(scr_question, 12, 0);
+    lv_obj_set_style_pad_top(scr_question, PX(70), 0);
+    lv_obj_set_style_pad_bottom(scr_question, PX(90), 0);
+    lv_obj_set_style_pad_row(scr_question, PX(12), 0);
     lv_obj_set_flex_flow(scr_question, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(scr_question, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_add_flag(scr_question, LV_OBJ_FLAG_SCROLLABLE);
@@ -2352,12 +2630,12 @@ void ui_init(void)
     // scrollable column as the Wifi picker; rows rebuilt on each open by build_model_picker.
     scr_picker = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr_picker, COL_BG, 0);
-    lv_obj_set_style_pad_hor(scr_picker, 24, 0);
+    lv_obj_set_style_pad_hor(scr_picker, PX(24), 0);
     // Center-focus wheel: pad_top/bottom = H/2 - ROW_H/2 so the FIRST and LAST row can each reach the middle
     // (edge-items centering, like Wear OS / Apple Watch pickers). Snap lands the nearest row centered.
-    lv_obj_set_style_pad_top(scr_picker, PICK_PAD_V, 0);
-    lv_obj_set_style_pad_bottom(scr_picker, PICK_PAD_V, 0);
-    lv_obj_set_style_pad_row(scr_picker, PICK_GAP, 0);
+    lv_obj_set_style_pad_top(scr_picker, PX(PICK_PAD_V), 0);
+    lv_obj_set_style_pad_bottom(scr_picker, PX(PICK_PAD_V), 0);
+    lv_obj_set_style_pad_row(scr_picker, PX(PICK_GAP), 0);
     lv_obj_set_flex_flow(scr_picker, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(scr_picker, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_add_flag(scr_picker, LV_OBJ_FLAG_SCROLLABLE);
@@ -2373,7 +2651,7 @@ void ui_init(void)
     s_reconnect_badge = lv_label_create(lv_layer_top());
     lv_obj_set_style_text_font(s_reconnect_badge, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_reconnect_badge, COL_YELLOW, 0);
-    lv_obj_align(s_reconnect_badge, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(s_reconnect_badge, LV_ALIGN_TOP_MID, 0, PX(30));
     lv_obj_clear_flag(s_reconnect_badge, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(s_reconnect_badge, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(s_reconnect_badge, "Reconnecting" LV_SYMBOL_REFRESH);
@@ -2394,13 +2672,13 @@ void ui_init(void)
     lv_obj_set_style_bg_color(s_notif_pill, lv_color_hex(0x006fff), 0);   // Figma blue 🔔 badge
     lv_obj_set_style_bg_opa(s_notif_pill, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_notif_pill, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_hor(s_notif_pill, 13, 0);
-    lv_obj_set_style_pad_ver(s_notif_pill, 4, 0);
-    lv_obj_align(s_notif_pill, LV_ALIGN_TOP_MID, 0, 22);
+    lv_obj_set_style_pad_hor(s_notif_pill, PX(13), 0);
+    lv_obj_set_style_pad_ver(s_notif_pill, PX(4), 0);
+    lv_obj_align(s_notif_pill, LV_ALIGN_TOP_MID, 0, PX(22));
     lv_obj_set_style_bg_opa(s_notif_pill, LV_OPA_80, LV_STATE_PRESSED);   // it presses now, so it says so
     lv_obj_set_flex_flow(s_notif_pill, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_notif_pill, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(s_notif_pill, 6, 0);
+    lv_obj_set_style_pad_column(s_notif_pill, PX(6), 0);
     { lv_obj_t *bell = lv_label_create(s_notif_pill);
       lv_obj_set_style_text_font(bell, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(bell, COL_FG, 0);
@@ -2428,10 +2706,10 @@ void ui_init(void)
     make_close_pill(s_notif_drawer, notif_bg_tap, 16);
     s_notif_list = lv_obj_create(s_notif_drawer);   // scrollable column of cards (centered band, below the badge)
     lv_obj_remove_style_all(s_notif_list);
-    lv_obj_set_size(s_notif_list, 360, 320);
-    lv_obj_align(s_notif_list, LV_ALIGN_CENTER, 0, 34);
+    lv_obj_set_size(s_notif_list, PX(360), PX(320));
+    lv_obj_align(s_notif_list, LV_ALIGN_CENTER, 0, PX(34));
     lv_obj_set_flex_flow(s_notif_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_notif_list, 12, 0);
+    lv_obj_set_style_pad_row(s_notif_list, PX(12), 0);
     lv_obj_set_scroll_dir(s_notif_list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_notif_list, LV_SCROLLBAR_MODE_OFF);
     s_notif_empty = lv_label_create(s_notif_drawer);
@@ -2493,6 +2771,9 @@ void ui_init(void)
     lv_timer_create(busy_dots_tick, 300, NULL);   // animate the "processing" loading dots (~3Hz)
 
     ui_lock_init_gate();   // wire sleep/wake lock hook + show the unlock overlay now if a passcode is set
+#if defined(DEVICE_BOARD_M5CORES3)
+    chrome_build();
+#endif
 
     lv_screen_load(scr_connecting);
     display_unlock();
@@ -2536,7 +2817,7 @@ void ui_show_e2ee_pair(const char *code, int seconds_left)
     // This label is SHARED with the fingerprint state below, so every state restates font, spacing AND
     // colour — setting the colour once at build time would be silently undone the moment either state ran.
     lv_obj_set_style_text_font(e2e_code_lbl, &lv_font_montserrat_40, 0);
-    lv_obj_set_style_text_letter_space(e2e_code_lbl, 4, 0);
+    lv_obj_set_style_text_letter_space(e2e_code_lbl, PX(4), 0);
     lv_obj_set_style_text_color(e2e_code_lbl, COL_PAIRCODE, 0);
     lv_label_set_text(e2e_code_lbl, code && code[0] ? code : "------");
     lv_label_set_text(e2e_sub_lbl, "Enter in CLI");
@@ -2566,7 +2847,7 @@ void ui_show_e2ee_paired(const char *fingerprint)
     set_hidden(e2e_info_lbl, false);
     set_hidden(e2e_cancel_btn, true);
     lv_obj_set_style_text_font(e2e_code_lbl, &geist_reg_25, 0);   // fingerprint is longer than a 6-char code
-    lv_obj_set_style_text_letter_space(e2e_code_lbl, 2, 0);
+    lv_obj_set_style_text_letter_space(e2e_code_lbl, PX(2), 0);
     lv_obj_set_style_text_color(e2e_code_lbl, COL_FG, 0);
     lv_label_set_text(e2e_code_lbl, fingerprint && fingerprint[0] ? fingerprint : "");
     lv_label_set_text(e2e_sub_lbl, "Fingerprint match");
@@ -2602,7 +2883,7 @@ void ui_show_ota_restarting(void)
 {
     display_lock();
     lv_obj_t *scr = make_screen();
-    lv_obj_set_style_pad_row(scr, 22, 0);
+    lv_obj_set_style_pad_row(scr, PX(22), 0);
 
     make_spinner(scr, 96);
 
@@ -2619,7 +2900,7 @@ void ui_show_unpaired(void)
 {
     display_lock();
     lv_obj_t *scr = make_screen();
-    lv_obj_set_style_pad_row(scr, 18, 0);
+    lv_obj_set_style_pad_row(scr, PX(18), 0);
 
     make_label(scr, LV_SYMBOL_WARNING, COL_ACCENT, &lv_font_montserrat_30);
     make_label(scr, "Unpaired", COL_FG, &lv_font_montserrat_30);
@@ -2644,14 +2925,14 @@ void ui_ota_boot_show(const char *version)
     make_label(scr, vbuf, COL_MUTED, &geist_reg_25);
 
     s_ota_boot_bar = lv_bar_create(scr);
-    lv_obj_set_size(s_ota_boot_bar, 300, 18);
+    lv_obj_set_size(s_ota_boot_bar, PX(300), PX(18));
     lv_bar_set_range(s_ota_boot_bar, 0, 100);
     lv_bar_set_value(s_ota_boot_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_ota_boot_bar, COL_CARD, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_ota_boot_bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(s_ota_boot_bar, 9, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_ota_boot_bar, PX(9), LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_ota_boot_bar, COL_GREEN, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(s_ota_boot_bar, 9, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s_ota_boot_bar, PX(9), LV_PART_INDICATOR);
 
     s_ota_boot_pct_lbl = make_label(scr, "0%", COL_FG, &lv_font_montserrat_22);
     make_label(scr, "Do not power off", COL_MUTED, &geist_reg_25);
@@ -2862,7 +3143,7 @@ static void rebuild_overview_tile(void)
         // Agents not loaded yet → show a spinner in place of the (unknown) count; never flash "0 agents".
         lv_obj_add_flag(s_overview_count_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_overview_agents_lbl) lv_obj_add_flag(s_overview_agents_lbl, LV_OBJ_FLAG_HIDDEN);
-        if (!s_overview_spin) { s_overview_spin = make_spinner(s_overview_tile, 56); lv_obj_align(s_overview_spin, LV_ALIGN_TOP_MID, 0, OV_ROW_Y + 8); }
+        if (!s_overview_spin) { s_overview_spin = make_spinner(s_overview_tile, 56); lv_obj_align(s_overview_spin, LV_ALIGN_TOP_MID, 0, PX(OV_ROW_Y + 8)); }
         lv_obj_clear_flag(s_overview_spin, LV_OBJ_FLAG_HIDDEN);
     } else {
         if (s_overview_spin) { lv_obj_del(s_overview_spin); s_overview_spin = NULL; }   // stop its timer
@@ -3098,12 +3379,18 @@ static void agent_step_press(lv_event_t *e)
 // chooses. An lv_line, not an image: nothing to bake, nothing to recolor on the LVGL task.
 static lv_obj_t *agent_step_glyph(lv_obj_t *parent, int dir)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The dial's 30px chevron at 0.6x: 18px, a 2px stroke.
+    static const lv_point_precise_t left[]  = { { 11, 3 }, { 6, 9 }, { 11, 15 } };
+    static const lv_point_precise_t right[] = { { 7, 3 }, { 12, 9 }, { 7, 15 } };
+#else
     static const lv_point_precise_t left[]  = { { 19, 5 }, { 11, 15 }, { 19, 25 } };
     static const lv_point_precise_t right[] = { { 11, 5 }, { 19, 15 }, { 11, 25 } };
+#endif
     lv_obj_t *l = lv_line_create(parent);
     lv_line_set_points(l, dir < 0 ? left : right, 3);
-    lv_obj_set_size(l, 30, 30);
-    lv_obj_set_style_line_width(l, 3, 0);
+    lv_obj_set_size(l, PX(30), PX(30));
+    lv_obj_set_style_line_width(l, PX(3), 0);
     lv_obj_set_style_line_rounded(l, true, 0);
     lv_obj_set_style_line_color(l, COL_MUTED, 0);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
@@ -3114,8 +3401,8 @@ static lv_obj_t *agent_step_glyph(lv_obj_t *parent, int dir)
 static lv_obj_t *agent_act_btn(int32_t x, int32_t y, lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(s_agent_acts);
-    lv_obj_set_size(b, 80, 80);
-    lv_obj_set_pos(b, x, y);
+    lv_obj_set_size(b, PX(80), PX(80));
+    lv_obj_set_pos(b, PX(x), PX(y));
     lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_color(b, COL_FG, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(b, LV_OPA_10, LV_STATE_PRESSED);
@@ -3123,7 +3410,9 @@ static lv_obj_t *agent_act_btn(int32_t x, int32_t y, lv_event_cb_t cb)
     lv_obj_set_style_border_width(b, 0, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_set_style_pad_all(b, 0, 0);
-    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    // No PRESS_LOCK: a finger that lands on Voice and slides away (the home swipe starts right here) has not
+    // pressed it. With the lock, LVGL clicked on release wherever the finger ended, and started a recording.
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
     return b;
 }
@@ -3132,7 +3421,7 @@ static void build_agent_actions(void)
 {
     s_agent_acts = lv_obj_create(scr_projects);
     lv_obj_remove_style_all(s_agent_acts);
-    lv_obj_set_size(s_agent_acts, 466, 466);
+    lv_obj_set_size(s_agent_acts, SCR_W, SCR_H);
     lv_obj_set_pos(s_agent_acts, 0, 0);
     lv_obj_add_flag(s_agent_acts, LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_agent_acts, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
@@ -3171,7 +3460,7 @@ static void build_agent_actions(void)
       lv_obj_t *ring = lv_obj_create(b);
       lv_obj_remove_style_all(ring);
       lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-      lv_obj_set_size(ring, 44, 44);
+      lv_obj_set_size(ring, PX(44), PX(44));
       lv_obj_center(ring);
       const int sz[] = { 40, 22, 10 };
       for (int k = 0; k < 3; k++) {
@@ -3189,7 +3478,11 @@ static void build_agent_actions(void)
 #endif
     // Voice — the centre of the arc, 31px lower than its neighbours (the ±36° offset). It does NOT move
     // sideways: it is the one under the resting thumb, and the other two spread away from it.
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *b = agent_act_btn(227, 310, agent_voice_tap);   // bottom centre of the 320x240 glass, under the card
+#else
     { lv_obj_t *b = agent_act_btn(193, 353, agent_voice_tap);
+#endif
       s_agent_voice_btn = b;
       lv_obj_t *ic = lv_image_create(b);
       lv_image_set_src(ic, &icon_act_voice);      // 44px native, colour baked — see the note on the asset
@@ -3197,13 +3490,23 @@ static void build_agent_actions(void)
     // ‹ › — the previous/next pair, on the two arc spots Goal and Loop measured against the bezel
     // (owner, 2026-09-22, mockup option A: "vừa swipe được vừa bấm nút được"). Same 80px circles, same
     // pressed fill; the glyph is a 30px chevron in the muted ink.
+    // On the CoreS3 the arc spots fall off the glass's bottom edge and onto the WiFi and battery corners,
+    // so the pair flanks Voice on its own row, between the corners.
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *b = agent_act_btn(107, 310, agent_prev_tap);
+#else
     { lv_obj_t *b = agent_act_btn(79, 322, agent_prev_tap);
+#endif
       s_agent_prev_btn = b;
       s_agent_prev_glyph = agent_step_glyph(b, -1);
       lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESSED, s_agent_prev_glyph);
       lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_RELEASED, s_agent_prev_glyph);
       lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESS_LOST, s_agent_prev_glyph); }
+#if defined(DEVICE_BOARD_M5CORES3)
+    { lv_obj_t *b = agent_act_btn(347, 310, agent_next_tap);
+#else
     { lv_obj_t *b = agent_act_btn(307, 322, agent_next_tap);
+#endif
       s_agent_next_btn = b;
       s_agent_next_glyph = agent_step_glyph(b, +1);
       lv_obj_add_event_cb(b, agent_step_press, LV_EVENT_PRESSED, s_agent_next_glyph);
@@ -3257,6 +3560,11 @@ static void overview_loop_tap(lv_event_t *e)
 // start a recording nobody asked for.
 bool ui_action_hit(uint16_t x, uint16_t y)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The key before anything: during voice too, where a tap anywhere else stops and sends, and a tap on
+    // the key must abort instead — the dial's physical key does exactly that.
+    if (ui_chrome_key_hit(x, y)) return true;
+#endif
     // During a voice turn the buttons are hidden under the overlay and must NOT capture the gesture — else
     // touch.c suppresses tap-to-stop for the whole press (gesture_pressed=false), so a tap to stop the voice
     // does nothing. Let the tap flow to tap-to-stop instead; the clickable overlay blocks the LVGL button click.
@@ -3334,26 +3642,26 @@ static lv_obj_t *settings_row(lv_obj_t *parent, const lv_image_dsc_t *icon, cons
     //
     // A NULL icon draws `sym` (an LV_SYMBOL glyph), or a blue "+" when that is NULL too.
     lv_obj_t *row = lv_button_create(parent);
-    lv_obj_set_width(row, SET_ROW_W);
-    lv_obj_set_height(row, SET_ROW_H);
+    lv_obj_set_width(row, PX(SET_ROW_W));
+    lv_obj_set_height(row, PX(SET_ROW_H));
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_color(row, COL_FG, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(row, LV_OPA_10, LV_STATE_PRESSED);   // the only press feedback left
     lv_obj_set_style_radius(row, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_left(row, 6, 0);
-    lv_obj_set_style_pad_right(row, 14, 0);   // 22 left "Version" 16px short of fitting beside "v0.0.25"
-    lv_obj_set_style_pad_ver(row, 6, 0);
+    lv_obj_set_style_pad_left(row, PX(6), 0);
+    lv_obj_set_style_pad_right(row, PX(14), 0);   // 22 left "Version" 16px short of fitting beside "v0.0.25"
+    lv_obj_set_style_pad_ver(row, PX(6), 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_set_style_shadow_width(row, 0, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, 14, 0);
+    lv_obj_set_style_pad_column(row, PX(14), 0);
 
     // Icon inside a 72px BLACK circle (consistent left column; stands out on the #1c1c1c pill).
     lv_obj_t *circ = lv_obj_create(row);
     lv_obj_remove_style_all(circ);
     lv_obj_clear_flag(circ, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(circ, 72, 72);
+    lv_obj_set_size(circ, PX(72), PX(72));
     lv_obj_set_style_radius(circ, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(circ, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(circ, COL_SET_BG, 0);
@@ -3445,7 +3753,13 @@ static void apply_dim(uint8_t level)
 void ui_set_brightness(uint8_t level)
 {
     s_brightness = level;
+#if defined(DEVICE_BOARD_M5CORES3)
+    // Hardware backlight is the dimmer. The software overlay is an AMOLED trick — black pixels are off
+    // there — and on an LCD it would dim the picture while the backlight burned at full power.
+    display_set_brightness(level);
+#else
     apply_dim(level);
+#endif
 }
 
 // --- Brightness row — iOS-Control-Center style, built from plain objects (NOT lv_slider) ---
@@ -3465,7 +3779,7 @@ void ui_set_brightness(uint8_t level)
 static int32_t bright_w_from_level(uint8_t level)    // fill width for a level (BRIGHT_MIN→20%, 0xFF→full)
 {
     if (level < BRIGHT_MIN) level = BRIGHT_MIN;
-    return BRIGHT_FILL_MIN + (int32_t)(level - BRIGHT_MIN) * (BRIGHT_BOX_W - BRIGHT_FILL_MIN) / (0xFF - BRIGHT_MIN);
+    return PX(BRIGHT_FILL_MIN) + (int32_t)(level - BRIGHT_MIN) * (PX(BRIGHT_BOX_W) - PX(BRIGHT_FILL_MIN)) / (0xFF - BRIGHT_MIN);
 }
 
 static void bright_box_pressing(lv_event_t *e)       // finger moved → track value + move the fill live (cheap)
@@ -3511,7 +3825,11 @@ static void bright_box_release(lv_event_t *e)        // let go (or press lost) �
         lv_obj_add_flag(tileview, LV_OBJ_FLAG_SCROLLABLE);
         carousel_scroll_apply();   // HOR, or NONE on a ring of one
     }
+#if defined(DEVICE_BOARD_M5CORES3)
+    ui_set_brightness(s_brightness);         // the backlight — the CoreS3 has no AMOLED-black to dim with
+#else
     apply_dim(s_brightness);                 // dim the screen to the chosen level (a single redraw — safe)
+#endif
     config_save_brightness(s_brightness);    // persist once on release (avoid NVS wear)
     ESP_LOGI(TAG, "brightness -> 0x%02x", s_brightness);
 }
@@ -3541,7 +3859,9 @@ static void build_brightness_screen(void)
     lv_obj_set_style_bg_color(ov, COL_BG, 0);
     lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(ov, 0, 0);
+#if !defined(DEVICE_BOARD_M5CORES3)   // full-screen: round on the dial, the glass's own rectangle on the CoreS3
     lv_obj_set_style_radius(ov, LV_RADIUS_CIRCLE, 0);
+#endif
     lv_obj_set_style_pad_all(ov, 0, 0);
     lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(ov, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
@@ -3553,17 +3873,17 @@ static void build_brightness_screen(void)
     lv_obj_set_style_text_font(ttl, &geist_med_48, 0);
     lv_obj_set_style_text_color(ttl, COL_FG, 0);
     lv_label_set_text(ttl, "Brightness");
-    lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 151);   // Figma y; at Medium 48 this ends at 207, clear of the track
+    lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, PX(151));   // Figma y; at Medium 48 this ends at 207, clear of the track
 
     lv_obj_t *box = lv_obj_create(ov);
     s_bright_box = box;
     lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, BRIGHT_BOX_W, 84);
-    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 231);      // Figma y — 24px below the title, not touching it
-    lv_obj_set_style_radius(box, 42, 0);
+    lv_obj_set_size(box, PX(BRIGHT_BOX_W), PX(84));
+    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, PX(231));      // Figma y — 24px below the title, not touching it
+    lv_obj_set_style_radius(box, PX(42), 0);
     lv_obj_set_style_bg_color(box, COL_SET_PILL, 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_width(box, PX(1), 0);
     lv_obj_set_style_border_color(box, COL_SET_BORD, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);      // it IS the drag surface now — no separate catcher
@@ -3576,10 +3896,10 @@ static void build_brightness_screen(void)
     lv_obj_clear_flag(s_bright_fill, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     // 82, not 84: the track carries a 1px border, so LVGL lays this child out inside an 82px content box.
     // At 84 the fill overflowed a pixel top and bottom and read as a green bar taller than its own track.
-    lv_obj_set_height(s_bright_fill, 82);
+    lv_obj_set_height(s_bright_fill, PX(82));
     lv_obj_set_width(s_bright_fill, bright_w_from_level(s_brightness));
     lv_obj_align(s_bright_fill, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_set_style_radius(s_bright_fill, 41, 0);   // matches the 82px height, so the left cap stays round
+    lv_obj_set_style_radius(s_bright_fill, PX(41), 0);   // matches the 82px height, so the left cap stays round
     lv_obj_set_style_bg_color(s_bright_fill, COL_BRIGHT, 0);
     lv_obj_set_style_bg_opa(s_bright_fill, LV_OPA_COVER, 0);
 
@@ -3587,8 +3907,8 @@ static void build_brightness_screen(void)
     lv_obj_remove_style_all(circ);
     lv_obj_add_flag(circ, LV_OBJ_FLAG_FLOATING);
     lv_obj_clear_flag(circ, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(circ, 72, 72);
-    lv_obj_align(circ, LV_ALIGN_LEFT_MID, 6, 0);
+    lv_obj_set_size(circ, PX(72), PX(72));
+    lv_obj_align(circ, LV_ALIGN_LEFT_MID, PX(6), 0);
     lv_obj_set_style_radius(circ, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(circ, COL_SET_BG, 0);
     lv_obj_set_style_bg_opa(circ, LV_OPA_COVER, 0);
@@ -3611,6 +3931,313 @@ static void settings_brightness_tap(lv_event_t *e)
     overlay_raise(s_bright_screen);   // the preview has to be honest on THIS screen especially
 }
 
+#if defined(DEVICE_BOARD_M5CORES3)
+static void wifi_status_text(char *out, size_t cap)
+{
+    wifi_sta_state_t st = wifi_sta_state();
+    const char *ssid = wifi_sta_ssid();
+    switch (st) {
+    case WIFI_STA_CONNECTED:
+        snprintf(out, cap, "%s", ssid[0] ? ssid : "On");
+        break;
+    case WIFI_STA_CONNECTING:
+        snprintf(out, cap, "Joining…");
+        break;
+    case WIFI_STA_SCANNING:
+        snprintf(out, cap, "Scanning…");
+        break;
+    case WIFI_STA_FAILED:
+        snprintf(out, cap, "Failed");
+        break;
+    default:
+        snprintf(out, cap, ssid[0] ? "Saved" : "Off");
+        break;
+    }
+}
+
+static void wifi_overlay_hide(void)
+{
+    if (s_wifi_timer) { lv_timer_delete(s_wifi_timer); s_wifi_timer = NULL; }
+    if (s_wifi_pass_box) lv_obj_add_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_screen) lv_obj_add_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void wifi_overlay_close(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    wifi_overlay_hide();
+}
+
+static void wifi_pass_hide(void)
+{
+    if (s_wifi_pass_box) lv_obj_add_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_list) lv_obj_clear_flag(s_wifi_list, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void wifi_join_open(const char *ssid)
+{
+    if (!s_wifi_ta) return;
+    lv_textarea_set_text(s_wifi_ta, "");
+    wifi_sta_connect(ssid, "");
+    wifi_pass_hide();
+}
+
+static void wifi_ap_tap(lv_event_t *e)
+{
+    wifi_sta_ap_t *ap = lv_event_get_user_data(e);
+    if (!ap || !ap->ssid[0]) return;
+    s_suppress_tap = true;
+    if (ap->open) {
+        wifi_join_open(ap->ssid);
+        return;
+    }
+    strncpy(s_wifi_pending_ssid, ap->ssid, sizeof(s_wifi_pending_ssid) - 1);
+    s_wifi_pending_ssid[sizeof(s_wifi_pending_ssid) - 1] = '\0';
+    if (s_wifi_list) lv_obj_add_flag(s_wifi_list, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_ta) lv_textarea_set_text(s_wifi_ta, "");
+    if (s_wifi_pass_box) {
+        lv_obj_t *ttl = lv_obj_get_child(s_wifi_pass_box, 0);
+        if (ttl) lv_label_set_text(ttl, s_wifi_pending_ssid);
+        lv_obj_clear_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_wifi_ta) lv_obj_add_state(s_wifi_ta, LV_STATE_FOCUSED);
+}
+
+static void wifi_kb_ready(lv_event_t *e)
+{
+    (void)e;
+    if (!s_wifi_ta || !s_wifi_pending_ssid[0]) return;
+    const char *pass = lv_textarea_get_text(s_wifi_ta);
+    wifi_sta_connect(s_wifi_pending_ssid, pass);
+    wifi_pass_hide();
+}
+
+static void wifi_kb_cancel(lv_event_t *e)
+{
+    (void)e;
+    s_wifi_pending_ssid[0] = '\0';
+    wifi_pass_hide();
+}
+
+static void wifi_forget_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    wifi_sta_forget();
+}
+
+static void wifi_ap_free(lv_event_t *e)
+{
+    void *p = lv_event_get_user_data(e);
+    if (p) lv_free(p);
+}
+
+static void wifi_fill_list(void)
+{
+    if (!s_wifi_list) return;
+    lv_obj_clean(s_wifi_list);
+    wifi_sta_ap_t aps[WIFI_STA_AP_MAX];
+    int n = wifi_sta_copy_scan(aps, WIFI_STA_AP_MAX);
+    const char *cur = wifi_sta_ssid();
+    if (n == 0) {
+        lv_obj_t *empty = lv_label_create(s_wifi_list);
+        lv_obj_set_style_text_font(empty, &geist_reg_20, 0);
+        lv_obj_set_style_text_color(empty, COL_MUTED, 0);
+        lv_label_set_text(empty, wifi_sta_state() == WIFI_STA_SCANNING ? "Scanning…" : "No networks");
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(empty, lv_pct(100));
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *row = lv_button_create(s_wifi_list);
+        lv_obj_set_width(row, PX(SET_ROW_W));
+        lv_obj_set_height(row, PX(56));
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(row, COL_FG, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(row, LV_OPA_10, LV_STATE_PRESSED);
+        lv_obj_set_style_radius(row, PX(16), 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_shadow_width(row, 0, 0);
+        lv_obj_set_style_pad_hor(row, PX(12), 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *nm = lv_label_create(row);
+        lv_obj_set_style_text_font(nm, &geist_reg_20, 0);
+        lv_obj_set_style_text_color(nm, (cur[0] && strcmp(cur, aps[i].ssid) == 0) ? COL_GREEN : COL_FG, 0);
+        lv_label_set_text(nm, aps[i].ssid);
+        lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+        lv_obj_set_flex_grow(nm, 1);
+        lv_obj_t *tr = lv_label_create(row);
+        lv_obj_set_style_text_font(tr, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tr, COL_MUTED, 0);
+        lv_label_set_text(tr, aps[i].open ? LV_SYMBOL_OK : LV_SYMBOL_SETTINGS);
+        wifi_sta_ap_t *keep = lv_malloc(sizeof(*keep));
+        if (keep) {
+            *keep = aps[i];
+            lv_obj_add_event_cb(row, wifi_ap_tap, LV_EVENT_CLICKED, keep);
+            lv_obj_add_event_cb(row, wifi_ap_free, LV_EVENT_DELETE, keep);
+        }
+    }
+}
+
+static void wifi_refresh_labels(void)
+{
+    char buf[40];
+    wifi_status_text(buf, sizeof(buf));
+    if (s_wifi_status) lv_label_set_text(s_wifi_status, buf);
+    if (s_wifi_trail) lv_label_set_text(s_wifi_trail, buf);
+}
+
+static void wifi_tick(lv_timer_t *t)
+{
+    (void)t;
+    wifi_refresh_labels();
+    if (wifi_sta_take_scan_done()) wifi_fill_list();
+}
+
+static void wifi_build_overlay(void)
+{
+    if (s_wifi_screen) return;
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    s_wifi_screen = ov;
+    lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
+    lv_obj_align(ov, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(ov, COL_BG, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_set_style_radius(ov, 0, 0);   // square: keyboard needs the full 466 face, not the round clip
+    lv_obj_set_style_pad_all(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ov, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    make_close_pill(ov, wifi_overlay_close, 16);
+
+    lv_obj_t *ttl = lv_label_create(ov);
+    lv_obj_set_style_text_font(ttl, &geist_med_32, 0);
+    lv_obj_set_style_text_color(ttl, COL_FG, 0);
+    lv_label_set_text(ttl, "WiFi");
+    lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, PX(56));
+
+    s_wifi_status = lv_label_create(ov);
+    lv_obj_set_style_text_font(s_wifi_status, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(s_wifi_status, COL_MUTED, 0);
+    lv_label_set_text(s_wifi_status, "Off");
+    lv_obj_align(s_wifi_status, LV_ALIGN_TOP_MID, 0, PX(96));
+
+    s_wifi_list = lv_obj_create(ov);
+    lv_obj_remove_style_all(s_wifi_list);
+    lv_obj_set_size(s_wifi_list, PX(SET_ROW_W), PX(250));
+    lv_obj_align(s_wifi_list, LV_ALIGN_TOP_MID, 0, PX(128));
+    lv_obj_set_flex_flow(s_wifi_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_wifi_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(s_wifi_list, PX(4), 0);
+    lv_obj_set_scroll_dir(s_wifi_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_wifi_list, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *forget = lv_button_create(ov);
+    lv_obj_set_size(forget, PX(200), PX(44));
+    lv_obj_align(forget, LV_ALIGN_BOTTOM_MID, 0, PX(-18));
+    lv_obj_set_style_bg_color(forget, COL_SET_PILL, 0);
+    lv_obj_set_style_bg_opa(forget, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(forget, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(forget, 0, 0);
+    lv_obj_add_event_cb(forget, wifi_forget_tap, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *fl = lv_label_create(forget);
+    lv_obj_set_style_text_font(fl, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(fl, COL_MUTED, 0);
+    lv_label_set_text(fl, "Forget");
+    lv_obj_center(fl);
+
+    // Authored in panel pixels: the keyboard needs every one of the 320 for keys a fingertip can hit.
+    s_wifi_pass_box = lv_obj_create(ov);
+    lv_obj_remove_style_all(s_wifi_pass_box);
+    lv_obj_set_size(s_wifi_pass_box, lv_pct(100), lv_pct(100));
+    lv_obj_align(s_wifi_pass_box, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(s_wifi_pass_box, LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_wifi_pass_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_wifi_pass_box, COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_wifi_pass_box, LV_OPA_COVER, 0);
+    lv_obj_t *pt = lv_label_create(s_wifi_pass_box);
+    lv_obj_set_style_text_font(pt, &geist_reg_20, 0);
+    lv_obj_set_style_text_color(pt, COL_FG, 0);
+    lv_label_set_text(pt, "");
+    lv_obj_align(pt, LV_ALIGN_TOP_MID, 0, PX(4));
+    s_wifi_ta = lv_textarea_create(s_wifi_pass_box);
+    lv_obj_set_size(s_wifi_ta, lv_pct(94), PX(34));
+    lv_obj_align(s_wifi_ta, LV_ALIGN_TOP_MID, 0, PX(26));
+    lv_textarea_set_one_line(s_wifi_ta, true);
+    lv_textarea_set_password_mode(s_wifi_ta, true);
+    lv_textarea_set_placeholder_text(s_wifi_ta, "Password");
+    lv_obj_set_style_text_font(s_wifi_ta, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_pad_all(s_wifi_ta, PX(5), 0);
+    // Sized in real panel pixels, not virtual ones. Ten keys across 320 with 3 px gutters gives ~29 px
+    // a key against the 18 px the virtual face allowed, and every glyph is drawn 1:1 instead of being
+    // box-filtered to half size — the blur mattered as much as the size on 4-bpp fonts.
+    lv_obj_t *kb = lv_keyboard_create(s_wifi_pass_box);
+    lv_obj_set_size(kb, lv_pct(100), PX(168));
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(kb, s_wifi_ta);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_pad_all(kb, PX(3), 0);
+    lv_obj_set_style_pad_row(kb, PX(3), 0);
+    lv_obj_set_style_pad_column(kb, PX(3), 0);
+    lv_obj_set_style_min_height(kb, PX(38), LV_PART_ITEMS);
+    lv_obj_set_style_radius(kb, PX(10), LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(0x2a2a2a), LV_PART_ITEMS);
+    lv_obj_add_event_cb(kb, wifi_kb_ready, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, wifi_kb_cancel, LV_EVENT_CANCEL, NULL);
+}
+
+static void settings_wifi_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    wifi_build_overlay();
+    wifi_refresh_labels();
+    wifi_fill_list();
+    wifi_sta_request_scan();
+    lv_obj_clear_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN);
+    overlay_raise(s_wifi_screen);
+    if (!s_wifi_timer) s_wifi_timer = lv_timer_create(wifi_tick, 400, NULL);
+}
+
+void ui_service_wifi(void)
+{
+    wifi_sta_service();
+}
+
+// rebuild_settings_tile() deletes s_settings_tile, and the Unpair row is a CHILD of that tile — so
+// calling it straight from this handler frees the object tree LVGL is still dispatching this very event
+// inside. It presented as a dead screen rather than a crash (invalidations stopped dead at the tap and
+// never resumed; a swipe built a new tile and it came back), which is the misleading part: the visible
+// symptom was recoverable while the underlying fault was a use-after-free, free to surface later as an
+// unrelated crash. Deferring to lv_async_call runs the rebuild once the event has finished unwinding.
+static void unpair_rebuild_async(void *unused)
+{
+    (void)unused;
+    rebuild_settings_tile();
+}
+
+static void settings_unpair_tap(lv_event_t *e)
+{
+    (void)e;
+    s_suppress_tap = true;
+    config_clear_bind();
+    wifi_cable_drop();
+    lv_async_call(unpair_rebuild_async, NULL);
+}
+#endif  // DEVICE_BOARD_M5CORES3
+
+bool ui_modal_is_open(void)
+{
+    if (s_bright_screen && !lv_obj_has_flag(s_bright_screen, LV_OBJ_FLAG_HIDDEN)) return true;
+#if defined(DEVICE_BOARD_M5CORES3)
+    if (s_wifi_screen && !lv_obj_has_flag(s_wifi_screen, LV_OBJ_FLAG_HIDDEN)) return true;
+#endif
+    return false;
+}
+
 // (Re)build the trailing "settings" tile so it always sits at the column AFTER the last project.
 // Delete+recreate keeps its tileview column index correct without touching LVGL internals. Caller
 // holds the display lock. If the user was on the settings tile, re-focus it after the rebuild.
@@ -3619,7 +4246,11 @@ static void rebuild_settings_tile(void)
     if (!tileview) return;
     bool was_active = s_settings_active;
     if (s_settings_tile) { lv_obj_delete(s_settings_tile); s_settings_tile = NULL; s_vlang_lbl = NULL;
-                           s_scroll_dir_lbl = NULL; s_swipe_dir_lbl = NULL; }
+                           s_scroll_dir_lbl = NULL; s_swipe_dir_lbl = NULL;
+#if defined(DEVICE_BOARD_M5CORES3)
+                           s_wifi_trail = NULL;
+#endif
+                         }
 
     lv_obj_t *t = lv_obj_create(tileview);
     lv_obj_set_size(t, carousel_w(), carousel_h());
@@ -3631,9 +4262,9 @@ static void rebuild_settings_tile(void)
     // A LIST now, not a group centred on the face. Five rows of SET_ROW_H stack contiguously (the design
     // gives them no gap); only four fit the circle at 320 wide, so the tile scrolls and the fifth is
     // reached by dragging. Align START, not CENTER — centring a list that overflows fights its own scroll.
-    lv_obj_set_style_pad_hor(t, SCREEN_PAD, 0);
-    lv_obj_set_style_pad_top(t, SET_LIST_PAD, 0);
-    lv_obj_set_style_pad_bottom(t, SET_LIST_PAD, 0);
+    lv_obj_set_style_pad_hor(t, PX(SCREEN_PAD), 0);
+    lv_obj_set_style_pad_top(t, PX(SET_LIST_PAD), 0);
+    lv_obj_set_style_pad_bottom(t, PX(SET_LIST_PAD), 0);
     lv_obj_set_flex_flow(t, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(t, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(t, 0, 0);
@@ -3660,6 +4291,15 @@ static void rebuild_settings_tile(void)
     // hold. The confirm overlay and its handlers survive unreferenced rather than being torn out with
     // them: nothing reaches that screen now, and removing live UI plumbing to chase two dead rows is how
     // a working stop button disappears.
+#if defined(DEVICE_BOARD_M5CORES3)
+    { char wbuf[40]; wifi_status_text(wbuf, sizeof(wbuf));
+      s_wifi_trail = settings_row(t, &icon_wifi, NULL, COL_FG, "WiFi", COL_FG, wbuf,
+                                  &geist_reg_24, COL_FG, settings_wifi_tap, NULL); }
+    if (config_has_bind()) {
+        settings_row(t, &icon_lock, NULL, COL_FG, "Unpair", COL_FG, "This computer",
+                     &geist_reg_24, COL_GREEN, settings_unpair_tap, NULL);
+    }
+#endif
     char vl[40]; vlang_label(vl, sizeof(vl));
     // Every trailing VALUE on this page is one font — geist_reg_24, the size Version already used. The row
     // label stays SET_ROW_FONT (32), so a value always reads as subordinate to the thing it belongs to.
@@ -3690,6 +4330,12 @@ static void rebuild_settings_tile(void)
       snprintf(vbuf, sizeof(vbuf), "v%s", (d && d->version[0]) ? d->version : "?");
       settings_row(t, &icon_info, NULL, COL_FG, "Version", COL_FG, vbuf,
                    &geist_reg_24, COL_MUTED, NULL, NULL); }
+#if defined(DEVICE_BOARD_M5CORES3)
+    // The dial resets by holding BOOT at power-on; the CoreS3 has no BOOT key, so its reset is a row —
+    // last, behind the confirm the dial already carries ("Keep using" is the safe, coloured choice).
+    settings_row(t, &icon_reset, NULL, COL_FG, "Reset device", COL_RED, NULL,
+                 NULL, COL_FG, settings_reset_tap, NULL);
+#endif
 
     if (was_active) carousel_goto(col_for_ring_near(carousel_col(), ring_settings()), LV_ANIM_OFF);   // keep Settings centered
 }
@@ -3708,10 +4354,10 @@ static void build_lang_picker(void)
     lv_obj_remove_style_all(band);
     lv_obj_add_flag(band, LV_OBJ_FLAG_FLOATING);
     lv_obj_clear_flag(band, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SNAPPABLE);
-    lv_obj_set_size(band, lv_pct(88), PICK_ROW_H);
+    lv_obj_set_size(band, lv_pct(88), PX(PICK_ROW_H));
     lv_obj_align(band, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_border_side(band, LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(band, 1, 0);
+    lv_obj_set_style_border_width(band, PX(1), 0);
     lv_obj_set_style_border_color(band, lv_color_hex(0x242424), 0);
 
     s_pick_owner = PICK_OWNER_LANG;
@@ -3753,10 +4399,10 @@ static __attribute__((unused)) void build_action_picker(void)
     lv_obj_remove_style_all(band);
     lv_obj_add_flag(band, LV_OBJ_FLAG_FLOATING);
     lv_obj_clear_flag(band, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SNAPPABLE);
-    lv_obj_set_size(band, lv_pct(88), PICK_ROW_H);
+    lv_obj_set_size(band, lv_pct(88), PX(PICK_ROW_H));
     lv_obj_align(band, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_border_side(band, LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(band, 1, 0);
+    lv_obj_set_style_border_width(band, PX(1), 0);
     lv_obj_set_style_border_color(band, lv_color_hex(0x242424), 0);
 
     s_pick_owner = PICK_OWNER_ACTION;
@@ -3976,7 +4622,7 @@ static void parse_and_store(proj_t *p)
 #define CTL_CHIP_PAD_H  12
 #define CTL_CHIP_PAD_V  6
 #define CTL_CHIP_GAP    13          // between pills (10 → 13: the row sits lower now, so there is room)
-#define CTL_MARK_SRC    20          // every engine icon asset is 20x20
+#define CTL_MARK_SRC    PX(20)      // every engine icon asset is 20x20 (12x12 in the CoreS3's set)
 #define SHELL_MARK      28          // the mark beside the name: 0.72 of a 38px name, rounded
 #define SHELL_MARK_GAP  10          // between the mark and the first letter
 static void swarm_line_tap(lv_event_t *e);   // the tab line → the tab picker (defined with it)
@@ -3998,7 +4644,7 @@ static void swarm_line_paint(proj_t *p);     // name the window's current tab on
 // Outer height of a pill: text line + its padding + the 1px border on each side.
 static inline int32_t ctl_pill_h(void)
 {
-    return lv_font_get_line_height(CTL_CHIP_FONT) + 2 * CTL_CHIP_PAD_V + 2 /*border*/;
+    return lv_font_get_line_height(CTL_CHIP_FONT) + 2 * PX(CTL_CHIP_PAD_V) + 2 /*border*/;
 }
 
 // The engine mark is sized to the PILL, not to a fixed zoom (owner, 2026-07-30): the row reads as one band
@@ -4013,11 +4659,11 @@ static inline int32_t ctl_mark_scale(void)
 // pills without this pushes them down onto the name instead of keeping the gap.
 static inline int32_t ctl_row_y(void)
 {
-    return -(ctl_pill_h() + CTL_NAME_GAP);   // the mark matches the pill, so the pill sets the row height
+    return -(ctl_pill_h() + PX(CTL_NAME_GAP));   // the mark matches the pill, so the pill sets the row height
 }
 
 // Total vertical band the floating chip row occupies above the name.
-static inline int32_t ctl_band_h(void) { return ctl_pill_h() + CTL_NAME_GAP; }
+static inline int32_t ctl_band_h(void) { return ctl_pill_h() + PX(CTL_NAME_GAP); }
 
 // Is the row actually on screen for this agent? It is hidden on local machines and when the feature is off,
 // and the working layout has to reserve its band only when it is really there.
@@ -4051,13 +4697,13 @@ static __attribute__((unused)) lv_obj_t *ctl_chip(lv_obj_t *parent, lv_event_cb_
     lv_obj_set_style_bg_color(c, lv_color_hex(0x1c1e24), 0);
     lv_obj_set_style_bg_opa(c, LV_OPA_70, 0);
     lv_obj_set_style_radius(c, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(c, 1, 0);
+    lv_obj_set_style_border_width(c, PX(1), 0);
     lv_obj_set_style_border_color(c, lv_color_hex(0x3a3f4b), 0);
-    lv_obj_set_style_pad_hor(c, CTL_CHIP_PAD_H, 0);
-    lv_obj_set_style_pad_ver(c, CTL_CHIP_PAD_V, 0);
+    lv_obj_set_style_pad_hor(c, PX(CTL_CHIP_PAD_H), 0);
+    lv_obj_set_style_pad_ver(c, PX(CTL_CHIP_PAD_V), 0);
     if (AGENT_CTL_INTERACTIVE && cb) {
         lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(c, 12);   // forgiving tap target
+        lv_obj_set_ext_click_area(c, PX(12));   // forgiving tap target
         lv_obj_add_event_cb(c, cb, LV_EVENT_CLICKED, NULL);
     }
     return c;
@@ -4193,10 +4839,10 @@ static void ui_show_picker_loading(int want)
     lv_obj_t *title = lv_label_create(scr_picker);
     lv_obj_set_style_text_font(title, &geist_med_32, 0);
     lv_obj_set_style_text_color(title, COL_FG, 0);
-    lv_obj_set_style_pad_bottom(title, 6, 0);
+    lv_obj_set_style_pad_bottom(title, PX(6), 0);
     lv_label_set_text(title, want == PICK_MODE_EFFORT ? "Effort" : "Model");
     lv_obj_t *sp = make_spinner(scr_picker, 64);
-    lv_obj_set_style_margin_top(sp, 24, 0);
+    lv_obj_set_style_margin_top(sp, PX(24), 0);
     // On the WAIT screen too, and this is the one that needs it most: the list behind it comes from a
     // blocking RPC, so this is the screen a user can be stuck looking at with nothing else to press.
     picker_add_close();
@@ -4261,7 +4907,7 @@ static lv_obj_t *make_pick_row(lv_obj_t *parent, const char *text, int idx)
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
     lv_obj_set_width(b, lv_pct(100));
-    lv_obj_set_height(b, PICK_ROW_H);            // FIXED → the focus font-swap never relayouts siblings / snap points
+    lv_obj_set_height(b, PX(PICK_ROW_H));            // FIXED → the focus font-swap never relayouts siblings / snap points
     lv_obj_set_style_bg_color(b, COL_DOT_OFF, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(b, LV_OPA_20, LV_STATE_PRESSED);   // subtle tap feedback
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
@@ -4375,10 +5021,10 @@ static void build_model_picker(const char *agent_id, int want)
     lv_obj_remove_style_all(band);
     lv_obj_add_flag(band, LV_OBJ_FLAG_FLOATING);
     lv_obj_clear_flag(band, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SNAPPABLE);
-    lv_obj_set_size(band, lv_pct(88), PICK_ROW_H);
+    lv_obj_set_size(band, lv_pct(88), PX(PICK_ROW_H));
     lv_obj_align(band, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_border_side(band, LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(band, 1, 0);
+    lv_obj_set_style_border_width(band, PX(1), 0);
     lv_obj_set_style_border_color(band, lv_color_hex(0x242424), 0);
 
     s_pick_owner = PICK_OWNER_PROFILE;   // this wheel is the runtime profile, not one of the local ones
@@ -4523,7 +5169,11 @@ static char *dup_str(const char *s)
 // back without it left the words floating on the black face with nothing holding them. Same surface as
 // before — flat #23252f, 28px radius, a hairline at 20% — with the vertical padding down from 18 to 14:
 // the card holds two pinned lines now instead of a paragraph that could be one.
+#if defined(DEVICE_BOARD_M5CORES3)
+#define RECAP_MAX_CHARS   64        // fill the wider card (~12 more glyphs than 52)
+#else
 #define RECAP_MAX_CHARS   40
+#endif
 #define RECAP_FONT        (&geist_med_28)
 #define RECAP_LINE_SPACE  3
 #define RECAP_CARD_PAD_H  18
@@ -4531,11 +5181,11 @@ static char *dup_str(const char *s)
 // gripping them — a recap that wraps close to the edge no longer looks clipped at the bottom.
 #define RECAP_CARD_PAD_V  19
 /** The text column inside the card: the safe width less the padding and the hairline each side. */
-#define RECAP_TEXT_W      (SAFE_CONTENT_W - 2 * RECAP_CARD_PAD_H - 2)
+#define RECAP_TEXT_W      PX(TILE_COL_W - 2 * RECAP_CARD_PAD_H - 2)
 /** The card's fixed height: two lines of recap, the space between them, the padding, and the 1px edge
  *  on each side. Fixed so the box does not breathe as the carousel moves between tiles. */
-#define RECAP_CARD_H      (2 * lv_font_get_line_height(RECAP_FONT) + RECAP_LINE_SPACE \
-                           + 2 * RECAP_CARD_PAD_V + 2)
+#define RECAP_CARD_H      (2 * lv_font_get_line_height(RECAP_FONT) + PX(RECAP_LINE_SPACE) \
+                           + 2 * PX(RECAP_CARD_PAD_V) + 2)
 
 static void tile_layout_apply(proj_t *p);   // the tile's two layouts, chosen by state — defined with its macros below
 static void tile_center_if_cardless(proj_t *p);  // …and the half of it that measures, defined beside it
@@ -4576,10 +5226,10 @@ static void render_recap_block(proj_t *p)
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x23252f), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, 28, 0);
-    lv_obj_set_style_pad_hor(card, RECAP_CARD_PAD_H, 0);
-    lv_obj_set_style_pad_ver(card, RECAP_CARD_PAD_V, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_radius(card, PX(28), 0);
+    lv_obj_set_style_pad_hor(card, PX(RECAP_CARD_PAD_H), 0);
+    lv_obj_set_style_pad_ver(card, PX(RECAP_CARD_PAD_V), 0);
+    lv_obj_set_style_border_width(card, PX(1), 0);
     lv_obj_set_style_border_color(card, lv_color_hex(0xa6a6a6), 0);
     lv_obj_set_style_border_opa(card, LV_OPA_20, 0);
 
@@ -4604,12 +5254,12 @@ static void render_recap_block(proj_t *p)
     // the words break kindly; a recap of short words with diacritics wrapped onto three, and the card —
     // pinned to two — sliced the third through the middle of its glyphs. So the text is laid out at the
     // card's width and trimmed, a glyph at a time, until it fits in two lines with its "…" on the second.
-    const int32_t two_lines = 2 * lv_font_get_line_height(RECAP_FONT) + RECAP_LINE_SPACE;
+    const int32_t two_lines = 2 * lv_font_get_line_height(RECAP_FONT) + PX(RECAP_LINE_SPACE);
     for (;;) {
         char probe[sizeof(cut) + 4];
         snprintf(probe, sizeof probe, "%s%s", cut, clipped ? "\xE2\x80\xA6" : "");
         lv_point_t sz;
-        lv_text_get_size(&sz, probe, RECAP_FONT, 0, RECAP_LINE_SPACE, RECAP_TEXT_W, LV_TEXT_FLAG_NONE);
+        lv_text_get_size(&sz, probe, RECAP_FONT, 0, PX(RECAP_LINE_SPACE), RECAP_TEXT_W, LV_TEXT_FLAG_NONE);
         if (sz.y <= two_lines || !cut[0]) break;
         // Drop the last glyph (UTF-8: back over continuation bytes) and any space it leaves behind.
         size_t n = strlen(cut);
@@ -4625,7 +5275,7 @@ static void render_recap_block(proj_t *p)
     lv_obj_set_style_text_font(line, RECAP_FONT, 0);
     lv_obj_set_style_text_color(line, p->m_col, 0);   // kind_style's colour: red on an error, plain otherwise
     lv_obj_set_style_text_align(line, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_line_space(line, RECAP_LINE_SPACE, 0);
+    lv_obj_set_style_text_line_space(line, PX(RECAP_LINE_SPACE), 0);
 
     p->card = card;                            // ui_tap hit-tests against this, and only this
     lv_obj_set_user_data(card, reader_text);   // ev_card_free frees this
@@ -4648,11 +5298,14 @@ static void render_busy_row(proj_t *p)
     lv_obj_set_height(p->busy, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(p->busy, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->busy, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(p->busy, 4, 0);            // Figma verb→teaser gap
+    lv_obj_set_style_pad_row(p->busy, PX(4), 0);            // Figma verb→teaser gap
     p->busy_icon = NULL;                                 // no sparkle — the LED ring is the loading cue
     p->busy_verb = lv_label_create(p->busy);            // "<verb> <elapsed>" (green, one line)
     lv_obj_set_style_text_font(p->busy_verb, &geist_med_32, 0);
     lv_obj_set_style_text_color(p->busy_verb, COL_VOICE, 0);   // Figma #00ff2f
+    lv_obj_set_width(p->busy_verb, PX(TILE_COL_W));          // same column as the session title (Thinking… / Working…)
+    lv_label_set_long_mode(p->busy_verb, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(p->busy_verb, LV_TEXT_ALIGN_CENTER, 0);
     p->busy_meta = NULL;   // no stale-recap teaser here; live activity shows via tool_line when the backend sends it
     busy_compose(p);
     tile_layout_apply(p);   // again, now the verb line has its text and therefore its height
@@ -4673,7 +5326,11 @@ static void render_busy_row(proj_t *p)
 // The action arc — Goal / prev / next / Loop, built at y=322 in agent_actions_apply — and the air the
 // centred layout keeps above it. Named here because tile_center_if_cardless has to know where the
 // bottom of the face stops being free.
+#if defined(DEVICE_BOARD_M5CORES3)
+#define TILE_ARC_Y      310         // the CoreS3's one row: ‹ Voice ›, see build_agent_actions
+#else
 #define TILE_ARC_Y      322
+#endif
 #define TILE_ARC_GAP    20
 
 // ONE ANCHOR, TWO RESTING PLACES — and which one a tile uses is decided by whether it has a card.
@@ -4696,8 +5353,8 @@ static void tile_layout_apply(proj_t *p)
 {
     if (!p->tile) return;
     lv_obj_set_flex_align(p->tile, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_top(p->tile, TILE_PAD_TOP, 0);
-    lv_obj_set_style_pad_row(p->tile, TILE_NAME_GAP, 0);
+    lv_obj_set_style_pad_top(p->tile, PX(TILE_PAD_TOP), 0);
+    lv_obj_set_style_pad_row(p->tile, PX(TILE_NAME_GAP), 0);
     shell_name_fit(p);   // the name's line budget follows the state
     tile_center_if_cardless(p);
 }
@@ -4722,16 +5379,16 @@ static void tile_layout_apply(proj_t *p)
 // the measured answer exactly: 466/2 − (51 + 21 + 51)/2 = 171, which is where the name sits.
 static int32_t tile_block_pad(proj_t *p)
 {
-    const int32_t block_h = lv_obj_get_height(p->name_lbl) + TILE_NAME_GAP + lv_obj_get_height(p->body);
+    const int32_t block_h = lv_obj_get_height(p->name_lbl) + PX(TILE_NAME_GAP) + lv_obj_get_height(p->body);
     int32_t pad = lv_obj_get_height(p->tile) / 2 - block_h / 2;
     // Two rims to stay inside, because a centred block grows in BOTH directions and a working tile's
     // body is whatever the daemon has streamed into it — a tool line, a sub-agent list, a checklist.
     // Below: the action arc's buttons sit at y=322 and the body must not reach them.
-    const int32_t most = TILE_ARC_Y - TILE_ARC_GAP - block_h;
+    const int32_t most = PX(TILE_ARC_Y) - PX(TILE_ARC_GAP) - block_h;
     if (pad > most) pad = most;
     // Above: the floating tab line is drawn OUTSIDE the header's box, so nothing else stops a tall
     // block from lifting it off the glass. On a round face the rim eats the corners, hence a margin.
-    const int32_t least = ctl_band_h() + 24;
+    const int32_t least = ctl_band_h() + PX(24);
     if (pad < least) pad = least;
     return pad;
 }
@@ -4774,11 +5431,11 @@ static void create_tile(proj_t *p)
     lv_obj_set_style_border_width(p->tile, 0, 0);
     lv_obj_set_style_radius(p->tile, 0, 0);
     lv_obj_set_style_bg_color(p->tile, COL_BG, 0);
-    lv_obj_set_style_pad_all(p->tile, SCREEN_PAD, 0);
+    lv_obj_set_style_pad_all(p->tile, PX(SCREEN_PAD), 0);
     lv_obj_set_flex_flow(p->tile, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->tile, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_top(p->tile, TILE_PAD_TOP, 0);
-    lv_obj_set_style_pad_row(p->tile, TILE_NAME_GAP, 0);
+    lv_obj_set_style_pad_top(p->tile, PX(TILE_PAD_TOP), 0);
+    lv_obj_set_style_pad_row(p->tile, PX(TILE_NAME_GAP), 0);
     lv_obj_clear_flag(p->tile, LV_OBJ_FLAG_SCROLLABLE);
 }
 
@@ -4830,7 +5487,7 @@ static void shell_name_fit(proj_t *p)
 {
     if (!p->name_lbl) return;
     bool mark = p->engine_lbl && !lv_obj_has_flag(p->engine_lbl, LV_OBJ_FLAG_HIDDEN);
-    int32_t cap = SAFE_CONTENT_W - (mark ? SHELL_MARK + SHELL_MARK_GAP : 0);
+    int32_t cap = PX(SAFE_CONTENT_W - (mark ? SHELL_MARK + SHELL_MARK_GAP : 0));
     const char *text = lv_label_get_text(p->name_lbl);
     lv_point_t sz;
     lv_text_get_size(&sz, text, &geist_med_38, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -4859,7 +5516,7 @@ static void shell_name_fit(proj_t *p)
                               multi ? LV_FLEX_ALIGN_START : LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     }
     if (p->engine_lbl) {
-        lv_obj_set_style_margin_top(p->engine_lbl, multi && mark ? (lh - SHELL_MARK) / 2 : 0, 0);
+        lv_obj_set_style_margin_top(p->engine_lbl, multi && mark ? (lh - PX(SHELL_MARK)) / 2 : 0, 0);
     }
 }
 
@@ -4889,8 +5546,8 @@ static void apply_engine_label(proj_t *p)
         lv_image_set_pivot(p->engine_lbl, (int32_t)src->header.w / 2, (int32_t)src->header.h / 2);
         // Beside the name, at SHELL_MARK px — 0.72 of the name's size, the ratio the launch-page
         // prototype draws the pair at.
-        lv_image_set_scale(p->engine_lbl, (uint32_t)(SHELL_MARK * 256 / CTL_MARK_SRC));
-        lv_obj_set_size(p->engine_lbl, SHELL_MARK, SHELL_MARK);
+        lv_image_set_scale(p->engine_lbl, (uint32_t)(PX(SHELL_MARK) * 256 / CTL_MARK_SRC));
+        lv_obj_set_size(p->engine_lbl, PX(SHELL_MARK), PX(SHELL_MARK));
         lv_obj_set_style_image_recolor(p->engine_lbl, COL_CLAUDE, 0);
         // Reset this on every engine change: the same LVGL image object may previously have shown Claude.
         lv_obj_set_style_image_recolor_opa(p->engine_lbl, recolor ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
@@ -4915,15 +5572,15 @@ static void build_shell(proj_t *p)
     if (!p->tile || p->header) return;      // no tile, or shell already built
     p->dot = NULL;                          // recap design drops the status dot (its only reader is guarded)
 
-    // The header is ONE ROW: [engine mark] [name], centred as a pair. See shell_name_fit for why the name
-    // is measured rather than boxed.
+    // Dial: ONE ROW [engine mark][name]. CoreS3: COLUMN, mark above the name, so the status
+    // line below can use the full square width instead of sharing it with the icon.
     p->header = lv_obj_create(p->tile);
     lv_obj_remove_style_all(p->header);
     lv_obj_clear_flag(p->header, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(p->header, SAFE_CONTENT_W, lv_font_get_line_height(&geist_med_38));
+    lv_obj_set_size(p->header, PX(TILE_COL_W), lv_font_get_line_height(&geist_med_38));
     lv_obj_set_flex_flow(p->header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(p->header, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(p->header, SHELL_MARK_GAP, 0);
+    lv_obj_set_style_pad_column(p->header, PX(SHELL_MARK_GAP), 0);
 
     p->engine_lbl = lv_image_create(p->header);        // engine product mark, sized by apply_engine_label
     // The text mark, for the one "engine" that is not a product: a terminal (see apply_engine_label).
@@ -4953,17 +5610,17 @@ static void build_shell(proj_t *p)
     lv_obj_t *ctl = lv_button_create(p->header);
     lv_obj_remove_style_all(ctl);
     lv_obj_set_size(ctl, LV_SIZE_CONTENT, ctl_pill_h());
-    lv_obj_set_style_pad_hor(ctl, CTL_CHIP_PAD_H, 0);
+    lv_obj_set_style_pad_hor(ctl, PX(CTL_CHIP_PAD_H), 0);
     lv_obj_set_style_radius(ctl, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(ctl, lv_color_hex(0x1c1e24), 0);
     lv_obj_set_style_bg_opa(ctl, LV_OPA_70, 0);
     lv_obj_set_style_bg_opa(ctl, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(ctl, 1, 0);
+    lv_obj_set_style_border_width(ctl, PX(1), 0);
     lv_obj_set_style_border_color(ctl, lv_color_hex(0x3a3f4b), 0);
-    lv_obj_set_ext_click_area(ctl, 12);   // forgiving tap target, as the chip had
+    lv_obj_set_ext_click_area(ctl, PX(12));   // forgiving tap target, as the chip had
     lv_obj_set_flex_flow(ctl, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(ctl, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(ctl, 8, 0);
+    lv_obj_set_style_pad_column(ctl, PX(8), 0);
     lv_obj_clear_flag(ctl, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_flag(ctl, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(ctl, LV_ALIGN_TOP_MID, 0, ctl_row_y());
@@ -4977,7 +5634,11 @@ static void build_shell(proj_t *p)
     // 340 for the words, 364 with the pill's padding: the row sits at y≈130–175 on the round face, where
     // the chord is 418 px wide at the narrowest, and SAFE_CONTENT_W is 384 for everything below it.
     // It was 260 — "Autonomous Workshop" cut to "Autonomou…" with half the pill's room unused.
-    lv_obj_set_style_max_width(p->swarm_lbl, 340, 0);
+#if defined(DEVICE_BOARD_M5CORES3)
+    lv_obj_set_style_max_width(p->swarm_lbl, PX(400), 0);
+#else
+    lv_obj_set_style_max_width(p->swarm_lbl, PX(340), 0);
+#endif
     lv_obj_set_height(p->swarm_lbl, lv_font_get_line_height(CTL_CHIP_FONT));
     lv_label_set_long_mode(p->swarm_lbl, LV_LABEL_LONG_DOT);
     // No ▾ after the name: the pill IS the affordance, as the Model chip was.
@@ -5006,11 +5667,11 @@ static void materialize_content(int i)
 
     p->body = lv_obj_create(p->tile);
     lv_obj_remove_style_all(p->body);
-    lv_obj_set_width(p->body, SAFE_CONTENT_W);
+    lv_obj_set_width(p->body, PX(TILE_COL_W));
     lv_obj_set_height(p->body, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(p->body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(p->body, 12, 0);
+    lv_obj_set_style_pad_row(p->body, PX(12), 0);
     lv_obj_clear_flag(p->body, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(p->body, ev_body_resized, LV_EVENT_SIZE_CHANGED, p);   // see ev_body_resized
 
@@ -5020,7 +5681,7 @@ static void materialize_content(int i)
     lv_obj_set_height(p->list, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(p->list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->list, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(p->list, 14, 0);
+    lv_obj_set_style_pad_row(p->list, PX(14), 0);
     lv_obj_clear_flag(p->list, LV_OBJ_FLAG_SCROLLABLE);
 
     if (p->m_preview) render_recap_block(p);
@@ -5541,7 +6202,11 @@ static int add_proj(const char *id)
 // very long name (now editable via rename) would otherwise overflow the round header.
 static void name_clip(const char *in, char *out, size_t cap)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    const int MAX_CP = 26;   // 15 was the round header; the square title can hold ~26 at geist 38
+#else
     const int MAX_CP = 15;
+#endif
     const unsigned char *p = (const unsigned char *)in;
     size_t o = 0; int cp = 0;
     while (*p && cp < MAX_CP) {
@@ -5723,12 +6388,12 @@ bool ui_is_projects_active(void)
 
 // May a vertical drag right now be reported to the computer as a scroll?
 //
-// TWO SCREENS SAY YES, AND THEY MEAN DIFFERENT THINGS BY IT:
-//   · an AGENT TILE — the dial has nothing of its own to scroll there, so the stroke is purely a
-//     touchpad gesture: the glass stays put and only the window on the computer moves.
-//   · the DETAIL READER — LVGL scrolls the text under the finger natively, AND the same stroke goes out.
-//     Both surfaces move together; they hold different documents, so this is "both scroll", not "both
-//     show the same line".
+// ONE SCREEN SAYS YES: an AGENT TILE. The dial has nothing of its own to scroll there, so the stroke is
+// purely a touchpad gesture: the glass stays put and only the window on the computer moves.
+//
+// The DETAIL READER used to say yes as well, scrolling its text and the window together. It says no now
+// (owner, 2026-09-22): the reader is what is being read, and a window scrolling away behind it while the
+// thumb works through a long answer moves a screen the hand did not mean to move.
 //
 // Everything else says no, and each for a reason: Settings, Machines and the pickers own their own
 // scrollable lists, and driving the computer's terminal while the user drags one of those would move a
@@ -5737,7 +6402,6 @@ bool ui_is_projects_active(void)
 bool ui_scroll_reportable(void)
 {
     if (display_is_asleep() || ui_voice_is_active()) return false;
-    if (lv_screen_active() == scr_reader) return true;
     return lv_screen_active() == scr_projects && !s_overview_active && !s_settings_active
            && !s_machines_active && !s_notif_open
            && s_active_idx >= 0 && s_active_idx < s_proj_count;
@@ -5766,7 +6430,7 @@ int ui_notif_pull_zone_px(void)
     // "nút X tắt ở màn hình setting chưa work").
     if (lv_screen_active() == scr_projects && s_settings_active) return 0;
     bool agent_tile = lv_screen_active() == scr_projects && !s_overview_active && !s_settings_active && !s_machines_active;
-    return agent_tile ? 44 : 90;   // narrow on agent tiles so the tab pill still gets taps
+    return agent_tile ? PX(44) : PX(90);   // narrow on agent tiles so the tab pill still gets taps
 }
 
 // A FOCUS THE RING COULD NOT HONOUR YET, kept until it can.
@@ -5826,6 +6490,11 @@ void ui_focus_project(const char *project_id)
     if (notif_is_question(project_id)) q_reopen(project_id);   // takes the lock itself; recursive
     if (i >= 0) {
         carousel_goto(col_for_ring_near(carousel_col(), ring_of_agent(i)), LV_ANIM_OFF);   // nearest column showing agent i
+        // Recompute which ring is showing, as every other landing does (carousel_land). Landing here from
+        // the Overview left s_overview_active set, so the tile came up believing it was the Overview: no
+        // Voice button, and a stop state read off the wrong agent. The move is muted (carousel_goto), so
+        // this reports nothing back.
+        apply_active_from_col();
         s_active_idx = i;
         update_content_window();   // build the focused tile's content (it may have been an off-window shell)
         rebuild_page_dots();
@@ -5874,6 +6543,9 @@ void ui_home_overview(void)
 {
     if (s_bright_dragging) return;   // a brightness-slider drag on Settings is not a home swipe (mirror ui_swipe_*)
     ui_notif_close();   // no-op if closed; takes/releases the lock itself (must not nest inside our lock)
+#if defined(DEVICE_BOARD_M5CORES3)
+    wifi_overlay_hide();
+#endif
     display_lock();
     swarm_picker_close();
     if (s_ring != RING_AGENTS && lv_screen_active() == scr_projects) {
@@ -6036,7 +6708,7 @@ static bool notif_is_question(const char *proj_id)
 // hình agent"). A notification lands on the agent's tile and stops there; a tap on the recap opens
 // nothing. The screen, its X and open_reader_text are kept built and wired — set DETAIL_READER to 1 and
 // both ways in come back.
-#define DETAIL_READER 0
+#define DETAIL_READER 1   // back ON for evaluation (jay, 2026-09-20): both ways in are live again.
 static void open_agent_detail(const char *proj_id)
 {
     if (!proj_id || !proj_id[0]) return;
@@ -6108,15 +6780,15 @@ static void notif_rebuild(void)
         lv_obj_set_height(row, LV_SIZE_CONTENT);
         lv_obj_set_style_bg_color(row, lv_color_hex(0x23252f), 0);
         lv_obj_set_style_bg_color(row, lv_color_hex(0x2e313d), LV_STATE_PRESSED);
-        lv_obj_set_style_radius(row, 26, 0);
-        lv_obj_set_style_pad_hor(row, 16, 0);
-        lv_obj_set_style_pad_ver(row, 14, 0);
-        lv_obj_set_style_border_width(row, 1, 0);            // subtle glassy edge (Figma inner highlight)
+        lv_obj_set_style_radius(row, PX(26), 0);
+        lv_obj_set_style_pad_hor(row, PX(16), 0);
+        lv_obj_set_style_pad_ver(row, PX(14), 0);
+        lv_obj_set_style_border_width(row, PX(1), 0);            // subtle glassy edge (Figma inner highlight)
         lv_obj_set_style_border_color(row, lv_color_hex(0xa6a6a6), 0);
         lv_obj_set_style_border_opa(row, LV_OPA_20, 0);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-        lv_obj_set_style_pad_row(row, 8, 0);
+        lv_obj_set_style_pad_row(row, PX(8), 0);
         lv_obj_set_user_data(row, ref);
         lv_obj_add_event_cb(row, notif_row_tap, LV_EVENT_CLICKED, NULL);
         lv_obj_add_event_cb(row, notif_ud_free, LV_EVENT_DELETE, NULL);
@@ -6135,7 +6807,7 @@ static void notif_rebuild(void)
         lv_obj_set_height(nmrow, LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(nmrow, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(nmrow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(nmrow, 8, 0);
+        lv_obj_set_style_pad_column(nmrow, PX(8), 0);
         // The agent's ENGINE MARK where the green dot was (owner, 2026-09-16, mockup/notif-engine-mark.html
         // option A): the same 20px product mark the tile wears, native size, no scaling — which kind of
         // agent finished, before the name is read. The dot stays only for an agent the list no longer
@@ -6153,7 +6825,7 @@ static void notif_rebuild(void)
             lv_obj_t *dot = lv_obj_create(nmrow);   // green "pending" dot, as before
             lv_obj_remove_style_all(dot);
             lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_set_size(dot, 8, 8);
+            lv_obj_set_size(dot, PX(8), PX(8));
             lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
             lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
             lv_obj_set_style_bg_color(dot, lv_color_hex(0x04fe08), 0);
@@ -6286,15 +6958,15 @@ static void swarm_picker_rebuild(void)
         lv_obj_set_height(row, LV_SIZE_CONTENT);
         lv_obj_set_style_bg_color(row, COL_CARD, 0);
         lv_obj_set_style_bg_opa(row, here ? LV_OPA_COVER : LV_OPA_60, 0);
-        lv_obj_set_style_radius(row, 16, 0);
+        lv_obj_set_style_radius(row, PX(16), 0);
         lv_obj_set_style_border_width(row, here ? 1 : 0, 0);
         lv_obj_set_style_border_color(row, COL_ACCENT, 0);
         lv_obj_set_style_shadow_width(row, 0, 0);
-        lv_obj_set_style_pad_hor(row, 16, 0);
-        lv_obj_set_style_pad_ver(row, 10, 0);
+        lv_obj_set_style_pad_hor(row, PX(16), 0);
+        lv_obj_set_style_pad_ver(row, PX(10), 0);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_row(row, 2, 0);
+        lv_obj_set_style_pad_row(row, PX(2), 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_user_data(row, (void *)(intptr_t)i);
         lv_obj_add_event_cb(row, swarm_row_tap, LV_EVENT_CLICKED, NULL);
@@ -6336,18 +7008,18 @@ static void swarm_picker_build(void)
     lv_obj_t *title = lv_label_create(s_swarm_screen);
     lv_obj_set_style_text_font(title, &geist_reg_20, 0);
     lv_obj_set_style_text_color(title, COL_DOT_OFF, 0);
-    lv_obj_set_style_text_letter_space(title, 2, 0);
+    lv_obj_set_style_text_letter_space(title, PX(2), 0);
     lv_label_set_text(title, "TABS");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, PX(62));
     s_swarm_list = lv_obj_create(s_swarm_screen);
     lv_obj_remove_style_all(s_swarm_list);
-    lv_obj_set_width(s_swarm_list, SAFE_CONTENT_W);
+    lv_obj_set_width(s_swarm_list, PX(SAFE_CONTENT_W));
     lv_obj_set_height(s_swarm_list, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_height(s_swarm_list, 340, 0);   // the end rows stay inside the round face
-    lv_obj_align(s_swarm_list, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_set_style_max_height(s_swarm_list, PX(340), 0);   // the end rows stay inside the round face
+    lv_obj_align(s_swarm_list, LV_ALIGN_CENTER, 0, PX(10));
     lv_obj_set_flex_flow(s_swarm_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_swarm_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s_swarm_list, 8, 0);
+    lv_obj_set_style_pad_row(s_swarm_list, PX(8), 0);
     lv_obj_set_scroll_dir(s_swarm_list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_swarm_list, LV_SCROLLBAR_MODE_OFF);
 }
@@ -6373,6 +7045,9 @@ static void swarm_line_tap(lv_event_t *e)
 
 bool ui_notif_pill_hit(uint16_t x, uint16_t y)
 {
+#if defined(DEVICE_BOARD_M5CORES3)
+    if (ui_chrome_key_hit(x, y)) return true;   // the key sits in the pull band; a press on it is a press
+#endif
     if (!s_notif_pill || lv_obj_has_flag(s_notif_pill, LV_OBJ_FLAG_HIDDEN)) return false;
     lv_point_t pt = { .x = x, .y = y };
     return lv_obj_hit_test(s_notif_pill, &pt);
@@ -6391,7 +7066,7 @@ void ui_notif_open(void)
     lv_anim_t a; lv_anim_init(&a);   // slide down from off-top (position anim — no snapshot layer)
     lv_anim_set_var(&a, s_notif_drawer);
     lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_y);
-    lv_anim_set_values(&a, -466, 0);
+    lv_anim_set_values(&a, -SCR_H, 0);
     lv_anim_set_duration(&a, 220);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
@@ -6749,7 +7424,7 @@ void ui_project_set_tool(const char *project_id, const char *tool_name, const ch
         lv_obj_set_size(p->tool_line, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(p->tool_line, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(p->tool_line, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_row(p->tool_line, 2, 0);
+        lv_obj_set_style_pad_row(p->tool_line, PX(2), 0);
         // Inner ROW: toolName (colored) + title (muted) — unchanged from before.
         lv_obj_t *tr = lv_obj_create(p->tool_line);
         lv_obj_remove_style_all(tr);
@@ -6757,7 +7432,7 @@ void ui_project_set_tool(const char *project_id, const char *tool_name, const ch
         lv_obj_set_size(tr, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(tr, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(tr, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(tr, 6, 0);
+        lv_obj_set_style_pad_column(tr, PX(6), 0);
         lv_obj_t *gi = lv_image_create(tr);   // WebSearch globe marker — shown INSTEAD of the toolName text
         lv_image_set_src(gi, &icon_globe);
         lv_obj_add_flag(gi, LV_OBJ_FLAG_HIDDEN);
@@ -6774,7 +7449,7 @@ void ui_project_set_tool(const char *project_id, const char *tool_name, const ch
         lv_obj_set_style_text_font(dt, &geist_reg_20, 0);
         lv_obj_set_style_text_color(dt, COL_MUTED, 0);
         lv_obj_set_style_text_align(dt, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(dt, SAFE_CONTENT_W);
+        lv_obj_set_width(dt, PX(STATUS_LINE_W));
         lv_obj_move_to_index(p->tool_line, lv_obj_get_index(p->busy));   // sit just above the Working row
     }
     lv_obj_t *tr = lv_obj_get_child(p->tool_line, 0);
@@ -6804,7 +7479,7 @@ void ui_project_set_tool(const char *project_id, const char *tool_name, const ch
             lead_w = lead_sz.x;
         }
         lv_text_get_size(&title_sz, tbuf, &geist_reg_25, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        int title_w = SAFE_CONTENT_W - lead_w - 6;   // 6px flex gap between tool name/icon and title
+        int title_w = STATUS_LINE_W - lead_w - 6;   // 6px flex gap; CoreS3 STATUS_LINE_W is wider so this truncates later
         if (title_w < 1) title_w = 1;
         if (title_w > title_sz.x) title_w = title_sz.x;
         // LV_LABEL_LONG_DOT only ellipsizes reliably when both dimensions are fixed. Keeping the row at
@@ -6856,11 +7531,11 @@ void ui_project_set_agents(const char *project_id, const struct cJSON *agents_)
 
     p->agents = lv_obj_create(p->body);
     lv_obj_remove_style_all(p->agents);
-    lv_obj_set_width(p->agents, SAFE_CONTENT_W);
+    lv_obj_set_width(p->agents, PX(SAFE_CONTENT_W));
     lv_obj_set_height(p->agents, LV_SIZE_CONTENT);   // measured + capped below
     lv_obj_set_flex_flow(p->agents, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->agents, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(p->agents, 4, 0);
+    lv_obj_set_style_pad_row(p->agents, PX(4), 0);
     // Same scrollable-box treatment as the todo list: render ALL agents; the overflow scrolls. CLICKABLE
     // so the drag scrolls THIS box (not the horizontal tileview); no vertical scroll-chain.
     lv_obj_add_flag(p->agents, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
@@ -6882,7 +7557,7 @@ void ui_project_set_agents(const char *project_id, const struct cJSON *agents_)
         lv_obj_t *nm = lv_label_create(p->agents);
         lv_obj_set_style_text_font(nm, &geist_reg_25, 0);
         lv_obj_set_width(nm, LV_SIZE_CONTENT);
-        lv_obj_set_style_max_width(nm, SAFE_CONTENT_W, 0);   // long desc → trailing "…" on ONE line, never wraps
+        lv_obj_set_style_max_width(nm, PX(SAFE_CONTENT_W), 0);   // long desc → trailing "…" on ONE line, never wraps
         lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(nm, LV_TEXT_ALIGN_CENTER, 0);
         utf8_filter(text, nbuf, sizeof(nbuf));
@@ -6935,11 +7610,11 @@ void ui_project_set_todos(const char *project_id, const struct cJSON *todos_)
 
     p->todo = lv_obj_create(p->body);
     lv_obj_remove_style_all(p->todo);
-    lv_obj_set_width(p->todo, SAFE_CONTENT_W);
+    lv_obj_set_width(p->todo, PX(SAFE_CONTENT_W));
     lv_obj_set_height(p->todo, LV_SIZE_CONTENT);   // measured after building; capped below if too tall
     lv_obj_set_flex_flow(p->todo, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(p->todo, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);  // rows centered horizontally
-    lv_obj_set_style_pad_row(p->todo, 7, 0);
+    lv_obj_set_style_pad_row(p->todo, PX(7), 0);
     // CLICKABLE so a press lands ON the box (not through it to the tileview) → LVGL scrolls THIS box
     // vertically instead of letting the tileview eat the drag. SCROLL_CHAIN off so a vertical drag never
     // bubbles up to the horizontal tileview.
@@ -6967,13 +7642,13 @@ void ui_project_set_todos(const char *project_id, const struct cJSON *todos_)
         lv_obj_set_height(row, LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(row, 8, 0);
+        lv_obj_set_style_pad_column(row, PX(8), 0);
 
         // Glyph: green dot = done, orange (pulsed) = in_progress, grey ring = pending.
         lv_obj_t *g = lv_obj_create(row);
         lv_obj_remove_style_all(g);
         lv_obj_clear_flag(g, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(g, 12, 12);
+        lv_obj_set_size(g, PX(12), PX(12));
         lv_obj_set_style_radius(g, LV_RADIUS_CIRCLE, 0);
         if (done) {
             lv_obj_set_style_bg_color(g, COL_GREEN, 0); lv_obj_set_style_bg_opa(g, LV_OPA_COVER, 0);
@@ -6983,7 +7658,7 @@ void ui_project_set_todos(const char *project_id, const struct cJSON *todos_)
             active_row = row;
         } else {
             lv_obj_set_style_bg_opa(g, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_border_width(g, 2, 0); lv_obj_set_style_border_color(g, COL_MUTED, 0);
+            lv_obj_set_style_border_width(g, PX(2), 0); lv_obj_set_style_border_color(g, COL_MUTED, 0);
         }
 
         utf8_filter(ct, clean, sizeof(clean));
@@ -6991,7 +7666,7 @@ void ui_project_set_todos(const char *project_id, const struct cJSON *todos_)
         // Content-width so the glyph+text sizes to the item and the whole row can be centered as a unit;
         // bounded by max_width with a trailing "…" for long items. One line.
         lv_obj_set_width(lbl, LV_SIZE_CONTENT);
-        lv_obj_set_style_max_width(lbl, SAFE_CONTENT_W - 40, 0);
+        lv_obj_set_style_max_width(lbl, PX(SAFE_CONTENT_W - 40), 0);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_font(lbl, &geist_reg_25, 0);
@@ -7081,10 +7756,12 @@ static void project_apply_event(const char *project_id, const char *session_id, 
     const char *sym; lv_color_t col;
     kind_style(kind, &sym, &col);
     const char *body = (text && text[0]) ? text : (kind ? kind : "");
-    // Scratch in PSRAM (~5.3KB off internal RAM): all four fields are used within this one call, which
+    // Scratch in PSRAM (~17KB off internal RAM): all four fields are used within this one call, which
     // runs on the small commander WS task and is serialized under display_lock. Was static .bss; on the
     // stack it overflowed and smashed the return address (crash on long events), hence the shared buffer.
-    static struct emit_scratch { char clean[2100]; char full[2160]; char preview[520]; char recap_clean[512]; } *s_emit;
+    // clean/full hold a whole message for the reader: the daemon sends the complete answer now, sized to
+    // one cable frame (8 KB), where it used to send a 250-character glance.
+    static struct emit_scratch { char clean[8200]; char full[8260]; char preview[520]; char recap_clean[512]; } *s_emit;
     if (!s_emit) s_emit = ram_psram_alloc(sizeof(*s_emit), "event_format_scratch");
     if (!s_emit) { display_unlock(); return; }   // PSRAM exhausted (never in practice) → bail, don't crash
     char *clean = s_emit->clean, *full = s_emit->full, *preview = s_emit->preview, *recap_clean = s_emit->recap_clean;
@@ -7293,9 +7970,9 @@ static lv_obj_t *q_add_btn(const char *txt, lv_color_t txtcol, lv_color_t bg, lv
     //   · a modest radius instead of LV_RADIUS_CIRCLE — a full pill on a multi-line box means a much
     //     larger rounded mask to compose, for a shape that reads no better once the text wraps.
     lv_obj_set_style_shadow_width(b, 0, 0);
-    lv_obj_set_style_radius(b, 14, 0);
-    lv_obj_set_style_pad_ver(b, 14, 0);
-    lv_obj_set_style_pad_hor(b, 18, 0);
+    lv_obj_set_style_radius(b, PX(14), 0);
+    lv_obj_set_style_pad_ver(b, PX(14), 0);
+    lv_obj_set_style_pad_hor(b, PX(18), 0);
     lv_obj_set_style_border_width(b, 0, 0);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
@@ -7360,10 +8037,10 @@ static void q_render(void)
         lv_obj_set_style_text_font(l, &geist_sem_24, 0);
         lv_obj_set_style_text_color(l, COL_MUTED, 0);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_pad_bottom(l, 2, 0);
+        lv_obj_set_style_pad_bottom(l, PX(2), 0);
         lv_label_set_text(l, who);
         lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(l, 10);
+        lv_obj_set_ext_click_area(l, PX(10));
         lv_obj_add_event_cb(l, q_open_tap, LV_EVENT_CLICKED, NULL);
     }
     static char tmp[256];
@@ -7385,7 +8062,7 @@ static void q_render(void)
             lv_obj_set_style_text_font(ck, &geist_med_32, 0);
             lv_obj_set_style_text_color(ck, COL_GREEN, 0);
             lv_label_set_text(ck, "\xE2\x9C\x93");
-            lv_obj_align(ck, LV_ALIGN_RIGHT_MID, -4, 0);
+            lv_obj_align(ck, LV_ALIGN_RIGHT_MID, PX(-4), 0);
         }
     }
     // COL_SET_BLUE, not a hardcoded near-miss: 0x3378ff was three notches off the Figma blue that the
@@ -7483,7 +8160,12 @@ void ui_question_close(const char *project_id, const char *request_id)
     // away an answer the user is halfway through choosing.
     if (s_q.active && project_id && strcmp(s_q.project, project_id) == 0
         && (!request_id || !request_id[0] || strcmp(s_q.request_id, request_id) == 0)) {
+        ESP_LOGI(TAG, "question.close %s: answered elsewhere", request_id ? request_id : "-");
         q_leave("answered elsewhere");
+    } else {
+        // Said, because a question left on screen after it was answered is otherwise unexplainable.
+        ESP_LOGW(TAG, "question.close %s for %.8s ignored (showing: %s %s for %.8s)", request_id ? request_id : "-",
+                 project_id ? project_id : "-", s_q.active ? "active" : "none", s_q.request_id, s_q.project);
     }
     // THE AGENT'S ROW GOES, whatever kind it is, and whether or not that question was still the one on
     // the face.
@@ -7667,18 +8349,18 @@ static void machine_toast(const char *msg)
         s_machine_toast = lv_label_create(lv_layer_top());
         lv_obj_set_style_bg_opa(s_machine_toast, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(s_machine_toast, COL_SET_PILL, 0);
-        lv_obj_set_style_border_width(s_machine_toast, 1, 0);
+        lv_obj_set_style_border_width(s_machine_toast, PX(1), 0);
         lv_obj_set_style_border_color(s_machine_toast, COL_SET_BORD, 0);
-        lv_obj_set_style_radius(s_machine_toast, 14, 0);
-        lv_obj_set_style_pad_all(s_machine_toast, 14, 0);
+        lv_obj_set_style_radius(s_machine_toast, PX(14), 0);
+        lv_obj_set_style_pad_all(s_machine_toast, PX(14), 0);
         lv_obj_set_style_text_font(s_machine_toast, &geist_reg_20, 0);
         lv_obj_set_style_text_color(s_machine_toast, COL_FG, 0);
-        lv_obj_set_style_max_width(s_machine_toast, 360, 0);
+        lv_obj_set_style_max_width(s_machine_toast, PX(360), 0);
         lv_label_set_long_mode(s_machine_toast, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(s_machine_toast, LV_TEXT_ALIGN_CENTER, 0);
     }
     lv_label_set_text(s_machine_toast, msg);
-    lv_obj_align(s_machine_toast, LV_ALIGN_CENTER, 0, 100);
+    lv_obj_align(s_machine_toast, LV_ALIGN_CENTER, 0, PX(100));
     lv_obj_clear_flag(s_machine_toast, LV_OBJ_FLAG_HIDDEN);
     overlay_raise(s_machine_toast);
     lv_timer_create(machine_toast_hide_cb, 2200, NULL);
@@ -7851,14 +8533,14 @@ static int machine_wheel_row(int status, bool accent, const char *name, const ch
     lv_obj_t *b = lv_button_create(s_machine_wheel);
     lv_obj_remove_style_all(b);
     lv_obj_set_width(b, lv_pct(100));
-    lv_obj_set_height(b, MACHINE_WHEEL_ROW_H);        // FIXED → focus font-swap never relayouts / moves snap points
+    lv_obj_set_height(b, PX(MACHINE_WHEEL_ROW_H));        // FIXED → focus font-swap never relayouts / moves snap points
     lv_obj_set_style_bg_color(b, COL_DOT_OFF, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(b, LV_OPA_20, LV_STATE_PRESSED);
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(b, LV_OBJ_FLAG_SNAPPABLE);
     lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(b, 2, 0);
+    lv_obj_set_style_pad_row(b, PX(2), 0);
 
     lv_obj_t *r1 = lv_obj_create(b);            // status glyph + name
     lv_obj_remove_style_all(r1);
@@ -7866,7 +8548,7 @@ static int machine_wheel_row(int status, bool accent, const char *name, const ch
     lv_obj_set_size(r1, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(r1, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(r1, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(r1, 12, 0);   // Figma icon -> text gap
+    lv_obj_set_style_pad_column(r1, PX(12), 0);   // Figma icon -> text gap
 
     if (status == MACHINE_ST_SELECTED) {
         lv_obj_t *g = lv_label_create(r1);
@@ -7882,14 +8564,14 @@ static int machine_wheel_row(int status, bool accent, const char *name, const ch
         lv_obj_t *disc = lv_obj_create(r1);
         lv_obj_remove_style_all(disc);
         lv_obj_clear_flag(disc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(disc, 32, 32);
+        lv_obj_set_size(disc, PX(32), PX(32));
         lv_obj_set_style_radius(disc, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(disc, COL_FG, 0);
         lv_obj_set_style_bg_opa(disc, LV_OPA_20, 0);   // 15% in Figma; LV_OPA_20 is the nearest step
         lv_obj_t *dot = lv_obj_create(disc);
         lv_obj_remove_style_all(dot);
         lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(dot, 16, 16);
+        lv_obj_set_size(dot, PX(16), PX(16));
         lv_obj_center(dot);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
@@ -7904,7 +8586,7 @@ static int machine_wheel_row(int status, bool accent, const char *name, const ch
     lv_obj_set_style_text_font(nm, &geist_reg_25, 0);
     lv_obj_set_style_text_color(nm, accent ? COL_GREEN : COL_DOT_OFF, 0);   // unfocused default; focus_apply promotes
     lv_obj_set_style_text_opa(nm, LV_OPA_70, 0);   // match what machine_style_row(false) leaves behind
-    lv_obj_set_style_max_width(nm, 300, 0);
+    lv_obj_set_style_max_width(nm, PX(300), 0);
     lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
     lv_label_set_text(nm, nmc[0] ? nmc : "Machine");
 
@@ -7912,7 +8594,7 @@ static int machine_wheel_row(int status, bool accent, const char *name, const ch
     lv_obj_set_style_text_font(m, &geist_reg_20, 0);
     lv_obj_set_style_text_color(m, COL_MUTED, 0);
     lv_obj_set_style_text_opa(m, LV_OPA_50, 0);   // unfocused default; the centred row is promoted to COVER
-    lv_obj_set_style_max_width(m, 320, 0);
+    lv_obj_set_style_max_width(m, PX(320), 0);
     lv_label_set_long_mode(m, LV_LABEL_LONG_DOT);
     lv_label_set_text(m, meta);
 
@@ -7966,13 +8648,23 @@ static void no_agents_apply(void)
             if (strcmp(s_swarms[i].id, s_swarm_selected) == 0) { tab = s_swarms[i].name[0] ? s_swarms[i].name : NULL; break; }
         lv_label_set_text(s_na_eyebrow, tab ? tab : "This tab");
         lv_label_set_text(s_na_title, "Nothing on this tab");
+#if defined(DEVICE_BOARD_M5CORES3)
+        if (s_na_cmd_lbl) lv_label_set_text(s_na_cmd_lbl, "Switch tab");
+        if (pill) { lv_obj_t *cap = lv_obj_get_child(pill, 0); if (cap) set_hidden(cap, true); }
+        lv_label_set_text(s_no_agents_hint_lbl, "Tap to pick a tab that has agents.");
+#else
         lv_label_set_text(s_no_agents_hint_lbl, "Create one in OpenHarness,\nor pick another tab in the app.");
+#endif
         return;
     }
     if (s_na_marks) set_hidden(s_na_marks, false);
     // Name as-is, exactly like the Overview eyebrow: the device never upper-cases anything.
     lv_label_set_text(s_na_eyebrow, name ? name : "");
     lv_label_set_text(s_na_title, "No Harnesses yet");
+#if defined(DEVICE_BOARD_M5CORES3)
+    if (s_na_cmd_lbl) lv_label_set_text(s_na_cmd_lbl, "New Harness");
+    if (pill) { lv_obj_t *cap = lv_obj_get_child(pill, 0); if (cap) set_hidden(cap, false); }
+#endif
     lv_label_set_text(s_no_agents_hint_lbl, "Create one in OpenHarness \xE2\x80\x94\nit shows up here the moment it starts.");
 }
 
@@ -8008,8 +8700,8 @@ static void rebuild_machines_tile(void)
     lv_obj_remove_style_all(w);
     lv_obj_set_size(w, carousel_w(), carousel_h());
     s_machine_wheel = w;
-    lv_obj_set_style_pad_hor(w, SCREEN_PAD, 0);
-    int padv = (carousel_h() - MACHINE_WHEEL_ROW_H) / 2;   // centre the focused row at the SCREEN middle
+    lv_obj_set_style_pad_hor(w, PX(SCREEN_PAD), 0);
+    int padv = (carousel_h() - PX(MACHINE_WHEEL_ROW_H)) / 2;   // centre the focused row at the SCREEN middle
     lv_obj_set_style_pad_top(w, padv, 0);
     lv_obj_set_style_pad_bottom(w, padv, 0);
     lv_obj_set_style_pad_row(w, 0, 0);
@@ -8027,16 +8719,16 @@ static void rebuild_machines_tile(void)
     lv_obj_t *hdr = lv_obj_create(t);
     lv_obj_remove_style_all(hdr);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(hdr, carousel_w(), MACHINE_WHEEL_ROW_H + 2);
+    lv_obj_set_size(hdr, carousel_w(), PX(MACHINE_WHEEL_ROW_H + 2));
     lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(hdr, COL_SET_BG, 0);
     lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
     lv_obj_t *eb = lv_label_create(hdr);
     lv_obj_set_style_text_font(eb, &geist_reg_20, 0);
     lv_obj_set_style_text_color(eb, COL_MUTED, 0);
-    lv_obj_set_style_text_letter_space(eb, 3, 0);
+    lv_obj_set_style_text_letter_space(eb, PX(3), 0);
     lv_label_set_text(eb, "MACHINES");
-    lv_obj_align(eb, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_align(eb, LV_ALIGN_BOTTOM_MID, 0, PX(-8));
     lv_obj_move_foreground(hdr);
 
     int sel_row = -1;
@@ -8093,12 +8785,12 @@ static void rebuild_machines_tile(void)
             snprintf(hint, sizeof hint, "Start one on your computer\n#00ff2f harness#\nIt shows up here automatically");
         }
         lv_obj_t *h = lv_label_create(w);
-        lv_obj_set_width(h, SAFE_CONTENT_W);
+        lv_obj_set_width(h, PX(SAFE_CONTENT_W));
         lv_obj_set_style_text_font(h, &geist_reg_20, 0);
         lv_obj_set_style_text_color(h, COL_MUTED, 0);
         lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_line_space(h, 6, 0);
-        lv_obj_set_style_pad_top(h, 10, 0);   // gap under the title (the wheel's pad_row is 0 for rows)
+        lv_obj_set_style_text_line_space(h, PX(6), 0);
+        lv_obj_set_style_pad_top(h, PX(10), 0);   // gap under the title (the wheel's pad_row is 0 for rows)
         lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
         lv_label_set_recolor(h, true);
         lv_label_set_text(h, hint);
@@ -8108,7 +8800,7 @@ static void rebuild_machines_tile(void)
     // row) and promote it. The scroll callback keeps focus correct from the first swipe on.
     lv_obj_update_layout(t);
     int center = sel_row >= 0 ? sel_row : 0;
-    lv_obj_scroll_to_y(w, center * MACHINE_WHEEL_ROW_H, LV_ANIM_OFF);
+    lv_obj_scroll_to_y(w, center * PX(MACHINE_WHEEL_ROW_H), LV_ANIM_OFF);
     if (center < s_machine_row_count) { machine_style_row(center, true); s_machine_focus = center; }
 
     rebuild_overview_tile();   // keep the overview eyebrow (selected machine name) in sync
@@ -8535,8 +9227,23 @@ static void update_stop_btn(void)
 // Cancel the running turn of the visible project (physical BOOT button, or the legacy STOP tap). Only
 // acts when that tile is actually processing, so a press while idle doesn't emit a stray "Cancelled".
 // Safe to call from a non-LVGL task.
-void ui_boot_pressed(void)
+bool ui_boot_pressed(void)
 {
+    // Voice overlay (recording / sending / waiting for transcript) has no other way off on CoreS3 —
+    // PWR is back/stop. Drop it before the cancel-task confirm.
+    if (s_voice_routing || ui_voice_is_active()
+        || (s_voice_overlay && !lv_obj_has_flag(s_voice_overlay, LV_OBJ_FLAG_HIDDEN))) {
+        if (audio_client_active()) audio_client_abort();
+        display_lock();
+        s_voice_routing = false;
+        s_voice_route_ms = 0;
+        voice_icon_apply(VIC_NONE);
+        voice_overlay_set(false);
+        update_stop_btn();
+        display_unlock();
+        ESP_LOGI(TAG, "BOOT → dismiss voice overlay");
+        return true;
+    }
     // While a question is shown, BOOT means "back" (cancel voice / dismiss the question). Otherwise, if
     // the visible project is WORKING, pop a "Cancel task?" confirm (a running turn is always shown on
     // the projects screen) so an accidental press can't kill it. Nothing running → ignore.
@@ -8544,7 +9251,7 @@ void ui_boot_pressed(void)
     bool q = s_q.active;
     int idx = (s_active_idx >= 0 && s_active_idx < s_proj_count) ? s_active_idx : 0;
     bool processing = (!q && s_proj_count > 0 && !s_settings_active && !s_machines_active && !s_overview_active && s_proj[idx].busy != NULL);
-    if (q) { display_unlock(); q_back_tap(NULL); return; }
+    if (q) { display_unlock(); q_back_tap(NULL); return true; }
     if (processing) {
         ESP_LOGI(TAG, "BOOT → show 'Cancel task?' confirm");
         lv_obj_clear_flag(s_cancel_confirm, LV_OBJ_FLAG_HIDDEN);
@@ -8553,6 +9260,7 @@ void ui_boot_pressed(void)
         ESP_LOGI(TAG, "BOOT → no working task, ignored");
     }
     display_unlock();
+    return processing;
 }
 
 // "Cancel task?" confirm handlers (run on the LVGL task, already under the display lock).
@@ -8841,3 +9549,47 @@ void ui_log_state_if_changed(void)
         }
     }
 }
+
+#if defined(DEVICE_BOARD_M5CORES3)
+// Debug (cable `debug.show`): put the face in a named state through its own handlers, so every screen can
+// be captured with scripts/cores3-snap.py without a finger on the glass.
+void ui_debug_show(const char *what)
+{
+    if (!what) return;
+    if (!strcmp(what, "overview")) { ui_home_overview(); return; }
+    if (!strcmp(what, "drawer"))   { ui_notif_open(); return; }
+    display_lock();
+    int idx = (s_active_idx >= 0 && s_active_idx < s_proj_count) ? s_active_idx : 0;
+    if (!strcmp(what, "settings"))        overview_settings_tap(NULL);
+    else if (!strcmp(what, "tabs"))       swarm_line_tap(NULL);
+    else if (!strcmp(what, "brightness")) settings_brightness_tap(NULL);
+    else if (!strcmp(what, "language"))   settings_vlang_tap(NULL);
+    else if (!strcmp(what, "wifi"))       settings_wifi_tap(NULL);
+    else if (!strcmp(what, "lock"))       lk_show(LK_SET);
+    else if (!strcmp(what, "voice"))      { voice_overlay_set(true); voice_icon_apply(VIC_REC); }
+    else if (!strcmp(what, "sending"))    { voice_overlay_set(true); voice_icon_apply(VIC_SEND); }
+    else if (!strcmp(what, "cancel"))     { lv_obj_clear_flag(s_cancel_confirm, LV_OBJ_FLAG_HIDDEN); overlay_raise(s_cancel_confirm); }
+    else if (!strcmp(what, "reset"))      { lv_obj_clear_flag(s_reset_confirm, LV_OBJ_FLAG_HIDDEN); overlay_raise(s_reset_confirm); }
+    else if (!strcmp(what, "reader") && s_proj_count > 0 && s_proj[idx].m_full) open_reader_text(s_proj[idx].m_full);
+    else if (!strcmp(what, "clear")) {
+        voice_icon_apply(VIC_NONE); voice_overlay_set(false);
+        lv_obj_add_flag(s_cancel_confirm, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_reset_confirm, LV_OBJ_FLAG_HIDDEN);
+        if (s_lk_overlay) lv_obj_add_flag(s_lk_overlay, LV_OBJ_FLAG_HIDDEN);
+#if defined(DEVICE_BOARD_M5CORES3)
+    chrome_refresh();   // the key and the time come back with the face, not a tick later
+#endif
+        if (ui_reader_is_open()) reader_close_tap(NULL);
+        if (ui_switch_is_open()) swarm_picker_close();
+        if (ui_picker_is_open()) picker_close_tap(NULL);
+        if (s_bright_screen) lv_obj_add_flag(s_bright_screen, LV_OBJ_FLAG_HIDDEN);
+        wifi_overlay_hide();
+        if (s_settings_active) settings_close_tap(NULL);
+        chrome_refresh();
+        display_unlock();
+        ui_notif_close();
+        return;
+    }
+    display_unlock();
+}
+#endif
