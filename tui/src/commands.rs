@@ -192,7 +192,7 @@ fn listing(app: &App, command: &str) -> Vec<String> {
         "list-windows" => (0..app.tabs.len()).map(window).collect(),
         "list-panes" => app.tab().panes().iter().enumerate().map(|(i, id)| {
             let p = app.panes.get(id);
-            let (c, r) = p.map(|p| (p.cols, p.rows)).unwrap_or((0, 0));
+            let (c, r) = app.rects.iter().find(|(x, _)| x == id).map(|(_, r)| (r.width, r.height.saturating_sub(app.header_rows()))).or(p.map(|p| (p.cols, p.rows))).unwrap_or((0, 0));
             let title = p.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
             let machine = p.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default();
             format!("{}: [{c}x{r}] \"{title}\" {machine} %{id}{}", i + app.pane_base_index, if Some(*id) == app.focused() { " (active)" } else { "" })

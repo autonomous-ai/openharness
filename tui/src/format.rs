@@ -45,9 +45,22 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "pane_id" | "D" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
         "pane_current_path" => pane.and_then(|p| p.cwd.clone()).or_else(|| agent.map(|a| a.cwd.clone())).unwrap_or_default(),
         "pane_current_command" => agent.map(|a| a.engine.clone()).unwrap_or_default(),
-        "pane_width" => pane.map(|p| p.cols.to_string()).unwrap_or_default(),
-        "pane_height" => pane.map(|p| p.rows.to_string()).unwrap_or_default(),
+        // The tile's size (what you see), as tmux's pane size is its cell.
+        "pane_width" | "pane_height" => {
+            let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
+            match (r, pane) { (Some(r), _) => if name == "pane_width" { r.width } else { r.height.saturating_sub(app.header_rows()) }.to_string(), (None, Some(p)) => if name == "pane_width" { p.cols } else { p.rows }.to_string(), _ => String::new() }
+        }
         "pane_in_mode" => pane.map(|p| p.copy.is_some()).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "session_windows" => app.tabs.len().to_string(),
+        "session_attached" => "1".into(),
+        "client_width" => app.size.0.to_string(),
+        "client_height" => app.size.1.to_string(),
+        "window_width" => app.body().width.to_string(),
+        "window_height" => app.body().height.to_string(),
+        "pane_left" | "pane_top" | "pane_right" | "pane_bottom" => {
+            let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
+            r.map(|r| match name { "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => r.y + r.height.saturating_sub(1) }.to_string()).unwrap_or_default()
+        }
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "status" => (app.opts.status != Some(false)).then_some("on").unwrap_or("off").into(),
         "mouse" => app.mouse.then_some("on").unwrap_or("off").into(),
