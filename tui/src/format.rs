@@ -958,8 +958,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "scroll_position" => pane.filter(|p| p.copy.is_some()).map(|p| p.scrolled().to_string()).unwrap_or_default(),
         "pane_search_string" => app.last_search.clone().unwrap_or_default(),
         "client_prefix" => app.prefix.then_some("1").unwrap_or("0").into(),
-        "host" => host,
-        "host_short" => host.split('.').next().unwrap_or("").to_string(),
+        // gethostname(3): the whole name (mac.lan); #{host_short} is it up to the first dot.
+        "host" => crate::app::full_hostname(),
+        "host_short" => crate::app::full_hostname().split('.').next().unwrap_or("").to_string(),
         // Harness's own: the machine a pane is on, and how many harnesses wait on you.
         "machine" => pane.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default(),
         "waiting" => app.fleet.waiting().to_string(),

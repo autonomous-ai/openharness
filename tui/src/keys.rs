@@ -77,8 +77,9 @@ impl Keymap {
         for n in 0..=9u8 { b(ch((b'0' + n) as char), &format!("select-window -t {n}"), false, &format!("Select window {n}")); }
         b(ch(':'), "command-prompt", false, "Prompt for a command");
         b(ch(';'), "last-pane", false, "Move to the previously active pane");
-        b(ch('<'), WINDOW_MENU, false, "Display window menu");
-        b(ch('>'), PANE_MENU, false, "Display pane menu");
+        // No notes: 3.5a gives the two menus none (list-keys -N leaves them out).
+        b(ch('<'), WINDOW_MENU, false, "");
+        b(ch('>'), PANE_MENU, false, "");
         b(ch('='), "choose-buffer", false, "Choose a paste buffer");
         b(ch('?'), "list-keys", false, "List key bindings");
         b(ch('D'), "choose-client", false, "Choose a client (the windows that hold harnesses)");

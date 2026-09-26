@@ -1245,7 +1245,7 @@ impl App {
                 self.lastw.retain(|x| *x != gone.id);
                 if i == self.active { select = true; self.active = self.tabs.iter().position(|t| t.id == id).unwrap_or(0) }
                 else if i < self.active { self.active -= 1 }
-                for p in gone.panes() { self.drop_pane(p) }
+                for p in gone.panes() { self.end_shell(p); self.drop_pane(p) }
                 if gone.on_desk { self.desk_op(json!({ "op": "tab.close", "id": gone.id })) }
             }
         }
@@ -1664,17 +1664,20 @@ impl App {
         }
     }
 
+    /// A shell hn made (new-window, a split, the one it started with) goes when its pane is
+    /// killed, as tmux kills the pane's shell; an agent keeps running.
+    fn end_shell(&mut self, id: u64) {
+        let Some(key) = self.panes.get(&id).map(|p| (p.machine_id.clone(), p.agent_id.clone())).filter(|k| self.shells.remove(k)) else { return };
+        if let Some(link) = self.link(&key.0) {
+            let agent_id = key.1;
+            self.spawn(async move { link.rpc("agent_delete", json!({ "agentId": agent_id }), Duration::from_secs(30)).await }, |_, _| {});
+        }
+    }
+
     pub fn close_pane(&mut self, id: u64) {
         let Some(index) = self.tabs.iter().position(|t| t.panes().contains(&id)) else { return };
         let agent = self.panes.get(&id).map(|p| (p.machine_id.clone(), p.agent_id.clone()));
-        // A shell made by a split or new-window goes when its pane does (tmux kills the pane's
-        // shell); an agent keeps running.
-        if let Some(key) = agent.clone().filter(|k| self.shells.remove(k)) {
-            if let Some(link) = self.link(&key.0) {
-                let agent_id = key.1.clone();
-                self.spawn(async move { link.rpc("agent_delete", json!({ "agentId": agent_id }), Duration::from_secs(30)).await }, |_, _| {});
-            }
-        }
+        self.end_shell(id);
         let tab = &mut self.tabs[index];
         tab.lose(id);
         tab.root = tab.root.take().and_then(|root| root.remove(id));
@@ -1701,7 +1704,7 @@ impl App {
         }
         let tab = self.tabs.remove(index);
         self.lastw.retain(|id| *id != tab.id);
-        for id in tab.panes() { self.drop_pane(id) }
+        for id in tab.panes() { self.end_shell(id); self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
         // The last window gone: the session is over, and hn with it (tmux's `[exited]`).
         if self.tabs.is_empty() { self.tabs.push(Tab::new("home")); self.quit = true; self.exited = true }
@@ -2462,6 +2465,18 @@ pub fn utc_offset() -> i64 {
 /// in a mode.
 #[derive(Default, Clone)]
 pub struct HooksSeen { ready: bool, windows: Vec<(String, u64, String, Option<u64>, String)>, current: Option<String>, client: bool, session: String, modes: Vec<u64>, focused: Vec<u64> }
+
+/// gethostname(3), as tmux's #{host} reads it (`mac.lan`, not `hostname -s`'s `mac`).
+pub fn full_hostname() -> String {
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| {
+        let mut buf = [0u8; 256];
+        let ok = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0;
+        if !ok { return String::new() }
+        let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..end]).into_owned()
+    }).clone()
+}
 
 pub fn hostname() -> String {
     static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();

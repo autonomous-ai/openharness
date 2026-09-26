@@ -144,7 +144,9 @@ wss.on('connection', (ws) => {
       case 'fs_list_dir': return reply({ path: '/home/demo', entries: [] })
       // What tmux says a pane runs and where (the real daemon asks its tmux; here, fixed).
       case 'terminal_info': return reply({ command: 'zsh', path: '/home/demo/src', pid: 4242, tty: '/dev/ttys042' })
-      case 'agent_update': case 'agent_delete': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
+      // The e2e reads which harnesses were deleted (a killed pane's shell goes with it).
+      case 'agent_delete': dial.deleted = [...(dial.deleted || []), payload.agentId]; return reply({ agent: agents[machine][0], deleted: true })
+      case 'agent_update': case 'agent_resume': case 'agent_restart': return reply({ agent: agents[machine][0], deleted: true })
       case 'agent_create': {
         const created = agent(randomUUID(), `Mock ${payload.engine}`, payload.engine)
         agents[machine].push(created)

@@ -1303,7 +1303,6 @@ fn run_words(app: &mut App, words: &[String]) {
             }
             if opt(words, "-F").is_some() && !positional(words).is_empty() { return app.error("only one of -F or argument must be given") }
             let text = opt(words, "-F").or_else(|| positional(words).first().cloned()).unwrap_or_default();
-            if text.is_empty() && app.capture.is_none() { input::run(app, "info"); return }
             let text = if text.is_empty() { "[#S] #I:#W, current pane #P - (%H:%M %d-%b-%y)".to_string() } else { text };
             let out = if flag(words, "-l") { text } else {
                 match opt(words, "-t").map(|t| pane_target(app, &t)) {

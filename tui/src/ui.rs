@@ -303,7 +303,8 @@ fn pane_state_word(app: &App, pane: &Pane) -> Option<Span<'static>> {
     if let Phase::Watching(who) = &pane.phase {
         return Some(Span::styled(format!("[watching{}]", if who.is_empty() { String::new() } else { format!(" — {who} has it") }), Style::default().fg(Color::Yellow)));
     }
-    if app.marked == Some(pane.id) { return Some(Span::styled("[marked]", Style::default().add_modifier(Modifier::REVERSED))) }
+    // The marked pane: tmux reverses its border, nothing in its title.
+    let _ = app;
     None
 }
 

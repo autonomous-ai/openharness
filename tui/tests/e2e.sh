@@ -132,6 +132,15 @@ tmux_ send-keys -t t q
 tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n
+# C-b c's shell, killed with its window (C-b &), goes with it, as tmux kills the pane's shell.
+before=$(dial "(d.deleted || []).length")
+tmux_ send-keys -t t C-b c
+expect "C-b c: another new window" "2:"
+sleep 0.5
+tmux_ send-keys -t t C-b '&'
+expect "C-b & asks first" "(y/n)"
+tmux_ send-keys -t t y
+wait_eq "C-b & kills the window's shell" $((before + 1)) dial "(d.deleted || []).length"
 tmux_ resize-window -t t -x 30 -y 8
 sleep 0.3
 tmux_ resize-window -t t -x 120 -y 32
