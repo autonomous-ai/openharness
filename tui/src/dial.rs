@@ -299,6 +299,7 @@ fn voice(app: &mut App, p: &Value) {
         picker.keep_order = true;
         picker.set_rows(rows);
         picker.hints = vec![("enter", "send")];
+        picker.heading = Some(picker.title.clone());
         app.toast = None;
         app.dial.voice = Some(id.clone());
         app.modal = Some(Modal::Picker { kind: PickerKind::Route { text, voice: Some(id) }, picker });

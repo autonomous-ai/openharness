@@ -955,11 +955,18 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 
 /// fzf's `--header`: the keys this list answers to, in the header colour.
 fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> {
-    if picker.hints.is_empty() { return None }
+    if picker.hints.is_empty() && picker.heading.is_none() { return None }
     // Indented to the rows' text (past the pointer and marker).
     let indent = gutter_width() as usize;
     let mut spans = vec![Span::raw(" ".repeat(indent))];
     let mut used = indent;
+    // What the list is for, first (a task about to be sent).
+    if let Some(h) = &picker.heading {
+        let h = clip(h, width.saturating_sub(indent + 12));
+        used += h.width() + 3;
+        spans.push(Span::styled(h, Style::default().fg(theme::fzf().header).add_modifier(Modifier::BOLD)));
+        if !picker.hints.is_empty() { spans.push(Span::styled(" · ", Style::default().fg(theme::fzf().border))) }
+    }
     for (i, (k, w)) in picker.hints.iter().enumerate() {
         // Whole hints only: the ones that do not fit are left out, not cut.
         let piece = if i > 0 { 3 } else { 0 } + k.width() + 1 + w.width();

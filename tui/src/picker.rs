@@ -46,6 +46,9 @@ pub struct Picker {
     /// How far the preview can scroll (the preview sets it as it draws).
     pub preview_max: std::cell::Cell<u16>,
     pub title: String,
+    /// Words that say what this list is for (a task about to be sent), at the head of the header
+    /// line, as fzf's --header carries them.
+    pub heading: Option<String>,
     pub placeholder: String,
     pub query: String,
     pub rows: Vec<Row>,
@@ -80,6 +83,7 @@ impl Picker {
     pub fn new(title: impl Into<String>, placeholder: impl Into<String>) -> Picker {
         Picker {
             title: title.into(),
+            heading: None,
             placeholder: placeholder.into(),
             query: String::new(),
             rows: Vec::new(),

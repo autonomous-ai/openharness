@@ -1896,6 +1896,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                     picker.keep_order = true;
                     picker.set_rows(rows);
                     picker.hints = vec![("enter", "send")];
+        picker.heading = Some(picker.title.clone());
                     app.toast = None;
                     app.modal = Some(Modal::Picker { kind: PickerKind::Route { text: value, voice: None }, picker });
                 }
