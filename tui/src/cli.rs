@@ -21,6 +21,11 @@ pub async fn run(args: &[String], port: u16) -> Option<i32> {
         "ls" | "list-sessions" | "list" => Some(ls(port).await),
         "send" | "send-message" => Some(send(port, &args[1..]).await),
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
+        // attach / a: the client itself, as `tmux attach` is.
+        "attach" | "attach-session" | "a" | "at" => None,
+        // Any tmux command: run on the newest running client, its output printed here.
+        c if crate::commands::is_command_name(c) => Some(crate::ipc::call(args).await),
+        c if !c.starts_with('-') => { eprintln!("unknown command: {c}"); Some(1) }
         _ => None,
     }
 }
@@ -32,8 +37,10 @@ async fn machines(port: u16) -> Result<(String, Vec<(String, String, bool)>), St
     let mut out = vec![(local.clone(), crate::app::hostname(), true)];
     for row in reply.get("machines").and_then(Value::as_array).cloned().unwrap_or_default() {
         let id = row.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
-        if id.is_empty() || id == local { continue }
         let name = ["name", "hostname"].iter().filter_map(|k| row.get(*k).and_then(Value::as_str)).find(|s| !s.trim().is_empty()).unwrap_or(&id).to_string();
+        // This computer by the name the fleet (and the status line) gives it.
+        if id == local { out[0].1 = name; continue }
+        if id.is_empty() { continue }
         let up = matches!(row.get("status").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase().as_str(), "running" | "online" | "connected" | "ready");
         out.push((id, name, up));
     }

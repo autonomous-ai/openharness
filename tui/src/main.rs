@@ -6,6 +6,7 @@ mod app;
 mod cli;
 mod clipboard;
 mod commands;
+mod ipc;
 mod keys;
 mod preview;
 mod config;
@@ -99,8 +100,8 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "-h" || a == "--help") { usage(); return Ok(()) }
-    if args.iter().any(|a| a == "--version" || a == "-V") { println!("hn {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
+    if matches!(args.first().map(|a| a.as_str()), Some("-h" | "--help")) { usage(); return Ok(()) }
+    if matches!(args.first().map(|a| a.as_str()), Some("--version" | "-V")) { println!("hn {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
     if args.iter().any(|a| a == "--keys") {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);
@@ -165,6 +166,8 @@ async fn run(config: config::Config) -> io::Result<()> {
 
     mark("terminal ready");
     let mut app = app::App::new(port, tx.clone(), size);
+    // `hn <command>` from a shell comes in here.
+    let socket = ipc::serve(tx.clone());
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
     let settings = tmuxconf::load(&mut app.keymap);
     app.apply_settings(&settings);
@@ -248,6 +251,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     app.fleet.save_cache();
+    if let Some(path) = &socket { let _ = std::fs::remove_file(path); }
     let host = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(app::hostname);
     drop(term);
     drop(restore);

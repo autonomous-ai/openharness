@@ -121,6 +121,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
 /// Keys into the focused pane. A watcher is promoted first — typing is how you take a terminal.
 fn send_to_focused(app: &mut App, bytes: Vec<u8>) {
     let Some(focus) = app.focused() else { return };
+    send_to_pane(app, focus, bytes)
+}
+
+/// Keys into a pane (send-keys -t): a watcher's is taken over first, as typing takes it.
+fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
     let Some(pane) = app.panes.get_mut(&focus) else { return };
     if pane.read_only || matches!(pane.phase, Phase::Watching(_)) || pane.stream.is_none() {
         pane.queued.push(bytes);
@@ -128,7 +133,7 @@ fn send_to_focused(app: &mut App, bytes: Vec<u8>) {
         return;
     }
     // synchronize-panes: the same keys into every pane of the window that takes them.
-    if app.tab().sync {
+    if app.tab().sync && app.tab().panes().contains(&focus) {
         let others: Vec<u64> = app.tab().panes().into_iter().filter(|p| *p != focus).collect();
         for p in others {
             let ok = app.panes.get(&p).map(|x| x.stream.is_some() && !x.read_only && matches!(x.phase, Phase::Live)).unwrap_or(false);
@@ -767,7 +772,9 @@ pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, comm
     app.modal = None;
     // The command runs in the shell's place (-E: the popup goes when it ends) or in it; a leading
     // space keeps it out of the shell's history, `clear` off the screen.
-    let line = command.map(|c| if close_on_exit { format!(" clear; exec {c}\r") } else { format!(" clear; {c}\r") });
+    // `sh -c` takes the whole command line (`echo hi; read x`), as tmux runs it.
+    let quoted = |c: &str| format!("'{}'", c.replace('\'', "'\\''"));
+    let line = command.map(|c| if close_on_exit { format!(" clear; exec sh -c {}\r", quoted(&c)) } else { format!(" clear; sh -c {}\r", quoted(&c)) });
     app.starting_shell = Some(line.map(|l| vec![l.into_bytes()]).unwrap_or_default());
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
         let typed = app.starting_shell.take().unwrap_or_default();
@@ -928,7 +935,8 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         KeyCode::End => p.cursor = chars.len(),
         KeyCode::Char('e') if ctrl => p.cursor = chars.len(),
         KeyCode::Char('k') if ctrl => { let v = chars[..at].to_vec(); set(&mut p, v, at) }
-        KeyCode::Char('u') if ctrl => { let v = chars[at..].to_vec(); set(&mut p, v, 0) }
+        // tmux's status prompt: C-u clears the whole line.
+        KeyCode::Char('u') if ctrl => { set(&mut p, Vec::new(), 0) }
         KeyCode::Char('w') if ctrl => { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
         KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None }) => {
             let n = app.history.len();
@@ -1723,18 +1731,35 @@ pub fn paste_buffer(app: &mut App, index: usize) {
 
 /// `send-keys`: words are typed as text, key names (`Enter`, `C-c`, `Up`) as keys.
 pub fn send_keys(app: &mut App, words: &[String]) {
-    let literal = words.first().map(|w| w == "-l").unwrap_or(false);
-    let mode = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());
+    // send-keys [-lR] [-t target] key …: flags anywhere before the keys, -t takes its target.
+    let mut literal = false;
+    let mut target = None;
+    let mut keys_at = words.len();
+    let mut i = 0;
+    while i < words.len() {
+        match words[i].as_str() {
+            "-t" => { target = words.get(i + 1).cloned(); i += 2; continue }
+            "-l" => literal = true,
+            "-R" | "-M" | "-H" | "-K" | "-F" => {}
+            "-N" => { i += 2; continue }
+            _ => { keys_at = i; break }
+        }
+        i += 1;
+    }
+    let pane = match &target {
+        Some(t) => match crate::commands::pane_target(app, t) { Some((_, p)) => p, None => { app.say(format!("Can't find pane: {t}"), theme::WARN); return } },
+        None => match app.focused() { Some(f) => f, None => return },
+    };
+    let mode = app.panes.get(&pane).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());
     let mut bytes = Vec::new();
-    for word in words.iter().skip(usize::from(literal)) {
-        if word.starts_with('-') && !literal && word.len() == 2 { continue }
+    for word in &words[keys_at.min(words.len())..] {
         let key = if literal { None } else { keys::parse(word).ok().filter(|c| word.len() > 1 && (c.mods != KeyModifiers::NONE || !matches!(c.code, KeyCode::Char(_)))) };
         match key {
             Some(chord) => { if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { bytes.extend(b) } }
             None => bytes.extend(word.as_bytes()),
         }
     }
-    if !bytes.is_empty() { send_to_focused(app, bytes) }
+    if !bytes.is_empty() { send_to_pane(app, pane, bytes) }
 }
 
 /// `new-harness claude @office ~/src/api`: the words `harness new` takes.
