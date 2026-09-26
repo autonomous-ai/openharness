@@ -376,11 +376,20 @@ fn run_words(app: &mut App, words: &[String]) {
             let toward = if flag(words, "-L") { Some(Toward::Left) } else if flag(words, "-R") { Some(Toward::Right) } else if flag(words, "-U") { Some(Toward::Up) } else if flag(words, "-D") { Some(Toward::Down) } else { None };
             match toward {
                 Some(t) => app.focus_toward(t),
+                None if flag(words, "-l") => app.last_pane(),
                 None => {
                     let target = opt(words, "-t").unwrap_or_default();
-                    if target.ends_with(".+") || target.ends_with('+') { app.cycle_pane(1) }
-                    else if target.ends_with(".-") || target.ends_with('-') { app.cycle_pane(-1) }
-                    else if let Ok(n) = target.trim_start_matches(":.").trim_start_matches('.').parse::<usize>() { app.select_pane_index(n.saturating_sub(app.pane_base_index)) }
+                    // -T: the pane's title (as #{pane_title} reads it).
+                    if let Some(title) = opt(words, "-T") { if let Some(p) = app.focused().and_then(|f| app.panes.get_mut(&f)) { p.title = title } }
+                    if target.is_empty() { return }
+                    if target.ends_with(".+") || target == "+" { app.cycle_pane(1) }
+                    else if target.ends_with(".-") || target == "-" { app.cycle_pane(-1) }
+                    else {
+                        match pane_target(app, &target) {
+                            Some((w, p)) => app.focus_pane(w, p),
+                            None => app.say(format!("can't find pane: {target}"), theme::WARN),
+                        }
+                    }
                 }
             }
         }

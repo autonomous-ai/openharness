@@ -54,6 +54,7 @@ pub struct Options {
     /// main-pane-width / -height: cells, or 1000 + a percentage.
     pub main_pane_width: Option<u16>,
     pub main_pane_height: Option<u16>,
+    pub copy_command: Option<String>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -273,6 +274,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "history-limit" => { if let Ok(n) = value.parse::<usize>() { crate::pane::HISTORY.store(n, std::sync::atomic::Ordering::Relaxed) } }
                 "main-pane-width" => s.options.main_pane_width = value.trim_end_matches('%').parse().ok().map(|n: u16| if value.ends_with('%') { 1000 + n } else { n }),
                 "main-pane-height" => s.options.main_pane_height = value.trim_end_matches('%').parse().ok().map(|n: u16| if value.ends_with('%') { 1000 + n } else { n }),
+                "copy-command" => s.options.copy_command = Some(value.to_string()).filter(|v| !v.is_empty()),
                 "status-justify" => s.options.status_justify = Some(value.to_string()),
                 "window-status-style" => { let (fg, bg) = style(value); s.options.window_status_style = Some((fg, bg)) }
                 "pane-border-format" => s.options.pane_border_format = Some(value.to_string()),
