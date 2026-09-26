@@ -152,6 +152,58 @@ impl Node {
         }
     }
 
+    /// split-window's own: [new_id] beside [target] ([before]: left of or above it), taking
+    /// [share] of the room (a fraction; the rest stays the target's).
+    pub fn split_at(&mut self, target: u64, new_id: u64, dir: Dir, before: bool, share: f32) -> bool {
+        match self {
+            Node::Leaf(id) if *id == target => {
+                let (a, b, ratio) = if before { (new_id, target, share) } else { (target, new_id, 1.0 - share) };
+                *self = Node::Split { dir, ratio: ratio.clamp(0.05, 0.95), a: Box::new(Node::Leaf(a)), b: Box::new(Node::Leaf(b)) };
+                true
+            }
+            Node::Leaf(_) => false,
+            Node::Split { a, b, .. } => a.split_at(target, new_id, dir, before, share) || b.split_at(target, new_id, dir, before, share),
+        }
+    }
+
+    /// split-window -f: [new_id] across the whole window, at its [before] edge.
+    pub fn wrap(self, new_id: u64, dir: Dir, before: bool, share: f32) -> Node {
+        let (a, b, ratio) = if before { (Node::Leaf(new_id), self, share) } else { (self, Node::Leaf(new_id), 1.0 - share) };
+        Node::Split { dir, ratio: ratio.clamp(0.05, 0.95), a: Box::new(a), b: Box::new(b) }
+    }
+
+    /// resize-pane -x/-y: [target] made [want] cells wide (or tall, borders and title rows
+    /// included), by the border of the nearest split in that direction.
+    pub fn set_extent(&mut self, target: u64, dir: Dir, want: u16, area: Rect) -> bool {
+        let Node::Split { dir: d, ratio, a, b } = self else { return false };
+        let (ra, rb) = split_rect(area, *d, *ratio);
+        let in_a = a.leaves().contains(&target);
+        if !in_a && !b.leaves().contains(&target) { return false }
+        if if in_a { a.set_extent(target, dir, want, ra) } else { b.set_extent(target, dir, want, rb) } { return true }
+        if *d != dir { return false }
+        let usable = if dir == Dir::Horizontal { area.width.saturating_sub(1) } else { area.height };
+        if usable < 2 { return false }
+        let first = if in_a { want } else { usable.saturating_sub(want) }.clamp(1, usable - 1);
+        *ratio = first as f32 / usable as f32;
+        true
+    }
+
+    /// resize-pane -L/-R/-U/-D n: the border of the nearest split in that direction moves n cells
+    /// (left or up for a negative n), whichever side of it [target] is on.
+    pub fn nudge(&mut self, target: u64, dir: Dir, cells: i32, area: Rect) -> bool {
+        let Node::Split { dir: d, ratio, a, b } = self else { return false };
+        let (ra, rb) = split_rect(area, *d, *ratio);
+        let in_a = a.leaves().contains(&target);
+        if !in_a && !b.leaves().contains(&target) { return false }
+        if if in_a { a.nudge(target, dir, cells, ra) } else { b.nudge(target, dir, cells, rb) } { return true }
+        if *d != dir { return false }
+        let usable = if dir == Dir::Horizontal { area.width.saturating_sub(1) } else { area.height } as i32;
+        if usable < 2 { return false }
+        let now = if dir == Dir::Horizontal { ra.width } else { ra.height } as i32;
+        *ratio = (now + cells).clamp(1, usable - 1) as f32 / usable as f32;
+        true
+    }
+
     /// Remove [target]; its sibling takes its place. Returns the new tree (None when it was the last).
     pub fn remove(self, target: u64) -> Option<Node> {
         match self {

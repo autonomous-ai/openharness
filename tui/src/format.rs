@@ -796,6 +796,22 @@ fn pretty_time(app: &App, t: i64, now: i64) -> String {
 
 enum Val { Str(String), Time(i64) }
 
+/// A pane's tile in its window's layout, in the client's cells (title row included).
+fn tab_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
+    if window == app.active { if let Some((_, r)) = app.rects.iter().find(|(id, _)| *id == pane) { return Some(*r) } }
+    let mut out = Vec::new();
+    app.tabs.get(window)?.root.as_ref()?.rects(app.body(), &mut out);
+    out.into_iter().find(|(id, _)| *id == pane).map(|(_, r)| r)
+}
+
+/// The pane's own cells, from its window's top-left corner: tmux's pane_left/top/width/height.
+fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layout::Rect> {
+    let r = tab_rect(app, window, pane)?;
+    let body = app.body();
+    let header = app.tabs.get(window).map(|t| app.tab_header_rows(t)).unwrap_or(0);
+    Some(ratatui::layout::Rect { x: r.x - body.x, y: r.y - body.y + header, width: r.width, height: r.height.saturating_sub(header) })
+}
+
 /// tmux's format table: a variable's value for a window (and a pane: else the window's active
 /// one), or None when there is no such variable. Times are seconds since the epoch.
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
@@ -825,10 +841,11 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "pane_current_command" => pane.and_then(|p| p.fg_command.clone()).or_else(|| agent.map(|a| a.engine.clone())).unwrap_or_default(),
         "pane_pid" => pane.and_then(|p| p.remote_pid).map(|n| n.to_string()).unwrap_or_default(),
         "pane_tty" => pane.and_then(|p| p.remote_tty.clone()).unwrap_or_default(),
-        // The tile's size (what you see), as tmux's pane size is its cell.
-        "pane_width" | "pane_height" => {
-            let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
-            match (r, pane) { (Some(r), _) => if name == "pane_width" { r.width } else { r.height.saturating_sub(app.header_rows()) }.to_string(), (None, Some(p)) => if name == "pane_width" { p.cols } else { p.rows }.to_string(), _ => String::new() }
+        // The pane's cells in its window, its title row not among them (tmux's pane_* with
+        // pane-border-status top): any window's, not only the one on screen.
+        "pane_width" | "pane_height" | "pane_left" | "pane_top" | "pane_right" | "pane_bottom" => {
+            let Some(r) = focus.and_then(|f| content_rect(app, window, f)) else { return Some(Val::Str(String::new())) };
+            match name { "pane_width" => r.width, "pane_height" => r.height, "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => (r.y + r.height).saturating_sub(1) }.to_string()
         }
         "pane_in_mode" => pane.map(|p| p.copy.is_some()).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "session_windows" => app.tabs.len().to_string(),
@@ -837,14 +854,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_height" => app.size.1.to_string(),
         "window_width" => app.body().width.to_string(),
         "window_height" => app.body().height.to_string(),
-        "pane_left" | "pane_top" | "pane_right" | "pane_bottom" => {
-            let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
-            r.map(|r| match name { "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => (r.y + r.height).saturating_sub(1) }.to_string()).unwrap_or_default()
-        }
         // At an edge of the window (vim-tmux-navigator style configs ask).
         "pane_at_top" | "pane_at_bottom" | "pane_at_left" | "pane_at_right" => {
             let body = app.body();
-            let r = focus.and_then(|f| app.rects.iter().find(|(id, _)| *id == f)).map(|(_, r)| *r);
+            let r = focus.and_then(|f| tab_rect(app, window, f));
             r.map(|r| match name { "pane_at_top" => r.y <= body.y, "pane_at_bottom" => r.y + r.height >= body.y + body.height, "pane_at_left" => r.x <= body.x, _ => r.x + r.width >= body.x + body.width })
                 .map(|b| if b { "1" } else { "0" }.to_string()).unwrap_or_default()
         }

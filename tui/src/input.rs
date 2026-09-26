@@ -834,11 +834,6 @@ fn new_what(app: &mut App, machine: String) {
 /// `agent_create`, then open it. [cwd] None with an agent = a new project folder.
 /// tmux's split-window / new-window: a shell, now, on this pane's machine and in its folder
 /// (`-c` another), running `command` if one is given. Keys typed before it is up go into it.
-pub fn new_shell(app: &mut App, placement: Placement, cwd: Option<String>, command: Option<String>) {
-    let focused = focused_agent(app);
-    new_shell_from(app, focused, placement, cwd, command)
-}
-
 /// display-popup: a shell in a box over the window, running `command` then leaving (-E).
 pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool) {
     let focused = focused_agent(app);
