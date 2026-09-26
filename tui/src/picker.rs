@@ -43,8 +43,11 @@ pub struct Picker {
     pub page_rows: std::cell::Cell<i64>,
     /// The kill buffer (C-w, M-BSpace, M-d), for C-y.
     pub kill: String,
-    /// How far the preview can scroll (the preview sets it as it draws).
+    /// How far the preview can scroll, its lines and its height (the preview sets them as it
+    /// draws): fzf's offset goes until the last line is at the top, a page is the window's height.
     pub preview_max: std::cell::Cell<u16>,
+    pub preview_lines: std::cell::Cell<usize>,
+    pub preview_rows: std::cell::Cell<u16>,
     pub title: String,
     /// Words that say what this list is for (a task about to be sent), at the head of the header
     /// line, as fzf's --header carries them.
@@ -74,9 +77,11 @@ pub struct Picker {
     pub qcursor: usize,
     /// Rows marked with Tab (fzf --multi), by id, in the order marked.
     pub marked: Vec<String>,
-    /// The preview window, and how far it is scrolled.
+    /// The preview window, and how far it is scrolled — for the row it shows: another row's
+    /// preview starts at its top, as fzf runs the preview again.
     pub preview: bool,
     pub preview_scroll: u16,
+    preview_of: Option<String>,
 }
 
 impl Picker {
@@ -104,7 +109,10 @@ impl Picker {
             marked: Vec::new(),
             preview: true,
             preview_scroll: 0,
+            preview_of: None,
             preview_max: Default::default(),
+            preview_lines: Default::default(),
+            preview_rows: Default::default(),
             kill: String::new(),
             page_rows: std::cell::Cell::new(10),
         }
@@ -173,13 +181,30 @@ impl Picker {
     }
 
     fn skip_disabled(&mut self, direction: i64) {
-        if self.visible.is_empty() { self.selected_id = None; return }
+        if self.visible.is_empty() { self.selected_id = None; self.preview_of = None; return }
         let n = self.visible.len() as i64;
         for _ in 0..n {
             if !self.rows[self.visible[self.cursor].0].disabled { break }
             self.cursor = ((self.cursor as i64 + direction).rem_euclid(n)) as usize;
         }
         self.selected_id = Some(self.rows[self.visible[self.cursor].0].id.clone());
+        if self.selected_id != self.preview_of { self.preview_scroll = 0; self.preview_of = self.selected_id.clone() }
+    }
+
+    /// fzf's scrollPreviewBy: from the first line until the last one is at the top.
+    pub fn preview_by(&mut self, by: i64) { self.preview_scroll = (self.preview_scroll as i64 + by).clamp(0, self.preview_max.get() as i64) as u16 }
+
+    /// preview-page-*: the window's height; preview-half-page-*: half of it.
+    pub fn preview_page(&mut self, pages: i64, half: bool) {
+        let rows = self.preview_rows.get() as i64;
+        self.preview_by(pages * if half { rows / 2 } else { rows })
+    }
+
+    /// preview-bottom: the last line at the bottom.
+    pub fn preview_bottom(&mut self) {
+        let bottom = self.preview_lines.get().saturating_sub(self.preview_rows.get() as usize) as i64;
+        self.preview_scroll = 0;
+        self.preview_by(bottom);
     }
 
     pub fn move_by(&mut self, delta: i64) {
@@ -197,7 +222,6 @@ impl Picker {
     fn changed(&mut self, before: &str) {
         if self.query == before { return }
         self.selected_id = None;
-        self.preview_scroll = 0;
         self.refilter();
     }
 

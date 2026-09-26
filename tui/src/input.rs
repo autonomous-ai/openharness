@@ -188,7 +188,7 @@ fn modal_mouse(app: &mut App, mouse: MouseEvent) {
             let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
             let half = app.size.0 / 2;
             if let Some(Modal::Picker { picker, .. }) = &mut app.modal {
-                if picker.preview && mouse.column >= half { picker.preview_scroll = if up { picker.preview_scroll.saturating_sub(1) } else { picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()) } }
+                if picker.preview && mouse.column >= half { picker.preview_by(if up { -1 } else { 1 }) }
                 else { let r: i64 = if theme::fzf().reverse { -1 } else { 1 }; picker.move_by(if up { r } else { -r }) }
             }
         }
@@ -1124,8 +1124,8 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         match key.code {
             KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
             KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
-            KeyCode::Up if shift => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
-            KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
+            KeyCode::Up if shift => picker.preview_by(-1),
+            KeyCode::Down if shift => picker.preview_by(1),
             // Up is toward the top of the screen: further down the list, unless it is reversed.
             KeyCode::Up => picker.move_by(up),
             KeyCode::Down => picker.move_by(-up),
@@ -1519,9 +1519,9 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, page: i64, u
             "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
             "toggle-in" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { 1 } else { -1 }) }
             "toggle-out" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { -1 } else { 1 }) }
-            "preview-page-up" | "preview-half-page-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(if action == "preview-page-up" { 10 } else { 5 }),
-            "preview-page-down" | "preview-half-page-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(if action == "preview-page-down" { 10 } else { 5 }).min(picker.preview_max.get()),
-            "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_scroll = picker.preview_max.get(),
+            "preview-page-up" => picker.preview_page(-1, false), "preview-page-down" => picker.preview_page(1, false),
+            "preview-half-page-up" => picker.preview_page(-1, true), "preview-half-page-down" => picker.preview_page(1, true),
+            "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_bottom(),
             "unix-word-rubout" => picker.backspace(true), "kill-line" => { let q: String = picker.query.chars().take(picker.qcursor).collect(); picker.set_query(&q) }
             "backward-char" => picker.qmove(-1, false), "forward-char" => picker.qmove(1, false),
             "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),
@@ -1538,8 +1538,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, page: i64, u
             "deselect-all" => picker.marked.clear(),
             "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
             "toggle-preview" => picker.preview = !picker.preview,
-            "preview-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
-            "preview-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
+            "preview-up" => picker.preview_by(-1), "preview-down" => picker.preview_by(1),
             "clear-query" => picker.set_query(""),
             "backward-kill-word" => picker.kill_word(false), "kill-word" => picker.kill_word(true), "unix-line-discard" => picker.clear_query(),
             "beginning-of-line" => picker.qhome(), "end-of-line" => picker.qend(),

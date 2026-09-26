@@ -454,13 +454,13 @@ pub fn fzf() -> &'static Fzf {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8 };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8 };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -502,8 +502,9 @@ pub fn fzf_opts() -> &'static FzfOpts {
                     }
                 }
                 "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty() } }
-                "--scrollbar" => { if let Some(v) = take() { o.scrollbar = v.chars().next().map(|c| c.to_string()) } }
-                "--no-scrollbar" => o.scrollbar = None,
+                // --scrollbar=CHAR1[CHAR2]: the list's, and the preview's (CHAR1 when there is no CHAR2).
+                "--scrollbar" => { if let Some(v) = take() { o.scrollbar = v.chars().next().map(|c| c.to_string()); o.preview_scrollbar = v.chars().nth(1).map(|c| c.to_string()).or(o.scrollbar.clone()) } }
+                "--no-scrollbar" => { o.scrollbar = None; o.preview_scrollbar = None }
                 "-e" | "--exact" => o.exact = true, "--no-exact" => o.exact = false,
                 "-i" | "--ignore-case" => o.case = Some(false), "+i" | "--no-ignore-case" => o.case = Some(true), "--smart-case" => o.case = None,
                 "--no-separator" => o.separator = false,

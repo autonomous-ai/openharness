@@ -987,7 +987,8 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area
     buf.set_string(area.x, area.y + h - 1, "╰", border);
     buf.set_string(area.x + w - 1, area.y + h - 1, "╯", border);
     for x in area.x + 1..area.x + w - 1 { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + h - 1, "─", border); }
-    for y in area.y + 1..area.y + h - 1 { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + w - 1, y, "│", border); }
+    // The padding inside the sides is the border's too (the right one is the scrollbar's column).
+    for y in area.y + 1..area.y + h - 1 { buf.set_string(area.x, y, "│ ", border); buf.set_string(area.x + w - 2, y, " │", border); }
     let inner = Rect::new(area.x + 2, area.y + 1, w.saturating_sub(4), h.saturating_sub(2));
     let Some(id) = picker.current_id() else { return };
     let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
@@ -1006,11 +1007,29 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area
     }
     // Long lines wrap, as fzf's preview does (it is text, not a screen).
     let lines: Vec<Line> = crate::preview::lines(app, kind, &id).into_iter().flat_map(|l| wrap_line(l, inner.width as usize)).collect();
-    // A preview that fits does not scroll; one that does stops at its last line.
-    let most = lines.len().saturating_sub(inner.height as usize) as u16;
+    // A preview that fits does not scroll; one that does scrolls until its last line is at the
+    // top (fzf's scrollPreviewTo).
+    let (total, height) = (lines.len(), inner.height as usize);
+    let scrollable = total > height && height > 0;
+    let most = if scrollable { (total - 1).min(u16::MAX as usize) as u16 } else { 0 };
     picker.preview_max.set(most);
-    for (i, line) in lines.iter().skip(picker.preview_scroll.min(most) as usize).take(inner.height as usize).enumerate() {
+    picker.preview_lines.set(total);
+    picker.preview_rows.set(inner.height);
+    let offset = picker.preview_scroll.min(most) as usize;
+    for (i, line) in lines.iter().skip(offset).take(height).enumerate() {
         buf.set_line(inner.x, inner.y + i as u16, line, inner.width);
+    }
+    if !scrollable { return }
+    // fzf's preview scrollbar, in the column before the border: getScrollbar's thumb and start.
+    if let Some(bar) = theme::fzf_opts().preview_scrollbar.clone() {
+        let thumb = (height * height / total).max(1);
+        let start = ((height - thumb) * offset / (total - height)).min(height - thumb);
+        for i in 0..thumb { buf.set_string(area.x + w - 2, inner.y + (start + i) as u16, &bar, border); }
+    }
+    // Its offset, N/M, at the top right in the info colour reversed.
+    let mark = format!("{}/{}", offset + 1, total);
+    if (mark.width() as u16) < inner.width {
+        buf.set_string(inner.x + inner.width - mark.width() as u16, inner.y, &mark, theme::fzf().pal.info.style().add_modifier(Modifier::REVERSED));
     }
 }
 
