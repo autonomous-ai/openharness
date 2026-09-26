@@ -36,6 +36,11 @@ impl crate::cmdparse::Env for App {
     }
 }
 
+/// tmux's winlink alert flags.
+pub const ACTIVITY: u8 = 1;
+pub const BELL: u8 = 2;
+pub const SILENCE: u8 = 4;
+
 /// An environment's variable, as tmux's environ keeps one: a value, or none (cleared: `-NAME`,
 /// taken away from what runs), and whether it is hidden (%hidden, set-environment -h).
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +69,14 @@ pub struct Tab {
     pub order: Vec<u64>,
     /// tmux's active_point: when each pane last became the active one (higher is later).
     pub points: HashMap<u64, u64>,
+    /// tmux's winlink alert flags (alerts.c): activity, bell, silence — set while the window is
+    /// not the current one, cleared when it becomes current.
+    pub alerts: u8,
+    /// When a pane of the window last printed, or the window was chosen (monitor-silence counts
+    /// from here).
+    pub last_output: Instant,
+    /// The same, in seconds since the epoch: #{window_activity}.
+    pub activity: i64,
     /// Where `next-layout` (Space) is in its cycle.
     pub layout_at: usize,
     /// Whether the desk knows this tab yet (a new, empty tab is local until its first harness).
@@ -79,8 +92,11 @@ impl Tab {
     pub fn new(name: &str) -> Tab {
         static WID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let wid = WID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Tab { id: Uuid::new_v4().simple().to_string(), wid, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
     }
+    /// window_update_activity: something happened in the window just now — its activity time,
+    /// and the silence timer starts again (alerts_reset).
+    pub fn touch(&mut self) { self.last_output = Instant::now(); self.activity = crate::format::now_secs() }
     /// The panes in tmux's order (pane_index); one the list has not placed yet comes last.
     pub fn panes(&self) -> Vec<u64> {
         let leaves = self.root.as_ref().map(Node::leaves).unwrap_or_default();
@@ -727,6 +743,15 @@ impl App {
             pane.note_echo();
             pane.feed(&bytes);
             pane.settle_predictions();
+            let belled = std::mem::replace(&mut pane.bell, false);
+            let id = pane.id;
+            // alerts.c: output is activity; a BEL is a bell.
+            if let Some(t) = self.tabs.iter().position(|t| t.panes().contains(&id)) {
+                self.tabs[t].touch();
+                // alerts_check_all: the bell first, then the activity.
+                if belled { self.alert(t, BELL) }
+                self.alert(t, ACTIVITY);
+            }
         }
     }
 
@@ -1253,8 +1278,11 @@ impl App {
         if let Some(prev) = self.focused().and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) {
             if self.panes.get(&pane).map(|p| (p.machine_id.clone(), p.agent_id.clone())) != Some(prev.clone()) { self.last_harness = Some(prev) }
         }
-        if tab != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
+        let changed = tab != self.active;
+        if changed { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
         self.active = tab;
+        self.tabs[tab].alerts = 0;
+        if changed { self.tabs[tab].touch(); self.alert(tab, ACTIVITY) }
         if self.tabs[tab].zoomed && self.tabs[tab].focus != Some(pane) { self.tabs[tab].zoomed = false }
         self.tabs[tab].set_active(pane);
         self.seen(pane);
@@ -1263,7 +1291,7 @@ impl App {
         self.refresh_pane_info(pane);
     }
 
-    fn seen(&mut self, pane: u64) {
+    pub fn seen(&mut self, pane: u64) {
         let Some(p) = self.panes.get(&pane) else { return };
         let key = (p.machine_id.clone(), p.agent_id.clone());
         if let Some(agent) = self.fleet.agents.get_mut(&key) {
@@ -1461,6 +1489,8 @@ impl App {
         self.tabs.insert(at, tab);
         if detached {
             if let Some(i) = self.tabs.iter().position(|t| t.id == back) { self.active = i }
+            // window_create: the new window is activity, flagged as it is not the current one.
+            self.alert(at, ACTIVITY);
         } else {
             let prev = self.tabs.iter().position(|t| t.id == back);
             if let Some(i) = prev { self.active = i }
@@ -1610,10 +1640,53 @@ impl App {
         self.fit_panes();
     }
 
+    /// tmux's alerts_queue + alerts_check_*: when the window's monitor-activity / monitor-bell /
+    /// monitor-silence is on, a window that is not the current one is flagged (activity and
+    /// silence once until it is visited, a bell every time), and — as bell-action / activity-action
+    /// / silence-action say — the terminal's bell rings or (visual-*) a message says where.
+    pub fn alert(&mut self, t: usize, flag: u8) {
+        let Some(tab) = self.tabs.get(t) else { return };
+        let id = tab.id.clone();
+        let (monitor, action, visual, word) = match flag {
+            BELL => ("monitor-bell", "bell-action", "visual-bell", "Bell"),
+            ACTIVITY => ("monitor-activity", "activity-action", "visual-activity", "Activity"),
+            _ => ("monitor-silence", "silence-action", "visual-silence", "Silence"),
+        };
+        let on = self.options.get(monitor, &id, None).map(|v| v != "off" && v != "0").unwrap_or(false);
+        if !on { return }
+        let current = t == self.active;
+        if flag != BELL && self.tabs[t].alerts & flag != 0 { return }
+        if !current { self.tabs[t].alerts |= flag }
+        let applies = match self.options.get(action, "", None).as_deref() { Some("any") => true, Some("current") => current, Some("other") => !current, _ => false };
+        if !applies { return }
+        let visual = self.options.get(visual, "", None).unwrap_or_default();
+        if visual == "off" || visual == "both" { crate::bell() }
+        if visual == "off" { return }
+        let msg = if current { format!("{word} in current window") } else { format!("{word} in window {}", self.win_num(t)) };
+        self.say(msg, theme::WARN);
+    }
+
+    /// monitor-silence: a window quiet that many seconds (checked on the tick).
+    /// The timer runs again when it fires (alerts_reset), so a window that stays quiet is said
+    /// again each time — to the current window only, the others being flagged already.
+    pub fn check_silence(&mut self) {
+        for t in 0..self.tabs.len() {
+            let n: u64 = self.options.get("monitor-silence", &self.tabs[t].id, None).and_then(|v| v.parse().ok()).unwrap_or(0);
+            if n > 0 && self.tabs[t].last_output.elapsed() >= Duration::from_secs(n) {
+                self.tabs[t].last_output = Instant::now();
+                self.alert(t, SILENCE)
+            }
+        }
+    }
+
     pub fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
-            if index != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
+            // session_set_current: the window's alerts are seen, and choosing it is activity.
+            self.tabs[index].alerts = 0;
+            let changed = index != self.active;
+            if changed { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
             self.active = index;
+            if changed { self.tabs[index].touch(); self.alert(index, ACTIVITY) }
             if let Some(f) = self.tabs[index].focus { self.seen(f) }
             self.fit_panes();
         }
@@ -1974,6 +2047,7 @@ impl App {
     pub fn on_tick(&mut self) {
         self.tick += 1;
         crate::dial::tick(self);
+        if self.tick % 4 == 0 { self.check_silence() }
         // What the panes on screen run (vim? a build?) moves as you work: asked every two seconds.
         // …and every other window's active pane, which names that window (automatic-rename).
         if self.tick % 8 == 4 {
