@@ -51,6 +51,10 @@ tmux_ send-keys -t t "remote"
 tmux_ send-keys -t t C-v
 expect "C-b s then C-v: a harness beside" "Remote shell (mock)"
 expect "pane titles, tmux pane-border-status" '"Remote shell"'
+# From a shell, as tmux is scripted: the running client answers.
+out=$(HOME=$home "$bin" display -p '#{session_windows} #{pane_index}')
+[ -n "$out" ] || fail "hn display -p from a shell answered nothing"
+echo "✓ hn display -p from a shell: $out"
 tmux_ send-keys -t t C-b o
 tmux_ send-keys -t t C-b z
 expect "C-b z zooms (Z flag)" "*Z"

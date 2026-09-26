@@ -65,6 +65,19 @@ and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`, `16`, `bw`).
 
 Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
 
+## From a shell
+
+As `tmux` is: any tmux command, run in the client you have open, its output printed here.
+
+```bash
+hn display -p '#{pane_current_path}'
+hn send-keys -t 1 'make test' Enter
+hn capture-pane -p -t 0 | tail
+hn list-panes -F '#{pane_index} #{pane_title}'
+hn ls                        # every harness on every machine
+hn send -t api 'run the tests'   # a message to a harness, as a turn
+```
+
 ## Mouse and clipboard
 
 Click a pane to focus it, a tab to switch, a launcher row to open it; drag a split's border or a
