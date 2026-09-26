@@ -94,7 +94,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     }
     if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
     let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
-    let col_w: usize = key_w + 32;
+    let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
     let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
     let rows_needed = items.len().div_ceil(cols);
     let height = (rows_needed as u16 + 2).min(body.height);
@@ -351,7 +351,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     if let Some((text, _, at)) = &app.toast {
         if at.elapsed() < Duration::from_millis(app.display_ms) {
             buf.set_style(rect, yellow);
-            buf.set_stringn(rect.x, rect.y, text, rect.width as usize, yellow);
+            buf.set_stringn(rect.x, rect.y, clip(text, rect.width as usize), rect.width as usize, yellow);
             return None;
         }
     }
@@ -525,7 +525,7 @@ fn local_time(offset: i64) -> (String, String) {
 // ── fzf ──────────────────────────────────────────────────────────────────────
 
 fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
-    (picker.preview && !picker.visible.is_empty() && body.width >= 80 && body.height >= 8).then(|| {
+    (picker.preview && body.width >= 80 && body.height >= 8).then(|| {
         let list_w = body.width / 2;
         Rect::new(body.x + list_w, body.y, body.width - list_w, body.height)
     })
@@ -543,7 +543,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let prompt_y = bottom - 1;
     let info_y = prompt_y.saturating_sub(1);
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
-    let header = if area.height >= 6 { header_line(picker, kind, width) } else { None };
+    let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
     let header_y = if header.is_some() { info_y.saturating_sub(1) } else { info_y };
     let prompt = Style::default().fg(theme::fzf().prompt);
     buf.set_string(area.x, prompt_y, ">", prompt.add_modifier(Modifier::BOLD));
@@ -653,10 +653,16 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let avail = text_w.saturating_sub(lead_w + if show_right { right_w + 2 } else { 0 });
     // A waiting question keeps some of itself in view; any other detail gives way to the title.
     let asking = row.detail.first().map(|s| s.content.starts_with("? ")).unwrap_or(false);
-    let label_room = if asking { row.label.width().min((avail * 3 / 5).max(12)).min(avail) } else { avail };
+    let label_room = if asking && avail >= 50 { row.label.width().min((avail * 3 / 5).max(12)).min(avail) } else { avail };
     let label = clip(&row.label, label_room);
     let mut spans: Vec<Span> = Vec::new();
-    for s in &row.lead { spans.push(Span::styled(s.content.clone(), if current { s.style.patch(plus) } else { s.style })) }
+    // The glyphs' colours follow the scheme: none in bw, the 16 in 16.
+    let tone = |st: Style| -> Style {
+        if z.bw { Style { fg: None, bg: None, ..st } }
+        else if z.sixteen { Style { fg: st.fg.map(theme::to16), ..st } }
+        else { st }
+    };
+    for s in &row.lead { spans.push(Span::styled(s.content.clone(), if current { tone(s.style).patch(plus) } else { tone(s.style) })) }
     let mut run = String::new();
     let mut lit = false;
     for (i, ch) in label.chars().enumerate() {
@@ -704,6 +710,13 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
         }
     }
     if !cur.is_empty() { out.push(Line::from(cur)) }
+    // A wrapped line does not start with the separator it broke at.
+    for line in out.iter_mut().skip(1) {
+        while let Some(first) = line.spans.first() {
+            let t = first.content.trim();
+            if t.is_empty() || t == "·" { line.spans.remove(0); } else { break }
+        }
+    }
     out
 }
 
@@ -949,6 +962,7 @@ fn clip(text: &str, cols: usize) -> String {
         if out.width() + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) + 1 > cols { break }
         out.push(ch);
     }
+    let mut out = out.trim_end().to_string();
     out.push('…');
     out
 }

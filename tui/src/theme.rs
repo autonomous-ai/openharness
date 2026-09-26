@@ -21,7 +21,7 @@ pub const TEXT: Color = Color::Reset;
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
-pub struct Fzf { pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool }
+pub struct Fzf { pub sixteen: bool, pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool }
 
 pub fn fzf() -> &'static Fzf {
     static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
@@ -33,10 +33,10 @@ pub fn fzf() -> &'static Fzf {
         // A terminal that only has 16 colours gets fzf's 16-colour scheme, as fzf itself does.
         let base = if base.is_empty() && depth() < 256 { "16".to_string() } else { base };
         match base.as_str() {
-            _ if no_color || base == "bw" => Fzf { gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true },
-            "light" | "light256" => Fzf { gutter: i(251), bg_plus: i(251), fg_plus: i(237), hl: i(66), hl_plus: i(23), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false },
-            "16" => Fzf { gutter: Color::DarkGray, bg_plus: Color::DarkGray, fg_plus: Color::White, hl: Color::Green, hl_plus: Color::LightGreen, pointer: Color::Red, marker: Color::Magenta, info: Color::Yellow, prompt: Color::Blue, border: Color::DarkGray, header: Color::Cyan, bw: false },
-            _ => Fzf { gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false },
+            _ if no_color || base == "bw" => Fzf { sixteen: false, gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true },
+            "light" | "light256" => Fzf { sixteen: false, gutter: i(251), bg_plus: i(251), fg_plus: i(237), hl: i(66), hl_plus: i(23), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false },
+            "16" => Fzf { sixteen: true, gutter: Color::DarkGray, bg_plus: Color::DarkGray, fg_plus: Color::White, hl: Color::Green, hl_plus: Color::LightGreen, pointer: Color::Red, marker: Color::Magenta, info: Color::Yellow, prompt: Color::Blue, border: Color::DarkGray, header: Color::Cyan, bw: false },
+            _ => Fzf { sixteen: false, gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false },
         }
     })
 }
@@ -71,6 +71,26 @@ pub fn depth() -> u32 {
         let term = std::env::var("TERM").unwrap_or_default();
         if ct == "truecolor" || ct == "24bit" { 1 << 24 } else if term.contains("256") || term.contains("kitty") || term.contains("ghostty") || term.contains("wezterm") || term.contains("alacritty") || term.contains("tmux") { 256 } else if term.is_empty() { 256 } else { 16 }
     })
+}
+
+/// Any colour as one of the 16.
+pub fn to16(c: Color) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => nearest16(r, g, b),
+        Color::Indexed(n) if n >= 16 => {
+            let (r, g, b) = if n >= 232 { let v = (8 + 10 * (n - 232) as u16) as u8; (v, v, v) } else { let n = n - 16; let f = |x: u8| if x == 0 { 0 } else { 55 + 40 * x }; (f(n / 36), f((n / 6) % 6), f(n % 6)) };
+            nearest16(r, g, b)
+        }
+        c => c,
+    }
+}
+
+fn nearest16(r: u8, g: u8, b: u8) -> Color {
+    let bit = |v: u8| v > 110;
+    match (bit(r), bit(g), bit(b)) {
+        (false, false, false) => Color::DarkGray, (true, false, false) => Color::Red, (false, true, false) => Color::Green, (true, true, false) => Color::Yellow,
+        (false, false, true) => Color::Blue, (true, false, true) => Color::Magenta, (false, true, true) => Color::Cyan, (true, true, true) => Color::Reset,
+    }
 }
 
 /// A brand colour (the engine marks) brought down to what the terminal has.
