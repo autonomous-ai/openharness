@@ -30,7 +30,7 @@ sleep 0.5
 # (an unnamed hn takes "default", which is where `hn <command>` goes).
 client="e2e-$$"
 # HN_DESKTOP=off: no desktop app here, so hn is the window the dial talks to.
-tmux_ new-session -d -s t -x 120 -y 32 "HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
+tmux_ new-session -d -s t -x 120 -y 32 "EDITOR=emacs VISUAL= HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
 # The mock's dial: what hn told it (dial <js expression over d>), and a frame to push at hn.
 dial() { curl -s "http://127.0.0.1:$port/test/dial" | node -e "const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).data; console.log($1)"; }
 push() { curl -s -X POST --data "$1" "http://127.0.0.1:$port/test/dial" >/dev/null; }
@@ -53,6 +53,19 @@ tmux_ send-keys -t t Enter
 expect "pane streams the keyframe" "Mock Codex (mock)"
 tmux_ send-keys -t t "echo-me"
 expect "typing round-trips" "echo-me"
+# tmux's copy mode (emacs keys: EDITOR is emacs here): the position top right, a word copied.
+tmux_ send-keys -t t C-b "["
+expect "C-b [ is copy mode, its position shown" "[0/0]"
+wait_eq "#{pane_in_mode} and the copy cursor" "1 9,1" hn display -p '#{pane_in_mode} #{copy_cursor_x},#{copy_cursor_y}'
+tmux_ send-keys -t t C-a C-f C-f C-Space M-f M-w
+wait_eq "C-Space M-f M-w copies a word" "echo" hn show-buffer
+wait_eq "and leaves copy mode" "0" hn display -p '#{pane_in_mode}'
+# What a command prints goes to the pane's view mode, as tmux's; q closes it.
+tmux_ send-keys -t t C-b "?"
+expect "C-b ? lists the keys in view mode" "C-b Space   Select next layout"
+wait_eq "#{pane_mode}" "view-mode" hn display -p '#{pane_mode}'
+tmux_ send-keys -t t q
+wait_eq "q leaves view mode" "0" hn display -p '#{pane_in_mode}'
 tmux_ send-keys -t t C-b ":"
 expect "C-b : is the command prompt" ":"
 tmux_ send-keys -t t "split-window -h" Enter

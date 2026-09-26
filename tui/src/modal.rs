@@ -181,6 +181,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("machines", "Machines", "⌥M", "", "Machines"),
     ("store", "Harness Store", "⌥S", "", "Machines"),
     ("help", "Keyboard Shortcuts", "⌥/", "", "Session"),
+    ("keys", "Every Key…", "", "every binding, searched as you type (C-b ? lists them as tmux does)", "Session"),
     ("quit", "Quit", "⌥Q", "harnesses keep running", "Session"),
 ];
 

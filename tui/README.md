@@ -61,11 +61,11 @@ and on the right the focused pane's machine (when it is another one), project an
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
 | `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` `C-b &` | windows |
 | `C-b x` | close the pane (the harness keeps running) |
-| `C-b [` `C-b ]` | copy mode (vi keys; `?` `/` search), paste |
+| `C-b [` `C-b ]` | copy mode (tmux's, vi or emacs keys as `mode-keys` says), paste |
 | `C-b <` `C-b >` | the window and pane menus |
 | `C-b /` | what a key does |
 | `C-b :` | the command prompt — tmux commands, `Tab` completes |
-| `C-b ?` | every key, fzf-searchable — or just pause after `C-b` and they show |
+| `C-b ?` | every key and what it does (`list-keys -N`) — or just pause after `C-b` and they show |
 | `C-b d` | detach — everything keeps running |
 
 Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux does):
@@ -120,6 +120,19 @@ hn list-panes -F '#{pane_index} #{pane_title}'
 hn list-harnesses            # every harness on every machine (hn ls is list-sessions, as in tmux)
 hn send-message -t api 'run the tests'   # a message to a harness, as a turn (hn send is send-keys, as in tmux)
 ```
+
+## Copy mode
+
+tmux's own (window-copy.c, ported): `C-b [` takes a copy of the pane's screen and history, and
+every key is looked up in the `copy-mode-vi` table (`mode-keys vi`) or `copy-mode` (emacs) and runs
+tmux's command for it — so `v` `Space` `Enter`, `C-Space` `C-e` `M-w`, `/` `?` `n` `N`, `C-s`
+`C-r` (incremental), `f` `t` `;` `,`, `5k`, `%`, `{` `}`, `X` `M-x`, the search marks and their
+count, and your own `bind -T copy-mode-vi …` all do what they do in tmux. `r` takes the copy again
+(output that arrived meanwhile is `#{pane_unseen_changes}`); `q` leaves.
+
+What a command prints — `C-b ?`, `C-b ~`, `:show -g`, `:list-windows`, `run-shell` — opens in the
+pane's view mode, as in tmux: the same keys move and search it, `q` closes it. The same list of
+keys to search as you type, fzf-style, is `C-b s` then `>` and `keys`.
 
 ## Mouse and clipboard
 
