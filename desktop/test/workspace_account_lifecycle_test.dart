@@ -76,16 +76,54 @@ class WorkspaceAccountFixture extends AppNotifier {
   }
   final WorkspaceAccountLogin cli;
   int get inventoryRequests => (api as _Api).inventoryRequests;
-  var expired = false;
+
+  /// The id a signed-out daemon serves this computer under, for a test whose
+  /// guest window should find this computer in its machine list and re-seat
+  /// the desk onto it. Left null, the guest's list names no machine, and the
+  /// desk is not re-seated at all.
+  String? guestComputerId;
+
   @override
-  Future<void> ensureCliDaemonReady() async {
-    if (expired) await super.ensureCliDaemonReady();
+  Future<bool> refreshMachines() async {
+    final id = guestComputerId;
+    if (signedIn || id == null) return super.refreshMachines();
+    final machine = Machine(
+      machineId: id,
+      authMode: MachineAuthMode.remote,
+      name: 'This computer',
+    );
+    machines = [machine];
+    machineStates
+      ..clear()
+      ..[id] = (MachineState(machine)..localOnly = true);
+    return true;
   }
 
+  var expiring = false;
+  @override
+  Future<void> ensureCliDaemonReady() async {
+    if (!expiring) return;
+    expiring = false;
+    await super.ensureCliDaemonReady();
+  }
+
+  /// The session ends underneath a running window: the daemon gate finds the
+  /// daemon gone and the CLI signed out.
+  ///
+  /// The window no longer drops to a sign-in wall; it becomes a guest, and a
+  /// daemon now comes back WITHOUT a session, so every later gate passes. This
+  /// waits for that guest transition to land on the desk.
   Future<void> expire() async {
-    expired = true;
-    await ensureCliDaemonReady();
-    expired = false;
+    expiring = true;
+    try {
+      await ensureCliDaemonReady();
+    } on StateError {
+      // THIS probe's daemon did not start, and the gate still says so; the
+      // guest transition it handed the window to does not depend on it.
+    }
+    for (var turn = 0; turn < 100; turn++) {
+      await Future<void>.value();
+    }
   }
 }
 
@@ -134,9 +172,20 @@ void main() {
         } else {
           await app.logout();
         }
-        expect(app.status, AppStatus.unauthenticated);
-        expect(app.allPanes, isEmpty);
-        expect(app.swarms, hasLength(1));
+        // The account leaving no longer puts a sign-in wall in front of the
+        // desk: the window stays on it as a guest.
+        expect(app.status, AppStatus.authenticated);
+        expect(app.isGuest, isTrue);
+        if (!expires) {
+          // Signing out still takes the account's tiles off the screen.
+          expect(app.allPanes, isEmpty);
+          expect(app.swarms, hasLength(1));
+        }
+        // An expiry leaves the live desk where it is: which of its tiles
+        // follow this computer is decided by the re-seat, once the guest
+        // daemon says which id it serves (pinned in guest_window_test.dart).
+        // Here it names no machine, so nothing is re-seated, and either way
+        // the account's saved desk is not overwritten on the way out.
         expect(storage.values['swarm_layout_v1'], saved);
         await app.login();
         expect(app.status, AppStatus.authenticated);
@@ -172,11 +221,12 @@ void main() {
       await app.closePane(pane.id);
       expect(app.closedHistory, isNotEmpty);
       await app.expire();
+      expect(app.isGuest, isTrue);
       expect(app.machines, isEmpty);
       expect(app.machineStates, isEmpty);
       expect(app.machinesAreStale, isFalse);
       expect(app.closedHistory, isEmpty);
-      expect(app.lastError, contains('Sign in again'));
+      expect(app.lastError, contains('sign in again'));
     },
   );
 
@@ -230,7 +280,11 @@ void main() {
       'sign-in ${cancel ? 'can be cancelled while waiting for' : 'waits for'} expired terminal cleanup',
       () async {
         final cli = WorkspaceAccountLogin();
-        final app = WorkspaceAccountFixture(MemoryStore(), cli);
+        // The guest daemon names this computer, so the expiry re-seats the
+        // desk: the tile on the other machine leaves with the account, and its
+        // terminal detaching is the cleanup a sign-in must not overtake.
+        final app = WorkspaceAccountFixture(MemoryStore(), cli)
+          ..guestComputerId = 'computer-abc';
         addTearDown(app.dispose);
         final closed = Completer<bool>();
         app.adoptSessionForTest(
