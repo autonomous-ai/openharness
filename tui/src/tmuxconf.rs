@@ -443,39 +443,39 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
             }
         }
         "unbind" | "unbind-key" => {
-            let mut table = Table::Prefix;
-            let mut all = false;
-            let mut key = None;
+            // tmux's unbind-key [-anq] [-T key-table] key: -a every key of the table, -n root's,
+            // -q no complaint; the table must exist and the key must be one.
+            let (mut table, mut all, mut quiet, mut key, mut named) = (Table::Prefix, false, false, None, None);
             let mut i = 1;
             while i < words.len() {
                 match words[i].as_str() {
                     "-a" => all = true,
                     "-n" => table = Table::Root,
-                    "-T" => {
-                        i += 1;
-                        match words.get(i).and_then(|t| keys::table_named(t)) {
-                            Some(t) => table = t,
-                            None => {
-                                // A table of your own: its key (or with -a all of it) goes.
-                                let name = words.get(i).cloned().unwrap_or_default();
-                                let rest: Vec<&String> = words[i + 1..].iter().filter(|w| !w.starts_with('-')).collect();
-                                if words.iter().any(|w| w == "-a") { keymap.named.remove(&name); }
-                                else if let Some(k) = rest.first() { let chord = keys::parse(k)?; if let Some(list) = keymap.named.get_mut(&name) { list.retain(|b| b.chord != chord) } }
-                                return Ok(());
-                            }
-                        }
-                    }
+                    "-q" => quiet = true,
+                    "-T" => { i += 1; named = words.get(i).cloned() }
                     w => key = Some(w.to_string()),
                 }
                 i += 1;
             }
-            if all { keymap.table_mut(table).clear() }
-            else if let Some(k) = key {
-                let chord = keys::parse(&k)?;
-                // `unbind C-b` right after `set prefix C-a` means "C-b is not the prefix any more".
-                if chord == keymap.prefix && table == Table::Prefix { return Ok(()) }
-                keymap.unbind(table, &chord);
+            let fail = |e: String| if quiet { Ok(()) } else { Err(e) };
+            if all && key.is_some() { return fail("key given with -a".into()) }
+            if let Some(name) = &named {
+                match keys::table_named(name) {
+                    Some(t) => table = t,
+                    None if keymap.named.contains_key(name) => {
+                        if all { keymap.named.remove(name); return Ok(()) }
+                        let Some(k) = key else { return fail("missing key".into()) };
+                        let chord = match keys::parse(&k) { Ok(c) => c, Err(e) => return fail(e) };
+                        if let Some(list) = keymap.named.get_mut(name) { list.retain(|b| b.chord != chord) }
+                        return Ok(());
+                    }
+                    None => return fail(format!("table {name} doesn't exist")),
+                }
             }
+            if all { keymap.remove_table(table); return Ok(()) }
+            let Some(k) = key else { return fail("missing key".into()) };
+            let chord = match keys::parse(&k) { Ok(c) => c, Err(e) => return fail(e) };
+            keymap.unbind(table, &chord);
         }
         _ => {}
     }

@@ -156,6 +156,8 @@ impl Store {
             } else { map.remove(name); }
             return Ok(self.get(name, window, Some(pane)));
         }
+        // cmd_set_option: a user option needs a value.
+        if name.starts_with('@') && value.is_none() { return Err("empty value".into()) }
         let here = self.map(scope, global, window, pane).and_then(|m| m.get(name).cloned());
         if f.only_if_unset && here.is_some() { return Err(format!("already set: {name}")) }
         let now = self.get(name, window, Some(pane));
@@ -173,7 +175,10 @@ impl Store {
                     map.insert(format!("{name}[{n}]"), v.to_string());
                     return Ok(Some(v.to_string()));
                 }
-                if f.append { format!("{}{v}", here.clone().or(now.clone()).unwrap_or_default()) } else { v.to_string() }
+                let v = if f.append { format!("{}{v}", here.clone().or(now.clone()).unwrap_or_default()) } else { v.to_string() };
+                // options_from_string_check: a style option's value must parse as a style (formats aside).
+                if name.ends_with("-style") && !v.contains("#{") && !crate::draw::valid_style(&v) { return Err(format!("invalid style: {v}")) }
+                v
             }
             (Some(Kind::Flag), None | Some("")) => if now.as_deref() == Some("on") { "off".into() } else { "on".into() },
             (Some(Kind::Flag), Some(v)) => match v.to_ascii_lowercase().as_str() {
