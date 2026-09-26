@@ -884,6 +884,7 @@ impl App {
         if self.tabs[tab].zoomed && self.tabs[tab].focus != Some(pane) { self.tabs[tab].zoomed = false }
         self.tabs[tab].focus = Some(pane);
         self.seen(pane);
+        self.sync_titles();
         self.fit_panes();
     }
 
@@ -982,7 +983,8 @@ impl App {
     pub fn sync_titles(&mut self) {
         for index in 0..self.tabs.len() {
             if self.tabs[index].named { continue }
-            let first = self.tabs[index].panes().first().copied();
+            // tmux's automatic-rename: an unnamed window is called after its active pane.
+            let first = self.tabs[index].focus.or_else(|| self.tabs[index].panes().first().copied());
             if let Some(name) = first.and_then(|id| self.panes.get(&id)).and_then(|p| self.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()) {
                 self.tabs[index].name = name;
             }

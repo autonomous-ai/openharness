@@ -643,8 +643,10 @@ fn preview_grid(buf: &mut Buffer, pane: &Pane, area: Rect, scroll: u16) {
     let content = pane.term.renderable_content();
     let colors = content.colors;
     let rows = pane.rows as i32;
-    // Show the last `area.height` rows of the screen (minus scroll).
-    let first = (rows - area.height as i32 - scroll as i32).max(0);
+    // The rows that end at the cursor (an agent's prompt), not a screen's blank bottom.
+    let cursor = content.cursor.point.line.0.max(0);
+    let spare = (rows - area.height as i32).max(0);
+    let first = (cursor + 1 - area.height as i32 - scroll as i32).clamp(0, spare);
     for indexed in content.display_iter {
         let row = indexed.point.line.0 - first;
         let col = indexed.point.column.0 as u16;
@@ -686,30 +688,45 @@ fn tree(buf: &mut Buffer, app: &App, body: Rect, cursor: usize, collapsed: &[Str
     let rows = tree_rows(app, collapsed);
     let list_h = (body.height / 2).max(3).min(rows.len() as u16 + 1).min(body.height);
     let mode = Style::default().bg(Color::Yellow).fg(Color::Black);
-    let start = cursor.saturating_sub(list_h as usize - 1);
-    for (i, row) in rows.iter().enumerate().skip(start).take(list_h as usize) {
-        let y = body.y + (i - start) as u16;
+    // tmux's tree: the session first, then its windows, then (expanded) their panes.
+    let session = format!("(0)  - {}: {} windows (attached)", app.session_name(), app.tabs.len());
+    buf.set_stringn(body.x, body.y, &session, body.width as usize, Style::default());
+    let room = list_h.saturating_sub(1) as usize;
+    let start = cursor.saturating_sub(room.saturating_sub(1));
+    let pane_title = |p: u64| {
+        let pane = app.panes.get(&p);
+        let name = pane.and_then(|pn| app.fleet.agent(&pn.machine_id, &pn.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
+        let machine = pane.filter(|pn| pn.machine_id != app.fleet.local_id).map(|pn| format!(" {}", app.fleet.machine_name(&pn.machine_id))).unwrap_or_default();
+        let state = pane.and_then(|pn| app.fleet.agent(&pn.machine_id, &pn.agent_id)).map(|a| match app.fleet.state_of(a) { State::NeedsInput => " [waiting]", State::Working => " [working]", State::Paused => " [paused]", State::Offline => " [offline]", _ => "" }).unwrap_or("");
+        format!("\"{name}\"{machine}{state}")
+    };
+    let last_window = rows.iter().rposition(|r| r.pane.is_none()).unwrap_or(0);
+    for (i, row) in rows.iter().enumerate().skip(start).take(room) {
+        let y = body.y + 1 + (i - start) as u16;
         let tab = &app.tabs[row.window];
+        let n = i + 1;
         let text = match row.pane {
             None => {
-                let n = tab.panes().len();
-                let (entry, _) = window_entry(app, row.window, 24);
-                format!("({i}) {} {entry}: {n} pane{}", if collapsed.contains(&tab.id) { "+" } else { "-" }, if n == 1 { "" } else { "s" })
+                let panes = tab.panes();
+                let branch = if i == last_window { "└─>" } else { "├─>" };
+                let fold = if panes.len() < 2 { " " } else if collapsed.contains(&tab.id) { "+" } else { "-" };
+                let mut flags = String::new();
+                if row.window == app.active { flags.push('*') } else if app.last_tab.as_ref() == Some(&tab.id) { flags.push('-') }
+                if tab.zoomed { flags.push('Z') }
+                let tail = match panes.as_slice() { [only] => format!(": {}", pane_title(*only)), [] => String::new(), _ => format!(" ({} panes)", panes.len()) };
+                format!("({n}) {branch} {fold} {}: {}{flags}{tail}", app.win_num(row.window), tab.name)
             }
             Some(p) => {
                 let panes = tab.panes();
                 let at = panes.iter().position(|x| *x == p).unwrap_or(0);
+                let rail = if rows.iter().skip(i + 1).any(|r| r.pane.is_none()) { "│" } else { " " };
                 let branch = if at + 1 == panes.len() { "└─>" } else { "├─>" };
-                let pane = app.panes.get(&p);
-                let name = pane.and_then(|pn| app.fleet.agent(&pn.machine_id, &pn.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
-                let machine = pane.map(|pn| app.fleet.machine_name(&pn.machine_id)).unwrap_or_default();
-                let state = pane.and_then(|pn| app.fleet.agent(&pn.machine_id, &pn.agent_id)).map(|a| match app.fleet.state_of(a) { State::NeedsInput => " [waiting]", State::Working => " [working]", State::Paused => " [paused]", State::Offline => " [offline]", _ => "" }).unwrap_or("");
-                format!("({i})     {branch} {}: \"{name}\" {machine}{state}", at + app.pane_base_index)
+                format!("({n}) {rail}   {branch} {}: {}", at + app.pane_base_index, pane_title(p))
             }
         };
         let style = if i == cursor { mode } else { Style::default() };
         if i == cursor { buf.set_style(Rect::new(body.x, y, body.width, 1), mode) }
-        buf.set_stringn(body.x, y, &text, body.width as usize, style);
+        buf.set_stringn(body.x, y, &clip(&text, body.width as usize), body.width as usize, style);
     }
     // The preview: the chosen window's (or pane's) terminal, in a box below.
     let top = body.y + list_h;
@@ -724,7 +741,11 @@ fn tree(buf: &mut Buffer, app: &App, body: Rect, cursor: usize, collapsed: &[Str
     let pane_id = row.pane.or(app.tabs[row.window].focus);
     let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
     match pane_id.and_then(|p| app.panes.get(&p)) {
-        Some(pane) if matches!(pane.phase, Phase::Live | Phase::Watching(_)) => preview_grid(buf, pane, inner, 0),
+        Some(pane) if matches!(pane.phase, Phase::Live | Phase::Watching(_)) => {
+            let label = format!(" {}: {} ", app.win_num(row.window), app.tabs[row.window].name);
+            buf.set_stringn(area.x + 2, area.y, &clip(&label, area.width.saturating_sub(4) as usize), area.width.saturating_sub(4) as usize, Style::default());
+            preview_grid(buf, pane, inner, 0)
+        }
         Some(_) => { buf.set_string(inner.x + 1, inner.y, "(not streaming yet — open it to see it)", Style::default().add_modifier(Modifier::DIM)); }
         None => { buf.set_string(inner.x + 1, inner.y, "(empty window)", Style::default().add_modifier(Modifier::DIM)); }
     }
