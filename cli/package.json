@@ -4,7 +4,8 @@
   "type": "module",
   "bin": {
     "harness": "dist/cli.js",
-    "hn": "dist/cli.js"
+    "hn": "dist/cli.js",
+    "tim": "dist/cli.js"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
