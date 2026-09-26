@@ -65,6 +65,10 @@ fn usage() {
     println!("  HARNESS_TUI_DESK=off    keep tabs to this window");
 }
 
+unsafe extern "C" { fn raise(sig: i32) -> i32; }
+/// SIGTSTP, as a shell's job control expects of a program that suspends itself.
+unsafe fn libc_raise_tstp() { unsafe { raise(if cfg!(target_os = "linux") { 20 } else { 18 }); } }
+
 struct Restore { enhanced: bool }
 
 impl Drop for Restore {
@@ -154,15 +158,10 @@ async fn run(config: config::Config) -> io::Result<()> {
     let mut app = app::App::new(port, tx.clone(), size);
     // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
     let settings = tmuxconf::load(&mut app.keymap);
-    if let Some(n) = settings.base_index { app.base_index = n }
-    if let Some(n) = settings.pane_base_index { app.pane_base_index = n }
+    app.apply_settings(&settings);
     // With a ~/.tmux.conf, tmux's default: no mouse unless it says `set -g mouse on`.
     app.mouse = settings.mouse.unwrap_or(settings.path.is_none());
-    if !app.mouse { execute!(io::stdout(), DisableMouseCapture)?; }
-    if let Some(t) = settings.status_top { app.status_top = t }
-    if let Some(ms) = settings.display_ms { app.display_ms = ms.max(300) }
-    if let Some(ms) = settings.display_panes_ms { app.display_panes_ms = ms }
-    app.look = settings.look.clone();
+    app.mouse_changed = true;
     if config.prefix_set { app.keymap.prefix = config.prefix }
     for (chord, command) in &config.keys {
         match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
@@ -197,6 +196,21 @@ async fn run(config: config::Config) -> io::Result<()> {
         // Everything else already waiting goes into the same frame.
         while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill); need_draw = true }
         if app.quit { break }
+        if std::mem::take(&mut app.mouse_changed) {
+            if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; } else { execute!(term.backend_mut(), DisableMouseCapture)?; }
+        }
+        if std::mem::take(&mut app.suspend) {
+            // C-z: give the shell its terminal back, stop, and pick up where we were on `fg`.
+            execute!(term.backend_mut(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape)?;
+            terminal::disable_raw_mode()?;
+            unsafe { libc_raise_tstp() };
+            terminal::enable_raw_mode()?;
+            execute!(term.backend_mut(), EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange)?;
+            if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; }
+            app.cursor_shape.clear();
+            term.clear()?;
+            need_draw = true;
+        }
         app.flush_acks();
         if refill && matches!(app.modal, Some(modal::Modal::Picker { .. })) { input::refill(&mut app) }
         if need_draw && last_draw.elapsed() >= frame_budget {

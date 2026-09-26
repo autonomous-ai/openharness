@@ -99,6 +99,7 @@ impl Keymap {
         b(k(KeyCode::Char('p'), alt), "previous-window -a", false, "Select the previous window with an alert");
         b(k(KeyCode::Char('o'), alt), "rotate-window -D", false, "Rotate through the panes in reverse");
         b(k(KeyCode::Char('o'), ctrl), "rotate-window", false, "Rotate through the panes");
+        b(k(KeyCode::Char('z'), ctrl), "suspend-client", false, "Suspend the current client");
         b(k(KeyCode::Up, alt), "resize-pane -U 5", true, "Resize the pane up by 5");
         b(k(KeyCode::Down, alt), "resize-pane -D 5", true, "Resize the pane down by 5");
         b(k(KeyCode::Left, alt), "resize-pane -L 5", true, "Resize the pane left by 5");

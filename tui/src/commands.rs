@@ -39,6 +39,25 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("display-message", "display", "Show information about the pane, or a message"),
     ("show-messages", "showmsgs", "Messages so far"),
     ("list-keys", "lsk", "Every key binding"),
+    ("list-windows", "lsw", "The windows"),
+    ("list-panes", "lsp", "The panes in this window"),
+    ("list-sessions", "ls", "The session (this computer) and its windows"),
+    ("list-clients", "lsc", "This client"),
+    ("show-options", "show", "Options as they are now"),
+    ("set-option", "set", "Set an option: set -g mouse on"),
+    ("bind-key", "bind", "Bind a key: bind h select-pane -L"),
+    ("unbind-key", "unbind", "Unbind a key"),
+    ("source-file", "source", "Read a tmux.conf again: source ~/.tmux.conf"),
+    ("swap-window", "swapw", "Swap this window with another: swap-window -t 2"),
+    ("join-pane", "joinp", "Move this pane into another window: join-pane -t :1"),
+    ("move-pane", "movep", "Same as join-pane"),
+    ("clear-history", "clearhist", "Forget this pane's scrollback (here)"),
+    ("capture-pane", "capturep", "Copy the visible pane into a paste buffer"),
+    ("set-buffer", "setb", "Put text in a paste buffer"),
+    ("show-buffer", "showb", "Show the newest paste buffer"),
+    ("respawn-pane", "respawnp", "Restart the harness in this pane"),
+    ("suspend-client", "suspendc", "Suspend (C-z); fg brings it back"),
+    ("rename-session", "rename", "Sessions are computers here — rename it from the desktop app"),
     ("clock-mode", "clock-mode", "A clock"),
     ("refresh-client", "refresh", "Redraw"),
     ("detach-client", "detach", "Detach — everything keeps running"),
@@ -109,6 +128,42 @@ pub fn expand(app: &App, text: &str) -> String {
     let mut out = text.to_string();
     for (k, v) in clients { out = out.replace(k, v) }
     out
+}
+
+/// What tmux's list-* commands print.
+fn listing(app: &App, command: &str) -> Vec<String> {
+    let window = |i: usize| {
+        let tab = &app.tabs[i];
+        let flag = if i == app.active { "*" } else if app.last_tab.as_ref() == Some(&tab.id) { "-" } else { "" };
+        format!("{}: {}{flag} ({} panes){}", app.win_num(i), tab.name, tab.panes().len(), if i == app.active { " (active)" } else { "" })
+    };
+    match command {
+        "list-windows" => (0..app.tabs.len()).map(window).collect(),
+        "list-panes" => app.tab().panes().iter().enumerate().map(|(i, id)| {
+            let p = app.panes.get(id);
+            let (c, r) = p.map(|p| (p.cols, p.rows)).unwrap_or((0, 0));
+            let title = p.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
+            let machine = p.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default();
+            format!("{}: [{c}x{r}] \"{title}\" {machine} %{id}{}", i + app.pane_base_index, if Some(*id) == app.focused() { " (active)" } else { "" })
+        }).collect(),
+        "list-sessions" => {
+            let mut out = vec![format!("{}: {} windows (attached)", app.session_name(), app.tabs.len())];
+            for m in &app.fleet.machines { if m.id != app.fleet.local_id { out.push(format!("  {} — a machine; its harnesses open in any window", m.name)) } }
+            out
+        }
+        "list-clients" => vec![format!("{}: {} [{}x{} {}] (utf8)", std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_else(|_| "tty".into()), app.session_name(), app.size.0, app.size.1, std::env::var("TERM").unwrap_or_default())],
+        _ => vec![
+            format!("base-index {}", app.base_index),
+            format!("display-panes-time {}", app.display_panes_ms),
+            format!("display-time {}", app.display_ms),
+            format!("mouse {}", if app.mouse { "on" } else { "off" }),
+            format!("pane-base-index {}", app.pane_base_index),
+            format!("prefix {}", crate::keys::name(&app.keymap.prefix)),
+            format!("prefix2 {}", app.keymap.prefix2.map(|c| crate::keys::name(&c)).unwrap_or_else(|| "None".into())),
+            format!("repeat-time {}", app.keymap.repeat_ms),
+            format!("status-position {}", if app.status_top { "top" } else { "bottom" }),
+        ],
+    }
 }
 
 fn resolve(name: &str) -> &str {
@@ -199,7 +254,7 @@ fn run_words(app: &mut App, words: &[String]) {
             app.resize_focused(dir, sign * n);
         }
         "swap-pane" => app.swap_pane(if flag(words, "-U") { -1 } else { 1 }),
-        "break-pane" => input::run(app, "pane-tab"),
+        "break-pane" => { if app.tab().panes().len() < 2 { app.say("can't break with only one pane", theme::WARN) } else { input::run(app, "pane-tab") } }
         "rotate-window" => app.rotate(if flag(words, "-D") { -1 } else { 1 }),
         "next-layout" => app.next_layout(),
         "select-layout" => {
@@ -232,6 +287,59 @@ fn run_words(app: &mut App, words: &[String]) {
         "display-message" => { let text = rest(words); if text.is_empty() { input::run(app, "info") } else { let t = expand(app, &text); app.say(t, theme::WARN) } }
         "show-messages" => input::run(app, "messages"),
         "list-keys" => input::run(app, "keys"),
+        "list-windows" | "list-sessions" | "list-panes" | "list-clients" | "show-options" => {
+            let lines = listing(app, command);
+            input::picker(app, crate::modal::PickerKind::Output { title: command.to_string(), lines }, command, "");
+        }
+        "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" => {
+            let mut settings = crate::tmuxconf::Settings::default();
+            let mut words = words.to_vec();
+            words[0] = command.to_string();
+            match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
+                Ok(()) => app.apply_settings(&settings),
+                Err(e) => app.say(e, theme::WARN),
+            }
+        }
+        "source-file" => {
+            let path = rest(words);
+            let path = if let Some(r) = path.strip_prefix("~/") { format!("{}/{r}", std::env::var("HOME").unwrap_or_default()) } else { path };
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    let mut settings = crate::tmuxconf::Settings::default();
+                    crate::tmuxconf::apply(&text, &mut app.keymap, &mut settings);
+                    let problems = settings.problems.clone();
+                    app.apply_settings(&settings);
+                    for p in problems { app.say(p, theme::WARN) }
+                }
+                Err(_) => app.say(format!("{path}: No such file or directory"), theme::WARN),
+            }
+        }
+        "swap-window" => {
+            let Some(n) = opt(words, "-t").and_then(|t| t.trim_start_matches(':').trim_start_matches('=').parse::<usize>().ok()) else { app.say("swap-window -t N", theme::WARN); return };
+            match app.tab_by_num(n) { Some(j) => app.swap_tabs(app.active, j), None => app.say(format!("Can't find window: {n}"), theme::WARN) }
+        }
+        "join-pane" | "move-pane" => {
+            let Some(n) = opt(words, "-t").and_then(|t| t.trim_start_matches(':').trim_start_matches('=').split('.').next().and_then(|n| n.parse::<usize>().ok())) else { app.say("join-pane -t :N", theme::WARN); return };
+            let Some(to) = app.tab_by_num(n) else { app.say(format!("Can't find window: {n}"), theme::WARN); return };
+            if to == app.active { return }
+            let Some((machine, agent)) = input::focused_agent(app) else { return };
+            if let Some(f) = app.focused() { app.close_pane(f) }
+            let to = app.tab_by_num(n).unwrap_or(to);
+            app.select_tab(to);
+            app.open_agent(&machine, &agent, Placement::Split(if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical }));
+        }
+        "clear-history" => { if let Some(p) = app.focused().and_then(|f| app.panes.get_mut(&f)) { p.clear_history() } }
+        "capture-pane" => {
+            if let Some(text) = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.visible_text()) { app.buffers.insert(0, text) }
+        }
+        "set-buffer" => { let text = rest(words); if !text.is_empty() { app.buffers.insert(0, text) } }
+        "show-buffer" => {
+            let lines = app.buffers.first().map(|b| b.lines().map(str::to_string).collect()).unwrap_or_default();
+            input::picker(app, crate::modal::PickerKind::Output { title: "show-buffer".into(), lines }, "show-buffer", "");
+        }
+        "respawn-pane" => input::run(app, "restart"),
+        "suspend-client" => app.suspend = true,
+        "rename-session" => app.say("sessions are computers here: rename one from the desktop app", theme::WARN),
         "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }
         "detach-client" | "kill-server" | "kill-session" => app.quit = true,

@@ -141,6 +141,9 @@ pub struct App {
     pub nums: HashMap<String, usize>,
     /// The cursor shape last sent to the terminal.
     pub cursor_shape: String,
+    /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
+    pub suspend: bool,
+    pub mouse_changed: bool,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
     pub fleet_marked: bool,
@@ -170,6 +173,8 @@ impl App {
             base_index: 0,
             nums: HashMap::new(),
             cursor_shape: String::new(),
+            suspend: false,
+            mouse_changed: false,
             pane_base_index: 0,
             messages: Vec::new(),
             buffers: Vec::new(),
@@ -740,6 +745,40 @@ impl App {
     // ── tabs & panes ─────────────────────────────────────────────────────────
 
     pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
+
+    /// What a tmux.conf (or `set`, `source-file`) said, over what is set now.
+    pub fn apply_settings(&mut self, s: &crate::tmuxconf::Settings) {
+        if let Some(n) = s.base_index { self.base_index = n }
+        if let Some(n) = s.pane_base_index { self.pane_base_index = n }
+        if let Some(m) = s.mouse { self.mouse = m; self.mouse_changed = true }
+        if let Some(t) = s.status_top { self.status_top = t; self.fit_panes() }
+        if let Some(ms) = s.display_ms { self.display_ms = ms.max(300) }
+        if let Some(ms) = s.display_panes_ms { self.display_panes_ms = ms }
+        let (l, n) = (&mut self.look, &s.look);
+        for (to, from) in [(&mut l.status_bg, n.status_bg), (&mut l.status_fg, n.status_fg), (&mut l.message_bg, n.message_bg), (&mut l.message_fg, n.message_fg),
+            (&mut l.active_border, n.active_border), (&mut l.border, n.border), (&mut l.window_fg, n.window_fg), (&mut l.window_bg, n.window_bg),
+            (&mut l.active_window_fg, n.active_window_fg), (&mut l.active_window_bg, n.active_window_bg)] {
+            if from.is_some() { *to = from }
+        }
+        self.redraw_all = true;
+    }
+
+    /// swap-window: the two windows trade places and indexes; this one stays current.
+    pub fn swap_tabs(&mut self, a: usize, b: usize) {
+        if a == b || b >= self.tabs.len() { return }
+        self.renumber();
+        let (ia, ib) = (self.tabs[a].id.clone(), self.tabs[b].id.clone());
+        let (na, nb) = (self.win_num(a), self.win_num(b));
+        self.nums.insert(ia.clone(), nb);
+        self.nums.insert(ib.clone(), na);
+        let (lo, hi) = (a.min(b), a.max(b));
+        self.active = lo;
+        while self.active < hi { self.move_tab(1) }
+        self.active = hi - 1;
+        while self.active > lo { self.move_tab(-1) }
+        self.active = self.tabs.iter().position(|t| t.id == ia).unwrap_or(self.active);
+        self.fit_panes();
+    }
 
     /// tmux's #S: this computer's name, as the status line's `[…]` shows it.
     pub fn session_name(&self) -> String {

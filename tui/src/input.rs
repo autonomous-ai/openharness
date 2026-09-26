@@ -300,8 +300,10 @@ fn home_key(app: &mut App, key: KeyEvent) {
 
 // ── commands ──────────────────────────────────────────────────────────────
 
-fn picker(app: &mut App, kind: PickerKind, title: &str, placeholder: &str) {
+pub fn picker(app: &mut App, kind: PickerKind, title: &str, placeholder: &str) {
     let mut picker = Picker::new(title, placeholder);
+    // A list that is the whole answer (output, messages, keys) needs no preview beside it.
+    if matches!(kind, PickerKind::Output { .. } | PickerKind::Messages | PickerKind::Keys) { picker.preview = false }
     fill(app, &kind, &mut picker);
     app.modal = Some(Modal::Picker { kind, picker });
 }
@@ -313,7 +315,7 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.set_rows(modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref()));
             picker.status = modal::open_status(app, *filter);
             picker.hints = vec![("enter", "open"), ("C-t", "window"), ("C-v", "beside"), ("C-x", "below"), ("tab", "mark"), ("C-/", "preview"), ("M-p", "pause"), ("M-1..9", "answer")];
-            picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { "Nothing matches.".into() };
+            picker.empty = if app.fleet.agents.is_empty() { "no harnesses yet — C-b C makes one".into() } else { String::new() };
         }
         PickerKind::Palette => { picker.set_rows(modal::palette_rows(app)); picker.hints = vec![("enter", "run"), ("C-b :", "type one")] }
         PickerKind::Projects => {
@@ -376,6 +378,13 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("enter", "choose")];
         }
         PickerKind::Route { .. } => {}
+        PickerKind::Output { title, lines } => {
+            picker.keep_order = true;
+            picker.status = title.clone();
+            picker.set_rows(lines.iter().enumerate().map(|(i, l)| crate::picker::Row::new(i.to_string(), l.clone())).collect());
+            picker.empty = "(empty)".into();
+            picker.hints = vec![];
+        }
         PickerKind::Messages => {
             picker.keep_order = true;
             let rows = app.messages.iter().enumerate().rev().map(|(i, (at, text))| {
@@ -433,7 +442,7 @@ fn prompt(app: &mut App, kind: PromptKind, title: &str, label: &str, hint: &str,
     app.modal = Some(Modal::Prompt(p));
 }
 
-fn focused_agent(app: &App) -> Option<(String, String)> {
+pub fn focused_agent(app: &App) -> Option<(String, String)> {
     app.focused().and_then(|f| app.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone()))
 }
 
@@ -850,6 +859,9 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     }
     let before = picker.query.clone();
     let page = (app.size.1 as i64 - 6).max(1);
+    let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
+    // Lists that only show things (tmux's view mode): q leaves, as in tmux.
+    let view = matches!(kind, PickerKind::Keys | PickerKind::Messages | PickerKind::Output { .. } | PickerKind::Buffers | PickerKind::Help);
     match key.code {
         KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
         KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
@@ -861,8 +873,10 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-1),
         KeyCode::PageUp => picker.move_by(page),
         KeyCode::PageDown => picker.move_by(-page),
-        KeyCode::Tab => { picker.toggle_mark(); picker.move_by(1) }
-        KeyCode::BackTab => { picker.toggle_mark(); picker.move_by(-1) }
+        // fzf --multi, in the harness lists only: Tab marks and moves down (toward the prompt).
+        KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-1) }
+        KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(1) }
+        KeyCode::Char('q') if view && picker.query.is_empty() => { return }
         KeyCode::Backspace => picker.backspace(alt),
         KeyCode::Char('h') if ctrl => picker.backspace(false),
         KeyCode::Delete => picker.delete_forward(),
@@ -897,6 +911,9 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     }
     let mut kind = kind;
     if picker.query != before {
+        // Marks belong to one list: switching scope (> commands, @ machines…) drops them.
+        let scope = |q: &str| q.chars().next().filter(|c| ['>', '@', '#', ':', '*', '?'].contains(c));
+        if scope(&picker.query) != scope(&before) { picker.marked.clear() }
         let (next, changed) = remode(app, kind, &mut picker);
         kind = next;
         if changed { prepare(app, &kind); fill(app, &kind, &mut picker) }
@@ -1054,9 +1071,16 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
                 (_, Some(dir)) => Placement::Split(dir),
                 _ => Placement::Auto(None),
             };
-            app.open_agent(&machine, &agent, placement);
-            if state == Some(crate::fleet::State::Paused) {
-                if let Some((_, pane)) = app.find_pane(&machine, &agent) { app.resume(pane) }
+            // fzf --multi: Enter acts on every marked row — the first where asked, the rest beside it.
+            let mut targets: Vec<(String, String)> = picker.marked.iter().filter_map(|m| split_key(m)).collect();
+            if targets.is_empty() { targets.push((machine.clone(), agent.clone())) }
+            for (i, (machine, agent)) in targets.iter().enumerate() {
+                let state = app.fleet.agent(machine, agent).map(|a| app.fleet.state_of(a));
+                if state == Some(crate::fleet::State::Offline) { continue }
+                app.open_agent(machine, agent, if i == 0 { placement.clone() } else { Placement::Auto(None) });
+                if state == Some(crate::fleet::State::Paused) {
+                    if let Some((_, pane)) = app.find_pane(machine, agent) { app.resume(pane) }
+                }
             }
         }
         PickerKind::Inbox => {
@@ -1074,7 +1098,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             if modal::NEEDS_ARGS.contains(&id.as_str()) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None }, ":", &format!("{id} ")))) }
             else if is_command(&id) { run(app, &id) } else { commands::execute(app, &id) }
         }
-        PickerKind::Messages => {}
+        PickerKind::Messages | PickerKind::Output { .. } => {}
         PickerKind::Keys => { if let Some(id) = id { if let Some((_, command)) = id.split_once('\t') { commands::execute(app, command) } } }
         PickerKind::Buffers => { if let Some(i) = id.and_then(|i| i.parse::<usize>().ok()) { paste_buffer(app, i) } }
         PickerKind::Help => {
