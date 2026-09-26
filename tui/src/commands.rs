@@ -4,7 +4,7 @@
 
 use crate::app::{App, Placement};
 use crate::input;
-use crate::layout::{self, Dir, Preset, Toward};
+use crate::layout::{Dir, Preset, Toward};
 use crate::modal::{Filter, Modal, Prompt, PromptKind};
 use crate::theme;
 
@@ -397,8 +397,6 @@ fn run_words(app: &mut App, words: &[String]) {
     }
 }
 
-pub fn placement_for(dir: Dir) -> Placement { Placement::Split(dir) }
-pub fn tiled_ids(ids: &[u64]) -> Option<layout::Node> { layout::build(ids, Preset::Grid) }
 
 #[cfg(test)]
 mod tests {

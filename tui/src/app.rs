@@ -1317,6 +1317,8 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        // display-panes goes away after display-panes-time, as in tmux.
+        if matches!(self.modal, Some(crate::modal::Modal::DisplayPanes { until }) if Instant::now() >= until) { self.modal = None }
         self.orphans.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(10));
         for pane in self.panes.values_mut() { pane.settle_predictions() }
         let now = Instant::now();

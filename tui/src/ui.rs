@@ -886,7 +886,6 @@ pub fn tab_at(app: &App, x: u16) -> Option<usize> {
     app.tab_hits.iter().find(|(_, from, to)| x >= *from && x < *to).map(|(i, _, _)| *i)
 }
 
-pub fn keys_for(app: &App, command: &str) -> String { app.keymap.hint(command).unwrap_or_default() }
 
 #[allow(dead_code)]
 fn _unused(_: &keys::Keymap, _: PromptKind) {}

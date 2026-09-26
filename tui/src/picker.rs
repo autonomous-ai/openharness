@@ -61,7 +61,6 @@ pub struct Picker {
     pub empty: String,
     pub scroll: usize,
     /// Where the terminal cursor goes: the end of the query.
-    pub cursor_pos: Option<ratatui::layout::Position>,
     /// The query starts with a mode character (`>` `@` `#` `:` `*` `?`) that is not part of the match.
     pub prefixed: bool,
     /// Screen row → visible index, from the last draw (for clicks).
@@ -95,7 +94,6 @@ impl Picker {
             flash: None,
             empty: "Nothing matches.".into(),
             scroll: 0,
-            cursor_pos: None,
             prefixed: false,
             row_at: Vec::new(),
             armed: None,
@@ -272,6 +270,7 @@ impl Picker {
         if let Some(at) = self.marked.iter().position(|m| *m == id) { self.marked.remove(at); } else { self.marked.push(id) }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     /// Replace the query outright (a mode switch, a history recall).
     pub fn set_query(&mut self, text: &str) {
         self.query = text.to_string();
