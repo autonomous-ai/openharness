@@ -68,6 +68,7 @@ fn var(app: &App, name: &str, window: usize) -> String {
             r.map(|r| match name { "pane_at_top" => r.y <= body.y, "pane_at_bottom" => r.y + r.height >= body.y + body.height, "pane_at_left" => r.x <= body.x, _ => r.x + r.width >= body.x + body.width })
                 .map(|b| if b { "1" } else { "0" }.to_string()).unwrap_or_default()
         }
+        "window_layout" | "window_visible_layout" => tab.and_then(|t| t.root.as_ref()).map(|r| r.to_tmux(app.body())).unwrap_or_default(),
         "history_size" => pane.map(|p| { use alacritty_terminal::grid::Dimensions; p.term.grid().history_size().to_string() }).unwrap_or_default(),
         "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),

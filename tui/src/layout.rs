@@ -63,6 +63,77 @@ impl Node {
         }
     }
 
+    /// tmux's layout string for this tree in `area` (#{window_layout}): `csum,WxH,X,Y{…}`, `{}`
+    /// side by side, `[]` stacked, a pane's number after its cell.
+    pub fn to_tmux(&self, area: Rect) -> String {
+        fn body(n: &Node, r: Rect, out: &mut String) {
+            out.push_str(&format!("{}x{},{},{}", r.width, r.height, r.x, r.y));
+            match n {
+                Node::Leaf(id) => out.push_str(&format!(",{id}")),
+                Node::Split { dir, ratio, a, b } => {
+                    let (ra, rb) = split_rect(r, *dir, *ratio);
+                    out.push(if *dir == Dir::Horizontal { '{' } else { '[' });
+                    body(a, ra, out);
+                    out.push(',');
+                    body(b, rb, out);
+                    out.push(if *dir == Dir::Horizontal { '}' } else { ']' });
+                }
+            }
+        }
+        let mut b = String::new();
+        body(self, area, &mut b);
+        format!("{:04x},{b}", checksum(&b))
+    }
+
+    /// A tree from a tmux layout string, its cells given to `ids` in order (None when it does not
+    /// read, or has more cells than there are panes).
+    pub fn from_tmux(text: &str, ids: &[u64]) -> Option<Node> {
+        let body = text.split_once(',').map(|(c, rest)| if c.len() == 4 && c.chars().all(|x| x.is_ascii_hexdigit()) { rest } else { text }).unwrap_or(text);
+        let mut chars = body.chars().peekable();
+        let mut next = 0usize;
+        fn num(it: &mut std::iter::Peekable<std::str::Chars>) -> Option<u32> {
+            let mut s = String::new();
+            while let Some(c) = it.peek() { if c.is_ascii_digit() { s.push(*c); it.next(); } else { break } }
+            s.parse().ok()
+        }
+        fn cell(it: &mut std::iter::Peekable<std::str::Chars>, ids: &[u64], next: &mut usize) -> Option<(Node, u32, u32)> {
+            let w = num(it)?; if it.next()? != 'x' { return None }
+            let h = num(it)?; if it.next()? != ',' { return None }
+            num(it)?; if it.next()? != ',' { return None }
+            num(it)?;
+            match it.peek().copied() {
+                Some('{') | Some('[') => {
+                    let open = it.next()?;
+                    let (close, dir) = if open == '{' { ('}', Dir::Horizontal) } else { (']', Dir::Vertical) };
+                    let mut kids = Vec::new();
+                    loop {
+                        kids.push(cell(it, ids, next)?);
+                        match it.next()? { ',' => continue, c if c == close => break, _ => return None }
+                    }
+                    // n children as nested pairs, each split at its first child's share.
+                    fn fold(mut kids: Vec<(Node, u32, u32)>, dir: Dir) -> Node {
+                        if kids.len() == 1 { return kids.remove(0).0 }
+                        let size = |k: &(Node, u32, u32)| if dir == Dir::Horizontal { k.1 } else { k.2 } as f32;
+                        let total: f32 = kids.iter().map(size).sum::<f32>() + (kids.len() - 1) as f32;
+                        let first = kids.remove(0);
+                        let ratio = ((size(&first) + 0.5) / total).clamp(0.05, 0.95);
+                        Node::Split { dir, ratio, a: Box::new(first.0), b: Box::new(fold(kids, dir)) }
+                    }
+                    Some((fold(kids, dir), w, h))
+                }
+                Some(',') => {
+                    it.next();
+                    num(it)?;
+                    let id = *ids.get(*next)?;
+                    *next += 1;
+                    Some((Node::Leaf(id), w, h))
+                }
+                _ => { let id = *ids.get(*next)?; *next += 1; Some((Node::Leaf(id), w, h)) }
+            }
+        }
+        cell(&mut chars, ids, &mut next).map(|(n, _, _)| n)
+    }
+
     /// Split the leaf [target] in [dir], the newcomer after it. False when [target] is not here.
     pub fn split(&mut self, target: u64, new_id: u64, dir: Dir) -> bool {
         match self {
@@ -203,6 +274,13 @@ pub enum Toward { Left, Right, Up, Down }
 
 /// The pane next to [from] in direction [toward]: the nearest one whose edge faces it and which
 /// overlaps it most along the other axis.
+/// tmux's layout checksum.
+fn checksum(s: &str) -> u16 {
+    let mut c: u16 = 0;
+    for b in s.bytes() { c = (c >> 1) | ((c & 1) << 15); c = c.wrapping_add(b as u16) }
+    c
+}
+
 pub fn neighbour(rects: &[(u64, Rect)], from: u64, toward: Toward) -> Option<u64> {
     let (_, r) = *rects.iter().find(|(id, _)| *id == from)?;
     let overlap = |a0: u16, a1: u16, b0: u16, b1: u16| (a1.min(b1) as i32 - a0.max(b0) as i32).max(0);
@@ -247,6 +325,19 @@ mod tests {
         assert_eq!(root.leaves(), vec![1, 2, 3]);
         let root = root.remove(2).unwrap();
         assert_eq!(root.leaves(), vec![1, 3]);
+    }
+
+    #[test]
+    fn tmux_layout_strings() {
+        // Measured from tmux 3.5a: two panes side by side in 81x21.
+        assert_eq!(format!("{:04x}", checksum("81x21,0,0{40x21,0,0,0,40x21,41,0,1}")), "cde9");
+        let mut root = Node::Leaf(1);
+        root.split(1, 2, Dir::Horizontal);
+        let text = root.to_tmux(Rect::new(0, 0, 81, 20));
+        assert!(text.ends_with(",81x20,0,0{40x20,0,0,1,40x20,41,0,2}"), "{text}");
+        let back = Node::from_tmux(&text, &[7, 8]).unwrap();
+        assert_eq!(back.leaves(), vec![7, 8]);
+        assert!(Node::from_tmux("81x20,0,0[81x10,0,0,1,81x9,0,11{40x9,0,11,2,40x9,41,11,3}]", &[1, 2, 3]).is_some());
     }
 
     #[test]
