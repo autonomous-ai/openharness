@@ -180,6 +180,14 @@ fn listing(app: &App, command: &str) -> Vec<String> {
         "list-clients" => vec![format!("{}: {} [{}x{} {}] (utf8)", std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_else(|_| "tty".into()), app.session_name(), app.size.0, app.size.1, std::env::var("TERM").unwrap_or_default())],
         _ => vec![
             format!("base-index {}", app.base_index),
+            format!("mode-keys {}", if app.opts.mode_keys_emacs == Some(true) { "emacs" } else { "vi" }),
+            format!("renumber-windows {}", if app.opts.renumber_windows == Some(true) { "on" } else { "off" }),
+            format!("status {}", if app.opts.status == Some(false) { "off" } else { "on" }),
+            format!("status-left {}", app.opts.status_left.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "\"[#S] \"".into())),
+            format!("status-right {}", app.opts.status_right.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| r##""#{=21:pane_title}" %H:%M %d-%b-%y"##.into())),
+            format!("synchronize-panes {}", if app.tab().sync { "on" } else { "off" }),
+            format!("pane-border-status {}", if app.opts.border_titles == Some(false) { "off" } else { "top" }),
+            format!("@hn-hint-time {}", if app.keymap.hint_ms == u64::MAX { 0 } else { app.keymap.hint_ms }),
             format!("display-panes-time {}", app.display_panes_ms),
             format!("display-time {}", app.display_ms),
             format!("mouse {}", if app.mouse { "on" } else { "off" }),
@@ -330,7 +338,14 @@ fn run_words(app: &mut App, words: &[String]) {
             if text.is_empty() { input::run(app, "info") } else { let t = expand(app, &text); app.say(t, theme::WARN) }
         }
         "show-messages" => input::run(app, "messages"),
-        "list-keys" => input::run(app, "keys"),
+        "list-keys" => {
+            // -T copy-mode-vi / copy-mode / root: that table.
+            if let Some(t) = opt(words, "-T").and_then(|t| crate::keys::table_named(&t)) {
+                let list = app.keymap.table_mut(t).clone();
+                let lines = list.iter().map(|b| format!("bind-key -T {} {:<8} {}", opt(words, "-T").unwrap_or_default(), crate::keys::name(&b.chord), b.command)).collect();
+                input::picker(app, crate::modal::PickerKind::Output { title: "list-keys".into(), lines }, "list-keys", "");
+            } else { input::run(app, "keys") }
+        }
         "list-windows" | "list-sessions" | "list-panes" | "list-clients" | "show-options" => {
             let mut lines = listing(app, command);
             // show -g prefix: just that one.
@@ -341,6 +356,24 @@ fn run_words(app: &mut App, words: &[String]) {
             let mut settings = crate::tmuxconf::Settings::default();
             let mut words = words.to_vec();
             words[0] = command.to_string();
+            if command != "bind-key" && command != "unbind-key" {
+                // A switch with no value toggles, as tmux's does (`bind C-s set status`).
+                let args: Vec<usize> = (1..words.len()).filter(|i| !words[*i].starts_with('-')).collect();
+                if let Some(&at) = args.first() {
+                    let name = words[at].clone();
+                    let now = match name.as_str() {
+                        "status" => Some(app.opts.status != Some(false)), "mouse" => Some(app.mouse),
+                        "synchronize-panes" => Some(app.tab().sync), "renumber-windows" => Some(app.opts.renumber_windows == Some(true)),
+                        _ => None,
+                    };
+                    if let Some(now) = now {
+                        let value = args.get(1).map(|i| words[*i].clone());
+                        let on = match value.as_deref() { None | Some("") => !now, Some(v) => matches!(v, "on" | "yes" | "1" | "true") };
+                        if name == "synchronize-panes" { app.tab_mut().sync = on; return }
+                        if args.len() < 2 { words.push(if on { "on".into() } else { "off".into() }) }
+                    }
+                }
+            }
             match crate::tmuxconf::directive(&words, &mut app.keymap, &mut settings) {
                 Ok(()) => { app.apply_settings(&settings); if let Some(n) = settings.notes.first() { app.say(n.clone(), theme::WARN) } }
                 Err(e) => app.say(e, theme::WARN),
@@ -430,11 +463,31 @@ fn run_words(app: &mut App, words: &[String]) {
             let Some(cond) = words.get(i) else { return };
             // -F: a format. Else a shell command, run here — unless it asks about the pane's tty
             // (vim-tmux-navigator), which lives on another machine: a harness pane is not vim.
-            let truth = if format { !matches!(expand(app, cond).trim(), "" | "0") } else if cond.contains("#{") || cond.contains("pane_tty") || cond.contains("is_vim") { false } else { crate::tmuxconf::shell_true(&expand(app, cond)) };
+            let truth = if format { !matches!(expand(app, cond).trim(), "" | "0") }
+                else if cond.contains("#{") || cond.contains("pane_tty") || cond.contains("is_vim") {
+                    // "Is vim in this pane?": a shell pane on the alternate screen is running a full-screen program.
+                    app.focused().and_then(|f| app.panes.get(&f)).filter(|p| app.fleet.agent(&p.machine_id, &p.agent_id).map(|a| a.engine == "terminal").unwrap_or(false))
+                        .map(|p| p.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)).unwrap_or(false)
+                } else { crate::tmuxconf::shell_true(&expand(app, cond)) };
             let pick = if truth { words.get(i + 1) } else { words.get(i + 2) };
             if let Some(command) = pick.cloned() { execute(app, &command) }
         }
-        "run-shell" | "run" => {}
+        // run-shell: on this computer, as tmux's server would; what it prints is shown.
+        "run-shell" | "run" => {
+            let cmd = rest(words);
+            if cmd.is_empty() { return }
+            let cmd = expand(app, &cmd);
+            let out = std::process::Command::new("sh").arg("-c").arg(&cmd).output();
+            match out {
+                Ok(o) => {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+                    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+                    if lines.len() > 1 { input::picker(app, crate::modal::PickerKind::Output { title: "run-shell".into(), lines }, "run-shell", "") }
+                    else if let Some(l) = lines.first() { app.say(l.clone(), theme::WARN) }
+                }
+                Err(e) => app.say(format!("run-shell: {e}"), theme::WARN),
+            }
+        }
         "send-prefix" => { let prefix = crate::keys::name(&app.keymap.prefix); input::send_keys(app, &[prefix]) }
         "command-prompt" => {
             let label = opt(words, "-p").unwrap_or_else(|| ":".into());

@@ -34,6 +34,8 @@ pub struct Tab {
     pub layout_at: usize,
     /// Whether the desk knows this tab yet (a new, empty tab is local until its first harness).
     pub on_desk: bool,
+    /// synchronize-panes: keys go to every pane here.
+    pub sync: bool,
     /// The desk's layout document for this tab, kept whole: a preset chosen here updates its entry
     /// and leaves the sizes other windows saved alone.
     pub layout: Value,
@@ -41,7 +43,7 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(name: &str) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last_focus: None, layout_at: 4, on_desk: false, layout: json!({}) }
+        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last_focus: None, layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
     }
     pub fn panes(&self) -> Vec<u64> { self.root.as_ref().map(Node::leaves).unwrap_or_default() }
 }
@@ -785,7 +787,7 @@ impl App {
         let (o, n) = (&mut self.opts, &s.options);
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
-            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status);
+            window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format);
         self.fit_panes();
         self.redraw_all = true;
     }
@@ -907,6 +909,7 @@ impl App {
         if let Some(prev) = self.focused().and_then(|f| self.panes.get(&f)).map(|p| (p.machine_id.clone(), p.agent_id.clone())) {
             if self.panes.get(&pane).map(|p| (p.machine_id.clone(), p.agent_id.clone())) != Some(prev.clone()) { self.last_harness = Some(prev) }
         }
+        if tab != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
         self.active = tab;
         if self.tabs[tab].zoomed && self.tabs[tab].focus != Some(pane) { self.tabs[tab].zoomed = false }
         self.tabs[tab].focus = Some(pane);

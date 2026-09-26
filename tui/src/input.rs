@@ -124,6 +124,14 @@ fn send_to_focused(app: &mut App, bytes: Vec<u8>) {
         if !pane.opening { app.open_stream(focus, true) }
         return;
     }
+    // synchronize-panes: the same keys into every pane of the window that takes them.
+    if app.tab().sync {
+        let others: Vec<u64> = app.tab().panes().into_iter().filter(|p| *p != focus).collect();
+        for p in others {
+            let ok = app.panes.get(&p).map(|x| x.stream.is_some() && !x.read_only && matches!(x.phase, Phase::Live)).unwrap_or(false);
+            if ok { app.send_input(p, &bytes) }
+        }
+    }
     app.send_input(focus, &bytes);
 }
 
@@ -1199,7 +1207,10 @@ fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<
                 return;
             }
         }
-        KeyCode::Char(c @ '0'..='9') => { if let Some(at) = rows.iter().position(|r| r.pane.is_none() && app.win_num(r.window) == c as usize - '0' as usize) { cursor = at } }
+        // The number in brackets chooses that row, as tmux's tree does ((0) is the session).
+        KeyCode::Char(c @ '1'..='9') => {
+            if let Some(r) = rows.get(c as usize - '1' as usize) { match r.pane { Some(p) => app.focus_pane(r.window, p), None => app.select_tab(r.window) } return }
+        }
         _ => {}
     }
     app.modal = Some(Modal::Tree { cursor: cursor.min(n - 1), collapsed });

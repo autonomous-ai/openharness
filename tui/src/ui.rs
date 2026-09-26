@@ -173,6 +173,12 @@ fn border_line(buf: &mut Buffer, app: &App, id: u64, index: usize, rect: Rect, a
     let style = border_style(app, active);
     for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.set_symbol("─").set_style(style); } }
     let Some(pane) = app.panes.get(&id) else { return };
+    // Your pane-border-format, if tmux.conf has one.
+    if let Some(fmt) = &app.opts.pane_border_format {
+        let line = clip_spans(crate::format::spans_for_pane(app, fmt, app.active, id, style), rect.width.saturating_sub(1) as usize);
+        buf.set_line(rect.x + 1, rect.y, &line, rect.width.saturating_sub(1));
+        return;
+    }
     let agent = app.fleet.agent(&pane.machine_id, &pane.agent_id);
     let title = agent.map(|a| a.name.clone()).unwrap_or_else(|| pane.agent_id.chars().take(8).collect());
     let mut spans: Vec<Span> = vec![Span::styled("─", style), Span::styled(index.to_string(), if active { style.add_modifier(Modifier::REVERSED) } else { style }), Span::styled(format!(" \"{title}\""), style)];
@@ -415,7 +421,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         if custom {
             let current = i == app.active;
             let fmt = if current { app.opts.window_status_current_format.clone() } else { None }.or_else(|| app.opts.window_status_format.clone()).unwrap_or_else(|| "#I:#W#F".into());
-            let style = match (current, app.opts.window_status_current_style) { (true, Some((fg, bg))) => { let mut st = base; if let Some(c) = fg { st = st.fg(c) } if let Some(c) = bg { st = st.bg(c) } st } _ => base };
+            let paint = |(fg, bg): (Option<Color>, Option<Color>)| { let mut st = base; if let Some(c) = fg { st = st.fg(c) } if let Some(c) = bg { st = st.bg(c) } st };
+            let style = match (current, app.opts.window_status_current_style, app.opts.window_status_style) { (true, Some(c), _) => paint(c), (false, _, Some(c)) => paint(c), _ => base };
             crate::format::spans(app, &fmt, Some(i), style)
         } else {
             let (text, alert) = window_entry(app, i, max);
@@ -437,6 +444,16 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         while first < app.active && widths[first..=app.active].iter().sum::<u16>() > room.saturating_sub(2) { first += 1 }
     }
     let mut x = list_x;
+    // status-justify: the list in the middle (centre, absolute-centre) or at the right.
+    let total: u16 = widths[first..].iter().sum();
+    if total < room {
+        match app.opts.status_justify.as_deref() {
+            Some("centre") => x = list_x + (room - total) / 2,
+            Some("absolute-centre") => x = (rect.x + rect.width.saturating_sub(total) / 2).max(list_x),
+            Some("right") => x = list_end.saturating_sub(total),
+            _ => {}
+        }
+    }
     if first > 0 { buf.set_string(x, rect.y, "<", base); x += 1 }
     app.tab_hits.clear();
     for (i, e) in entries.into_iter().enumerate().skip(first) {
@@ -489,19 +506,9 @@ fn keep_tail(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
 fn window_entry(app: &App, index: usize, max: usize) -> (String, bool) {
     let tab = &app.tabs[index];
     let name = clip(&tab.name, max);
-    let mut flags = String::new();
-    if index == app.active { flags.push('*') }
-    else if app.last_tab.as_ref() == Some(&tab.id) { flags.push('-') }
-    let (mut bell, mut activity) = (false, false);
-    for id in tab.panes() {
-        let Some(pane) = app.panes.get(&id) else { continue };
-        let Some(agent) = app.fleet.agent(&pane.machine_id, &pane.agent_id) else { continue };
-        match app.fleet.state_of(agent) { State::NeedsInput => bell = true, State::Done => activity = true, _ => {} }
-    }
-    if bell { flags.push('!') }
-    if activity && !bell { flags.push('#') }
-    if tab.zoomed { flags.push('Z') }
-    (format!("{}:{}{}", app.win_num(index), name, flags), (bell || activity) && index != app.active)
+    let flags = crate::format::flags(app, index);
+    let alert = flags.contains('!') || flags.contains('#');
+    (format!("{}:{}{}", app.win_num(index), name, flags), alert && index != app.active)
 }
 
 /// "%H:%M" and "%d-%b-%y" in local time, without a date crate.
