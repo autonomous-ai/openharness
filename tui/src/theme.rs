@@ -528,7 +528,7 @@ pub fn fzf_opts() -> &'static FzfOpts {
                             let k = k.replace("return", "enter");
                             match k.as_str() {
                                 "page-up" => "pgup".into(), "page-down" => "pgdn".into(), "backspace" | "bs" => "bspace".into(),
-                                "alt-bspace" | "alt-backspace" => "alt-bs".into(), "delete" => "del".into(),
+                                "alt-bspace" | "alt-backspace" => "alt-bs".into(), "delete" => "del".into(), "shift-tab" => "btab".into(),
                                 _ => k,
                             }
                         };

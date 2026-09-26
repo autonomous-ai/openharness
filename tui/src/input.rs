@@ -1112,111 +1112,75 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let page = (picker.page_rows.get() - 1).max(1);
     let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
-    // FZF_DEFAULT_OPTS --bind: your key:action pairs come first.
+    // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
+    // as in fzf), and a bound key never falls back to this list's own meaning of it: the actions it
+    // knows run, the others do nothing.
     let name = fzf_key_name(&key);
-    // The last bind for a key wins, as in fzf; an action this list does not know leaves the key
-    // to its own meaning.
     let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone());
-    const KNOWN: &[&str] = &["up", "down", "page-up", "page-down", "half-page-up", "half-page-down", "first", "last", "top", "toggle", "toggle+down", "toggle+up", "toggle-in", "toggle-out",
-        "select-all", "deselect-all", "toggle-all", "toggle-preview", "preview-up", "preview-down", "preview-page-up", "preview-page-down", "preview-half-page-up", "preview-half-page-down",
-        "preview-top", "preview-bottom", "clear-query", "backward-kill-word", "kill-word", "unix-line-discard", "unix-word-rubout", "kill-line", "beginning-of-line", "end-of-line",
-        "backward-char", "forward-char", "backward-word", "forward-word", "backward-delete-char", "delete-char", "delete-char/eof", "yank", "accept", "accept-non-empty", "abort", "cancel", "ignore"];
-    let bound = bound.filter(|a| a.split('+').all(|x| KNOWN.contains(&x) || x == "toggle" || x == "down" || x == "up"));
     if let Some(actions) = bound {
-        let half = (page / 2).max(1);
-        for action in actions.split('+') {
-            match action {
-                "half-page-up" => picker.move_by(half * up), "half-page-down" => picker.move_by(-half * up),
-                "top" => picker.move_by(-(picker.visible.len() as i64)),
-                "toggle-in" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { 1 } else { -1 }) }
-                "toggle-out" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { -1 } else { 1 }) }
-                "preview-page-up" | "preview-half-page-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(if action == "preview-page-up" { 10 } else { 5 }),
-                "preview-page-down" | "preview-half-page-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(if action == "preview-page-down" { 10 } else { 5 }).min(picker.preview_max.get()),
-                "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_scroll = picker.preview_max.get(),
-                "unix-word-rubout" => picker.backspace(true), "kill-line" => { let q: String = picker.query.chars().take(picker.qcursor).collect(); picker.set_query(&q) }
-                "backward-char" => picker.qmove(-1, false), "forward-char" => picker.qmove(1, false),
-                "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),
-                "backward-delete-char" => picker.backspace(false), "delete-char" => picker.delete_forward(),
-                "delete-char/eof" => { if picker.query.is_empty() { SPLIT.with(|s| s.set(None)); return } picker.delete_forward() }
-                "yank" => picker.yank(), "ignore" => {}
-                "accept-non-empty" => { if !picker.visible.is_empty() { choose(app, kind, picker, Choice::Enter); return } }
-                "up" => picker.move_by(up), "down" => picker.move_by(-up),
-                "page-up" => picker.move_by(page * up), "page-down" => picker.move_by(-page * up),
-                "first" => { picker.move_by(-(picker.visible.len() as i64)) } "last" => { picker.move_by(picker.visible.len() as i64) }
-                "toggle" => picker.toggle_mark(),
-                "select-all" => { if multi { picker.marked = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } }
-                "deselect-all" => picker.marked.clear(),
-                "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
-                "toggle-preview" => picker.preview = !picker.preview,
-                "preview-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
-                "preview-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
-                "clear-query" => picker.set_query(""),
-                "backward-kill-word" => picker.kill_word(false), "kill-word" => picker.kill_word(true), "unix-line-discard" => picker.clear_query(),
-                "beginning-of-line" => picker.qhome(), "end-of-line" => picker.qend(),
-                "accept" => { choose(app, kind, picker, Choice::Enter); return }
-                "abort" | "cancel" => { SPLIT.with(|s| s.set(None)); return }
-                _ => {}
-            }
+        match bound_actions(&mut picker, &actions, page, up, multi) {
+            End::Accept => { choose(app, kind, picker, Choice::Enter); return }
+            End::Abort => { SPLIT.with(|s| s.set(None)); return }
+            End::Stay => {}
         }
-        app.modal = Some(Modal::Picker { kind, picker });
-        return;
-    }
-    match key.code {
-        KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
-        KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
-        KeyCode::Up if shift => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
-        KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
-        // Up is toward the top of the screen: further down the list, unless it is reversed.
-        KeyCode::Up => picker.move_by(up),
-        KeyCode::Down => picker.move_by(-up),
-        KeyCode::Char('k' | 'p') if ctrl => picker.move_by(up),
-        KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-up),
-        KeyCode::PageUp => picker.move_by(page * up),
-        KeyCode::PageDown => picker.move_by(-page * up),
-        // fzf: C-d on an empty query closes the list; C-l redraws (no link here).
-        KeyCode::Char('d') if ctrl && picker.query.is_empty() => { SPLIT.with(|s| s.set(None)); return }
-        KeyCode::Char('l') if ctrl => { app.redraw_all = true }
-        // fzf --multi, in the harness lists only: Tab marks and moves down (toward the prompt).
-        KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-up) }
-        KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(up) }
-        KeyCode::Backspace if alt => picker.kill_word(false),
-        KeyCode::Backspace => picker.backspace(false),
-        KeyCode::Char('d') if alt => picker.kill_word(true),
-        KeyCode::Char('y') if ctrl => picker.yank(),
-        KeyCode::Char('h') if ctrl => picker.backspace(false),
-        KeyCode::Delete => picker.delete_forward(),
-        KeyCode::Char('d') if ctrl => picker.delete_forward(),
-        KeyCode::Char('u') if ctrl => picker.clear_query(),
-        KeyCode::Char('w') if ctrl => picker.backspace(true),
-        // fzf's: shift-left/right by words; ctrl- and alt-left/right are not bound.
-        KeyCode::Left if shift => picker.qmove(-1, true),
-        KeyCode::Right if shift => picker.qmove(1, true),
-        KeyCode::Left | KeyCode::Right if ctrl || alt => {}
-        KeyCode::Left => picker.qmove(-1, false),
-        KeyCode::Right => picker.qmove(1, false),
-        KeyCode::Char('b') if ctrl => picker.qmove(-1, false),
-        KeyCode::Char('f') if ctrl => picker.qmove(1, false),
-        KeyCode::Char('b') if alt => picker.qmove(-1, true),
-        KeyCode::Char('f') if alt => picker.qmove(1, true),
-        KeyCode::Char('a') if ctrl => picker.qhome(),
-        KeyCode::Char('e') if ctrl => picker.qend(),
-        KeyCode::Home => picker.qhome(),
-        KeyCode::End => picker.qend(),
-        KeyCode::Char('/' | '_' | '7') if ctrl => { picker.preview = !picker.preview; picker.preview_scroll = 0 }
-        KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
-        KeyCode::Char('p') if alt => { choose(app, kind, picker, Choice::Pause); return }
-        KeyCode::Enter if alt => { choose(app, kind, picker, Choice::Here); return }
-        KeyCode::Enter => { choose(app, kind, picker, Choice::Enter); return }
-        KeyCode::Char('t') if ctrl => { choose(app, kind, picker, Choice::Tab); return }
-        KeyCode::Char('v') if ctrl => { choose(app, kind, picker, Choice::SplitRight); return }
-        KeyCode::Char('x') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
-        KeyCode::Char('s') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
-        KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
-        KeyCode::Char('l') if alt => { choose(app, kind, picker, Choice::Link); return }
-        KeyCode::Char('n') if alt => { choose(app, kind, picker, Choice::New); return }
-        KeyCode::Char('i') if alt => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
-        KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
-        _ => {}
+    } else {
+        match key.code {
+            KeyCode::Esc => { SPLIT.with(|s| s.set(None)); return }
+            KeyCode::Char('c' | 'g' | 'q') if ctrl => { SPLIT.with(|s| s.set(None)); return }
+            KeyCode::Up if shift => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
+            KeyCode::Down if shift => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
+            // Up is toward the top of the screen: further down the list, unless it is reversed.
+            KeyCode::Up => picker.move_by(up),
+            KeyCode::Down => picker.move_by(-up),
+            KeyCode::Char('k' | 'p') if ctrl => picker.move_by(up),
+            KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-up),
+            KeyCode::PageUp => picker.move_by(page * up),
+            KeyCode::PageDown => picker.move_by(-page * up),
+            // fzf: C-d on an empty query closes the list; C-l redraws (no link here).
+            KeyCode::Char('d') if ctrl && picker.query.is_empty() => { SPLIT.with(|s| s.set(None)); return }
+            KeyCode::Char('l') if ctrl => { app.redraw_all = true }
+            // fzf --multi, in the harness lists only: Tab marks and moves down (toward the prompt).
+            KeyCode::Tab if multi => { picker.toggle_mark(); picker.move_by(-up) }
+            KeyCode::BackTab if multi => { picker.toggle_mark(); picker.move_by(up) }
+            KeyCode::Backspace if alt => picker.kill_word(false),
+            KeyCode::Backspace => picker.backspace(false),
+            KeyCode::Char('d') if alt => picker.kill_word(true),
+            KeyCode::Char('y') if ctrl => picker.yank(),
+            KeyCode::Char('h') if ctrl => picker.backspace(false),
+            KeyCode::Delete => picker.delete_forward(),
+            KeyCode::Char('d') if ctrl => picker.delete_forward(),
+            KeyCode::Char('u') if ctrl => picker.clear_query(),
+            KeyCode::Char('w') if ctrl => picker.backspace(true),
+            // fzf's: shift-left/right by words; ctrl- and alt-left/right are not bound.
+            KeyCode::Left if shift => picker.qmove(-1, true),
+            KeyCode::Right if shift => picker.qmove(1, true),
+            KeyCode::Left | KeyCode::Right if ctrl || alt => {}
+            KeyCode::Left => picker.qmove(-1, false),
+            KeyCode::Right => picker.qmove(1, false),
+            KeyCode::Char('b') if ctrl => picker.qmove(-1, false),
+            KeyCode::Char('f') if ctrl => picker.qmove(1, false),
+            KeyCode::Char('b') if alt => picker.qmove(-1, true),
+            KeyCode::Char('f') if alt => picker.qmove(1, true),
+            KeyCode::Char('a') if ctrl => picker.qhome(),
+            KeyCode::Char('e') if ctrl => picker.qend(),
+            KeyCode::Home => picker.qhome(),
+            KeyCode::End => picker.qend(),
+            KeyCode::Char('/' | '_' | '7') if ctrl => { picker.preview = !picker.preview; picker.preview_scroll = 0 }
+            KeyCode::Char(c @ '1'..='9') if alt => { answer_from(app, &kind, &mut picker, c as usize - '1' as usize) }
+            KeyCode::Char('p') if alt => { choose(app, kind, picker, Choice::Pause); return }
+            KeyCode::Enter if alt => { choose(app, kind, picker, Choice::Here); return }
+            KeyCode::Enter => { choose(app, kind, picker, Choice::Enter); return }
+            KeyCode::Char('t') if ctrl => { choose(app, kind, picker, Choice::Tab); return }
+            KeyCode::Char('v') if ctrl => { choose(app, kind, picker, Choice::SplitRight); return }
+            KeyCode::Char('x') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
+            KeyCode::Char('s') if ctrl => { choose(app, kind, picker, Choice::SplitDown); return }
+            KeyCode::Char('o') if ctrl => { choose(app, kind, picker, Choice::Open); return }
+            KeyCode::Char('l') if alt => { choose(app, kind, picker, Choice::Link); return }
+            KeyCode::Char('n') if alt => { choose(app, kind, picker, Choice::New); return }
+            KeyCode::Char('i') if alt => { if let PickerKind::Store = kind { return store_install(app, kind, picker) } }
+            KeyCode::Char(c) if !ctrl && !alt => picker.type_char(c),
+            _ => {}
+        }
     }
     let mut kind = kind;
     if picker.query != before {
@@ -1226,6 +1190,15 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         let (next, changed) = remode(app, kind, &mut picker);
         kind = next;
         if changed { prepare(app, &kind); fill(app, &kind, &mut picker) }
+        // --bind change:…, fzf's event for a query that changed (change:first puts the cursor back
+        // on the best match).
+        if let Some(actions) = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k == "change").map(|(_, a)| a.clone()) {
+            match bound_actions(&mut picker, &actions, page, up, multi) {
+                End::Accept => { choose(app, kind, picker, Choice::Enter); return }
+                End::Abort => { SPLIT.with(|s| s.set(None)); return }
+                End::Stay => {}
+            }
+        }
     }
     if matches!(kind, PickerKind::Open { .. } | PickerKind::Inbox) { if let Some(id) = picker.current_id() { ensure_recent(app, &id) } }
     app.modal = Some(Modal::Picker { kind, picker });
@@ -1524,6 +1497,68 @@ fn tree_key(app: &mut App, key: KeyEvent, mut cursor: usize, mut collapsed: Vec<
     app.modal = Some(Modal::Tree { cursor: cursor.min(n - 1), collapsed });
 }
 
+/// What a bound action chain leaves the list to do.
+enum End { Stay, Accept, Abort }
+
+/// An fzf action chain (`up+up`, `toggle+down`) split where a `+` is not inside an action's (…).
+fn split_chain(actions: &str) -> Vec<String> {
+    let (mut depth, mut out, mut cur) = (0i32, Vec::new(), String::new());
+    for c in actions.chars() {
+        match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, '+' if depth == 0 => { out.push(std::mem::take(&mut cur)); continue } _ => {} }
+        cur.push(c);
+    }
+    out.push(cur);
+    out
+}
+
+/// A bound key's (or event's) actions, in order: the ones this list knows, as fzf does them; the
+/// others (execute, become, change-prompt …) do nothing.
+fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, page: i64, up: i64, multi: bool) -> End {
+    let half = (page / 2).max(1);
+    let len = picker.visible.len() as i64;
+    for action in split_chain(actions) {
+        match action.as_str() {
+            "half-page-up" => picker.move_by(half * up), "half-page-down" => picker.move_by(-half * up),
+            "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
+            "toggle-in" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { 1 } else { -1 }) }
+            "toggle-out" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { -1 } else { 1 }) }
+            "preview-page-up" | "preview-half-page-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(if action == "preview-page-up" { 10 } else { 5 }),
+            "preview-page-down" | "preview-half-page-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(if action == "preview-page-down" { 10 } else { 5 }).min(picker.preview_max.get()),
+            "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_scroll = picker.preview_max.get(),
+            "unix-word-rubout" => picker.backspace(true), "kill-line" => { let q: String = picker.query.chars().take(picker.qcursor).collect(); picker.set_query(&q) }
+            "backward-char" => picker.qmove(-1, false), "forward-char" => picker.qmove(1, false),
+            "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),
+            "backward-delete-char" => picker.backspace(false), "delete-char" => picker.delete_forward(),
+            "delete-char/eof" => { if picker.query.is_empty() { return End::Abort } picker.delete_forward() }
+            "yank" => picker.yank(),
+            "accept-non-empty" => { if !picker.visible.is_empty() { return End::Accept } }
+            "accept" => return End::Accept,
+            "abort" | "cancel" => return End::Abort,
+            "up" => picker.move_by(up), "down" => picker.move_by(-up),
+            "page-up" => picker.move_by(page * up), "page-down" => picker.move_by(-page * up),
+            "toggle" => picker.toggle_mark(),
+            "select-all" => { if multi { picker.marked = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } }
+            "deselect-all" => picker.marked.clear(),
+            "toggle-all" => { if multi { let all: Vec<String> = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect(); for id in all { if let Some(at) = picker.marked.iter().position(|m| *m == id) { picker.marked.remove(at); } else { picker.marked.push(id) } } } }
+            "toggle-preview" => picker.preview = !picker.preview,
+            "preview-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(1),
+            "preview-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(1).min(picker.preview_max.get()),
+            "clear-query" => picker.set_query(""),
+            "backward-kill-word" => picker.kill_word(false), "kill-word" => picker.kill_word(true), "unix-line-discard" => picker.clear_query(),
+            "beginning-of-line" => picker.qhome(), "end-of-line" => picker.qend(),
+            // pos(N): the Nth match (1 the best; -1 the last).
+            a if a.starts_with("pos(") && a.ends_with(')') => {
+                if let Ok(n) = a[4..a.len() - 1].trim().parse::<i64>() {
+                    if n > 0 && len > 0 { picker.move_by(-len); picker.move_by((n - 1).min(len - 1)) }
+                    else if n < 0 && len > 0 { picker.move_by(len); picker.move_by(-((-n - 1).min(len - 1))) }
+                }
+            }
+            _ => {}
+        }
+    }
+    End::Stay
+}
+
 /// A key as fzf's --bind names it: ctrl-j, alt-a, enter, btab, f1, ctrl-/ …
 fn fzf_key_name(key: &KeyEvent) -> String {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1537,7 +1572,7 @@ fn fzf_key_name(key: &KeyEvent) -> String {
         _ => String::new(),
     };
     let upper = matches!(key.code, KeyCode::Char(c) if c.is_uppercase());
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT) && !matches!(key.code, KeyCode::Char(_));
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT) && !matches!(key.code, KeyCode::Char(_) | KeyCode::BackTab);
     if shift && !ctrl && !alt { return format!("shift-{base}") }
     if alt && !ctrl && key.code == KeyCode::Backspace { return "alt-bs".into() }
     // C-/ arrives as ctrl-/ or as its control character.
