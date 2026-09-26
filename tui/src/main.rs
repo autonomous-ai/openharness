@@ -301,7 +301,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     let host = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(app::hostname);
     drop(term);
     drop(restore);
-    // As tmux says it: the harnesses are still running, and `hn` comes back to them.
-    println!("[detached (from session {host})]");
+    // As tmux says it: the harnesses are still running, and `hn` comes back to them — or the
+    // last window went, and the session with it.
+    if app.exited { println!("[exited]") } else { println!("[detached (from session {host})]") }
     Ok(())
 }

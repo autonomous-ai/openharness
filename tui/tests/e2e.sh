@@ -42,8 +42,9 @@ wait_eq() { # wait_eq <what> <expected> <command…>: until the command prints w
   echo "✓ $what"
 }
 
-expect "home lists the fleet" "Mock Claude"
-expect "status line, tmux-style" "0:home*"
+# As tmux starts: window 0 is a shell on this computer.
+expect "starts in a shell, as tmux does" "Mock terminal (mock)" 5000
+expect "status line, tmux-style" "[mock-local] 0:"
 tmux_ send-keys -t t C-b s
 expect "C-b s opens the fzf list" "Search harnesses"
 tmux_ send-keys -t t "codex"
@@ -76,11 +77,12 @@ echo "✓ #{pane_current_command} and #{pane_current_path} come from the pane's 
 
 
 # The dial (the Harness device): hn is the window, so it says what is on screen and does what the dial asks.
-wait_eq "the dial's ring is this window's panes, in pane order" 2 dial "d.said.app_panes?.agentIds?.length"
-codex=$(dial "d.said.app_panes.agentIds[0]")
+# Window 0: the shell hn started in, the Codex harness beside it, the remote shell.
+wait_eq "the dial's ring is this window's panes, in pane order" 3 dial "d.said.app_panes?.agentIds?.length"
+codex=$(dial "d.said.app_panes.agentIds[1]")
 wait_eq "the dial hears the windows" 1 dial "d.said.app_swarms?.swarms?.length"
 push "{\"type\":\"dial_focus\",\"payload\":{\"machineId\":\"mock0000000000000000000000000001\",\"agentId\":\"$codex\"}}"
-wait_eq "turning the dial selects that pane" 0 hn display -p '#{pane_index}'
+wait_eq "turning the dial selects that pane" 1 hn display -p '#{pane_index}'
 wait_eq "and the dial hears it back (app_focus)" "$codex" dial "d.said.app_focus?.agentId"
 push '{"type":"dial_scroll","payload":{"phase":"down","dy":0,"velocity":0}}'
 push '{"type":"dial_scroll","payload":{"phase":"move","dy":40,"velocity":0}}'
@@ -95,9 +97,9 @@ push '{"type":"voice_route_request","payload":{"voiceId":"v2","text":"unsure: wh
 expect "one it is not sure of is put to you" "Send: unsure: which one"
 tmux_ send-keys -t t Escape
 wait_eq "esc cancels it on the dial" "taken,cancelled" dial "d.replies.filter(r => r.voiceId === 'v2').map(r => r.state).join(',')"
-shell=$(dial "d.said.app_panes.agentIds[1]")
+shell=$(dial "d.said.app_panes.agentIds[2]")
 push "{\"type\":\"dial_focus\",\"payload\":{\"machineId\":\"mock0000000000000000000000000002\",\"agentId\":\"$shell\"}}"
-wait_eq "the dial reaches a pane on another machine too" 1 hn display -p '#{pane_index}'
+wait_eq "the dial reaches a pane on another machine too" 2 hn display -p '#{pane_index}'
 
 tmux_ send-keys -t t C-b o
 tmux_ send-keys -t t C-b z
@@ -123,7 +125,7 @@ push "{\"type\":\"dial_swarm\",\"payload\":{\"swarmId\":\"$first\"}}"
 wait_eq "picking a window on the dial selects it" 0 hn display -p '#{window_index}'
 tmux_ send-keys -t t C-b 1
 tmux_ send-keys -t t C-b 0
-expect "C-b 0: back to window 0 (its harness idle: ·)" "0:· Mock Codex*"
+expect "C-b 0: back to window 0 (its harness idle: ·)" "0:· "
 tmux_ send-keys -t t C-b w
 expect "C-b w: choose-tree" "windows (attached)"
 tmux_ send-keys -t t q
@@ -138,4 +140,12 @@ tmux_ send-keys -t t C-b d
 sleep 0.5
 tmux_ has-session -t t 2>/dev/null && screen | grep -q "Mock" && fail "C-b d did not detach"
 echo "✓ C-b d detaches"
+# The last window closed ends hn, as the session's end ends tmux's client.
+tmux_ new-session -d -s u -x 120 -y 32 "HN_SOCKET_NAME=$client-2 HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin; sleep 5"
+waited=0; until tmux_ capture-pane -p -t u | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "a second hn started no shell"; done
+tmux_ send-keys -t u C-b '&'
+sleep 0.3
+tmux_ send-keys -t u y
+waited=0; until tmux_ capture-pane -p -t u | grep -qF "[exited]"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 3000 ] && { tmux_ capture-pane -p -t u; fail "killing the last window did not end hn with [exited]"; }; done
+echo "✓ the last window killed: [exited]"
 echo "all e2e checks passed"

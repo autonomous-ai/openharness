@@ -204,6 +204,12 @@ pub struct App {
     /// Each visible pane's full rect (header row included), from the last layout.
     pub rects: Vec<(u64, Rect)>,
     pub quit: bool,
+    /// The last window went (tmux's session ended): hn says `[exited]`, not `[detached …]`.
+    pub exited: bool,
+    /// Where the startup shell stands: the desk has answered (or there is none), and whether
+    /// the shell was asked for.
+    desk_answered: bool,
+    shell_asked: bool,
     pub prefix: bool,
     /// When the prefix was pressed: a pause after it shows the keys (which-key).
     pub prefix_at: Option<Instant>,
@@ -426,6 +432,9 @@ impl App {
             desk_mode,
             desk_revision: -1,
             desk_loaded: false,
+            exited: false,
+            desk_answered: false,
+            shell_asked: false,
             started: Instant::now(),
             daemon_down: false,
             dsh: HashMap::new(),
@@ -1673,10 +1682,10 @@ impl App {
         let tab_id = tab.id.clone();
         self.drop_pane(id);
         if let Some((machine, agent)) = agent { self.desk_op(json!({ "op": "pane.remove", "tabId": tab_id, "machineId": machine, "agentId": agent })) }
-        if self.tabs[index].root.is_none() && self.tabs.len() > 1 { self.close_tab(index) }
-        else if self.tabs[index].root.is_none() && !self.tabs[index].named { self.tabs[index].name = "home".into() }
+        // A window whose last pane went goes too — the last one ending hn, as tmux ends.
+        if self.tabs[index].root.is_none() { self.close_tab(index) }
         // layout_close_pane: the window's other panes take the room.
-        else if self.tabs[index].root.is_some() { self.layout_changed(index) }
+        else { self.layout_changed(index) }
         self.sync_titles();
         self.fit_panes();
     }
@@ -1694,7 +1703,8 @@ impl App {
         self.lastw.retain(|id| *id != tab.id);
         for id in tab.panes() { self.drop_pane(id) }
         if tab.on_desk { self.desk_op(json!({ "op": "tab.close", "id": tab.id })) }
-        if self.tabs.is_empty() { self.tabs.push(Tab::new("home")) }
+        // The last window gone: the session is over, and hn with it (tmux's `[exited]`).
+        if self.tabs.is_empty() { self.tabs.push(Tab::new("home")); self.quit = true; self.exited = true }
         if index < self.active || self.active >= self.tabs.len() { self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1) }
         self.fit_panes();
     }
@@ -2183,8 +2193,21 @@ impl App {
 
     fn load_desk(&mut self) {
         self.desk_loaded = true;
-        if self.desk_mode == DeskMode::Off { return }
+        if self.desk_mode == DeskMode::Off { self.desk_answered = true; self.maybe_start_shell(); return }
         self.fetch_desk();
+    }
+
+    /// tmux starts in a shell: when hn opens with no window of its own to show (the desk had
+    /// none, or there is no desk), window 0 is a shell on this computer, in the folder hn was
+    /// started in — once, when the desk has answered and this computer's daemon is connected.
+    /// Until then (or if it never connects: not signed in) the window shows what it can.
+    pub fn maybe_start_shell(&mut self) {
+        if self.shell_asked || !self.desk_answered || self.capture.is_some() { return }
+        if !(self.tabs.len() == 1 && self.tabs[0].root.is_none()) { self.shell_asked = true; return }
+        if self.link(&self.fleet.local_id).is_none() { return }
+        self.shell_asked = true;
+        let cwd = std::env::current_dir().ok().map(|d| d.display().to_string());
+        crate::input::new_shell_from(self, None, Placement::Auto(None), cwd, None);
     }
 
     fn fetch_desk(&mut self) {
@@ -2193,6 +2216,7 @@ impl App {
         self.spawn(async move { http_json(port, "GET", "/api/desk", None).await }, |app, desk| {
             if app.desk_inflight > 0 { app.desk_stale = true; return }
             if let Ok(desk) = desk { app.apply_desk(&desk) }
+            if !app.desk_answered { app.desk_answered = true; app.maybe_start_shell() }
         });
     }
 
@@ -2330,6 +2354,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick += 1;
+        self.maybe_start_shell();
         self.release_waiting();
         crate::dial::tick(self);
         if self.tick % 4 == 0 { self.check_silence() }

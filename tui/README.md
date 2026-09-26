@@ -24,7 +24,9 @@ Close it, lose the connection, reopen it anywhere — everything is where you le
 your tabs are the account's **desk**, the same tabs the desktop and the phone show.
 
 On a fresh server `hn` signs in (over SSH the login prints a URL and takes the pasted
-callback), starts the daemon, then opens.
+callback), starts the daemon, then opens — as `tmux new -A` does: your tabs if the desk has any,
+else window 0 is a shell on this computer, in the folder you ran `hn` in. `C-b s` finds every
+harness. Closing the last window ends `hn` (`[exited]`, as tmux says it); `C-b d` detaches.
 
 ## Keys
 
