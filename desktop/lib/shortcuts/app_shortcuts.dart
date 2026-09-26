@@ -242,15 +242,6 @@ const List<AppShortcut> kAppShortcuts = [
     label: 'Zoom this pane, or put it back',
     group: ShortcutGroup.panes,
   ),
-  // ⌘; — tmux's `prefix ;`, spelled the same. Two agents at a time is the shape
-  // most work actually has, and walking a list to get back to the other one is
-  // the wrong motion for it.
-  AppShortcut(
-    action: ShortcutAction.lastPane,
-    activator: SingleActivator(LogicalKeyboardKey.semicolon, meta: true),
-    label: 'Back to the pane you were just on',
-    group: ShortcutGroup.panes,
-  ),
   AppShortcut(
     action: ShortcutAction.closePane,
     activator: SingleActivator(

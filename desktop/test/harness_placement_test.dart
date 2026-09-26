@@ -503,7 +503,7 @@ void main() {
       expect(search.createTask, isNull);
       expect(search.rows.any((row) => row.isCreate), query.startsWith('@'));
       if (query.startsWith('@')) {
-        expect(search.rows.first.title, 'New Machine');
+        expect(search.rows.last.title, 'Add machine');
       }
     }
     search.setQuery('');

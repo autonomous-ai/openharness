@@ -4,7 +4,7 @@ One shared status line, using compact monospace text and measured character cell
 Follow the [terminal workspace design system](terminal-workspace.md).
 
 ```text
-1:api  2:web  3:blender  +                 M2  autonomous-harness  (main)    >   @   :   *
+1:api  2:web  3:blender  +          M2  autonomous-harness  (main)
 ```
 
 ## Tabs on the left
@@ -50,7 +50,7 @@ Do not show a tooltip that repeats a visible tab name (the numeric prefix does
 not make it a different name). Show a different underlying name or the full
 label when it is truncated. Keep action hints on symbols and status links.
 
-The new-tab `+` uses the same plain-text control as `>` `@` `:` `*`: no resting
+The new-tab `+` uses a plain-text control: no resting
 box, with bold text on hover or keyboard
 focus. Keep its New Tab tooltip and shortcut hint.
 
@@ -210,28 +210,21 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Agnoster](https://github.com/agnoster/agnoster-zsh-theme), and
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
-Pane headers keep task identity and the hover-only close action. Four text symbols sit at the far
-right, after the focused context and PR: `>` Harnesses, `@` Machines, `:` Models,
-and `*` Store. Use the same compact monospace font, size, weight, and baseline as the
-status text. Each symbol is centered in an equal four-column slot (at least
-28 points wide) with an equally sized click target. In narrow windows, reduce
-all four slots together in whole columns. Keep the symbols plain at
-rest; hovering, pressing, or keyboard focus makes the text bold without changing
-the background. A hand cursor, descriptive tooltip, and accessible button
-name make each action discoverable. Do not show a help symbol for now.
+Pane headers keep task identity and the hover-only close action. The top bar
+contains tabs, New Tab, and focused model/machine/project/branch/PR context.
+Do not add a standalone Search label or category icons at the right edge.
+Context links open the corresponding scope in the unified picker. Global
+search remains available through Cmd-P and the app menu.
 
-Harnesses opens the existing session manager with Pause and Resume. Machines
-opens its connection/password panel, Models opens its management panel with
-download/start/stop controls, and Store opens the Store tab. Cmd-O opens projects, Cmd-P opens
-harnesses, and Cmd-Shift-P opens commands in the unified picker; prefixes switch its resource type.
+The picker's empty preview contains clickable `@ machines`, `# projects`,
+`: models`, `* store`, and `> commands` hints. Each inserts its editable prefix
+and returns typing focus to the search input. Machine and model management,
+including API forms, stays inside the right pane. Store results open their
+Store page. Cmd-O, Cmd-M, Cmd-I, and Cmd-Shift-P remain shortcuts into the same
+picker; focused context links keep their scope.
 
-![Harnesses controls, rendered with fixture data](images/workspace-status-harnesses.png)
-
-![Machine controls, rendered with fixture data](images/workspace-status-machines.png)
-
-Reserve the symbols' width before laying out tabs and context. Leave a window drag
-area between tabs and context and prevent overlap in narrow windows. Native
-menus and commands remain available.
+Leave a window drag area between tabs and context and prevent overlap in
+narrow windows. Native menus and commands remain available.
 
 Data rules live in `lib/state/workspace_status.dart`; prompt formatting lives in
 `lib/shared/theme/status_line_style.dart`. Flutter draws the fallback bar in

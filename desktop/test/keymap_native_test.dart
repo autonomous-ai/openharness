@@ -46,6 +46,8 @@ void main() {
       {"keys":"cmd+k","command":null},
       {"keys":"cmd+k cmd+n","command":"swarm.new"},
       {"keys":"cmd+left","command":null,"when":"terminal"},
+      {"keys":"cmd+i","command":null},
+      {"keys":"cmd+y","command":"models.list"},
       {"keys":"down","command":null,"when":"picker"},
       {"keys":"ctrl+j","command":"picker.previous","when":"picker"}
     ]}''');

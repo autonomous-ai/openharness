@@ -69,7 +69,7 @@ export interface LocalModel {
   gridAsleep?: boolean
 }
 export interface ModelOperation {
-  id: string; modelId: string; action: 'start' | 'stop'; phase: 'running' | 'done' | 'failed'
+  id: string; modelId: string; action: 'download' | 'start' | 'stop'; phase: 'running' | 'done' | 'failed'
   stage: 'checking' | 'downloading' | 'starting' | 'verifying' | 'stopping'
   progress?: number; error?: string; updatedAt: string
 }
@@ -80,6 +80,7 @@ export interface LocalModelsSnapshot {
    * with a warning in `error` arrived as no list at all and the Local tab read 0. */
   notice?: string
   observedAt: string; busy: boolean
+  supportsDownload?: boolean
 }
 interface Candidate {
   id: string; name: string; pull: string; file: string; files: string[]; size: number; quant: string
@@ -484,7 +485,7 @@ export class LocalModels {
     }
     const value: LocalModelsSnapshot = { models, memoryBytes: num(obj(this.device.memory).total_gb) === undefined ? undefined : this.device.memory.total_gb * GiB,
       hardware: str(obj(this.device.machine).model || obj(this.device.cpu).brand), notice: inventoryError || this.catalogError,
-      observedAt: new Date().toISOString(), busy: !!this.active }
+      observedAt: new Date().toISOString(), busy: !!this.active, supportsDownload: true }
     this.cached = { grid, at: Date.now(), value }
     this.runningAtLastRead.set(grid, new Set(models.filter(model => model.state === 'running').map(model => model.id)))
     return value
@@ -497,11 +498,11 @@ export class LocalModels {
 
   /** A repeated click or lost RPC acknowledgement joins the same operation.
    * A different model waits: starts/stops must not race on the machine's budget. */
-  async act(grid: string | null, modelId: unknown, action: 'start' | 'stop'): Promise<{ operation?: ModelOperation; error?: string }> {
+  async act(grid: string | null, modelId: unknown, action: 'download' | 'start' | 'stop'): Promise<{ operation?: ModelOperation; error?: string }> {
     if (!grid || typeof modelId !== 'string') return { error: 'The model is unavailable. Refresh and try again.' }
     if (this.active) return this.active.grid === grid && this.active.operation.modelId === modelId && this.active.operation.action === action
-      ? { operation: this.active.operation } : { error: 'Wait for the current model to finish starting or stopping.' }
-    const operation: ModelOperation = { id: randomUUID(), modelId, action, stage: action === 'start' ? 'checking' : 'stopping', phase: 'running', updatedAt: new Date().toISOString() }
+      ? { operation: this.active.operation } : { error: 'Wait for the current model operation to finish.' }
+    const operation: ModelOperation = { id: randomUUID(), modelId, action, stage: action === 'stop' ? 'stopping' : 'checking', phase: 'running', updatedAt: new Date().toISOString() }
     // Reserve before any await; independent RPCs may arrive on separate connections.
     const active = { grid, operation, done: Promise.resolve() }
     this.active = active
@@ -523,8 +524,8 @@ export class LocalModels {
     const must = async (args: string[], message: string, output?: (chunk: string) => void) => {
       if (!(await this.run(args, output, 30 * 60_000)).ok) throw new ModelError(message)
     }
+    if (operation.action !== 'stop') await this.loadCatalog()
     if (operation.action === 'start') {
-      await this.loadCatalog()
       // Leaving the last engine removes Grid's local registration. Restore the
       // account's existing grids before resolving ownership or joining again.
       await must(['--remote', 'sync'], 'Models could not be checked. Try again.')
@@ -543,16 +544,18 @@ export class LocalModels {
       if (!instance) {
         // The pinned Grid runtime respawns its union when adding --serve.
         // Do not interrupt existing engines as a side effect of a simple Start.
-        if (this.blockers.has(grid)) throw new ModelError(this.blockers.get(grid)!)
-        // Recheck the machine immediately before downloading or allocating.
-        const currentDevice = obj(await this.json(['device-info', '--json']))
-        const budget = num(currentDevice.usable_bytes) ?? 0
-        if (candidate.pull) {
-          const current = compatibleModels(await this.catalog({ ...currentDevice, usable_bytes: Math.max(0, budget) })).find(c => c.id === candidate.id)
-          if (!current || current.size < candidate.size) throw new ModelError('Stop a running model to make room, then try again.')
-          candidate.context = Math.min(candidate.context ?? Infinity, current.context ?? Infinity)
-        } else if (candidate.size * 1.25 + 2 * GiB > budget) {
-          throw new ModelError('Stop a running model to make room, then try again.')
+        if (operation.action === 'start') {
+          if (this.blockers.has(grid)) throw new ModelError(this.blockers.get(grid)!)
+          // Recheck the machine immediately before downloading or allocating.
+          const currentDevice = obj(await this.json(['device-info', '--json']))
+          const budget = num(currentDevice.usable_bytes) ?? 0
+          if (candidate.pull) {
+            const current = compatibleModels(await this.catalog({ ...currentDevice, usable_bytes: Math.max(0, budget) })).find(c => c.id === candidate.id)
+            if (!current || current.size < candidate.size) throw new ModelError('Stop a running model to make room, then try again.')
+            candidate.context = Math.min(candidate.context ?? Infinity, current.context ?? Infinity)
+          } else if (candidate.size * 1.25 + 2 * GiB > budget) {
+            throw new ModelError('Stop a running model to make room, then try again.')
+          }
         }
         if (!await this.downloaded(candidate)) {
           if (!candidate.pull) throw new ModelError('The downloaded file is no longer available. Open Model Manager to restore it.')
@@ -571,6 +574,14 @@ export class LocalModels {
           })
           await progressWrites
           if (!await this.downloaded(candidate)) throw new ModelError('The download is incomplete. Start again to resume.')
+        }
+        // A download only stores the weights. It must never start/wake a grid,
+        // install an engine, allocate model memory, or send a test message.
+        if (operation.action === 'download') {
+          operation.phase = 'done'
+          delete operation.progress
+          await this.save(grid, operation)
+          return
         }
         await change('starting')
         // A grid that is down refuses a join outright ("The model could not start"), and `sync`
@@ -618,7 +629,7 @@ export class LocalModels {
             ? `This computer does not have the memory to run ${candidate.name} with a 64K context. Close some apps, or choose a smaller model.`
             : 'The model could not start. Try again.')
         }
-      } else if (this.runningAtLastRead.get(grid)?.has(operation.modelId)) {
+      } else if (operation.action === 'download' || this.runningAtLastRead.get(grid)?.has(operation.modelId)) {
         // Already serving when last read, and nothing was started: nothing to check. The reply test is an
         // inference THROUGH the grid (so is the served-window read) — on a sleeping grid it would start it,
         // and the platform then holds it up for hours, for a stray click (grid-reads-without-waking 03).

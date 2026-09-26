@@ -13,7 +13,11 @@ import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
 
 /// This computer's incoming password and, separately, its outgoing links.
-Future<void> showLinkMachineDialog(BuildContext context, AppNotifier notifier) {
+Future<void> showLinkMachineDialog(
+  BuildContext context,
+  AppNotifier notifier, {
+  bool passwordOnly = false,
+}) {
   final keymap = KeymapTheme.of(context, listen: false);
   return showAppDialog<void>(
     context: context,
@@ -21,7 +25,10 @@ Future<void> showLinkMachineDialog(BuildContext context, AppNotifier notifier) {
     veilBlur: 0,
     veilTint: Colors.transparent,
     builder: (_) {
-      final dialog = _LinkMachineDialog(notifier: notifier);
+      final dialog = _LinkMachineDialog(
+        notifier: notifier,
+        passwordOnly: passwordOnly,
+      );
       return keymap == null
           ? dialog
           : KeymapProvider(keymap: keymap, child: dialog);
@@ -32,8 +39,12 @@ Future<void> showLinkMachineDialog(BuildContext context, AppNotifier notifier) {
 enum _Page { password, clear, links, unlink }
 
 class _LinkMachineDialog extends StatefulWidget {
-  const _LinkMachineDialog({required this.notifier});
+  const _LinkMachineDialog({
+    required this.notifier,
+    required this.passwordOnly,
+  });
   final AppNotifier notifier;
+  final bool passwordOnly;
   @override
   State<_LinkMachineDialog> createState() => _LinkMachineDialogState();
 }
@@ -619,15 +630,17 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
           style: boxMonoStyle(color: kBoxFaint),
         ),
       ],
-      const SizedBox(height: 12),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: _button(
-          'Links from this computer…',
-          _busy ? null : _links,
-          key: const Key('remote-password-links-button'),
+      if (!widget.passwordOnly) ...[
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _button(
+            'Links from this computer…',
+            _busy ? null : _links,
+            key: const Key('remote-password-links-button'),
+          ),
         ),
-      ),
+      ],
     ];
   }
 

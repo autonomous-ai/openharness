@@ -24,6 +24,7 @@ import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
+import '../models/model_search_catalog.dart';
 import '../state/harness_sessions.dart' show SessionFilter, harnessActivityAge;
 import '../store/store_mark.dart';
 import 'engine_identity.dart';
@@ -161,6 +162,7 @@ class SwarmSearchKeys extends StatelessWidget {
     }
 
     void dismiss() {
+      if (previewControls?.invoke('picker.cancel') == true) return;
       if (search?.back() == true) {
         onRefocus?.call();
       } else {
@@ -181,6 +183,12 @@ class SwarmSearchKeys extends StatelessWidget {
       if (switchingMode) onRefocus?.call();
     });
     void move(int delta) => run(() {
+      if (previewControls?.invoke(
+            delta > 0 ? 'picker.next' : 'picker.previous',
+          ) ==
+          true) {
+        return;
+      }
       if (search == null) {
         onOpen?.call();
       } else {
@@ -189,6 +197,12 @@ class SwarmSearchKeys extends StatelessWidget {
       }
     });
     void complete(bool forward) => run(() {
+      if (previewControls?.invoke(
+            forward ? 'picker.complete' : 'picker.complete_back',
+          ) ==
+          true) {
+        return;
+      }
       if (search?.setupLayout == true) {
         move(forward ? 1 : -1);
       } else if (forward) {
@@ -485,6 +499,22 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   (Size, double)? _geometry;
   SwarmSearchController get search => widget.search;
 
+  List<({int? index, String? heading})> get _modelRows {
+    if (!search.isModelMode) return const [];
+    final items = <({int? index, String? heading})>[];
+    for (final section in ModelSearchSection.values) {
+      final indices = [
+        for (final (index, row) in search.rows.indexed)
+          if (search.modelSection(row) == section) index,
+      ];
+      if (indices.isEmpty && search.matchQuery.trim().isNotEmpty) continue;
+      if (items.isNotEmpty) items.add((index: null, heading: null));
+      items.add((index: null, heading: section.label));
+      items.addAll(indices.map((index) => (index: index, heading: null)));
+    }
+    return items;
+  }
+
   double _fittedHeight(
     BoxConstraints constraints, {
     required bool sideBySide,
@@ -581,11 +611,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   }
 
   bool get _pinsCreate =>
-      search.resultsFromBottom && search.rows.firstOrNull?.isCreate == true;
+      !search.isModelMode &&
+      search.resultsFromBottom &&
+      search.rows.firstOrNull?.isCreate == true;
 
   void _scrollToSelection() {
     if (!_scroll.hasClients || search.rows.isEmpty) return;
-    final index = search.cursor - (_createPinned ? 1 : 0);
+    final index = search.isModelMode
+        ? _modelRows.indexWhere((item) => item.index == search.cursor)
+        : search.cursor - (_createPinned ? 1 : 0);
     if (index < 0) return;
     final top = index * _rowHeight;
     final bottom = top + _rowHeight;
@@ -697,9 +731,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         // does not change when a query, preview, or selection changes.
         final pinCreate = _createPinned =
             _pinsCreate && constraints.maxHeight >= _rowHeight + 16;
+        final modelRows = _modelRows;
         Widget buildRow(BuildContext context, int index) {
           final row = search.rows[index];
-          final highlighted = index == search.cursor;
+          final selected = index == search.cursor;
+          final highlighted = selected && !search.managing;
           final canSubmit = search.canSubmit(row);
           final unavailableReason = search.sessionUnavailable(row);
           final alreadyHere = search.alreadyHere(row);
@@ -708,6 +744,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               : null;
           final presentation = (
             row,
+            selected,
             highlighted,
             canSubmit,
             unavailableReason,
@@ -723,6 +760,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
             widget.terminal,
             stacked,
             activityAge,
+            row.isModel ? search.modelRowAction(row) : null,
+            row.isModel ? search.canSelectModel(row) : null,
+            row.isModel ? search.canGetModel(row) : null,
           );
           final previous = _rowWidgets.remove(row.id);
           if (previous?.presentation == presentation) {
@@ -734,7 +774,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           }
           final tile = widget.bios
               ? Semantics(
-                  selected: highlighted,
+                  selected: selected,
                   enabled: canSubmit,
                   button: true,
                   child: InkWell(
@@ -890,7 +930,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               // arriving under a parked pointer: that took the
               // highlight from the keyboard untouched.
               onHover: (event) {
-                if (_pointer.moved(event)) {
+                if (_pointer.moved(event) && !search.managing) {
                   _focusResult(row.id);
                 }
               },
@@ -985,13 +1025,50 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 _rowHeight,
                               ),
                               reverse: search.resultsFromBottom,
-                              itemCount:
-                                  search.rows.length - (pinCreate ? 1 : 0),
+                              itemCount: search.isModelMode
+                                  ? modelRows.length
+                                  : search.rows.length - (pinCreate ? 1 : 0),
                               itemExtent: _rowHeight,
-                              itemBuilder: (context, index) => buildRow(
-                                context,
-                                index + (pinCreate ? 1 : 0),
-                              ),
+                              itemBuilder: (context, index) {
+                                if (!search.isModelMode) {
+                                  return buildRow(
+                                    context,
+                                    index + (pinCreate ? 1 : 0),
+                                  );
+                                }
+                                final item = modelRows[index];
+                                if (item.index != null) {
+                                  return buildRow(context, item.index!);
+                                }
+                                if (item.heading == null) {
+                                  return const SizedBox();
+                                }
+                                return Semantics(
+                                  header: true,
+                                  child: Padding(
+                                    key: ValueKey(
+                                      'model-section:${item.heading}',
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: widget.bios
+                                          ? cell.width * 3
+                                          : 10,
+                                    ),
+                                    child: Text(
+                                      item.heading!,
+                                      maxLines: 1,
+                                      style: widget.bios
+                                          ? terminalContentStyle(
+                                              color: theme.foreground
+                                                  .withValues(alpha: .54),
+                                            )
+                                          : grid.AppType.monoLabel(
+                                              color: Colors.white60,
+                                            ),
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                           ),
                         ),
@@ -1225,10 +1302,18 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         terminalThemeStore.value,
       );
       final muted = theme.foreground.withValues(alpha: .54);
+      final modelAction = row.isModel
+          ? widget.search.modelRowAction(row)
+          : null;
       final style = terminalContentStyle(
-        color: !widget.enabled
+        color:
+            !widget.enabled ||
+                (row.isModel &&
+                    !widget.search.isModelDownloadsRow(row) &&
+                    !widget.search.canSelectModel(row) &&
+                    !widget.search.canGetModel(row))
             ? theme.foreground.withValues(alpha: .28)
-            : row.isCreate
+            : row.isCreate || widget.search.isModelDownloadsRow(row)
             ? theme.cursor
             : theme.foreground,
       );
@@ -1249,6 +1334,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
         label: row.isCreate
             ? '${row.title}\n$detail'
             : '${row.title}\n${row.terminalDetail ?? row.detail}'
+                  '${modelAction == null ? '' : ', $modelAction'}'
                   '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
                   '${row.shortcut == null ? '' : ', Shortcut ${row.shortcut}'}'
                   '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
@@ -1275,7 +1361,19 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                               style: style,
                             ),
                     ),
-                    if (widget.unavailableReason case final reason?) ...[
+                    if (modelAction != null) ...[
+                      SizedBox(width: cell.width * 2),
+                      Text(
+                        modelAction,
+                        key: ValueKey('model-row-action:${row.id}'),
+                        maxLines: 1,
+                        style: terminalContentStyle(
+                          color: modelAction == 'Use'
+                              ? theme.foreground
+                              : muted,
+                        ),
+                      ),
+                    ] else if (widget.unavailableReason case final reason?) ...[
                       SizedBox(width: cell.width * 2),
                       Text(
                         reason,

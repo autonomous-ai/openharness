@@ -273,6 +273,13 @@ void main() {
       await key(tester, LogicalKeyboardKey.pageUp);
       expect(search.cursor, first);
       await key(tester, LogicalKeyboardKey.tab);
+      expect(search.cursor, first);
+      expect(field.focusNode!.hasFocus, isTrue);
+      expect(
+        find.byKey(const ValueKey('swarm-search-resource-actions')),
+        findsNothing,
+      );
+      await key(tester, LogicalKeyboardKey.arrowDown);
       expect(search.cursor, first + 1);
       expect(field.controller!.value, value);
       expect(field.focusNode!.hasFocus, isTrue);

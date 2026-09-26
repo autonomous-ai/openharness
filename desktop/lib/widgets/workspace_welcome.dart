@@ -17,9 +17,11 @@ class WorkspaceWelcome extends StatelessWidget {
   final ValueChanged<String> onCommand;
 
   static const _actions = [
-    ('agent.new', 'New Harness', 'to start a new harness'),
-    ('harnesses.list', 'Open Harness', 'to open a harness'),
-    ('app.store', 'Harness Store', 'to browse the harness store'),
+    ('agent.new', 'Start an agent'),
+    ('harnesses.list', 'Manage all your agents'),
+    ('models.list', 'Deploy a local model'),
+    ('machines.list', 'Manage all your machines'),
+    ('app.store', 'Build beyond code'),
   ];
 
   @override
@@ -39,9 +41,8 @@ class WorkspaceWelcome extends StatelessWidget {
     final ink = hasArtwork
         ? const Color(0xffdededb)
         : palette.foreground.withValues(alpha: .75);
-    final accent = hasArtwork || Theme.of(context).brightness == Brightness.dark
-        ? const Color(0xffa5d786)
-        : const Color(0xff356522);
+    // The welcome surface uses a dark workspace palette in both theme modes.
+    const accent = Color(0xffa5d786);
     // The page stands where a terminal will, so it is set like one: the
     // terminal's face at the terminal's size, following ⌘+ and ⌘−.
     final style = terminalTextStyle(
@@ -51,10 +52,9 @@ class WorkspaceWelcome extends StatelessWidget {
     );
     final keymap = KeymapTheme.of(context)?.current ?? harnessDefaultKeymap;
     final rows = [
-      for (final (command, label, description) in _actions)
+      for (final (command, description) in _actions)
         (
           command: command,
-          label: label,
           description: description,
           hint: keymap
               .bindingsFor(KeymapContext.workspace)
@@ -74,9 +74,8 @@ class WorkspaceWelcome extends StatelessWidget {
       return width;
     }
 
-    final prefixWidth = widthOf('press  ');
     final keyWidth = rows
-        .map((row) => widthOf('${row.hint ?? row.label}    '))
+        .map((row) => widthOf('${row.hint ?? ''}    '))
         .reduce((a, b) => a > b ? a : b);
     final descriptionWidth = rows
         .map((row) => widthOf(row.description))
@@ -109,7 +108,7 @@ class WorkspaceWelcome extends StatelessWidget {
                   child: Center(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxWidth: prefixWidth + keyWidth + descriptionWidth,
+                        maxWidth: keyWidth + descriptionWidth,
                       ),
                       child: DefaultTextStyle(
                         style: style,
@@ -119,7 +118,7 @@ class WorkspaceWelcome extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              'Follow your curiosity.',
+                              'Harness like a boss.',
                               key: const ValueKey('welcome-tagline'),
                             ),
                             SizedBox(height: line),
@@ -142,15 +141,9 @@ class WorkspaceWelcome extends StatelessWidget {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     SizedBox(
-                                      width: prefixWidth,
-                                      child: Text(
-                                        row.hint == null ? 'click' : 'press',
-                                      ),
-                                    ),
-                                    SizedBox(
                                       width: keyWidth,
                                       child: Text(
-                                        row.hint ?? row.label,
+                                        row.hint ?? '',
                                         style: TextStyle(color: accent),
                                         textAlign: TextAlign.left,
                                       ),

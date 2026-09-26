@@ -130,8 +130,51 @@ metrics and blank-row spacing; warnings are readable text in semantic colors.
 Cmd-P opens with no selected row. The preview area shows the type hints as plain,
 muted text: `@ machines`, `# projects`, `: models`,
 `* store`, and `> commands`.
-Typing selects the first match and replaces the hints with its preview. Arrows,
-Tab, and pointer movement can also select a row. Clearing the root search returns
+Each hint is also a plain-text button: clicking it inserts the prefix into the
+same editor and keeps typing focus there. Selected harnesses open with Enter.
+Machines use Enter to **Manage**: focus moves to their controls without invoking
+one. Models use four sections: **Subscriptions**, **APIs**, **Your local AI
+models**, and **Shared with you**. Headers are plain muted text and never take
+selection. Put **[ Add ]** within APIs. Your local AI models puts downloaded
+models first, followed by models served on the user's machines. Keep the
+undownloaded catalog collapsed behind **[ Get models ]**; Enter expands it in
+place and selects the first catalog row. **[ Hide catalog ]** collapses it.
+Explicit searches also include matching catalog models. Shared rows show only
+the model and sharing machine's label, separated by ` · `. Filtering preserves
+the groups.
+
+A plain right-aligned **Use** identifies a model the current pane can use;
+**Get** identifies a model that can be downloaded. Other model rows are dimmed,
+remain selectable for inspection, and have no action badge. Enter does nothing
+on these rows; it must never silently become Manage. Show the reason in the
+preview when it helps. Subscription names include the account label; only an
+account compatible with the current harness and available on its machine can
+say Use. Include actionable labels in accessibility text.
+
+From a live harness, both Cmd-I and Cmd-P's model scope use Enter to **Use** a
+served model, installed local model, or compatible subscription. Starting
+installed weights happens once; progress stays in the picker, and the pane
+switches only when the model is served. Closing the picker cancels the pending
+switch while startup continues on its host. **Get** prepares an undownloaded
+model on its host and stays in the picker. Pin selection to the pane that
+opened it; changing focus must never switch another pane's model.
+
+Cmd-N, Cmd-P, and Cmd-I share pane navigation: **Tab/Shift-Tab switch between
+the left and right panes**, without selecting a value or running an action.
+**Up/Down move within the active pane**: fields or choices in Cmd-N, results or
+controls in Cmd-P. **Enter activates the highlighted item**. In Cmd-N, Enter
+on a field opens its choices; Enter on a choice applies it and selects New
+Harness. Tab returns to the same field without applying a choice. In Cmd-P, Enter on a usable model
+uses it, on a Get row gets it, on a machine enters management, and on a harness
+opens it. Arrow keys walk controls while the right pane owns focus; they must
+not change the resource behind them. Left/Right retain normal cursor movement
+in text fields, and move between adjacent buttons. Enter/Space activate focused
+buttons. Escape backs out of an inline form, then returns to search while
+preserving the query and selection. Hints use the live keymap. Only the active
+pane shows a selection highlight.
+Typing selects the first match and replaces the hints with its preview. Arrows
+and pointer movement can also select a row. A pointer cannot change the resource
+while its management controls own keyboard focus. Clearing the root search returns
 to the hints; live inventory updates must not choose a row for the user. Enter
 does nothing until a row is selected. Keep the input and list in place throughout.
 Cmd-P has no New Harness row, including in machine and project session lists.
@@ -249,3 +292,55 @@ Reuse the relevant existing checks:
 
 When checking a native build, restart into the rebuilt app before judging the
 result. An existing process does not pick up a new build automatically.
+
+## Manage machines and models inside Cmd-P
+
+Place compact facts and controls together at the top of the preview. This
+computer has `[ Password ] [ Rename ]`; remote machines have `[ Connect ]
+[ Rename ] [ Delete ]`, with Connect only when linking is needed. Password opens
+the password form alone. Delete retains the account-removal confirmation. Show
+connection state, harness count, and real CPU/RAM readings; refresh resource
+readings while the machine picker is visible and the app is in the foreground.
+Do not add a View harnesses, Linked machines, Refresh, or Actions button to this
+management pane. Keep the controls on one row, wrapping only when needed.
+
+Connect, Rename, Password, and Delete edit or confirm **inside the right pane**;
+never cover Cmd-P with a second dialog. Keep the search and machine list in
+place. Cancel/Escape returns to the selected machine's controls. Pending
+operations survive closing their editor, and errors stay beside the fields.
+Deletion and password clearing start with Cancel focused.
+
+With no machine name typed, order machines by the next useful action: online
+machines needing a connection, this computer, other connected machines, then
+offline machines. Sort names naturally within each group. A live status change
+may reorder rows but must preserve the selected machine's identity. Typed
+queries retain match relevance. Put **Add machine** after the machine rows.
+It explains installation on the other computer, sign-in to the same account,
+and setting its password. App and CLI open their setup instructions in the
+same right pane; copying CLI commands never executes them on this computer.
+
+Local models show their name with quantization once, host and model-file size,
+and measured tokens/sec and request count with its period when available.
+Include inventory from every connected, linked machine in the account. Resolve
+Grid hostnames through the hostname on the Harness machine record, then use
+that machine's own model IDs and capabilities for controls. Display its Harness
+name (for example, M2), and keep its Grid hostname (mac.lan) searchable. Unlinked,
+offline, unknown, and shared hosts must not inherit another machine's controls.
+Reuse existing operation progress/failure labels; omit redundant normal-state
+labels such as Available. Show quantization once beside the name when known,
+including quantization explicitly present in an imported GGUF filename. Do not
+guess it from the model family or file size.
+
+Local models have one contextual button: **[ Get ]** before download,
+**[ Use ]** when installed and startable, or **[ Stop ]** when an owned process
+can be stopped. A running model's list action remains Use; Stop requires
+activating its button. Unavailable actions are dim and cannot receive focus.
+On hosts that support a separate download, Get only saves the files. Older
+hosts prepare models through their existing combined download/start action;
+explain `Downloads and starts on <machine>.` before Get. Use starts installed
+weights when necessary, then selects the model for the original harness.
+
+API provider selection, credential editing, validation, saving, and deletion
+stay in the picker's right pane. Keep keys masked by default; do not return
+stored secrets to the editor. Errors and progress appear in place. Leaving a
+pending form must not let its eventual reply reopen it or change the selection.

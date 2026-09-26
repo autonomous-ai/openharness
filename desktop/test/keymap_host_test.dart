@@ -129,6 +129,27 @@ void main() {
     expect(command('cmd+['), 'navigation.back');
   });
 
+  test('Models uses Cmd I and respects a saved pane shortcut', () {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    expect(map.hint('models.list'), '⌘I');
+    expect(harnessCommandById['pane.last']!.keys, isEmpty);
+    map.apply('''{"bindings":[
+      {"keys":"cmd+semicolon","command":"pane.last"},
+      {"keys":"cmd+y","command":"models.list"}
+    ]}''');
+    for (final context in KeymapContext.values) {
+      expect(
+        map.current.match(context, [KeyStroke.parse('cmd+semicolon')]).command,
+        'pane.last',
+      );
+      expect(
+        map.current.match(context, [KeyStroke.parse('cmd+y')]).command,
+        'models.list',
+      );
+    }
+  });
+
   test(
     'Mac native editing and window conflicts are rejected before activation',
     () {

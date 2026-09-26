@@ -254,7 +254,11 @@ void main() {
         )
         .search!;
     final previous = search.selected!.id;
-    final visibleRows = find.byType(InkWell).evaluate().toSet();
+    final visibleRows = find.byType(InkWell).evaluate().where((element) {
+      final key = element.widget.key;
+      return key is ValueKey<String> && key.value.startsWith('agent:');
+    }).toSet();
+    expect(visibleRows, isNotEmpty);
     var fields = 0;
     var rows = 0;
     debugOnRebuildDirtyWidget = (element, _) {

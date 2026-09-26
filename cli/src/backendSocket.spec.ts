@@ -26,7 +26,7 @@ import { STRICT_DOWN_TYPES } from './lib/e2ee/applicationFrames.js'
 
 describe('local model lifecycle RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
-  it.each(['grid_fleet_models_list', 'grid_fleet_model_start', 'grid_fleet_model_stop'])('dispatches %s and returns its correlated result', async type => {
+  it.each(['grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])('dispatches %s and returns its correlated result', async type => {
     const socket = new BackendSocket('fixture')
     socket.setHarnessGridName('home')
     const frames: any[] = []
@@ -37,7 +37,7 @@ describe('local model lifecycle RPCs', () => {
     await vi.waitFor(() => expect(frames.some(frame => frame.type === `${type}_result`)).toBe(true))
     expect(frames.find(frame => frame.type === `${type}_result`).payload.requestId).toBe('models-rpc')
     if (type === 'grid_fleet_models_list') expect(list).toHaveBeenCalledWith('home', true)
-    else expect(act).toHaveBeenCalledWith('home', 'fixture/model', type.endsWith('start') ? 'start' : 'stop')
+    else expect(act).toHaveBeenCalledWith('home', 'fixture/model', type.endsWith('download') ? 'download' : type.endsWith('start') ? 'start' : 'stop')
     await socket.stop()
   })
 
@@ -62,7 +62,7 @@ describe('local model lifecycle RPCs', () => {
   it('rejects unencrypted remote lifecycle requests before reaching the model service', async () => {
     const socket = new BackendSocket('fixture')
     const act = vi.spyOn(LocalModels.prototype, 'act')
-    for (const type of ['grid_fleet_model_start', 'grid_fleet_model_stop']) {
+    for (const type of ['grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
       await (socket as any).dispatchDown({ type, payload: { requestId: 'unsafe', modelId: 'fixture/model' } }, 'remote')
     }
     expect(act).not.toHaveBeenCalled()

@@ -32,6 +32,25 @@ class LocalModel {
   bool get resting => running && gridAsleep;
   bool get downloaded => state == 'downloaded' || running;
 
+  /// Imported weights can omit `quant`, but their filename still names the
+  /// exact variant. Never infer quantization from size or model family.
+  String? get quantization {
+    if (quant?.trim().isNotEmpty == true) return quant!.trim();
+    return RegExp(
+      r'(?:^|[^a-z0-9])(IQ\d+[a-z0-9_]*|Q\d+[a-z0-9_]*|MXFP\d+(?:_[a-z0-9]+)*|BF16|FP16|F16)(?=[^a-z0-9_]|$)',
+      caseSensitive: false,
+    ).firstMatch(id)?.group(1)?.toUpperCase();
+  }
+
+  String get displayName {
+    final variant = quantization;
+    if (variant == null || variant.isEmpty) return name;
+    final present = RegExp(
+      '(^|[^a-z0-9])${RegExp.escape(variant.toLowerCase())}([^a-z0-9]|\$)',
+    ).hasMatch(name.toLowerCase());
+    return present ? name : '$name · $variant';
+  }
+
   factory LocalModel.fromJson(Map<String, dynamic> data) => LocalModel(
     id: data['id'] as String? ?? '',
     name: data['name'] as String? ?? '',
@@ -76,7 +95,7 @@ class LocalModelOperation {
     if (raw is! Map<String, dynamic> ||
         raw['id'] is! String ||
         raw['modelId'] is! String ||
-        !['start', 'stop'].contains(raw['action']) ||
+        !['download', 'start', 'stop'].contains(raw['action']) ||
         ![
           'checking',
           'downloading',

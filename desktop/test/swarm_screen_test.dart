@@ -38,6 +38,7 @@ Future<void> mount(
   addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(
     MaterialApp(
+      debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: Brightness.dark),
       home: SwarmScreen(
         notifier: app,
@@ -516,7 +517,7 @@ void main() {
         find.byKey(const ValueKey('harness-start-search')),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('swarm-models-button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-search-button')), findsNothing);
       expect(find.text('Machines'), findsNothing);
       await openHarnessPicker(tester);
       await tester.pump();
