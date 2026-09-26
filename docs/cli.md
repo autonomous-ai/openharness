@@ -49,6 +49,11 @@ What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
 over the relay.
 
+`question_response` carries the `requestId` of the `commander_question` it answers, and its
+`question_response_result` comes back under that same id: `{ ok: true }` once the answer is typed, or
+`{ error: "STALE_QUESTION", detail }` when the dialog on screen is no longer that question — nothing is
+typed then.
+
 Engines report in over HTTP on the same port: `POST /api/hook/session-start`, `session-end`,
 `turn-start`, `turn-stop`, `tool-start`, authenticated by a per-install token the daemon writes into
 the hook it installs.
