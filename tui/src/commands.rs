@@ -88,11 +88,27 @@ pub fn split(line: &str) -> Vec<Vec<String>> {
 /// `#W` window name, `#P` pane index, `#T` pane (harness) title, `#I` window index, `#S` session.
 pub fn expand(app: &App, text: &str) -> String {
     let window = app.tab().name.clone();
-    let index = (app.active + app.base_index).to_string();
-    let pane = app.focused().and_then(|f| app.tab().panes().iter().position(|p| *p == f)).map(|i| (i + app.base_index).to_string()).unwrap_or_default();
+    let index = app.win_num(app.active).to_string();
+    let pane = app.focused().and_then(|f| app.tab().panes().iter().position(|p| *p == f)).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default();
     let title = input::focused_title(app);
-    text.replace("#{window_name}", &window).replace("#W", &window).replace("#{pane_index}", &pane).replace("#P", &pane)
-        .replace("#{pane_title}", &title).replace("#T", &title).replace("#{window_index}", &index).replace("#I", &index).replace("#S", "harness")
+    let session = app.session_name();
+    let host = crate::app::hostname();
+    let focused = app.focused().and_then(|f| app.panes.get(&f));
+    let agent = focused.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
+    let panes = app.tab().panes().len().to_string();
+    let zoomed = if app.tab().zoomed { "1" } else { "0" };
+    let path = agent.map(|a| a.cwd.clone()).unwrap_or_default();
+    let machine = focused.map(|p| app.fleet.machine_name(&p.machine_id)).unwrap_or_default();
+    let pane_id = app.focused().map(|f| format!("%{f}")).unwrap_or_default();
+    let clients = [
+        ("#{window_name}", window.as_str()), ("#{pane_index}", &pane), ("#{pane_title}", &title), ("#{window_index}", &index),
+        ("#{session_name}", &session), ("#{window_panes}", &panes), ("#{window_zoomed_flag}", zoomed), ("#{pane_current_path}", &path),
+        ("#{host}", &host), ("#{host_short}", host.split('.').next().unwrap_or(&host)), ("#{pane_id}", &pane_id), ("#{machine}", &machine),
+        ("#W", window.as_str()), ("#P", &pane), ("#T", &title), ("#I", &index), ("#S", &session), ("#H", &host), ("#h", host.split('.').next().unwrap_or(&host)), ("#D", &pane_id),
+    ];
+    let mut out = text.to_string();
+    for (k, v) in clients { out = out.replace(k, v) }
+    out
 }
 
 fn resolve(name: &str) -> &str {
@@ -147,12 +163,11 @@ fn run_words(app: &mut App, words: &[String]) {
             let target = opt(words, "-t").or_else(|| Some(rest(words))).unwrap_or_default();
             let target = target.trim_start_matches(':').trim_start_matches('=');
             match target.parse::<usize>() {
-                Ok(n) if n >= app.base_index && n - app.base_index < app.tabs.len() => app.select_tab(n - app.base_index),
-                Ok(n) => app.say(format!("can't find window: {n}"), theme::WARN),
+                Ok(n) => match app.tab_by_num(n) { Some(i) => app.select_tab(i), None => app.say(format!("Can't find window: {n}"), theme::WARN) },
                 Err(_) => {
                     // By name, as tmux allows.
                     if let Some(i) = app.tabs.iter().position(|t| t.name.to_lowercase().starts_with(&target.to_lowercase())) { app.select_tab(i) }
-                    else { app.say(format!("can't find window: {target}"), theme::WARN) }
+                    else { app.say(format!("Can't find window: {target}"), theme::WARN) }
                 }
             }
         }
@@ -160,9 +175,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "move-window" => {
             if flag(words, "-L") { app.move_tab(-1) } else if flag(words, "-R") { app.move_tab(1) }
             else if let Some(n) = opt(words, "-t").or_else(|| Some(rest(words))).and_then(|t| t.trim_start_matches(':').parse::<usize>().ok()) {
-                let to = n.saturating_sub(app.base_index).min(app.tabs.len().saturating_sub(1));
-                while app.active > to { app.move_tab(-1) }
-                while app.active < to { app.move_tab(1) }
+                if let Err(e) = app.move_tab_to(n) { app.say(e, theme::WARN) }
             }
         }
         "select-pane" => {

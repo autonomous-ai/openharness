@@ -27,6 +27,7 @@ use crate::theme::{self, bold, fg, engine_mark, state_mark};
 use crate::input::home_agents;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    app.renumber();
     let area = frame.area();
     if area.width == 0 || area.height == 0 { return }
     let status = Rect::new(0, if app.status_top { 0 } else { area.height - 1 }, area.width, 1);
@@ -305,7 +306,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     let base = Style::default().bg(app.look.status_bg.unwrap_or(theme::TMUX_STATUS_BG)).fg(app.look.status_fg.unwrap_or(theme::TMUX_STATUS_FG));
     buf.set_style(rect, base);
     // status-left: tmux's "[#S] " — here this computer's name, the session a window lives in.
-    let host = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(crate::app::hostname);
+    let host = app.session_name();
     let host: String = host.chars().take(12).collect();
     let left = format!("[{host}] ");
     // While the prefix waits for its key, the name shows it (reversed), the one thing tmux users add first.
@@ -418,7 +419,7 @@ fn window_entry(app: &App, index: usize, max: usize) -> (String, bool) {
     if bell { flags.push('!') }
     if activity && !bell { flags.push('#') }
     if tab.zoomed { flags.push('Z') }
-    (format!("{}:{}{}", index + app.base_index, name, flags), (bell || activity) && index != app.active)
+    (format!("{}:{}{}", app.win_num(index), name, flags), (bell || activity) && index != app.active)
 }
 
 /// "%H:%M" and "%d-%b-%y" in local time, without a date crate.
