@@ -30,7 +30,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.renumber();
     let area = frame.area();
     if area.width == 0 || area.height == 0 { return }
-    let status = Rect::new(0, if app.status_top { 0 } else { area.height - 1 }, area.width, 1);
+    // The status lines (tmux's status: off, on, 2 … 5), at the bottom or (status-position) the top.
+    let lines = app.status_lines().max(1).min(area.height);
+    let status = Rect::new(0, if app.status_top { 0 } else { area.height - lines }, area.width, lines);
     let body = app.body();
     let buf = frame.buffer_mut();
     let mut cursor: Option<Position> = None;
@@ -90,7 +92,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(Modal::Menu { title, items, cursor }) = &app.modal { menu(buf, body, title, items, *cursor) }
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
-    let hidden = app.opts.status == Some(false);
+    let hidden = app.status_lines() == 0;
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Find { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.display_ms)).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
@@ -415,159 +417,33 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     }
     let base = if plain { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(app.look.status_bg.unwrap_or(theme::TMUX_STATUS_BG)).fg(app.look.status_fg.unwrap_or(theme::TMUX_STATUS_FG)) };
     buf.set_style(rect, base);
-    // status-left: tmux's "[#S] " — here this computer's name, the session a window lives in — or
-    // the tmux.conf's own format, cut to status-left-length (10, as tmux).
-    let host = app.session_name();
-    // status-left-length is 10: "[#S] " cut there, as tmux cuts it.
-    let host: String = host.chars().take(7).collect();
-    let left: Line<'static> = match &app.opts.status_left {
-        Some(fmt) => clip_spans(crate::format::spans(app, fmt, None, base), app.opts.status_left_length.unwrap_or(10)),
-        // While the prefix waits for its key, the name shows it (reversed), the one thing tmux users add first.
-        None => Line::from(Span::styled(format!("[{host}] "), if app.prefix { base.add_modifier(Modifier::REVERSED) } else { base })),
-    };
-    let left_w = left.width() as u16;
-    buf.set_line(rect.x, rect.y, &left, rect.width);
-    let (clock, date) = local_time(app.utc_offset_secs);
-    let current_w = window_entry(app, app.active, 24).0.width() as u16 + 1;
-    let right: Vec<Span<'static>> = match &app.opts.status_right {
-        Some(fmt) => {
-            let cap = app.opts.status_right_length.unwrap_or(40).min(rect.width.saturating_sub(left_w + current_w + 1) as usize);
-            keep_tail(crate::format::spans(app, fmt, None, base), cap)
-        }
-        None => {
-            // status-right: "#{=21:pane_title}" %H:%M %d-%b-%y, with the harnesses waiting on you before it.
-            let title = crate::input::focused_title(app);
-            let title: String = if title.is_empty() { host.clone() } else { title.chars().take(21).collect() };
-            let machine = app.focused().and_then(|f| app.panes.get(&f)).filter(|p| p.machine_id != app.fleet.local_id).map(|p| app.fleet.machine_name(&p.machine_id));
-            let mut right: Vec<Span<'static>> = Vec::new();
-            let waiting = app.fleet.waiting();
-            if app.daemon_down { right.push(Span::styled("daemon down ", base.add_modifier(Modifier::REVERSED))); right.push(Span::styled(" ", base)) }
-            if waiting > 0 { right.push(Span::styled(format!("{waiting} waiting"), base.add_modifier(Modifier::REVERSED))); right.push(Span::styled(" ", base)) }
-            if app.focused().and_then(|f| app.panes.get(&f)).map(|p| matches!(p.phase, Phase::Watching(_))).unwrap_or(false) && app.rects.len() < 2 {
-                right.push(Span::styled("[watching] ", base));
-            }
-            let who = match machine { Some(m) => format!("\"{title}\" {m} "), None => format!("\"{title}\" ") };
-            right.push(Span::styled(who, base));
-            // tim, before the clock.
-            if let Some((f, st)) = crate::tim::face(app) { right.push(Span::styled(f, base.patch(st))); right.push(Span::styled(" ", base)) }
-            right.push(Span::styled(format!("{clock} {date}"), base));
-            // tmux's status-right-length is 40 (60 here: a waiting count, a far machine), and the
-            // window list comes first. Too long: the pane title goes first, then the date, then
-            // what is left is cut from the left, so the clock stays.
-            let cap = 60u16.min(rect.width.saturating_sub(left_w + current_w + 1));
-            let width = |r: &Vec<Span<'static>>| r.iter().map(|s| s.content.width()).sum::<usize>();
-            if width(&right) > cap as usize && right.len() >= 2 { let at = right.len() - 2; right.remove(at); }
-            if width(&right) > cap as usize { if let Some(last) = right.last_mut() { *last = Span::styled(clock.clone(), base) } }
-            keep_tail(right, cap as usize)
-        }
-    };
-    let right_line = Line::from(right);
-    let right_w = right_line.width() as u16;
-    let right_x = rect.x + rect.width - right_w;
-    buf.set_line(right_x, rect.y, &right_line, right_w);
-    // The window list, scrolled with < and > when it does not fit (as tmux does).
-    let list_x = rect.x + left_w;
-    let list_end = right_x.saturating_sub(1);
-    let room = list_end.saturating_sub(list_x);
-    let sep = app.opts.window_status_separator.clone().unwrap_or_else(|| " ".into());
-    let sep_w = sep.width() as u16;
-    let custom = app.opts.window_status_format.is_some() || app.opts.window_status_current_format.is_some();
-    let entry = |app: &App, i: usize, max: usize| -> Vec<Span<'static>> {
-        if custom {
-            let current = i == app.active;
-            let fmt = if current { app.opts.window_status_current_format.clone() } else { None }.or_else(|| app.opts.window_status_format.clone()).unwrap_or_else(|| "#I:#W#F".into());
-            let paint = |(fg, bg): (Option<Color>, Option<Color>)| { let mut st = base; if let Some(c) = fg { st = st.fg(c) } if let Some(c) = bg { st = st.bg(c) } st };
-            let style = match (current, app.opts.window_status_current_style, app.opts.window_status_style) { (true, Some(c), _) => paint(c), (false, _, Some(c)) => paint(c), _ => base };
-            crate::format::spans(app, &fmt, Some(i), style)
-        } else {
-            let (text, alert) = window_entry(app, i, max);
-            vec![Span::styled(text, if alert { base.add_modifier(Modifier::REVERSED) } else { base })]
-        }
-    };
-    let width_of = |e: &Vec<Span<'static>>| e.iter().map(|s| s.content.width() as u16).sum::<u16>();
-    // Harness titles are long where tmux's names are short: the other windows give way first.
-    let mut entries: Vec<Vec<Span<'static>>> = (0..app.tabs.len()).map(|i| entry(app, i, 24)).collect();
-    if !custom {
-        for short in [16, 10, 6] {
-            if entries.iter().map(|e| width_of(e) + sep_w).sum::<u16>() <= room { break }
-            entries = (0..app.tabs.len()).map(|i| entry(app, i, if i == app.active { 24 } else { short })).collect();
-        }
-    }
-    let widths: Vec<u16> = entries.iter().map(|e| width_of(e) + sep_w).collect();
-    let mut first = 0;
-    if widths[..=app.active].iter().sum::<u16>() > room {
-        while first < app.active && widths[first..=app.active].iter().sum::<u16>() > room.saturating_sub(2) { first += 1 }
-    }
-    let mut x = list_x;
-    // status-justify: the list in the middle (centre, absolute-centre) or at the right.
-    let total: u16 = widths[first..].iter().sum();
-    if total < room {
-        match app.opts.status_justify.as_deref() {
-            Some("centre") => x = list_x + (room - total) / 2,
-            Some("absolute-centre") => x = (rect.x + rect.width.saturating_sub(total) / 2).max(list_x),
-            Some("right") => x = list_end.saturating_sub(total),
-            _ => {}
-        }
-    }
-    if first > 0 { buf.set_string(x, rect.y, "<", base); x += 1 }
+    // Each line is its status-format, expanded and drawn as tmux's format_draw draws it: the
+    // left, the window list (cut around the current window, `<` `>` where it was cut) and the
+    // right; the windows' ranges are where a click selects them.
     app.tab_hits.clear();
-    for (i, e) in entries.into_iter().enumerate().skip(first) {
-        let w = width_of(&e);
-        if x + w + 1 > list_end {
-            // The current window always shows, cut to fit if it must.
-            if i == app.active && list_end > x + 1 {
-                buf.set_line(x, rect.y, &clip_spans(e, (list_end - x) as usize), list_end - x);
-                app.tab_hits.push((i, x, list_end));
-            } else { buf.set_string(list_end.saturating_sub(1).max(x), rect.y, ">", base) }
-            break
+    let tab_id = app.tab().id.clone();
+    for row in 0..rect.height {
+        let Some(fmt) = app.options.get(&format!("status-format[{row}]"), &tab_id, None) else { continue };
+        let expanded = crate::format::expand(app, &fmt, app.active, app.focused(), true);
+        let (cells, ranges) = crate::draw::format_draw(&expanded, base, rect.width);
+        for (x, (ch, st)) in cells.iter().enumerate() {
+            if let Some(cell) = buf.cell_mut((rect.x + x as u16, rect.y + row)) {
+                if !ch.is_empty() { cell.set_symbol(ch); } else { cell.set_symbol(""); }
+                cell.set_style(*st);
+            }
         }
-        buf.set_line(x, rect.y, &Line::from(e), w);
-        app.tab_hits.push((i, x, x + w));
-        x += w;
-        if x + sep_w <= list_end { buf.set_string(x, rect.y, &sep, base) }
-        x += sep_w;
+        if row == 0 {
+            for r in ranges {
+                if let crate::draw::RangeKind::Window(n) = r.kind {
+                    if let Some(i) = app.tab_by_num(n as usize) { app.tab_hits.push((i, rect.x + r.start, rect.x + r.end)) }
+                }
+            }
+        }
     }
     None
 }
 
-/// The last `width` columns of some spans.
-fn keep_tail(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
-    let mut room = width;
-    for span in spans.into_iter().rev() {
-        if room == 0 { break }
-        let w = span.content.width();
-        if w <= room { room -= w; out.push(span); continue }
-        let mut tail: Vec<char> = Vec::new();
-        let mut used = 0;
-        for c in span.content.chars().rev() {
-            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if used + cw > room { break }
-            used += cw;
-            tail.push(c);
-        }
-        // A part that does not fit goes whole (a clock, not half a title); only the last part is cut.
-        let tail: String = if out.is_empty() { tail.into_iter().rev().collect() } else { String::new() };
-        let pad = room - tail.width();
-        out.push(Span::styled(format!("{}{tail}", " ".repeat(pad)), span.style));
-        room = 0;
-    }
-    out.reverse();
-    out
-}
 
-/// `#I:#W#{window_flags}` — `*` current, `-` last, `Z` zoomed, `!` a harness is waiting on you
-/// (tmux's bell flag), `#` one finished (activity). The bool: draw it reversed, as tmux does alerts.
-fn window_entry(app: &App, index: usize, max: usize) -> (String, bool) {
-    let tab = &app.tabs[index];
-    let name = clip(&tab.name, max);
-    let flags = crate::format::flags(app, index);
-    let alert = flags.contains('!') || flags.contains('#');
-    // tmux's window-status-format: `#I:#W#{?window_flags,#{window_flags}, }` — a window with no
-    // flags keeps a space in their place.
-    let flags = if flags.is_empty() { " ".to_string() } else { flags };
-    (format!("{}:{}{}", app.win_num(index), name, flags), alert && index != app.active)
-}
 
 /// "%H:%M" and "%d-%b-%y" in local time, without a date crate.
 fn local_time(offset: i64) -> (String, String) {

@@ -179,7 +179,6 @@ pub struct App {
     /// `agent_recent` answers (asks and recaps), for the preview window.
     pub recent: HashMap<(String, String), Value>,
     /// Seconds east of UTC (for the status line's clock).
-    pub utc_offset_secs: i64,
     /// `:` command history (Up/Down in the prompt).
     pub history: Vec<String>,
     /// The last copy-mode search (n / N).
@@ -377,7 +376,6 @@ impl App {
             last_harness: None,
             history: Vec::new(),
             recent: HashMap::new(),
-            utc_offset_secs: utc_offset(),
             last_search: None,
             size,
             rects: Vec::new(),
@@ -1180,8 +1178,14 @@ impl App {
 
     /// Everything but the status line (tmux `status-position`, bottom by default).
     pub fn body(&self) -> Rect {
-        if self.opts.status == Some(false) { return Rect::new(0, 0, self.size.0, self.size.1) }
-        Rect::new(0, if self.status_top { 1 } else { 0 }, self.size.0, self.size.1.saturating_sub(1))
+        let n = self.status_lines();
+        Rect::new(0, if self.status_top { n } else { 0 }, self.size.0, self.size.1.saturating_sub(n))
+    }
+
+    /// tmux's status option: how many status lines (off, on, 2 … 5).
+    pub fn status_lines(&self) -> u16 {
+        if self.opts.status == Some(false) { return 0 }
+        match self.options.get("status", "", None).as_deref() { Some("off") => 0, Some("2") => 2, Some("3") => 3, Some("4") => 4, Some("5") => 5, _ => 1 }
     }
 
     /// A pane's own border line: tmux draws none for a lone pane, and with `pane-border-status top`

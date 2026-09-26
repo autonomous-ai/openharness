@@ -35,6 +35,11 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
             if !name.is_empty() { m.insert(name.to_string(), unescape(value)); }
         }
         m.insert("pane-border-status".into(), "top".into());
+        // The status line: tmux's, with what Harness adds — the name reversed while the prefix
+        // waits; before the clock, harnesses waiting on you, a far pane's machine, and tim.
+        m.insert("status-left".into(), "#{?client_prefix,#[reverse],}[#{session_name}]#{?client_prefix,#[noreverse],} ".into());
+        m.insert("status-right".into(), "#{?daemon_down,#[reverse]daemon down#[noreverse] ,}#{?#{>:#{waiting},0},#[reverse]#{waiting} waiting#[noreverse] ,}#{?pane_watching,[watching] ,}\"#{=21:pane_title}\" #{?pane_far,#{pane_machine} ,}#{?#{tim},#{tim} ,}%H:%M %d-%b-%y".into());
+        m.insert("status-right-length".into(), "60".into());
         // Agents print a lot: ten thousand lines of scrollback (tmux keeps two).
         m.insert("history-limit".into(), "10000".into());
         // A harness's name is its pane's title; a program's own (OSC 2) only if you say so.
@@ -343,7 +348,9 @@ mod tests {
     #[test]
     fn every_default_is_in_the_table() {
         for name in defaults().keys() { assert!(find(name).is_some(), "{name}") }
-        assert_eq!(defaults().get("status-left").map(String::as_str), Some("[#{session_name}] "));
+        // tmux's own default, in the fixture; hn's status-left adds the prefix's reverse.
+        assert!(include_str!("../../tests/fixtures/tmux-3.5a-options.txt").contains("session status-left \"[#{session_name}] \""));
+        assert_eq!(defaults().get("status-left").map(String::as_str), Some("#{?client_prefix,#[reverse],}[#{session_name}]#{?client_prefix,#[noreverse],} "));
         assert_eq!(defaults().get("status-interval").map(String::as_str), Some("15"));
     }
 
@@ -367,7 +374,7 @@ mod tests {
         s.set("@l", Some("2"), &SetFlags::default(), "w", 1).unwrap();
         assert_eq!(s.show(Some("@l"), &SetFlags::default(), false, false, "w", 1), Ok(vec!["@l 2".into()]));
         assert!(s.show(Some("@l"), &g, false, false, "w", 1).is_err());
-        assert_eq!(s.show(Some("status-left"), &g, false, true, "w", 1), Ok(vec!["[#{session_name}] ".into()]));
-        assert_eq!(s.show(Some("status-left"), &SetFlags::default(), false, false, "w", 1), Ok(vec![]));
+        assert_eq!(s.show(Some("status-interval"), &g, false, true, "w", 1), Ok(vec!["15".into()]));
+        assert_eq!(s.show(Some("status-interval"), &SetFlags::default(), false, false, "w", 1), Ok(vec![]));
     }
 }
