@@ -201,7 +201,7 @@ pub mod fzfcolor {
     #[allow(dead_code)]
     pub struct Palette {
         pub prompt: P, pub normal: P, pub selected: P, pub input: P, pub ghost: P, pub matched: P, pub selected_match: P,
-        pub cursor: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
+        pub cursor: P, pub cursor_empty: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
         pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub border_label: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
@@ -289,7 +289,7 @@ pub mod fzfcolor {
             prompt: pair(t.prompt, t.input_bg), normal: pair(t.list_fg, t.list_bg), selected: pair(t.selected_fg, t.selected_bg),
             input: pair(t.input, t.input_bg), ghost: pair(t.ghost, t.input_bg), matched: pair(t.matched, t.list_bg),
             selected_match: pair(t.selected_match, t.selected_bg), cursor: pair(t.cursor, t.gutter),
-            cursor_empty_char: pair(t.gutter, t.list_bg),
+            cursor_empty: pair(blank, t.gutter), cursor_empty_char: pair(t.gutter, t.list_bg),
             marker: if t.selected_bg.col != t.list_bg.col { pair(t.marker, t.selected_bg) } else { pair(t.marker, t.list_bg) },
             current: pair(t.current, t.dark_bg), current_match: pair(t.current_match, t.dark_bg), current_cursor: pair(t.cursor, t.dark_bg),
             current_cursor_empty: pair(blank, t.dark_bg), current_marker: pair(t.marker, t.dark_bg), current_selected_empty: pair(blank, t.dark_bg),
@@ -374,7 +374,7 @@ pub const TEXT: Color = Color::Reset;
 
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
-pub struct Fzf { pub reverse: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub bg_plus: Color, pub hl: Color, pub prompt: Color, pub bw: bool, pub pal: fzfcolor::Palette }
+pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub bg_plus: Color, pub hl: Color, pub prompt: Color, pub bw: bool, pub pal: fzfcolor::Palette }
 
 impl Fzf {
     /// The border (and --border's glyphs) and the scrollbar: each its own slot.
@@ -416,7 +416,7 @@ pub fn fzf() -> &'static Fzf {
         let opts = default_opts();
         // fzf's defaultOptions: NO_COLOR starts from bw; then each option in turn.
         let (mut theme, mut base) = if no_color() { (NO_COLOR, Some(NO_COLOR)) } else { (EMPTY, None) };
-        let (mut bold, mut reverse, mut pointer, mut marker, mut prompt, mut multi) = (true, false, None, None, None, None::<String>);
+        let (mut bold, mut reverse, mut pointer, mut marker, mut prompt, mut multi, mut unicode) = (true, false, None, None, None, None::<String>, true);
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -433,6 +433,7 @@ pub fn fzf() -> &'static Fzf {
                 "--pointer" => pointer = take(),
                 "--marker" => marker = take(),
                 "--marker-multi-line" => multi = take(),
+                "--unicode" => unicode = true, "--no-unicode" => unicode = false,
                 "--prompt" => prompt = take(),
                 _ => {}
             }
@@ -442,11 +443,13 @@ pub fn fzf() -> &'static Fzf {
         let base = base.unwrap_or(if depth() < 256 { DEFAULT16 } else { DARK256 });
         let pal = init(theme, base, bold);
         let fg = |p: P| p.style().fg.unwrap_or(Color::Reset);
-        let marker_char = marker.unwrap_or_else(|| "┃".into());
+        // --no-unicode: fzf's ASCII pointer and markers.
+        let marker_char = marker.unwrap_or_else(|| if unicode { "┃" } else { ">" }.into());
         Fzf {
             reverse,
-            pointer_char: pointer.unwrap_or_else(|| "▌".into()),
-            marker_multi: marker_multi(multi.as_deref(), &marker_char),
+            unicode,
+            pointer_char: pointer.unwrap_or_else(|| if unicode { "▌" } else { ">" }.into()),
+            marker_multi: marker_multi(multi.as_deref(), &marker_char, unicode),
             marker_char,
             // (Its first line only, as fzf's firstLine keeps it.)
             prompt_text: prompt.map(|p| p.split('\n').next().unwrap_or("").to_string()).unwrap_or_else(|| "> ".into()),
@@ -458,7 +461,7 @@ pub fn fzf() -> &'static Fzf {
 /// --marker-multi-line (a marked row of several lines: its first, middle and last lines' markers),
 /// as fzf's parseMarkerMultiLine splits it (three of width 1 or 2); none when --marker is ''; the
 /// three padded to --marker's width when they are narrower.
-fn marker_multi(spec: Option<&str>, marker: &str) -> [String; 3] {
+fn marker_multi(spec: Option<&str>, marker: &str, unicode: bool) -> [String; 3] {
     use unicode_width::UnicodeWidthStr;
     let parsed = spec.map(|s| {
         let total = s.width();
@@ -472,7 +475,12 @@ fn marker_multi(spec: Option<&str>, marker: &str) -> [String; 3] {
         }
         out
     });
-    let mut multi = match parsed { Some(m) => m, None if marker.is_empty() => Default::default(), None => ["╻".into(), "┃".into(), "╹".into()] };
+    let mut multi = match parsed {
+        Some(m) => m,
+        None if marker.is_empty() => Default::default(),
+        None if unicode => ["╻".into(), "┃".into(), "╹".into()],
+        None => [".".into(), "|".into(), "'".into()],
+    };
     let diff = marker.width() as i64 - multi[0].width() as i64;
     if diff > 0 && !multi[0].is_empty() { for m in multi.iter_mut() { m.push_str(&" ".repeat(diff as usize)) } }
     multi
@@ -529,13 +537,14 @@ fn strip_ansi(s: &str) -> String {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool) }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool), pub unicode: bool, pub gutter: Option<String> }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false) };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false), unicode: true, gutter: None };
+        let (mut sep_set, mut bar_set, mut ell_set, mut sign_set) = (false, false, false, false);
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -592,16 +601,19 @@ pub fn fzf_opts() -> &'static FzfOpts {
                         o.tiebreak = v.split(',').filter_map(|c| match c.trim().to_lowercase().as_str() { "length" => Some(Length), "chunk" => Some(Chunk), "pathname" => Some(Pathname), "begin" => Some(Begin), "end" => Some(End), _ => None }).collect();
                     }
                 }
-                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty() } }
+                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty(); sep_set = true } }
+                "--unicode" => o.unicode = true, "--no-unicode" => o.unicode = false,
+                // --gutter=CHAR: the gutter's character (a blank in reverse under --no-unicode).
+                "--gutter" => { if let Some(v) = take() { o.gutter = Some(v) } }
                 // --scrollbar=CHAR1[CHAR2]: the list's, and the preview's (CHAR1 when there is no CHAR2).
-                "--scrollbar" => { if let Some(v) = take() { o.scrollbar = v.chars().next().map(|c| c.to_string()); o.preview_scrollbar = v.chars().nth(1).map(|c| c.to_string()).or(o.scrollbar.clone()) } }
+                "--scrollbar" => { if let Some(v) = take() { o.scrollbar = v.chars().next().map(|c| c.to_string()); o.preview_scrollbar = v.chars().nth(1).map(|c| c.to_string()).or(o.scrollbar.clone()); bar_set = true } }
                 "--no-scrollbar" => { o.scrollbar = None; o.preview_scrollbar = None }
                 "-e" | "--exact" => o.exact = true, "--no-exact" => o.exact = false,
                 "-i" | "--ignore-case" => o.case = Some(false), "+i" | "--no-ignore-case" => o.case = Some(true), "--smart-case" => o.case = None,
                 "--no-separator" => o.separator = false,
-                "--ellipsis" => { if let Some(v) = take() { o.ellipsis = v } }
+                "--ellipsis" => { if let Some(v) = take() { o.ellipsis = v; ell_set = true } }
                 "--wrap" => o.wrap = true, "--no-wrap" => o.wrap = false,
-                "--wrap-sign" => { if let Some(v) = take() { o.wrap_sign = v } }
+                "--wrap-sign" => { if let Some(v) = take() { o.wrap_sign = v; sign_set = true } }
                 "--color" => {
                     if let Some(v) = take() {
                         for (slot, c) in v.split(',').filter_map(|p| p.split_once(':')) {
@@ -632,6 +644,13 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 _ => {}
             }
             i += 1;
+        }
+        // --no-unicode: fzf's ASCII separator, scrollbar, ellipsis and wrap sign, where none was given.
+        if !o.unicode {
+            if !sep_set && o.separator { o.separator_char = "-".into() }
+            if !bar_set && o.scrollbar.is_some() { o.scrollbar = Some("|".into()); o.preview_scrollbar = Some("|".into()) }
+            if !ell_set { o.ellipsis = "..".into() }
+            if !sign_set { o.wrap_sign = "> ".into() }
         }
         if no_color() { o.fg = None; o.bg = None }
         o

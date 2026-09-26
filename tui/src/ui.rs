@@ -604,18 +604,24 @@ pub fn fzf_frame(body: Rect, picker: &Picker) -> FzfFrame {
 /// bottom, left, right) around [body], in the border colour, and --border-label on it where
 /// --border-label-pos puts it (printLabel: centred by default; a column from the left, or from the
 /// right when negative; the bottom line with :bottom), cut with the ellipsis when it is too long.
-fn fzf_border(buf: &mut Buffer, body: Rect) {
-    let Some(style) = theme::fzf_opts().border.clone() else { return };
-    let st = theme::fzf().border_style();
-    // fzf's glyphs (tui.go MakeBorderStyle): top, bottom, left, right, then the corners.
-    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = match style.as_str() {
+/// fzf's glyphs for a border style (tui.go MakeBorderStyle): top, bottom, left, right, then the
+/// corners — ASCII under --no-unicode.
+fn border_glyphs(style: &str) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
+    if !theme::fzf().unicode { return ("-", "-", "|", "|", "+", "+", "+", "+") }
+    match style {
         "sharp" => ("─", "─", "│", "│", "┌", "┐", "└", "┘"),
         "bold" => ("━", "━", "┃", "┃", "┏", "┓", "┗", "┛"),
         "double" => ("═", "═", "║", "║", "╔", "╗", "╚", "╝"),
         "block" => ("▀", "▄", "▌", "▐", "▛", "▜", "▙", "▟"),
         "thinblock" => ("▔", "▁", "▏", "▕", "🭽", "🭾", "🭼", "🭿"),
         _ => ("─", "─", "│", "│", "╭", "╮", "╰", "╯"),
-    };
+    }
+}
+
+fn fzf_border(buf: &mut Buffer, body: Rect) {
+    let Some(style) = theme::fzf_opts().border.clone() else { return };
+    let st = theme::fzf().border_style();
+    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs(&style);
     let (top, bottom, left, right) = match style.as_str() { "none" => (false, false, false, false), "horizontal" => (true, true, false, false), "vertical" => (false, false, true, true), "top" => (true, false, false, false), "bottom" => (false, true, false, false), "left" => (false, false, true, false), "right" => (false, false, false, true), _ => (true, true, true, true) };
     if body.width < 2 || body.height < 2 { return }
     let (x1, y1) = (body.x + body.width - 1, body.y + body.height - 1);
@@ -743,8 +749,11 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // spins in the spinner's pair where fzf's does, and gives an info prefix that pair too.
     let (info_style, sep_style, spin_style) = (pal.info.style(), pal.separator.style(), pal.spinner.style());
     let reading = picker.busy.is_some();
+    // fzf's makeSpinner (ASCII under --no-unicode).
     const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let spinner = SPINNER[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100 % 10) as usize];
+    const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
+    let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
+    let spinner = frames[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100) as usize % frames.len()];
     let w = area.width as i32;
     let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { buf.set_stringn(area.x + x as u16, y, s, (w - x) as usize, st); } };
     let bar = |buf: &mut Buffer, x: i32, y: u16, n: i32| { if o.separator && n > 0 { put(buf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
@@ -938,7 +947,12 @@ fn row_gutter(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, mark
     let pal = z.pal;
     let pw = pointer_w();
     if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
-    else if pw > 0 { buf.set_string(x, y, format!("{:<pw$}", "▌"), pal.cursor_empty_char.style()) }
+    else if pw > 0 {
+        // The gutter: --gutter's character, `▌`, or under --no-unicode a blank in reverse.
+        let o = theme::fzf_opts();
+        let (gutter, st) = match &o.gutter { Some(g) => (g.as_str(), pal.cursor_empty_char), None if o.unicode => ("▌", pal.cursor_empty_char), None => (" ", pal.cursor_empty) };
+        buf.set_string(x, y, format!("{:<pw$}", gutter), st.style())
+    }
     let mw = marker_w();
     let marker = marker.unwrap_or(&z.marker_char);
     let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 };
@@ -1386,13 +1400,14 @@ fn preview(buf: &mut Buffer, app: &App, kind: &PickerKind, picker: &Picker, area
         for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } }
     }
     if let Some(bg) = theme::fzf_opts().bg { buf.set_style(area, Style::default().bg(bg)) }
-    buf.set_string(area.x, area.y, "╭", border);
-    buf.set_string(area.x + w - 1, area.y, "╮", border);
-    buf.set_string(area.x, area.y + h - 1, "╰", border);
-    buf.set_string(area.x + w - 1, area.y + h - 1, "╯", border);
-    for x in area.x + 1..area.x + w - 1 { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + h - 1, "─", border); }
+    let (top_c, bottom_c, left_c, right_c, tl, tr, bl, br) = border_glyphs("rounded");
+    buf.set_string(area.x, area.y, tl, border);
+    buf.set_string(area.x + w - 1, area.y, tr, border);
+    buf.set_string(area.x, area.y + h - 1, bl, border);
+    buf.set_string(area.x + w - 1, area.y + h - 1, br, border);
+    for x in area.x + 1..area.x + w - 1 { buf.set_string(x, area.y, top_c, border); buf.set_string(x, area.y + h - 1, bottom_c, border); }
     // The padding inside the sides is the border's too (the right one is the scrollbar's column).
-    for y in area.y + 1..area.y + h - 1 { buf.set_string(area.x, y, "│ ", border); buf.set_string(area.x + w - 2, y, " │", border); }
+    for y in area.y + 1..area.y + h - 1 { buf.set_string(area.x, y, format!("{left_c} "), border); buf.set_string(area.x + w - 2, y, format!(" {right_c}"), border); }
     let inner = Rect::new(area.x + 2, area.y + 1, w.saturating_sub(4), h.saturating_sub(2));
     let Some(id) = picker.current_id() else { return };
     let label = picker.current().map(|r| r.label.clone()).unwrap_or_default();
