@@ -55,13 +55,13 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
     if let Some(q) = &a.question {
         out.push(Line::raw(""));
         out.push(Line::from(vec![Span::styled("? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), bold(q.prompt.clone())]));
-        for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::FZF_HL)), Span::raw(o.clone())])) }
+        for (i, o) in q.options.iter().enumerate() { out.push(Line::from(vec![Span::styled(format!("  M-{} ", i + 1), Style::default().fg(theme::fzf().hl)), Span::raw(o.clone())])) }
     }
     if let Some(recent) = app.recent.get(&(machine_id.to_string(), agent_id.to_string())) {
         let asks: Vec<String> = recent.get("asks").and_then(Value::as_array).map(|x| x.iter().filter_map(|v| v.as_str().map(str::to_string).or_else(|| v.get("text").and_then(Value::as_str).map(str::to_string))).collect()).unwrap_or_default();
         let recaps: Vec<String> = recent.get("events").and_then(Value::as_array).map(|x| x.iter().filter_map(|e| e.pointer("/payload/recap").or_else(|| e.get("recap")).or_else(|| e.pointer("/payload/text")).and_then(Value::as_str).map(str::to_string)).collect()).unwrap_or_default();
         if !asks.is_empty() || !recaps.is_empty() { out.push(Line::raw("")) }
-        for ask in asks.iter().take(3) { out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::FZF_PROMPT)), Span::raw(ask.lines().next().unwrap_or("").to_string())])) }
+        for ask in asks.iter().take(3) { out.push(Line::from(vec![Span::styled("❯ ", Style::default().fg(theme::fzf().prompt)), Span::raw(ask.lines().next().unwrap_or("").to_string())])) }
         for recap in recaps.iter().take(2) { for (i, l) in recap.lines().take(6).enumerate() { out.push(Line::from(vec![dim(if i == 0 { "⏺ " } else { "  " }), Span::raw(l.to_string())])) } }
     }
     out.push(Line::raw(""));

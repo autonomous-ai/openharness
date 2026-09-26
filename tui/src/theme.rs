@@ -5,33 +5,39 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::fleet::State;
 
-pub const ACCENT: Color = Color::Rgb(0x41, 0x66, 0xF2);
-pub const ACCENT_SOFT: Color = Color::Rgb(0x8F, 0xA3, 0xF8);
-pub const ONLINE: Color = Color::Rgb(0x3F, 0xB9, 0x50);
-pub const WARN: Color = Color::Rgb(0xFF, 0xB0, 0x20);
-pub const ATTENTION: Color = Color::Rgb(0xE0, 0xA9, 0x3B);
-pub const DANGER: Color = Color::Rgb(0xF2, 0x54, 0x4B);
-pub const TEAL: Color = Color::Rgb(0x2D, 0xD4, 0xBF);
-pub const MUTED: Color = Color::Rgb(0x6E, 0x6E, 0x6E);
-pub const SOFT: Color = Color::Rgb(0xA8, 0xA8, 0xA2);
-pub const TEXT: Color = Color::Rgb(0xF5, 0xF5, 0xF5);
-pub const LINE: Color = Color::Rgb(0x3A, 0x3A, 0x3A);
-pub const SELECT: Color = Color::Rgb(0x26, 0x32, 0x4F);
-pub const SELECT_TEXT: Color = Color::Rgb(0x2F, 0x4A, 0x9E);
-pub const PANEL: Color = Color::Rgb(0x16, 0x17, 0x1A);
+// Hn's own chrome speaks the 16 ANSI colours, as tmux's does: the terminal's theme decides what
+// they look like, so it reads on dark, light and Solarized alike. SOFT and MUTED are not colours
+// but emphasis (the terminal's dim), `fg` turns them into that.
+pub const ACCENT: Color = Color::Blue;
+pub const ACCENT_SOFT: Color = Color::Cyan;
+pub const ONLINE: Color = Color::Green;
+pub const WARN: Color = Color::Yellow;
+pub const ATTENTION: Color = Color::Yellow;
+pub const DANGER: Color = Color::Red;
+pub const TEAL: Color = Color::Cyan;
+pub const MUTED: Color = Color::Indexed(8);
+pub const SOFT: Color = Color::Indexed(7);
+pub const TEXT: Color = Color::Reset;
 
-// fzf's default dark256 colours (fzf 0.67, measured from its output).
-pub const FZF_GUTTER: Color = Color::Indexed(236);
-pub const FZF_BG_PLUS: Color = Color::Indexed(236);
-pub const FZF_FG_PLUS: Color = Color::Indexed(254);
-pub const FZF_HL: Color = Color::Indexed(108);
-pub const FZF_HL_PLUS: Color = Color::Indexed(151);
-pub const FZF_POINTER: Color = Color::Indexed(161);
-pub const FZF_MARKER: Color = Color::Indexed(168);
-pub const FZF_INFO: Color = Color::Indexed(144);
-pub const FZF_PROMPT: Color = Color::Indexed(110);
-pub const FZF_BORDER: Color = Color::Indexed(59);
-pub const FZF_HEADER: Color = Color::Indexed(109);
+/// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
+/// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
+pub struct Fzf { pub gutter: Color, pub bg_plus: Color, pub fg_plus: Color, pub hl: Color, pub hl_plus: Color, pub pointer: Color, pub marker: Color, pub info: Color, pub prompt: Color, pub border: Color, pub header: Color, pub bw: bool }
+
+pub fn fzf() -> &'static Fzf {
+    static FZF: std::sync::OnceLock<Fzf> = std::sync::OnceLock::new();
+    FZF.get_or_init(|| {
+        let opts = std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default();
+        let base = opts.split_whitespace().rev().find_map(|w| w.strip_prefix("--color=").or_else(|| w.strip_prefix("--color "))).map(|c| c.split(',').next().unwrap_or("").to_string()).unwrap_or_default();
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+        let i = Color::Indexed;
+        match base.as_str() {
+            _ if no_color || base == "bw" => Fzf { gutter: Color::Reset, bg_plus: Color::Reset, fg_plus: Color::Reset, hl: Color::Reset, hl_plus: Color::Reset, pointer: Color::Reset, marker: Color::Reset, info: Color::Reset, prompt: Color::Reset, border: Color::Reset, header: Color::Reset, bw: true },
+            "light" | "light256" => Fzf { gutter: i(251), bg_plus: i(251), fg_plus: Color::Reset, hl: i(25), hl_plus: i(25), pointer: i(161), marker: i(168), info: i(101), prompt: i(25), border: i(145), header: i(31), bw: false },
+            "16" => Fzf { gutter: Color::Black, bg_plus: Color::Black, fg_plus: Color::Reset, hl: Color::Green, hl_plus: Color::Green, pointer: Color::Red, marker: Color::Magenta, info: Color::Gray, prompt: Color::Blue, border: Color::Black, header: Color::Cyan, bw: false },
+            _ => Fzf { gutter: i(236), bg_plus: i(236), fg_plus: i(254), hl: i(108), hl_plus: i(151), pointer: i(161), marker: i(168), info: i(144), prompt: i(110), border: i(59), header: i(109), bw: false },
+        }
+    })
+}
 
 // tmux's default colours.
 pub const TMUX_STATUS_BG: Color = Color::Green;
@@ -42,7 +48,12 @@ pub const TMUX_ACTIVE_BORDER: Color = Color::Green;
 pub const TMUX_DISPLAY_PANES: Color = Color::Blue;
 pub const TMUX_DISPLAY_PANES_ACTIVE: Color = Color::Red;
 
-pub fn fg(color: Color) -> Style { Style::default().fg(color) }
+pub fn fg(color: Color) -> Style {
+    match color {
+        MUTED | SOFT => Style::default().add_modifier(Modifier::DIM),
+        c => Style::default().fg(c),
+    }
+}
 pub fn bold(color: Color) -> Style { Style::default().fg(color).add_modifier(Modifier::BOLD) }
 
 pub fn engine_mark(engine: &str) -> (&'static str, Color) {
