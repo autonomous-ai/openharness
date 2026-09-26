@@ -27,16 +27,18 @@ callback), starts the daemon, then opens.
 
 ## Keys
 
-tmux's. The prefix is `C-b`; every default tmux binding does what it does in tmux, with a window
-being a tab and a pane being a harness. If you have a `~/.tmux.conf`, it is read: your prefix,
-your binds (vim-tmux-navigator's `C-h/j/k/l` included), `base-index`, `mouse`,
-`status-position` and your colours come with you.
+tmux's. The prefix is `C-b`; `C-b s` then `C-v`, `C-x` or `C-t` puts any harness beside, below or in a new window; every default tmux binding does what it does in tmux, with a window
+being a tab and a pane being a harness. If you have a `~/.tmux.conf`, it is read: your prefix and
+binds (copy-mode-vi's and vim-tmux-navigator's too), `source-file`, `if-shell`, `base-index`,
+`renumber-windows`, `mouse`, `mode-keys`, `status-left`/`status-right` and the window formats
+(`#[…]` styles, `#{?…}`, `%H:%M`), `pane-border-format`, `synchronize-panes` and your colours come
+with you. Plugins (tpm) do not load; `tim --keys` lists every line not used.
 
 | tmux keys | |
 |---|---|
 | `C-b s` | every harness on every machine — an fzf list with a live preview |
-| `C-b c` / `C-b C` / `C-b T` | new window / new harness / new terminal |
-| `C-b %` `C-b "` | split right / below, picking the harness to put there |
+| `C-b c` / `C-b C` | new window (a shell) / new harness (an agent) |
+| `C-b %` `C-b "` (`\|` `-`) | split right / below — a shell, at once, in this pane's machine and folder |
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
 | `C-b z` `C-b space` `C-b M-1…5` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
