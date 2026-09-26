@@ -21,6 +21,12 @@ pub struct Binding {
     pub note: String,
 }
 
+/// tmux 3.5a's window menu (C-b <), as `list-keys` prints it.
+pub const WINDOW_MENU: &str = r##"display-menu -T "#[align=centre]#{window_index}:#{window_name}" -x W -y W "#{?#{>:#{session_windows},1},,-}Swap Left" l { swap-window -t :-1 } "#{?#{>:#{session_windows},1},,-}Swap Right" r { swap-window -t :+1 } "#{?pane_marked_set,,-}Swap Marked" s { swap-window } '' Kill X { kill-window } Respawn R { respawn-window -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } Rename n { command-prompt -F -I "#W" { rename-window -t "#{window_id}" "%%" } } '' "New After" w { new-window -a } "New At End" W { new-window }"##;
+
+/// tmux 3.5a's pane menu (C-b >): the parts hn has — no mouse word under a key press.
+pub const PANE_MENU: &str = r##"display-menu -T "#[align=centre]#{pane_index} (#{pane_id})" -x P -y P "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}" < { send-keys -X history-top } "#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}" > { send-keys -X history-bottom } '' "Horizontal Split" h { split-window -h } "Vertical Split" v { split-window -v } '' "#{?#{>:#{window_panes},1},,-}Swap Up" u { swap-pane -U } "#{?#{>:#{window_panes},1},,-}Swap Down" d { swap-pane -D } "#{?pane_marked_set,,-}Swap Marked" s { swap-pane } '' Kill X { kill-pane } Respawn R { respawn-pane -k } "#{?pane_marked,Unmark,Mark}" m { select-pane -m } "#{?#{>:#{window_panes},1},,-}#{?window_zoomed_flag,Unzoom,Zoom}" z { resize-pane -Z }"##;
+
 #[derive(Clone, Debug)]
 pub struct Keymap {
     pub prefix: Chord,
@@ -44,6 +50,7 @@ impl Keymap {
         let none = KeyModifiers::NONE;
         let ctrl = KeyModifiers::CONTROL;
         let alt = KeyModifiers::ALT;
+        let shift = KeyModifiers::SHIFT;
         let mut t: Vec<Binding> = Vec::new();
         let mut b = |chord: Chord, command: &str, repeat: bool, note: &str| t.push(Binding { chord, command: command.into(), repeat, note: note.into() });
         // ── tmux's own table ──
@@ -57,28 +64,28 @@ impl Keymap {
         b(ch(','), "command-prompt -I \"#W\" -p (rename-window) rename-window", false, "Rename current window");
         // The split keys nearly every tmux.conf adds, beside % and " (tmux's `-` was delete-buffer).
         b(ch('|'), "split-window -h", false, "Split window horizontally (as %)");
-        b(ch('-'), "split-window", false, "Split window vertically (as \")");
+        b(ch('-'), "delete-buffer", false, "Delete the most recent paste buffer");
         b(ch('.'), "command-prompt -p (move-window) move-window", false, "Move the current window");
-        b(ch('/'), "list-keys", false, "Describe key binding");
+        b(ch('/'), "command-prompt -k -p key { list-keys -1N \"%%\" }", false, "Describe key binding");
         for n in 0..=9u8 { b(ch((b'0' + n) as char), &format!("select-window -t {n}"), false, &format!("Select window {n}")); }
         b(ch(':'), "command-prompt", false, "Prompt for a command");
         b(ch(';'), "last-pane", false, "Move to the previously active pane");
-        b(ch('<'), "move-window -L", false, "Move this window left");
-        b(ch('>'), "move-window -R", false, "Move this window right");
+        b(ch('<'), WINDOW_MENU, false, "Display window menu");
+        b(ch('>'), PANE_MENU, false, "Display pane menu");
         b(ch('='), "choose-buffer", false, "Choose a paste buffer");
         b(ch('?'), "list-keys", false, "List key bindings");
         b(ch('D'), "choose-client", false, "Choose a client (the windows that hold harnesses)");
         b(ch('E'), "select-layout -E", false, "Spread panes out evenly");
         b(ch('L'), "switch-client -l", false, "Switch to the last harness");
         b(ch('['), "copy-mode", false, "Enter copy mode");
-        b(ch(']'), "paste-buffer", false, "Paste the most recent paste buffer");
+        b(ch(']'), "paste-buffer -p", false, "Paste the most recent paste buffer");
         b(ch('c'), "new-window", false, "Create a new window (and choose its harness)");
         b(ch('d'), "detach-client", false, "Detach — everything keeps running");
         b(ch('f'), "find-window", false, "Search every harness on every machine");
         b(ch('i'), "display-message", false, "Display window information");
         b(ch('l'), "last-window", false, "Select the previously current window");
         b(ch('m'), "select-pane -m", false, "Toggle the marked pane");
-        b(ch('M'), "choose-tree -m", false, "Machines (then their harnesses)");
+        b(ch('M'), "select-pane -M", false, "Clear the marked pane");
         b(ch('n'), "next-window", false, "Select the next window");
         b(ch('o'), "select-pane -t :.+", false, "Select the next pane");
         b(ch('p'), "previous-window", false, "Select the previous window");
@@ -93,6 +100,11 @@ impl Keymap {
         b(ch('}'), "swap-pane -D", false, "Swap the active pane with the pane below");
         b(ch('~'), "show-messages", false, "Show messages");
         b(k(KeyCode::PageUp, none), "copy-mode -u", false, "Enter copy mode and scroll up");
+        b(k(KeyCode::Delete, none), "refresh-client -c", true, "Reset so the visible part follows the cursor");
+        b(k(KeyCode::Up, shift), "refresh-client -U 10", true, "Move the visible part of the window up");
+        b(k(KeyCode::Down, shift), "refresh-client -D 10", true, "Move the visible part of the window down");
+        b(k(KeyCode::Left, shift), "refresh-client -L 10", true, "Move the visible part of the window left");
+        b(k(KeyCode::Right, shift), "refresh-client -R 10", true, "Move the visible part of the window right");
         b(k(KeyCode::Up, none), "select-pane -U", true, "Select the pane above the active pane");
         b(k(KeyCode::Down, none), "select-pane -D", true, "Select the pane below the active pane");
         b(k(KeyCode::Left, none), "select-pane -L", true, "Select the pane to the left of the active pane");
@@ -102,6 +114,8 @@ impl Keymap {
         b(k(KeyCode::Char('3'), alt), "select-layout main-horizontal", false, "Set the main-horizontal layout");
         b(k(KeyCode::Char('4'), alt), "select-layout main-vertical", false, "Set the main-vertical layout");
         b(k(KeyCode::Char('5'), alt), "select-layout tiled", false, "Set the tiled layout");
+        b(k(KeyCode::Char('6'), alt), "select-layout main-horizontal-mirrored", false, "Set the main-horizontal-mirrored layout");
+        b(k(KeyCode::Char('7'), alt), "select-layout main-vertical-mirrored", false, "Set the main-vertical-mirrored layout");
         b(k(KeyCode::Char('n'), alt), "next-window -a", false, "Select the next window with an alert (a harness waiting on you)");
         b(k(KeyCode::Char('p'), alt), "previous-window -a", false, "Select the previous window with an alert");
         b(k(KeyCode::Char('o'), alt), "rotate-window -D", false, "Rotate through the panes in reverse");
@@ -119,7 +133,10 @@ impl Keymap {
         b(k(KeyCode::Left, ctrl), "resize-pane -L", true, "Resize the pane left");
         b(k(KeyCode::Right, ctrl), "resize-pane -R", true, "Resize the pane right");
         // ── keys tmux leaves unbound: the Harness ones ──
-        b(ch('C'), "new-harness", false, "New harness: agent, machine, folder, first message");
+        b(ch('C'), "customize-mode -Z", false, "Customize options");
+        // Harness's own, on keys tmux leaves unbound.
+        b(ch('N'), "new-harness", false, "New harness: agent, machine, folder, first message");
+        b(ch('@'), "choose-tree -m", false, "Machines (then their harnesses)");
         b(ch('T'), "new-terminal", false, "New terminal (a shell) beside this pane");
         b(ch('a'), "next-window -a", false, "Go to the next harness waiting on you");
         b(ch('A'), "choose-tree -a", false, "Harnesses waiting on you — answer from the list");
@@ -130,7 +147,6 @@ impl Keymap {
         b(ch('R'), "confirm-before -p \"restart #T? (y/n)\" restart-harness", false, "Restart this harness");
         b(ch('P'), "confirm-before -p \"pause #T? (y/n)\" pause-harness", false, "Pause this harness (the conversation is kept)");
         b(ch('K'), "clone-harness", false, "Clone this harness (a second one with its history)");
-        b(ch('/'), "copy-mode ; search-backward", false, "Search this pane's history");
         drop(b);
         // `/` is list-keys -1N in tmux (describe a key); here it is the far more used search. The
         // describe variant stays reachable through `?`.

@@ -37,24 +37,27 @@ with you. Plugins (tpm) do not load; `hn --keys` lists every line not used.
 | tmux keys | |
 |---|---|
 | `C-b s` | every harness on every machine — an fzf list with a live preview |
-| `C-b c` / `C-b C` | new window (a shell) / new harness (an agent) |
+| `C-b c` | new window (a shell) |
 | `C-b %` `C-b "` (`\|` `-`) | split right / below — a shell, at once, in this pane's machine and folder |
 | `C-b o` `C-b ;` `C-b ←↑→↓` `C-b q` | next pane, last pane, pane in a direction, pane numbers |
-| `C-b z` `C-b space` `C-b M-1…5` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
+| `C-b z` `C-b space` `C-b M-1…7` `C-b { }` `C-b C-o` | zoom, next layout, a layout, swap, rotate |
 | `C-b C-←↑→↓` `C-b M-←↑→↓` | resize (repeatable, like tmux's `-r`) |
 | `C-b n` `C-b p` `C-b l` `C-b 0…9` `C-b w` `C-b ,` `C-b &` | windows |
 | `C-b x` | close the pane (the harness keeps running) |
-| `C-b [` `C-b /` `C-b ]` | copy mode (vi keys), search back, paste |
+| `C-b [` `C-b ]` | copy mode (vi keys; `?` `/` search), paste |
+| `C-b <` `C-b >` | the window and pane menus |
+| `C-b /` | what a key does |
 | `C-b :` | the command prompt — tmux commands, `Tab` completes |
 | `C-b ?` | every key, fzf-searchable — or just pause after `C-b` and they show |
 | `C-b d` | detach — everything keeps running |
 
-Harness's own, on the letters tmux leaves free:
+Harness's own, only on keys tmux leaves unbound (every tmux key does what tmux does):
 
 | | |
 |---|---|
 | `C-b a` / `C-b A` | next harness waiting on you / all of them (`M-1…9` answers from the list) |
-| `C-b I` `C-b M` `C-b S` | models, machines, the Harness Store |
+| `C-b N` `C-b T` | new harness (an agent) / new terminal |
+| `C-b I` `C-b @` `C-b S` | models, machines, the Harness Store |
 | `C-b g` `C-b B` | send a task (Harness picks the harness) / broadcast to the window |
 | `C-b R` `C-b P` `C-b K` | restart, pause, clone the harness |
 

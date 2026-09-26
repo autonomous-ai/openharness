@@ -9,6 +9,7 @@ crossterm = "0.29.0"
 flate2 = "1.1.10"
 futures-util = "0.3.34"
 nucleo = "0.5.0"
+regex = "1"
 ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

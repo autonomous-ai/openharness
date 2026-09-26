@@ -120,6 +120,50 @@ pub fn quote_word(w: &str) -> String {
     format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// The config's logical lines: a `{ … }` block that runs over several lines (tmux 3 configs)
+/// stays one line, its own newlines kept (they separate its commands); comments inside dropped.
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut open: Option<String> = None;
+    let mut depth: i32 = 0;
+    for line in text.lines() {
+        match open.as_mut() {
+            Some(buf) => {
+                let t = line.trim();
+                if t.starts_with('#') || t.is_empty() { continue }
+                buf.push('\n');
+                buf.push_str(line);
+            }
+            None => open = Some(line.to_string()),
+        }
+        depth += brace_delta(line);
+        if depth <= 0 { depth = 0; out.extend(open.take()) }
+    }
+    out.extend(open.take());
+    out
+}
+
+/// Standalone `{` opened minus `}` closed on a line (quotes and #{formats} not counted).
+fn brace_delta(line: &str) -> i32 {
+    let (mut d, mut quote, mut format, mut prev) = (0i32, None::<char>, 0usize, ' ');
+    let chars: Vec<char> = line.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '#') if prev.is_whitespace() && format == 0 && chars.get(i + 1) != Some(&'{') => break,
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '{') if prev == '#' => format += 1,
+            (None, '}') if format > 0 => format -= 1,
+            (None, '{') if prev.is_whitespace() && chars.get(i + 1).map(|n| n.is_whitespace()).unwrap_or(true) => d += 1,
+            (None, '}') if prev.is_whitespace() || i == 0 || prev == ';' => d -= 1,
+            _ => {}
+        }
+        prev = c;
+    }
+    d
+}
+
 fn truthy(v: &str) -> bool { let v = v.trim(); !v.is_empty() && v != "0" }
 
 fn unquote(s: &str) -> &str { s.trim().trim_matches('"').trim_matches('\'') }
@@ -213,10 +257,10 @@ pub fn load(keymap: &mut Keymap) -> Settings {
 
 pub fn apply(text: &str, keymap: &mut Keymap, settings: &mut Settings) {
     // Join continued lines (a trailing backslash).
-    let joined = text.replace("\\\n", " ");
+    let joined = logical_lines(&text.replace("\\\n", " "));
     // %if / %elif / %else / %endif: a stack of (this branch runs, a branch already ran).
     let mut stack: Vec<(bool, bool)> = Vec::new();
-    for (n, raw) in joined.lines().enumerate() {
+    for (n, raw) in joined.iter().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') { continue }
         let live = stack.iter().all(|(on, _)| *on);
@@ -430,6 +474,15 @@ run '~/.tmux/plugins/tpm/tpm'
         apply("set -g @a x\n%if #{==:#{@a},x}\nset -g @r yes\n%else\nset -g @r no\n%endif\n%if #{>=:#{version},3.2}\nset -g @v new\n%endif\n", &mut k2, &mut s2);
         assert_eq!(s2.options.user.get("@r").map(String::as_str), Some("yes"));
         assert_eq!(s2.options.user.get("@v").map(String::as_str), Some("new"));
+        // tmux 3 blocks over several lines, and in one.
+        let mut k3 = Keymap::tmux_defaults();
+        let mut s3 = Settings::default();
+        apply("bind -n M-h if -F '#{pane_at_left}' {\n  send-keys M-h\n} {\n  # go left\n  select-pane -L\n}\nbind , command-prompt -I \"#W\" { rename-window \"%%\" }\nset -g @after yes\n", &mut k3, &mut s3);
+        assert!(s3.problems.is_empty(), "{:?}", s3.problems);
+        let mh = k3.root_command(&keys::parse("M-h").unwrap()).unwrap().command.clone();
+        assert!(mh.contains("send-keys M-h") && mh.contains("select-pane -L"), "{mh}");
+        assert!(k3.prefix_command(&keys::parse(",").unwrap()).unwrap().command.contains("rename-window"));
+        assert_eq!(s3.options.user.get("@after").map(String::as_str), Some("yes"));
         assert_eq!(s.pane_base_index, Some(1));
         assert_eq!(s.status_top, Some(true));
         assert_eq!(s.look.status_bg, Some(Color::Indexed(235)));

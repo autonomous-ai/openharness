@@ -910,6 +910,33 @@ impl App {
         self.fleet.machine(&self.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(hostname)
     }
 
+    /// The layout's main pane to the other side (the -mirrored layouts).
+    pub fn mirror_layout(&mut self) {
+        if let Some(layout::Node::Split { ratio, a, b, .. }) = self.tab_mut().root.as_mut() {
+            std::mem::swap(a, b);
+            *ratio = 1.0 - *ratio;
+        }
+        self.fit_panes();
+    }
+
+    /// new-window -a: the new (current) window takes the index after `after`'s, the windows
+    /// numbered from there moving up one, and its place in the order.
+    pub fn place_after(&mut self, after: &str) {
+        self.renumber();
+        let Some(base) = self.tabs.iter().find(|t| t.id == after).and_then(|t| self.nums.get(&t.id).copied()) else { return };
+        let me = self.tab().id.clone();
+        let want = base + 1;
+        let ids: Vec<String> = self.tabs.iter().filter(|t| t.id != me).map(|t| t.id.clone()).collect();
+        for id in ids { if let Some(n) = self.nums.get_mut(&id) { if *n >= want { *n += 1 } } }
+        self.nums.insert(me.clone(), want);
+        let Some(from) = self.tabs.iter().position(|t| t.id == me) else { return };
+        let tab = self.tabs.remove(from);
+        let at = self.tabs.iter().position(|t| self.nums.get(&t.id).map(|n| *n > want).unwrap_or(false)).unwrap_or(self.tabs.len());
+        self.tabs.insert(at, tab);
+        self.active = at;
+        self.fit_panes();
+    }
+
     /// move-window -r: every window numbered in order from base-index.
     pub fn renumber_all(&mut self) {
         for (i, t) in self.tabs.iter().enumerate() { self.nums.insert(t.id.clone(), i + self.base_index); }
