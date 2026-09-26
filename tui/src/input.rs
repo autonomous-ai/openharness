@@ -319,6 +319,14 @@ pub fn picker(app: &mut App, kind: PickerKind, title: &str, placeholder: &str) {
 
 /// (Re)build an overlay's rows from the fleet — called on open and whenever the fleet moves.
 pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
+    // Its spinner turns while what it lists is still coming in, as fzf's does while it reads.
+    let busy = match kind {
+        PickerKind::Store => is_loading(&format!("dsh {}", app.fleet.local_id)),
+        PickerKind::NewWhat { machine, .. } | PickerKind::NewFolder { machine, .. } => is_loading(&format!("dsh {machine}")),
+        PickerKind::Models => is_loading(&format!("grid {}", modal::models_machine(app))) || focused_agent(app).is_some_and(|(m, a)| is_loading(&format!("models {m} {a}"))),
+        _ => false,
+    };
+    picker.busy = busy.then(|| "loading".to_string());
     match kind {
         PickerKind::Open { filter, machine, project } => {
             picker.set_rows(modal::agent_rows(app, *filter, machine.as_deref(), project.as_deref()));
@@ -491,7 +499,9 @@ fn prepare(app: &mut App, kind: &PickerKind) {
 fn load_local_models(app: &mut App) {
     let machine = modal::models_machine(app);
     let Some(link) = app.link(&machine) else { return };
+    let mark = loading(format!("grid {machine}"), true);
     app.spawn(async move { link.rpc("grid_fleet_models_list", json!({}), Duration::from_secs(30)).await }, move |app, reply| {
+        loading(mark, false);
         if let Ok(reply) = reply { app.local_models.insert(machine, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
         refill(app);
     });
@@ -501,8 +511,10 @@ fn load_models(app: &mut App) {
     load_local_models(app);
     let Some((machine, agent)) = focused_agent(app) else { return };
     let Some(link) = app.link(&machine) else { return };
+    let mark = loading(format!("models {machine} {agent}"), true);
     let key = (machine, agent.clone());
     app.spawn(async move { link.rpc("models_list", json!({ "agentId": agent }), Duration::from_secs(20)).await }, move |app, reply| {
+        loading(mark, false);
         if let Ok(reply) = reply { app.models.insert(key, reply.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
         refill(app);
     });
@@ -665,7 +677,18 @@ pub fn run(app: &mut App, command: &str) {
 thread_local! {
     /// Which way the next harness picked goes, when the list was opened by split-window.
     static SPLIT: std::cell::Cell<Option<Dir>> = const { std::cell::Cell::new(None) };
+    /// The lists' loads still out (a catalog, a machine's models), each as many times as asked for.
+    static LOADING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
+
+/// A load goes out ([on]) or comes back; gives back its name.
+fn loading(what: String, on: bool) -> String {
+    LOADING.with(|l| { let mut l = l.borrow_mut(); if on { l.push(what.clone()) } else if let Some(i) = l.iter().position(|w| *w == what) { l.remove(i); } });
+    what
+}
+
+/// Whether a load of [what] is still out.
+fn is_loading(what: &str) -> bool { LOADING.with(|l| l.borrow().iter().any(|w| w == what)) }
 
 fn agent_rpc(app: &mut App, ty: &'static str, done: &'static str) {
     let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
@@ -679,11 +702,13 @@ fn agent_rpc(app: &mut App, ty: &'static str, done: &'static str) {
 fn load_dsh(app: &mut App, machine: String) {
     let Some(link) = app.link(&machine) else { return };
     let id = machine.clone();
+    let mark = loading(format!("dsh {machine}"), true);
     app.spawn(async move {
         let dsh = link.rpc("dsh_list", json!({}), Duration::from_secs(20)).await;
         let home = link.rpc("fs_list_dir", json!({}), Duration::from_secs(20)).await;
         (dsh, home)
     }, move |app, (dsh, home)| {
+        loading(mark, false);
         if let Ok(dsh) = dsh { app.dsh.insert(id.clone(), dsh.get("dsh").and_then(|v| v.as_array()).cloned().unwrap_or_default()); }
         if let Ok(home) = home { if let Some(path) = home.get("path").and_then(|v| v.as_str()) { app.homes.insert(id.clone(), path.to_string()); } }
         refill(app);
