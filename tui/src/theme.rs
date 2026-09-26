@@ -81,13 +81,13 @@ pub fn fzf() -> &'static Fzf {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
+pub struct FzfOpts { pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
-        let mut o = FzfOpts { info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
+        let mut o = FzfOpts { info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -96,7 +96,11 @@ pub fn fzf_opts() -> &'static FzfOpts {
             match flag.as_str() {
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
                 "--inline-info" => o.info_inline = true,
-                "--info" => { if let Some(v) = take() { o.info_inline = v.starts_with("inline") } }
+                "--no-info" => o.info_hidden = true,
+                "--info" => { if let Some(v) = take() { o.info_inline = v.starts_with("inline"); o.info_right = v == "inline-right" || v == "right"; o.info_hidden = v == "hidden"; } }
+                "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty() } }
+                "--scrollbar" => { if let Some(v) = take() { o.scrollbar = v.chars().next().map(|c| c.to_string()) } }
+                "--no-scrollbar" => o.scrollbar = None,
                 "-e" | "--exact" => o.exact = true, "--no-exact" => o.exact = false,
                 "-i" | "--ignore-case" => o.case = Some(false), "+i" | "--no-ignore-case" => o.case = Some(true), "--smart-case" => o.case = None,
                 "--no-separator" => o.separator = false,
@@ -110,7 +114,12 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 }
                 "--bind" => {
                     if let Some(v) = take() {
-                        for pair in v.split(',') { if let Some((k, a)) = pair.split_once(':') { o.binds.push((k.to_string(), a.to_string())) } }
+                        // Commas inside an action's (…) belong to it.
+                        let (mut depth, mut start) = (0, 0);
+                        let mut parts = Vec::new();
+                        for (i, c) in v.char_indices() { match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, ',' if depth == 0 => { parts.push(&v[start..i]); start = i + 1 } _ => {} } }
+                        parts.push(&v[start..]);
+                        for pair in parts { if let Some((k, a)) = pair.split_once(':') { o.binds.push((k.to_lowercase().replace("return", "enter"), a.to_string())) } }
                     }
                 }
                 _ => {}

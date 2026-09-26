@@ -444,17 +444,15 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![];
         }
         PickerKind::Keys => {
-            // The key is part of what is searched (`q` finds display-panes); the prefix is not.
+            // The whole line is searched, the prefix too (`C-b o`), as the line reads.
             let prefix = keys::name(&app.keymap.prefix);
             let mut rows: Vec<crate::picker::Row> = app.keymap.prefix_table.iter().map(|b| {
-                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{:<9} {}", keys::name(&b.chord), b.command))
+                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{prefix} {:<9} {}", keys::name(&b.chord), b.command))
                     .extra(b.note.clone())
-                    .lead(vec![ratatui::text::Span::styled(format!("{prefix} "), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))])
                     .detail(vec![ratatui::text::Span::styled(b.note.clone(), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))])
             }).collect();
             let pad = " ".repeat(prefix.chars().count() + 1);
-            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{:<9} {}", keys::name(&b.chord), b.command))
-                .lead(vec![ratatui::text::Span::raw(pad.clone())])));
+            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{pad}{:<9} {}", keys::name(&b.chord), b.command))));
             picker.set_rows(rows);
             picker.hints = vec![("enter", "run it")];
         }
@@ -989,9 +987,32 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first.
     let name = fzf_key_name(&key);
-    if let Some(actions) = theme::fzf_opts().binds.iter().find(|(k, _)| *k == name).map(|(_, a)| a.clone()) {
+    // The last bind for a key wins, as in fzf; an action this list does not know leaves the key
+    // to its own meaning.
+    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(&name) || *k == name).map(|(_, a)| a.clone());
+    const KNOWN: &[&str] = &["up", "down", "page-up", "page-down", "half-page-up", "half-page-down", "first", "last", "top", "toggle", "toggle+down", "toggle+up", "toggle-in", "toggle-out",
+        "select-all", "deselect-all", "toggle-all", "toggle-preview", "preview-up", "preview-down", "preview-page-up", "preview-page-down", "preview-half-page-up", "preview-half-page-down",
+        "preview-top", "preview-bottom", "clear-query", "backward-kill-word", "kill-word", "unix-line-discard", "unix-word-rubout", "kill-line", "beginning-of-line", "end-of-line",
+        "backward-char", "forward-char", "backward-word", "forward-word", "backward-delete-char", "delete-char", "delete-char/eof", "yank", "accept", "accept-non-empty", "abort", "cancel", "ignore"];
+    let bound = bound.filter(|a| a.split('+').all(|x| KNOWN.contains(&x) || x == "toggle" || x == "down" || x == "up"));
+    if let Some(actions) = bound {
+        let half = (page / 2).max(1);
         for action in actions.split('+') {
             match action {
+                "half-page-up" => picker.move_by(half * up), "half-page-down" => picker.move_by(-half * up),
+                "top" => picker.move_by(-(picker.visible.len() as i64)),
+                "toggle-in" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { 1 } else { -1 }) }
+                "toggle-out" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { -1 } else { 1 }) }
+                "preview-page-up" | "preview-half-page-up" => picker.preview_scroll = picker.preview_scroll.saturating_sub(if action == "preview-page-up" { 10 } else { 5 }),
+                "preview-page-down" | "preview-half-page-down" => picker.preview_scroll = picker.preview_scroll.saturating_add(if action == "preview-page-down" { 10 } else { 5 }).min(picker.preview_max.get()),
+                "preview-top" => picker.preview_scroll = 0, "preview-bottom" => picker.preview_scroll = picker.preview_max.get(),
+                "unix-word-rubout" => picker.backspace(true), "kill-line" => { let q: String = picker.query.chars().take(picker.qcursor).collect(); picker.set_query(&q) }
+                "backward-char" => picker.qmove(-1, false), "forward-char" => picker.qmove(1, false),
+                "backward-word" => picker.qmove(-1, true), "forward-word" => picker.qmove(1, true),
+                "backward-delete-char" => picker.backspace(false), "delete-char" => picker.delete_forward(),
+                "delete-char/eof" => { if picker.query.is_empty() { SPLIT.with(|s| s.set(None)); return } picker.delete_forward() }
+                "yank" => picker.yank(), "ignore" => {}
+                "accept-non-empty" => { if !picker.visible.is_empty() { choose(app, kind, picker, Choice::Enter); return } }
                 "up" => picker.move_by(up), "down" => picker.move_by(-up),
                 "page-up" => picker.move_by(page * up), "page-down" => picker.move_by(-page * up),
                 "first" => { picker.move_by(-(picker.visible.len() as i64)) } "last" => { picker.move_by(picker.visible.len() as i64) }
@@ -1309,10 +1330,15 @@ fn fzf_key_name(key: &KeyEvent) -> String {
         KeyCode::Enter => "enter".into(), KeyCode::Esc => "esc".into(), KeyCode::Tab => "tab".into(), KeyCode::BackTab => "btab".into(),
         KeyCode::Backspace => "bspace".into(), KeyCode::Delete => "del".into(), KeyCode::Up => "up".into(), KeyCode::Down => "down".into(),
         KeyCode::Left => "left".into(), KeyCode::Right => "right".into(), KeyCode::Home => "home".into(), KeyCode::End => "end".into(),
-        KeyCode::PageUp => "page-up".into(), KeyCode::PageDown => "page-down".into(), KeyCode::F(n) => format!("f{n}"),
+        KeyCode::PageUp => "pgup".into(), KeyCode::PageDown => "pgdn".into(), KeyCode::F(n) => format!("f{n}"),
         _ => String::new(),
     };
     let upper = matches!(key.code, KeyCode::Char(c) if c.is_uppercase());
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT) && !matches!(key.code, KeyCode::Char(_));
+    if shift && !ctrl && !alt { return format!("shift-{base}") }
+    if alt && !ctrl && key.code == KeyCode::Backspace { return "alt-bs".into() }
+    // C-/ arrives as ctrl-/ or as its control character.
+    if ctrl && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('7') | KeyCode::Char('_')) { return "ctrl-/".into() }
     match (ctrl, alt) {
         (true, true) => format!("ctrl-alt-{base}"),
         (true, false) => format!("ctrl-{base}"),

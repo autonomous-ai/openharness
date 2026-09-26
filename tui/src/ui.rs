@@ -577,7 +577,7 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let reverse = theme::fzf().reverse;
     let prompt_y = if reverse { area.y } else { bottom - 1 };
     // --info=inline: the count sits on the prompt line, after the query.
-    let inline = theme::fzf_opts().info_inline;
+    let inline = theme::fzf_opts().info_inline || theme::fzf_opts().info_hidden;
     let info_y = if inline { prompt_y } else if reverse { area.y + 1 } else { prompt_y.saturating_sub(1) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
@@ -595,9 +595,10 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let shown: String = { let mut w = 0; picker.query.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
     buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, Style::default().add_modifier(Modifier::BOLD));
     if picker.query.is_empty() && !picker.placeholder.is_empty() {
-        // The placeholder's scopes, whole ones only.
+        // The placeholder's scopes, whole ones only (leaving the inline count its place).
+        let room = if theme::fzf_opts().info_inline { q_room.saturating_sub(14) } else { q_room };
         let mut text = String::new();
-        for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > q_room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
+        for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
         buf.set_stringn(area.x + pw, prompt_y, &text, q_room, Style::default().add_modifier(Modifier::DIM));
     }
     let cursor = Position::new(area.x + pw + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
@@ -605,11 +606,18 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut info = format!("  {}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { info.push_str(&format!(" ({})", picker.marked.len())) }
-    if inline {
-        let qx = area.x + pw + shown.width().min(q_room) as u16;
-        if picker.query.is_empty() { /* the placeholder has the line */ } else {
-            let text = format!("  < {}", info.trim_start());
-            buf.set_stringn(qx, info_y, &text, (area.x + area.width).saturating_sub(qx) as usize, Style::default().fg(theme::fzf().info));
+    if theme::fzf_opts().info_hidden {
+        // --info=hidden: no count at all.
+    } else if inline {
+        // fzf 0.67: ` < ` in the prompt's bold colour, then the count; right-aligned for
+        // inline-right (and whenever the placeholder holds the line).
+        let count = info.trim_start().to_string();
+        let right = theme::fzf_opts().info_right || picker.query.is_empty();
+        let w = count.width() as u16 + 3;
+        let qx = if right { (area.x + area.width).saturating_sub(w + 1) } else { area.x + pw + shown.width().min(q_room) as u16 + 1 };
+        if qx + w <= area.x + area.width {
+            buf.set_string(qx, info_y, " < ", Style::default().fg(theme::fzf().prompt).add_modifier(Modifier::BOLD));
+            buf.set_string(qx + 3, info_y, &count, Style::default().fg(theme::fzf().info));
         }
     } else {
     buf.set_string(area.x, info_y, &info, Style::default().fg(theme::fzf().info));
@@ -626,7 +634,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if x + 1 < area.x + area.width && theme::fzf_opts().separator {
         buf.set_string(x, info_y, " ", Style::default());
         let gap = if preview.is_some() { 2 } else { 1 };
-        let sep = "─".repeat((area.x + area.width).saturating_sub(x + gap) as usize);
+        let ch = theme::fzf_opts().separator_char.clone();
+        let sep = ch.repeat((area.x + area.width).saturating_sub(x + gap) as usize / ch.width().max(1));
         buf.set_string(x + 1, info_y, &sep, Style::default().fg(theme::fzf().border));
     }
     }
@@ -651,7 +660,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     picker.scroll = picker.scroll.min(n.saturating_sub(list_h.max(1)));
     picker.row_at.clear();
     // A column of air before the scrollbar, so right-aligned keys never touch it.
-    let text_w = width.saturating_sub(if n > list_h && list_h > 2 { 4 } else { 3 });
+    let bar = n > list_h && list_h > 2 && theme::fzf_opts().scrollbar.is_some();
+    let text_w = width.saturating_sub(gutter_width() as usize + if bar { 2 } else { 1 });
     for slot in 0..list_h.min(n - picker.scroll) {
         let vi = picker.scroll + slot;
         let y = if reverse { list_top + slot as u16 } else { list_bottom - 1 - slot as u16 };
@@ -659,14 +669,14 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         fzf_row(buf, picker, vi, area.x, y, text_w);
     }
     // Scrollbar on the right edge, like fzf's: only the thumb, in the border colour.
-    if n > list_h && list_h > 2 {
+    if let (true, Some(bar)) = (n > list_h && list_h > 2, theme::fzf_opts().scrollbar.clone()) {
         let thumb = ((list_h * list_h) / n).max(1);
         let from_top = picker.scroll.min(n - list_h) as f32 / (n - list_h) as f32;
         let top_frac = if reverse { from_top } else { 1.0 - from_top };
         let start = ((list_h - thumb) as f32 * top_frac).round() as usize;
         for i in 0..thumb {
             let y = list_top + (start + i) as u16;
-            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, "│", Style::default().fg(theme::fzf().border)); }
+            if y < list_bottom { buf.set_string(area.x + area.width - 1, y, &bar, Style::default().fg(theme::fzf().border)); }
         }
     }
     cursor
@@ -682,12 +692,13 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     // fzf --color=bw: the current line in reverse video, matches underlined.
     let plus = if z.bw { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(z.bg_plus) };
     if current {
-        buf.set_string(x, y, clip(&z.pointer_char, 1), if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD) });
+        buf.set_string(x, y, format!("{:<w$}", z.pointer_char, w = pointer_w()), if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD) });
     } else {
-        buf.set_string(x, y, "▌", Style::default().fg(z.gutter));
+        buf.set_string(x, y, format!("{:<w$}", "▌", w = pointer_w()), Style::default().fg(z.gutter));
     }
     let marker_style = if current { plus.fg(z.marker) } else { Style::default().fg(z.marker) };
-    buf.set_string(x + 1, y, if marked { clip(&z.marker_char, 1) } else { " ".into() }, marker_style);
+    let mw = z.marker_char.width().max(1);
+    buf.set_string(x + pointer_w() as u16, y, if marked { format!("{:<mw$}", z.marker_char) } else { " ".repeat(mw) }, marker_style);
     let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { theme::fzf_opts().fg.map(|c| Style::default().fg(c)).unwrap_or_default() };
     let hit = match (current, z.bw) {
         (_, true) => base.add_modifier(Modifier::UNDERLINED),
@@ -767,7 +778,8 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
             };
             left = left.saturating_sub(t.width());
             let st = tone(if current { s.style.patch(plus) } else { s.style });
-            let lit = if st.add_modifier.contains(Modifier::DIM) { hit.add_modifier(Modifier::DIM) } else { hit };
+            // A hit is full intensity, in dim text too (fzf's hl is not dimmed).
+            let lit = hit.remove_modifier(Modifier::DIM);
             push_lit(&mut spans, &t, first, st, lit);
             at += len;
         }
@@ -781,8 +793,12 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     } else if current {
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }
-    buf.set_line(x + 2, y, &Line::from(spans), text_w as u16);
+    buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
 }
+
+/// The pointer's cells (fzf pads every row to it) and the pointer and marker together.
+fn pointer_w() -> usize { theme::fzf().pointer_char.width().max(1) }
+fn gutter_width() -> u16 { (pointer_w() + theme::fzf().marker_char.width().max(1)) as u16 }
 
 /// Break a styled line into lines no wider than `width`, at spaces where it can.
 fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
@@ -814,8 +830,10 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 /// fzf's `--header`: the keys this list answers to, in the header colour.
 fn header_line(picker: &Picker, _: &PickerKind, width: usize) -> Option<Line<'static>> {
     if picker.hints.is_empty() { return None }
-    let mut spans = vec![Span::raw("  ")];
-    let mut used = 2;
+    // Indented to the rows' text (past the pointer and marker).
+    let indent = gutter_width() as usize;
+    let mut spans = vec![Span::raw(" ".repeat(indent))];
+    let mut used = indent;
     for (i, (k, w)) in picker.hints.iter().enumerate() {
         // Whole hints only: the ones that do not fit are left out, not cut.
         let piece = if i > 0 { 3 } else { 0 } + k.width() + 1 + w.width();
