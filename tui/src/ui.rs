@@ -221,7 +221,13 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
 }
 
 fn border_style(app: &App, active: bool) -> Style {
-    if active { Style::default().fg(app.look.active_border.unwrap_or(theme::TMUX_ACTIVE_BORDER)) }
+    // tmux's pane-active-border-style: yellow while the pane is in copy mode, red while the
+    // window's panes are synchronized, else green (or your tmux.conf's colour).
+    if active {
+        let in_mode = matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Find { .. }));
+        let colour = if app.look.active_border.is_some() { app.look.active_border.unwrap() } else if in_mode { Color::Yellow } else if app.tab().sync { Color::Red } else { theme::TMUX_ACTIVE_BORDER };
+        Style::default().fg(colour)
+    }
     else { app.look.border.map(|c| Style::default().fg(c)).unwrap_or_default() }
 }
 
@@ -427,7 +433,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     // status-left: tmux's "[#S] " — here this computer's name, the session a window lives in — or
     // the tmux.conf's own format, cut to status-left-length (10, as tmux).
     let host = app.session_name();
-    let host: String = host.chars().take(12).collect();
+    // status-left-length is 10: "[#S] " cut there, as tmux cuts it.
+    let host: String = host.chars().take(7).collect();
     let left: Line<'static> = match &app.opts.status_left {
         Some(fmt) => clip_spans(crate::format::spans(app, fmt, None, base), app.opts.status_left_length.unwrap_or(10)),
         // While the prefix waits for its key, the name shows it (reversed), the one thing tmux users add first.
@@ -571,6 +578,9 @@ fn window_entry(app: &App, index: usize, max: usize) -> (String, bool) {
     let name = clip(&tab.name, max);
     let flags = crate::format::flags(app, index);
     let alert = flags.contains('!') || flags.contains('#');
+    // tmux's window-status-format: `#I:#W#{?window_flags,#{window_flags}, }` — a window with no
+    // flags keeps a space in their place.
+    let flags = if flags.is_empty() { " ".to_string() } else { flags };
     (format!("{}:{}{}", app.win_num(index), name, flags), alert && index != app.active)
 }
 
