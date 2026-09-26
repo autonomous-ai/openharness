@@ -1,15 +1,15 @@
-# tim — tmux improved
+# hn — tmux improved
 
 All of Harness in a terminal — every harness on every machine, in tabs and panes, from any
 terminal you can type into: a laptop, a server over SSH, a tablet's SSH app.
 
 ```bash
-tim           # or hn, or harness tui
+hn            # or: harness tui
 ```
 
-vim is vi improved: every vi key works, and more. tim is that for tmux — every tmux key and
+vim is vi improved: every vi key works, and more. hn is that for tmux — every tmux key and
 `~/.tmux.conf` line works, with every harness on every machine behind them. What tmux users have
-asked for over the years, and what tim does about it: [docs/tmux-improved.md](docs/tmux-improved.md).
+asked for over the years, and what hn does about it: [docs/tmux-improved.md](docs/tmux-improved.md).
 
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
@@ -32,7 +32,7 @@ being a tab and a pane being a harness. If you have a `~/.tmux.conf`, it is read
 binds (copy-mode-vi's and vim-tmux-navigator's too), `source-file`, `if-shell`, `base-index`,
 `renumber-windows`, `mouse`, `mode-keys`, `status-left`/`status-right` and the window formats
 (`#[…]` styles, `#{?…}`, `%H:%M`), `pane-border-format`, `synchronize-panes` and your colours come
-with you. Plugins (tpm) do not load; `tim --keys` lists every line not used.
+with you. Plugins (tpm) do not load; `hn --keys` lists every line not used.
 
 | tmux keys | |
 |---|---|
@@ -63,7 +63,7 @@ In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles 
 `C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works (`'exact ^prefix suffix$ !not a | b`),
 and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`, `16`, `bw`).
 
-Colours are the terminal's 16, as tmux's are, so tim reads on dark, light and Solarized themes.
+Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
 
 ## Mouse and clipboard
 
@@ -101,7 +101,7 @@ notify = true              # OS notifications through the terminal
 "M-x" = "none"
 ```
 
-`tim --keys` lists every binding, tmux-style, and reports problems in either file.
+`hn --keys` lists every binding, tmux-style, and reports problems in either file.
 
 ## Environment
 

@@ -150,7 +150,8 @@ impl Picker {
                 for group in &groups {
                     // The title first (its hits are what gets highlighted), then the rest of the line
                     // you see, then — whole words only — the keywords behind it (engine, machine).
-                    let mut best = group.iter().filter_map(|t| t.score(&row.label, &row.label, &mut buf, &mut self.matcher)).map(|(s, h)| (s + 40, h)).max_by_key(|(s, _)| *s);
+                    // (A negation must hold for the whole line you see, so it is only asked of that.)
+                    let mut best = group.iter().filter(|t| !t.negative()).filter_map(|t| t.score(&row.label, &row.label, &mut buf, &mut self.matcher)).map(|(s, h)| (s + 40, h)).max_by_key(|(s, _)| *s);
                     if best.is_none() { best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s) }
                     if best.is_none() { best = group.iter().filter(|t| t.names_word(&hidden)).map(|_| (8u32, Vec::new())).next() }
                     match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
@@ -163,7 +164,9 @@ impl Picker {
                 }
             }
             // fzf's tiebreak: score, then the shorter line, then the original order.
-            if !self.keep_order { scored.sort_by(|a, b| b.1.cmp(&a.1).then(self.rows[a.0].label.chars().count().cmp(&self.rows[b.0].label.chars().count())).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
+            // Only negations (`!rate`): nothing scores, so the list keeps its order, as fzf's does.
+            let positive = groups.iter().any(|g| g.iter().any(|t| !t.negative()));
+            if !self.keep_order && positive { scored.sort_by(|a, b| b.1.cmp(&a.1).then(self.rows[a.0].label.chars().count().cmp(&self.rows[b.0].label.chars().count())).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
             self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
         }
         // Keep the cursor on the same item across a rebuild.
@@ -185,7 +188,9 @@ impl Picker {
     pub fn move_by(&mut self, delta: i64) {
         if self.visible.is_empty() { return }
         let max = self.visible.len() as i64 - 1;
-        self.cursor = (self.cursor as i64 + delta).clamp(0, max) as usize;
+        let to = self.cursor as i64 + delta;
+        // --cycle: one step past an end comes round to the other.
+        self.cursor = if crate::theme::fzf_opts().cycle && delta.abs() == 1 && (to < 0 || to > max) { to.rem_euclid(max + 1) } else { to.clamp(0, max) } as usize;
         self.skip_disabled(if delta >= 0 { 1 } else { -1 });
     }
 
@@ -348,7 +353,15 @@ impl Term {
             if suffix { text.pop(); }
             return Term::Anchored { text, prefix, suffix, negate };
         }
-        Term::Nucleo(Pattern::parse(&word.replace(' ', "\\ "), CaseMatching::Smart, Normalization::Smart), word.trim_start_matches('\'').to_lowercase())
+        // FZF_DEFAULT_OPTS --exact turns 'x around (plain words exact, 'x fuzzy); -i / +i set the case.
+        let o = crate::theme::fzf_opts();
+        let word: String = if o.exact { match word.strip_prefix('\'') { Some(w) => w.to_string(), None if !word.starts_with('!') => format!("'{word}"), None => word.to_string() } } else { word.to_string() };
+        let case = match o.case { Some(true) => CaseMatching::Respect, Some(false) => CaseMatching::Ignore, None => CaseMatching::Smart };
+        Term::Nucleo(Pattern::parse(&word.replace(' ', "\\ "), case, Normalization::Smart), word.trim_start_matches('\'').to_lowercase())
+    }
+
+    fn negative(&self) -> bool {
+        match self { Term::Anchored { negate, .. } => *negate, Term::Nucleo(_, raw) => raw.starts_with('!') }
     }
 
     /// A hidden keyword this term names from its start (`codex`, `gpu-box`): three letters or more.
@@ -370,9 +383,21 @@ impl Term {
                 let n = l.chars().count() as u32;
                 let k = t.chars().count() as u32;
                 let hit = match (prefix, suffix) { (true, true) => l == t, (true, false) => l.starts_with(&t), _ => l.ends_with(&t) };
-                if *negate { return (!hit).then(|| (0, Vec::new())) }
-                if !hit { return None }
-                let from = if *prefix { 0 } else { n - k };
+                // suffix$ also ends a column of the line (the detail): "main$" finds `webapp · main`.
+                let column_end = if *suffix && !*prefix && !hit && haystack != label {
+                    let h = if smart { haystack.to_string() } else { haystack.to_lowercase() };
+                    let mut at = 0u32;
+                    let mut found = None;
+                    for part in h.split("  ") {
+                        let len = part.chars().count() as u32;
+                        if !part.is_empty() && part.ends_with(&t) { found = Some(at + len - k) }
+                        at += len + 2;
+                    }
+                    found
+                } else { None };
+                if *negate { return (!hit && column_end.is_none()).then(|| (0, Vec::new())) }
+                if !hit && column_end.is_none() { return None }
+                let from = if let Some(f) = column_end { f } else if *prefix { 0 } else { n - k };
                 Some((16 * k + 32, (from..from + k).collect()))
             }
         }

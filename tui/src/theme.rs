@@ -59,10 +59,12 @@ pub fn fzf() -> &'static Fzf {
         };
         // Slot overrides: --color=hl:204,bg+:236,pointer:#ff0000 …
         if !z.bw {
+            let gutter_given = specs.iter().flat_map(|s| s.split(',')).any(|p| p.starts_with("gutter:"));
             for pair in specs.iter().flat_map(|s| s.split(',')).filter_map(|p| p.split_once(':')) {
                 let Some(c) = fzf_colour(pair.1) else { continue };
                 match pair.0 {
-                    "hl" => z.hl = c, "hl+" => z.hl_plus = c, "fg+" => z.fg_plus = c, "bg+" => { z.bg_plus = c; }
+                    // fzf's gutter is bg+ unless it is given.
+                    "hl" => z.hl = c, "hl+" => z.hl_plus = c, "fg+" => z.fg_plus = c, "bg+" => { z.bg_plus = c; if !gutter_given { z.gutter = c } }
                     "gutter" => z.gutter = c, "pointer" => z.pointer = c, "marker" => z.marker = c, "info" => z.info = c,
                     "prompt" => z.prompt = c, "border" | "separator" | "scrollbar" => z.border = c, "header" => z.header = c,
                     _ => {}
@@ -74,6 +76,47 @@ pub fn fzf() -> &'static Fzf {
         z.marker_char = marker.unwrap_or_else(|| "┃".into());
         z.prompt_text = prompt.unwrap_or_else(|| "> ".into());
         z
+    })
+}
+
+/// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
+/// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
+pub struct FzfOpts { pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
+
+pub fn fzf_opts() -> &'static FzfOpts {
+    static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
+    OPTS.get_or_init(|| {
+        let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
+        let mut o = FzfOpts { cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
+        let mut i = 0;
+        while i < opts.len() {
+            let w = &opts[i];
+            let (flag, value) = match w.split_once('=') { Some((f, v)) => (f.to_string(), Some(v.to_string())), None => (w.clone(), None) };
+            let mut take = || value.clone().or_else(|| { i += 1; opts.get(i).cloned() });
+            match flag.as_str() {
+                "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
+                "-e" | "--exact" => o.exact = true, "--no-exact" => o.exact = false,
+                "-i" | "--ignore-case" => o.case = Some(false), "+i" | "--no-ignore-case" => o.case = Some(true), "--smart-case" => o.case = None,
+                "--no-separator" => o.separator = false,
+                "--ellipsis" => { if let Some(v) = take() { o.ellipsis = v } }
+                "--color" => {
+                    if let Some(v) = take() {
+                        for (slot, c) in v.split(',').filter_map(|p| p.split_once(':')) {
+                            match slot { "fg" => o.fg = fzf_colour(c), "bg" => o.bg = fzf_colour(c), _ => {} }
+                        }
+                    }
+                }
+                "--bind" => {
+                    if let Some(v) = take() {
+                        for pair in v.split(',') { if let Some((k, a)) = pair.split_once(':') { o.binds.push((k.to_string(), a.to_string())) } }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if no_color() { o.fg = None; o.bg = None }
+        o
     })
 }
 
