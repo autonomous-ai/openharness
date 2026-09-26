@@ -531,13 +531,15 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         PickerKind::Keys => {
             // The whole line is searched, the prefix too (`C-b o`), as the line reads.
             let prefix = keys::name(&app.keymap.prefix);
+            // A command too long to read at a glance (tmux's menus) shows its start; Enter runs it all.
+            let shown = |c: &str| if c.chars().count() > 44 { format!("{}…", c.chars().take(43).collect::<String>().trim_end()) } else { c.to_string() };
             let mut rows: Vec<crate::picker::Row> = app.keymap.prefix_table.iter().map(|b| {
-                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{prefix} {:<9} {}", keys::name(&b.chord), b.command))
+                crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{prefix} {:<9} {}", keys::name(&b.chord), shown(&b.command)))
                     .extra(b.note.clone())
                     .detail(vec![ratatui::text::Span::styled(b.note.clone(), ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM))])
             }).collect();
             let pad = " ".repeat(prefix.chars().count() + 1);
-            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{pad}{:<9} {}", keys::name(&b.chord), b.command))));
+            rows.extend(app.keymap.root_table.iter().map(|b| crate::picker::Row::new(format!("{}\t{}", keys::name(&b.chord), b.command), format!("{pad}{:<9} {}", keys::name(&b.chord), shown(&b.command)))));
             picker.set_rows(rows);
             picker.hints = vec![("enter", "run it")];
         }
