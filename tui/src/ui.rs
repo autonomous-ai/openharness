@@ -679,11 +679,19 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let header_y = match (header_first, prompt_top) { (true, true) => area.y, (true, false) => bottom - 1, _ => if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else { edge } };
     let prompt = theme::fzf().prompt_style();
     let prompt_text = theme::fzf().prompt_text.clone();
-    let pw = prompt_text.width() as u16;
-    // The glyph in the prompt's pair (bold as fzf makes it, unless --no-bold or prompt:regular);
-    // its trailing space plain, as fzf draws it.
-    let glyph = prompt_text.trim_end();
-    buf.set_string(area.x, prompt_y, glyph, prompt);
+    // The prompt in its pair (bold as fzf makes it, unless --no-bold or prompt:regular); its
+    // trailing blanks in the pair's colours without the attributes — parsePrompt's AttrClear, laid
+    // on the characters at the blanks' byte offsets, as fzf lays it (after `❯` it misses them); a
+    // tab out to the next --tabstop.
+    let blank_from = prompt_text.trim_end_matches([' ', '\t', '\n', '\x0c', '\r']).len();
+    let clear = theme::fzfcolor::P { attr: 0, ..pal.prompt }.style();
+    let mut pw = 0u16;
+    for (i, c) in prompt_text.chars().enumerate() {
+        let st = if i >= blank_from && i < prompt_text.len() { clear } else { prompt };
+        let (text, w) = if c == '\t' { let n = o.tabstop - pw as usize % o.tabstop; (" ".repeat(n), n) } else { (c.to_string(), unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)) };
+        buf.set_string(area.x + pw, prompt_y, text, st);
+        pw += w as u16;
+    }
     let q_room = width.saturating_sub(pw as usize + 1);
     // A query longer than the line scrolls to keep the cursor in view, as fzf's does.
     let before: String = picker.query.chars().take(picker.qcursor).collect();
@@ -691,6 +699,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let shown: String = { let mut w = 0; picker.query.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
     buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, pal.input.style());
     let mut typed_w = shown.width().min(q_room) as u16;
+    // What an inline count keeps clear of: the query and a margin, or the ghost, as fzf shifts it.
+    let mut shift = typed_w as i32 + 1;
     if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
@@ -698,57 +708,81 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
         buf.set_stringn(area.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
+        if !text.is_empty() { shift = typed_w as i32 }
     }
     let cursor = Position::new(area.x + pw + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut count = format!("{}/{}", picker.visible.len(), total);
     if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
-    let info_style = theme::fzf().info_style();
-    let rule = |buf: &mut Buffer, from: u16, to: u16, y: u16| {
-        if !o.separator || to <= from { return }
-        let ch = o.separator_char.clone();
-        let n = (to - from) as usize / ch.width().max(1);
-        buf.set_string(from, y, ch.repeat(n), theme::fzf().separator_style());
-    };
-    // fzf's printInfoImpl: the last column stays blank; a list still loading spins in the first.
-    let end = (area.x + area.width).saturating_sub(1);
+    // fzf's printInfoImpl, each --info laid out as it lays it out: the count in the info pair, cut
+    // with `..` when the room runs out (trimMessage); the separator's line filled with its string
+    // (RepeatToFill) after a blank in its pair; the last column left blank. A list still loading
+    // spins in the spinner's pair where fzf's does, and gives an info prefix that pair too.
+    let (info_style, sep_style, spin_style) = (pal.info.style(), pal.separator.style(), pal.spinner.style());
+    let reading = picker.busy.is_some();
     const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let spin = picker.busy.as_ref().map(|_| SPINNER[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100 % 10) as usize]);
-    match mode {
-        // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
-        "hidden" => rule(buf, area.x, end, info_y),
-        "inline" => {
-            // `> query  < 3/6 (0) ────`: the rule runs on to the edge.
-            let x = area.x + pw + typed_w + 1;
-            if x + 3 + count.width() as u16 <= area.x + area.width {
-                buf.set_string(x, info_y, " < ", prompt.add_modifier(Modifier::BOLD));
-                buf.set_string(x + 3, info_y, &count, info_style);
-                if let Some(sp) = spin { buf.set_string(x + 4 + count.width() as u16, info_y, sp, theme::fzf().spinner_style()) }
-                rule(buf, x + 4 + count.width() as u16 + if spin.is_some() { 2 } else { 0 }, end, info_y);
+    let spinner = SPINNER[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 100 % 10) as usize];
+    let w = area.width as i32;
+    let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { buf.set_stringn(area.x + x as u16, y, s, (w - x) as usize, st); } };
+    let bar = |buf: &mut Buffer, x: i32, y: u16, n: i32| { if o.separator && n > 0 { put(buf, x, y, &repeat_to_fill(&o.separator_char, n as usize), sep_style) } };
+    // printInfoPrefix: the prefix at [pos] (what fits of it), in the prompt's pair.
+    let prefix = |buf: &mut Buffer, pos: i32, y: u16| -> i32 {
+        let room = w - pos;
+        let (text, width) = if o.info_prefix.width() as i32 > room { (trim_right(&o.info_prefix, room), room) } else { (o.info_prefix.clone(), o.info_prefix.width() as i32) };
+        put(buf, pos, y, &text, if reading { spin_style } else { prompt });
+        pos + width
+    };
+    let len = count.len() as i32;
+    if w > 1 {
+        match mode {
+            // Hidden: no count, but the rule keeps its line (only --no-separator takes it away).
+            "hidden" => bar(buf, 0, info_y, w - 1),
+            // `> query  < 3/6 (0) ────`
+            "inline" => {
+                let pos = prefix(buf, pw as i32 + shift, info_y);
+                let max = w - pos - 1;
+                let out = trim_message(&count, max);
+                put(buf, pos, info_y, &out, info_style);
+                let (mut x, mut len) = (pos + out.width() as i32, len);
+                if len < max - 1 && reading { put(buf, x + 1, info_y, spinner, spin_style); x += 2; len += 2 }
+                let fill = max - len - 1;
+                if fill > 0 { put(buf, x, info_y, " ", sep_style); bar(buf, x + 1, info_y, fill) }
             }
-        }
-        "inline-right" => {
-            // The count at the right of the prompt line (ending a column short of the edge); the
-            // rule has a line of its own, from the first column.
-            let x = end.saturating_sub(count.width() as u16);
-            if x > area.x + pw + typed_w + 2 {
-                if let Some(sp) = spin { buf.set_string(x - 2, prompt_y, sp, theme::fzf().spinner_style()) }
-                buf.set_string(x, prompt_y, &count, info_style);
+            // The count at the right of the prompt line, a column short of the edge (the spinner
+            // two before it, or the prefix just before); the rule on a line of its own.
+            "inline-right" => {
+                let mut pos = pw as i32 + shift;
+                if o.info_prefix.is_empty() {
+                    pos = pos.max(w - len - 3);
+                    if pos < w { if reading { put(buf, pos, prompt_y, spinner, spin_style) } pos += 1 }
+                    if pos < w - 1 { pos += 1 }
+                } else {
+                    pos = prefix(buf, pos.max(w - len - o.info_prefix.width() as i32 - 1), prompt_y);
+                }
+                put(buf, pos, prompt_y, &trim_message(&count, w - pos - 1), info_style);
+                bar(buf, 0, info_y, w - 1);
             }
-            rule(buf, area.x, end, info_y);
-        }
-        "right" => {
-            // `──────── 3/6 (0) `: the rule from the first column, the count at the end.
-            let x = end.saturating_sub(count.width() as u16);
-            rule(buf, area.x, x.saturating_sub(if spin.is_some() { 3 } else { 1 }), info_y);
-            if let Some(sp) = spin { buf.set_string(x - 2, info_y, sp, theme::fzf().spinner_style()) }
-            buf.set_string(x, info_y, &count, info_style);
-        }
-        _ => {
-            // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a space, the rule.
-            if let Some(sp) = spin { buf.set_string(area.x, info_y, sp, theme::fzf().spinner_style()) }
-            buf.set_string(area.x + 2, info_y, &count, info_style);
-            rule(buf, area.x + 3 + count.width() as u16, end, info_y);
+            // `──────── 3/6 (0) `: the rule from the first column (the spinner after it), the count.
+            "right" => {
+                let out = trim_message(&count, w - 1 - if reading { 2 } else { 0 });
+                let fill = w - out.len() as i32 - 2;
+                let mut x = 0;
+                if reading {
+                    if fill >= 2 { bar(buf, 0, info_y, fill - 2); x = fill - 1 }
+                    put(buf, x, info_y, spinner, spin_style);
+                    x += 2;
+                } else if fill >= 0 { bar(buf, 0, info_y, fill); x = fill + 1 }
+                put(buf, x, info_y, &out, info_style);
+            }
+            // `⠋ 3/6 (0) ────`: the spinner's cell, a margin, the count, a blank, the rule.
+            _ => {
+                if reading { put(buf, 0, info_y, spinner, spin_style) }
+                let max = w - 3;
+                let out = trim_message(&count, max);
+                put(buf, 2, info_y, &out, info_style);
+                let fill = max - len - 1;
+                if fill > 0 { let x = 2 + out.width() as i32; put(buf, x, info_y, " ", sep_style); bar(buf, x + 1, info_y, fill) }
+            }
         }
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
@@ -815,13 +849,13 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     let o = theme::fzf_opts();
     let pal = z.pal;
     let colored = pal.colored;
-    // The pointer on the current line; the gutter elsewhere.
+    // The pointer on the current line; the gutter elsewhere (no column at all for --pointer='').
     let pw = pointer_w();
-    if current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
-    else { buf.set_string(x, y, format!("{:<pw$}", "▌"), pal.cursor_empty_char.style()) }
+    if pw > 0 && current { buf.set_string(x, y, format!("{:<pw$}", z.pointer_char), pal.current_cursor.style()) }
+    else if pw > 0 { buf.set_string(x, y, format!("{:<pw$}", "▌"), pal.cursor_empty_char.style()) }
     // The marker cell: the marker on a selected row, else blank (bg+ on the current line; plain,
-    // the default colour on the list's background, elsewhere).
-    let mw = z.marker_char.width().max(1);
+    // the default colour on the list's background, elsewhere) — none for --marker=''.
+    let mw = marker_w();
     let plain = theme::fzfcolor::P { fg: theme::fzfcolor::Col::Default, bg: pal.normal.bg, attr: 0 };
     let (mark, mark_style) = match (current, marked) {
         (true, true) => (format!("{:<mw$}", z.marker_char), pal.current_marker.style()),
@@ -892,6 +926,38 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
 }
 
+/// fzf's trimRight: as much of [s] as fits in [limit] columns.
+fn trim_right(s: &str, limit: i32) -> String {
+    let mut width = 0;
+    s.chars().take_while(|c| { width += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0) as i32; width <= limit }).collect()
+}
+
+/// fzf's trimMessage: a message longer than [max] (in bytes, as fzf counts) cut to leave room for
+/// two dots — or as many as there is room for.
+fn trim_message(s: &str, max: i32) -> String {
+    if s.len() as i32 <= max { return s.to_string() }
+    trim_right(s, max - 2) + &".".repeat(max.clamp(0, 2) as usize)
+}
+
+/// fzf's util.RepeatToFill (a separator longer than the room is cut to it): the string over and
+/// over, then as much of it as fits.
+fn repeat_to_fill(s: &str, limit: usize) -> String {
+    let length = s.width();
+    if length == 0 { return String::new() }
+    if length > limit { return trim_right(s, limit as i32) }
+    let mut out = s.repeat(limit / length);
+    let mut rest = (limit % length) as i32;
+    if rest > 0 {
+        for c in s.chars() {
+            rest -= unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as i32;
+            if rest < 0 { break }
+            out.push(c);
+            if rest == 0 { break }
+        }
+    }
+    out
+}
+
 /// fzf's hscroll (terminal.go, printHighlighted): a line wider than its room keeps its last match
 /// in view with --hscroll-off columns after it, the ellipsis where it was cut on either side.
 fn hscroll(cells: Vec<(char, Style, bool)>, room: usize, base: Style, o: &theme::FzfOpts) -> Vec<(char, Style, bool)> {
@@ -925,8 +991,9 @@ fn hscroll(cells: Vec<(char, Style, bool)>, room: usize, base: Style, o: &theme:
 }
 
 /// The pointer's cells (fzf pads every row to it) and the pointer and marker together.
-fn pointer_w() -> usize { theme::fzf().pointer_char.width().max(1) }
-fn gutter_width() -> u16 { (pointer_w() + theme::fzf().marker_char.width().max(1)) as u16 }
+fn pointer_w() -> usize { theme::fzf().pointer_char.width() }
+fn marker_w() -> usize { theme::fzf().marker_char.width() }
+fn gutter_width() -> u16 { (pointer_w() + marker_w()) as u16 }
 
 /// Break a styled line into lines no wider than `width`, at spaces where it can.
 fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
@@ -1366,3 +1433,21 @@ fn card(buf: &mut Buffer, area: Rect, lines: &[(String, Style)]) {
     }
 }
 
+#[cfg(test)]
+mod fzf_info_tests {
+    use super::{repeat_to_fill, trim_message};
+
+    /// printInfoImpl's pieces: the count cut as trimMessage cuts it, the separator repeated to
+    /// fill as RepeatToFill does.
+    #[test]
+    fn info_cut_and_filled_as_fzf_does() {
+        assert_eq!(trim_message("0/100", 5), "0/100");
+        assert_eq!(trim_message("0/100", 4), "0/..");
+        assert_eq!(trim_message("0/100", 3), "0..");
+        assert_eq!(trim_message("0/100", 1), ".");
+        assert_eq!(trim_message("0/100", -2), "");
+        assert_eq!(repeat_to_fill("-=", 5), "-=-=-");
+        assert_eq!(repeat_to_fill("─", 3), "───");
+        assert_eq!(repeat_to_fill("abc", 2), "ab");
+    }
+}
