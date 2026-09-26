@@ -816,8 +816,19 @@ fn run_words(app: &mut App, words: &[String]) {
                 while let Some(i) = app.tabs.iter().position(|t| t.id != keep) { app.close_tab(i) }
             } else { app.close_tab(target) }
         }
-        "next-window" => if flag(words, "-a") { input::run(app, "next-waiting") } else { let n = app.tabs.len(); let i = (app.active + 1) % n; app.select_tab(i) },
-        "previous-window" => if flag(words, "-a") { input::run(app, "prev-waiting") } else { let n = app.tabs.len(); let i = (app.active + n - 1) % n; app.select_tab(i) },
+        "next-window" | "previous-window" => {
+            // -a: the next (previous) window with an alert — # ! ~ — round the end
+            // (session_next_alert); else simply the next (previous) one.
+            let n = app.tabs.len();
+            let step = |i: usize| if command == "next-window" { (i + 1) % n } else { (i + n - 1) % n };
+            if flag(words, "-a") {
+                let mut i = step(app.active);
+                while i != app.active && !crate::format::flags(app, i).contains(['#', '!', '~']) { i = step(i) }
+                if i == app.active { return app.say(format!("no {} window", if command == "next-window" { "next" } else { "previous" }), theme::WARN) }
+                return app.select_tab(i);
+            }
+            app.select_tab(step(app.active))
+        }
         "last-window" => input::run(app, "last-tab"),
         "select-window" => {
             let target = opt(words, "-t").or_else(|| Some(rest(words))).unwrap_or_default();
@@ -1198,6 +1209,8 @@ fn run_words(app: &mut App, words: &[String]) {
             };
             // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
             if name == "@tim" { app.tim.set_off(matches!(now.as_deref(), Some("off" | "0" | "no"))); return }
+            // alerts_reset_all: every window's silence timer starts again.
+            if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
             if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
             // synchronize-panes belongs to a window: this one, or (-g) every window without its own.
             if name == "synchronize-panes" {
@@ -1419,7 +1432,7 @@ fn run_words(app: &mut App, words: &[String]) {
         "kill-session" => {
             // -C: the windows' alerts cleared; -a: every other session (there is only this one);
             // else the session goes, and this client with it (its harnesses keep running).
-            if flag(words, "-C") { for p in app.panes.values_mut() { p.bell = false } return }
+            if flag(words, "-C") { for t in app.tabs.iter_mut() { t.alerts = 0 } return }
             if flag(words, "-a") { return }
             app.quit = true;
         }

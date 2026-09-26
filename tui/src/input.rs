@@ -879,9 +879,18 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
                 app.shells.insert((machine.clone(), id.to_string()));
                 app.open_agent(&machine, id, placement);
-                // new-window -d: made in the background; back to where you were.
+                // new-window -d: made in the background; back to where you were — never left, as
+                // tmux sees it (nothing cleared or raised there). The new window is activity
+                // (window_create), flagged as it is not the current one.
                 if let Some((back, last)) = app.return_to.take() {
-                    if let Some(i) = app.tabs.iter().position(|t| t.id == back) { app.select_tab(i); app.last_tab = last }
+                    if let Some(i) = app.tabs.iter().position(|t| t.id == back) {
+                        app.active = i;
+                        app.last_tab = last;
+                        app.home_order.borrow_mut().clear();
+                        if let Some(f) = app.tabs[i].focus { app.seen(f) }
+                        app.fit_panes();
+                    }
+                    if let Some((w, _)) = app.find_pane(&machine, id) { app.tabs[w].touch(); app.alert(w, crate::app::ACTIVITY) }
                 }
                 if let Some((w, pane)) = app.find_pane(&machine, id) {
                     if let Some(p) = app.panes.get_mut(&pane) { p.queued.extend(typed) }

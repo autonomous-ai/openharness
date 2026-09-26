@@ -878,7 +878,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_name" => app.session_name(),
         "window_index" => tab.map(|_| app.win_num(window).to_string()).unwrap_or_default(),
         "window_name" => tab.map(|t| t.name.clone()).unwrap_or_default(),
-        "window_flags" => flags(app, window),
+        "window_flags" => flags(app, window).replacen('#', "##", 1),
         "window_raw_flags" => flags(app, window),
         "window_active" => (window == app.active).then_some("1").unwrap_or("0").into(),
         "window_last_flag" => (tab.map(|t| app.last_tab.as_ref() == Some(&t.id)).unwrap_or(false)).then_some("1").unwrap_or("0").into(),
@@ -966,8 +966,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_path" => std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
         "session_group" | "client_last_session" | "pane_dead_status" | "pane_start_command" => String::new(),
         "pane_input_off" => pane.map(|p| p.input_off).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        "window_activity_flag" => flags(app, window).contains('#').then_some("1").unwrap_or("0").into(),
+        "window_silence_flag" => flags(app, window).contains('~').then_some("1").unwrap_or("0").into(),
         "session_grouped" | "session_many_attached" | "window_linked" | "window_bigger" | "window_offset_x" | "window_offset_y"
-        | "window_activity_flag" | "window_silence_flag" | "client_readonly" | "pane_pipe" => "0".into(),
+        | "client_readonly" | "pane_pipe" => "0".into(),
         "server_sessions" | "session_attached_list" | "client_utf8" => "1".into(),
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
         "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),
@@ -1018,7 +1020,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "client_mode_format" => "#{t/p:client_activity}: session #{session_name}".into(),
         "tree_mode_format" => "#{?pane_format,#{?pane_marked,#[reverse],}#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",},#{?window_format,#{?window_marked_flag,#[reverse],}#{window_name}#{window_flags}#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",},#{session_windows} windows#{?session_grouped, (group #{session_group}: #{session_group_list}),}#{?session_attached, (attached),}}}".into(),
         "config_files" => app.config_files.join(","),
-        "session_alerts" => String::new(),
+        // format_cb_session_alerts: each window with an alert, its number and its # ! ~.
+        "session_alerts" => (0..app.tabs.len()).filter_map(|i| { let f: String = flags(app, i).chars().filter(|c| matches!(c, '#' | '!' | '~')).collect(); (!f.is_empty()).then(|| format!("{}{f}", app.win_num(i))) }).collect::<Vec<_>>().join(","),
         // The session's windows in the order they were last current (the current first).
         "session_stack" => { let mut v = vec![app.win_num(app.active)]; if let Some(l) = app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|t| &t.id == id)) { v.push(app.win_num(l)) } v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",") }
         "window_stack_index" => (if window == app.active { "0" } else if tab.map(|t| app.last_tab.as_ref() == Some(&t.id)).unwrap_or(false) { "1" } else { "0" }).into(),
@@ -1032,8 +1035,10 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "session_created" | "session_last_attached" | "client_created" | "start_time" => return Some(Val::Time(started(app))),
         "session_activity" | "client_activity" => return Some(Val::Time(now_secs())),
         "window_activity" => {
+            // The last output seen here, or the harness's own last activity when that is later
+            // (a pane not streaming yet).
             let last = tab.map(|t| t.panes()).unwrap_or_default().iter().filter_map(|id| app.panes.get(id)).filter_map(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| (a.active_at / 1000) as i64).max();
-            return Some(Val::Time(last.filter(|t| *t > 0).unwrap_or_else(|| started(app))));
+            return Some(Val::Time(last.into_iter().chain(tab.map(|t| t.activity)).max().unwrap_or_else(|| started(app))));
         }
         _ => return None,
     };
@@ -1041,19 +1046,26 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
 }
 
 
-/// `#{window_flags}`: `*` current, `-` last, `!` waiting on you, `#` finished, `Z` zoomed.
+/// `#{window_raw_flags}`: `#` activity, `!` bell, `~` silence, `*` current, `-` last, `M` the
+/// marked pane's, `Z` zoomed.
 pub fn flags(app: &App, window: usize) -> String {
     let Some(tab) = app.tabs.get(window) else { return String::new() };
     // tmux's order: alerts (# !), then * or -, then Z.
+    // window_printable_flags: # activity, ! bell, ~ silence — tmux's alerts, and (a window not
+    // the current one) a harness finished or waiting on you.
     let mut out = String::new();
-    let (mut bell, mut activity) = (false, false);
-    for id in tab.panes() {
-        let Some(agent) = app.panes.get(&id).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)) else { continue };
-        match app.fleet.state_of(agent) { crate::fleet::State::NeedsInput => bell = true, crate::fleet::State::Done => activity = true, _ => {} }
+    let (mut bell, mut activity) = (tab.alerts & crate::app::BELL != 0, tab.alerts & crate::app::ACTIVITY != 0);
+    if window != app.active {
+        for id in tab.panes() {
+            let Some(agent) = app.panes.get(&id).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)) else { continue };
+            match app.fleet.state_of(agent) { crate::fleet::State::NeedsInput => bell = true, crate::fleet::State::Done => activity = true, _ => {} }
+        }
     }
-    if activity && !bell { out.push('#') }
+    if activity { out.push('#') }
     if bell { out.push('!') }
+    if tab.alerts & crate::app::SILENCE != 0 { out.push('~') }
     if window == app.active { out.push('*') } else if app.last_tab.as_ref() == Some(&tab.id) { out.push('-') }
+    if app.marked.map(|m| tab.panes().contains(&m)).unwrap_or(false) { out.push('M') }
     if tab.zoomed { out.push('Z') }
     out
 }
