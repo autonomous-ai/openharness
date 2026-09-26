@@ -38,6 +38,7 @@ pub fn fzf() -> &'static Fzf {
             match flag.as_str() {
                 "--color" => { if let Some(v) = take() { specs.push(v) } }
                 "--layout" => { if let Some(v) = take() { reverse = v == "reverse" || v == "reverse-list" } }
+                "--reverse-list" => reverse = true,
                 "--reverse" => reverse = true,
                 "--pointer" => pointer = take(),
                 "--marker" => marker = take(),
@@ -64,7 +65,7 @@ pub fn fzf() -> &'static Fzf {
                 let Some(c) = fzf_colour(pair.1) else { continue };
                 match pair.0 {
                     // fzf's gutter is bg+ unless it is given.
-                    "hl" => z.hl = c, "hl+" => z.hl_plus = c, "fg+" => z.fg_plus = c, "bg+" => { z.bg_plus = c; if !gutter_given { z.gutter = c } }
+                    "hl" => z.hl = c, "hl+" => z.hl_plus = c, "fg+" | "current-fg" => z.fg_plus = c, "bg+" | "current-bg" => { z.bg_plus = c; if !gutter_given { z.gutter = c } }
                     "gutter" => z.gutter = c, "pointer" => z.pointer = c, "marker" => z.marker = c, "info" => z.info = c,
                     "prompt" => z.prompt = c, "border" | "separator" | "scrollbar" => z.border = c, "header" => z.header = c,
                     _ => {}
@@ -81,13 +82,13 @@ pub fn fzf() -> &'static Fzf {
 
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak_index: bool, pub selected_bg: Option<Color>, pub info_hidden: bool, pub info_right: bool, pub separator_char: String, pub scrollbar: Option<String>, pub info_inline: bool, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub binds: Vec<(String, String)> }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = words(&std::env::var("FZF_DEFAULT_OPTS").unwrap_or_default());
-        let mut o = FzfOpts { info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak_index: false, selected_bg: None, info_hidden: false, info_right: false, separator_char: "─".into(), scrollbar: Some("│".into()), info_inline: false, cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, binds: Vec::new() };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -96,8 +97,16 @@ pub fn fzf_opts() -> &'static FzfOpts {
             match flag.as_str() {
                 "--cycle" => o.cycle = true, "--no-cycle" => o.cycle = false,
                 "--inline-info" => o.info_inline = true,
-                "--no-info" => o.info_hidden = true,
-                "--info" => { if let Some(v) = take() { o.info_inline = v.starts_with("inline"); o.info_right = v == "inline-right" || v == "right"; o.info_hidden = v == "hidden"; } }
+                "--no-info" => { o.info_hidden = true; o.info_mode = "hidden".into() }
+                "--info" => { if let Some(v) = take() { let v = v.split(':').next().unwrap_or("").to_string(); o.info_inline = v.starts_with("inline"); o.info_right = v == "inline-right"; o.info_hidden = v == "hidden"; o.info_mode = v } }
+                "--layout" => { if let Some(v) = take() { o.prompt_top = v == "reverse" } }
+                "--reverse" => o.prompt_top = true,
+                "--header-first" => o.header_first = true,
+                "--border" => o.border = Some(value.clone().unwrap_or_else(|| "rounded".into())),
+                "--no-border" => o.border = None,
+                "--no-sort" | "+s" => o.no_sort = true,
+                "--tac" => o.tac = true,
+                "--tiebreak" => { if let Some(v) = take() { o.tiebreak_index = v.starts_with("index") } }
                 "--separator" => { if let Some(v) = take() { o.separator_char = v; o.separator = !o.separator_char.is_empty() } }
                 "--scrollbar" => { if let Some(v) = take() { o.scrollbar = v.chars().next().map(|c| c.to_string()) } }
                 "--no-scrollbar" => o.scrollbar = None,
@@ -108,7 +117,7 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--color" => {
                     if let Some(v) = take() {
                         for (slot, c) in v.split(',').filter_map(|p| p.split_once(':')) {
-                            match slot { "fg" => o.fg = fzf_colour(c), "bg" => o.bg = fzf_colour(c), _ => {} }
+                            match slot { "fg" => o.fg = fzf_colour(c), "bg" | "list-bg" => o.bg = fzf_colour(c), "selected-bg" => o.selected_bg = fzf_colour(c), _ => {} }
                         }
                     }
                 }
@@ -119,7 +128,7 @@ pub fn fzf_opts() -> &'static FzfOpts {
                         let mut parts = Vec::new();
                         for (i, c) in v.char_indices() { match c { '(' | '[' | '{' => depth += 1, ')' | ']' | '}' => depth -= 1, ',' if depth == 0 => { parts.push(&v[start..i]); start = i + 1 } _ => {} } }
                         parts.push(&v[start..]);
-                        for pair in parts { if let Some((k, a)) = pair.split_once(':') { o.binds.push((k.to_lowercase().replace("return", "enter"), a.to_string())) } }
+                        for pair in parts { if let Some((k, a)) = pair.split_once(':') { o.binds.push((k.replace("return", "enter"), a.to_string())) } }
                     }
                 }
                 _ => {}

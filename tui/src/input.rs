@@ -990,14 +990,14 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         return;
     }
     let before = picker.query.clone();
-    let page = (app.size.1 as i64 - 6).max(1);
+    let page = (picker.page_rows.get() - 1).max(1);
     let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first.
     let name = fzf_key_name(&key);
     // The last bind for a key wins, as in fzf; an action this list does not know leaves the key
     // to its own meaning.
-    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(&name) || *k == name).map(|(_, a)| a.clone());
+    let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone());
     const KNOWN: &[&str] = &["up", "down", "page-up", "page-down", "half-page-up", "half-page-down", "first", "last", "top", "toggle", "toggle+down", "toggle+up", "toggle-in", "toggle-out",
         "select-all", "deselect-all", "toggle-all", "toggle-preview", "preview-up", "preview-down", "preview-page-up", "preview-page-down", "preview-half-page-up", "preview-half-page-down",
         "preview-top", "preview-bottom", "clear-query", "backward-kill-word", "kill-word", "unix-line-discard", "unix-word-rubout", "kill-line", "beginning-of-line", "end-of-line",
