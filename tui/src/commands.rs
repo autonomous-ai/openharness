@@ -184,6 +184,11 @@ fn listing(app: &App, command: &str) -> Vec<String> {
             format!("mode-keys {}", if app.opts.mode_keys_emacs == Some(true) { "emacs" } else { "vi" }),
             format!("renumber-windows {}", if app.opts.renumber_windows == Some(true) { "on" } else { "off" }),
             format!("status {}", if app.opts.status == Some(false) { "off" } else { "on" }),
+            format!("status-justify {}", app.opts.status_justify.clone().unwrap_or_else(|| "left".into())),
+            format!("pane-border-format {}", app.opts.pane_border_format.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "(tim's: index, title, state, machine)".into())),
+            format!("history-limit {}", 10_000),
+            format!("escape-time 0"),
+            format!("display-time {}", app.display_ms),
             format!("status-left {}", app.opts.status_left.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "\"[#S] \"".into())),
             format!("status-right {}", app.opts.status_right.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| r##""#{=21:pane_title}" %H:%M %d-%b-%y"##.into())),
             format!("synchronize-panes {}", if app.tab().sync { "on" } else { "off" }),
@@ -409,9 +414,9 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "join-pane" | "move-pane" => {
-            // -s :N brings that window's pane here; -t :N sends this pane there.
+            // -s :N brings that window's pane here (or to -t :M); -t :N sends this pane there.
             if let Some(from) = opt(words, "-s").and_then(|t| window_target(app, t.split('.').next().unwrap_or(""))) {
-                let here = app.active;
+                let here = opt(words, "-t").and_then(|t| window_target(app, t.split('.').next().unwrap_or(""))).unwrap_or(app.active);
                 if from == here { return }
                 let Some(p) = app.tabs[from].focus else { return };
                 let Some((machine, agent)) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };

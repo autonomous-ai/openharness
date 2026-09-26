@@ -186,7 +186,7 @@ impl App {
             next_pane: 1,
             modal: None,
             toast: None,
-            display_ms: 1500,
+            display_ms: 750,
             display_panes_ms: 1000,
             base_index: 0,
             nums: HashMap::new(),
