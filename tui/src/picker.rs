@@ -202,6 +202,10 @@ impl Picker {
     }
 
     fn byte_at(&self, chars: usize) -> usize { self.query.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(self.query.len()) }
+
+    /// Where editing starts: after the mode character (`>` `@` `#` `:` `*` `?`), which reads as
+    /// part of the prompt — C-u, C-w, C-a and the arrows stop at it, as at fzf's prompt.
+    fn floor(&self) -> usize { usize::from(self.prefixed && self.query.starts_with(['>', '@', '#', ':', '*', '?'])) }
     fn qlen(&self) -> usize { self.query.chars().count() }
 
     pub fn type_char(&mut self, c: char) {
@@ -219,12 +223,15 @@ impl Picker {
     pub fn backspace(&mut self, word: bool) {
         let before = self.query.clone();
         self.qcursor = self.qcursor.min(self.qlen());
-        if self.qcursor == 0 { return }
+        let floor = self.floor();
+        // At the mode character: BSpace on an empty filter leaves the mode; anything else stops,
+        // as at the start of fzf's query.
+        if self.qcursor <= floor && !(floor == 1 && self.qcursor == 1 && !word && self.qlen() == 1) { return }
         let chars: Vec<char> = self.query.chars().collect();
         let mut from = self.qcursor - 1;
         if word {
-            while from > 0 && chars[from].is_whitespace() { from -= 1 }
-            while from > 0 && !chars[from - 1].is_whitespace() { from -= 1 }
+            while from > floor && chars[from].is_whitespace() { from -= 1 }
+            while from > floor && !chars[from - 1].is_whitespace() { from -= 1 }
             self.kill = chars[from..self.qcursor].iter().collect();
         }
         self.query = chars[..from].iter().chain(chars[self.qcursor..].iter()).collect();
@@ -238,6 +245,7 @@ impl Picker {
         let chars: Vec<char> = self.query.chars().collect();
         let at = self.qcursor.min(chars.len());
         let to = word_edge(&chars, at, forward);
+        let to = if forward { to } else { to.max(self.floor()) };
         let (a, b) = if forward { (at, to) } else { (to, at) };
         if a == b { return }
         self.kill = chars[a..b].iter().collect();
@@ -261,14 +269,15 @@ impl Picker {
         self.changed(&before);
     }
 
-    /// C-u: everything before the cursor.
+    /// C-u: everything before the cursor (after the mode character).
     pub fn clear_query(&mut self) {
         let before = self.query.clone();
         let chars: Vec<char> = self.query.chars().collect();
-        let at = self.qcursor.min(chars.len());
-        if at > 0 { self.kill = chars[..at].iter().collect() }
-        self.query = chars[at..].iter().collect();
-        self.qcursor = 0;
+        let (floor, at) = (self.floor(), self.qcursor.min(chars.len()));
+        if at <= floor { return }
+        self.kill = chars[floor..at].iter().collect();
+        self.query = chars[..floor].iter().chain(chars[at..].iter()).collect();
+        self.qcursor = floor;
         self.changed(&before);
     }
 
@@ -277,9 +286,9 @@ impl Picker {
         let chars: Vec<char> = self.query.chars().collect();
         let mut at = self.qcursor.min(chars.len()) as i64;
         if word { at = word_edge(&chars, at as usize, by > 0) as i64 } else { at = (at + by).clamp(0, chars.len() as i64) }
-        self.qcursor = at as usize;
+        self.qcursor = (at as usize).max(self.floor());
     }
-    pub fn qhome(&mut self) { self.qcursor = 0 }
+    pub fn qhome(&mut self) { self.qcursor = self.floor() }
     pub fn qend(&mut self) { self.qcursor = self.qlen() }
 
     /// Tab: mark or unmark the row under the cursor (fzf --multi).

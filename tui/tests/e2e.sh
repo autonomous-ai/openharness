@@ -108,6 +108,11 @@ expect "C-b I: models for the focused harness" "Sonnet / High"
 tmux_ send-keys -t t Escape
 tmux_ send-keys -t t C-b @
 expect "C-b @: machines" "mock-remote"
+tmux_ send-keys -t t -l zzz
+expect "a filter after the mode character" "0/"
+tmux_ send-keys -t t C-u
+expect "C-u clears the filter, not the mode" "mock-remote"
+screen | grep -q "Search harnesses" && fail "C-u left the machines list"
 tmux_ send-keys -t t Escape
 tmux_ send-keys -t t C-b c
 tmux_ send-keys -t t Escape
