@@ -70,13 +70,15 @@ impl Chord {
 
 pub struct Config {
     pub prefix: Chord,
+    /// Whether the file named a prefix (else tmux's, or ~/.tmux.conf's, stands).
+    pub prefix_set: bool,
     pub keys: Vec<(Chord, Option<String>)>,
     pub problems: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { prefix: Chord::normal(KeyCode::Char(' '), KeyModifiers::CONTROL), keys: Vec::new(), problems: Vec::new() }
+        Config { prefix: Chord::normal(KeyCode::Char('b'), KeyModifiers::CONTROL), prefix_set: false, keys: Vec::new(), problems: Vec::new() }
     }
 }
 
@@ -97,7 +99,7 @@ pub fn load() -> Config {
     // SAFETY: called from `main` before the async runtime (or any other thread) exists.
     let setenv = |name: &str, value: &str| { if std::env::var(name).is_err() { unsafe { std::env::set_var(name, value) } } };
     if let Some(p) = value.get("prefix").and_then(|v| v.as_str()) {
-        match Chord::parse(p) { Ok(c) => config.prefix = c, Err(e) => config.problems.push(format!("tui.toml prefix: {e}")) }
+        match crate::keys::parse(p) { Ok(c) => { config.prefix = c; config.prefix_set = true } Err(e) => config.problems.push(format!("tui.toml prefix: {e}")) }
     }
     if let Some(d) = value.get("desk").and_then(|v| v.as_str()) { setenv("HARNESS_TUI_DESK", d) }
     if let Some(p) = value.get("predict").and_then(|v| v.as_str()) { setenv("HARNESS_TUI_PREDICT", p) }
@@ -105,7 +107,7 @@ pub fn load() -> Config {
     if let Some(keys) = value.get("keys").and_then(|v| v.as_table()) {
         for (chord, command) in keys {
             let Some(command) = command.as_str() else { config.problems.push(format!("tui.toml keys.{chord}: expected a command name")); continue };
-            match Chord::parse(chord) {
+            match crate::keys::parse(chord) {
                 Ok(c) => config.keys.push((c, if command == "none" { None } else { Some(command.to_string()) })),
                 Err(e) => config.problems.push(format!("tui.toml keys: {e}")),
             }

@@ -173,7 +173,10 @@ pub fn name(chord: &Chord) -> String {
 
 /// A key as tmux writes it (`C-a`, `M-Left`, `S-Up`, `Space`, `\;`) or as a person does (`ctrl+a`).
 pub fn parse(text: &str) -> Result<Chord, String> {
-    let t = text.trim().trim_matches('"').trim_matches('\'');
+    let raw = text.trim();
+    // A lone quote IS the key (`unbind '"'` arrives here as `"`).
+    if raw.chars().count() == 1 { return Ok(Chord::normal(KeyCode::Char(raw.chars().next().unwrap()), KeyModifiers::NONE)) }
+    let t = raw.trim_matches('"').trim_matches('\'');
     let t = t.strip_prefix('\\').unwrap_or(t);
     if t.contains('+') && t.len() > 1 { return Chord::parse(t) }
     let mut mods = KeyModifiers::NONE;

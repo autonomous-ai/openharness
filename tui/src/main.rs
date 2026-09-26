@@ -18,6 +18,7 @@ mod pane;
 mod picker;
 mod proto;
 mod theme;
+mod tmuxconf;
 mod ui;
 
 use std::io::{self, BufWriter, Write};
@@ -55,8 +56,8 @@ pub fn bell() {
 }
 
 fn usage() {
-    println!("harness-tui — Harness in your terminal\n");
-    println!("  harness tui [--port N]\n");
+    println!("hn — Harness in your terminal\n");
+    println!("  hn [--port N] [--keys]      (also: harness tui)\n");
     println!("  tmux's keys: C-b s harnesses · C-b c window · C-b % \" split · C-b o next pane · C-b z zoom");
     println!("  C-b [ copy · C-b w windows · C-b C new harness · C-b ? keys · C-b d detach");
     println!("  ~/.tmux.conf is read: your prefix and binds work here too.");
@@ -90,12 +91,16 @@ async fn run(config: config::Config) -> io::Result<()> {
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") { usage(); return Ok(()) }
-    if args.iter().any(|a| a == "--version" || a == "-V") { println!("harness-tui {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
+    if args.iter().any(|a| a == "--version" || a == "-V") { println!("hn {}", env!("CARGO_PKG_VERSION")); return Ok(()) }
     if args.iter().any(|a| a == "--keys") {
-        println!("Commands a key can run in {} ([keys] \"alt+x\" = \"<command>\", or \"none\"):\n", config::path().display());
-        for (id, title, keys, _, _) in modal::COMMANDS { println!("  {id:<14} {title:<28} {keys}") }
-        for id in ["focus-left", "focus-right", "focus-up", "focus-down", "grow-left", "grow-right", "grow-up", "grow-down", "tab-1 … tab-9", "send", "take"] { println!("  {id}") }
-        for p in &config.problems { println!("\n  ! {p}") }
+        let mut km = keys::Keymap::tmux_defaults();
+        let settings = tmuxconf::load(&mut km);
+        if config.prefix_set { km.prefix = config.prefix }
+        if let Some(p) = &settings.path { println!("read {}", p.display()) }
+        println!("prefix {}\n", keys::name(&km.prefix));
+        for b in &km.prefix_table { println!("bind-key {}{:<8} {}", if b.repeat { "-r " } else { "   " }, keys::name(&b.chord), b.command) }
+        for b in &km.root_table { println!("bind-key -n {:<8} {}", keys::name(&b.chord), b.command) }
+        for p in config.problems.iter().chain(settings.problems.iter()) { println!("\n  ! {p}") }
         return Ok(())
     }
     let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok())
@@ -146,9 +151,21 @@ async fn run(config: config::Config) -> io::Result<()> {
 
     mark("terminal ready");
     let mut app = app::App::new(port, tx.clone(), size);
-    if let Some(problem) = config.problems.first() { app.say(problem.clone(), theme::DANGER) }
-    app.keys = config.keys;
-    app.prefix_key = config.prefix;
+    // tmux's defaults, then ~/.tmux.conf, then tui.toml: each one can change what the last set.
+    let settings = tmuxconf::load(&mut app.keymap);
+    if let Some(n) = settings.base_index { app.base_index = n }
+    if let Some(n) = settings.pane_base_index { app.pane_base_index = n }
+    if let Some(m) = settings.mouse { app.mouse = m }
+    if let Some(t) = settings.status_top { app.status_top = t }
+    if let Some(ms) = settings.display_ms { app.display_ms = ms.max(300) }
+    if let Some(ms) = settings.display_panes_ms { app.display_panes_ms = ms }
+    app.look = settings.look.clone();
+    if config.prefix_set { app.keymap.prefix = config.prefix }
+    for (chord, command) in &config.keys {
+        match command { Some(c) => app.keymap.bind(keys::Table::Root, *chord, c.clone(), false), None => app.keymap.unbind(keys::Table::Root, chord) }
+    }
+    if let Some(problem) = config.problems.first().or(settings.problems.first()) { app.say(problem.clone(), theme::DANGER) }
+    else if let Some(path) = &settings.path { app.say(format!("{} read — your prefix is {}", path.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~"), keys::name(&app.keymap.prefix)), theme::WARN) }
     app.boot();
 
     let frame_budget = Duration::from_millis(6);
