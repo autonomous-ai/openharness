@@ -47,20 +47,24 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
                 let (read, mut write) = stream.into_split();
                 let mut line = String::new();
                 if BufReader::new(read).read_line(&mut line).await.is_err() { return }
-                let words: Vec<String> = serde_json::from_str(line.trim()).unwrap_or_default();
-                let (tx, rx) = oneshot::channel::<(Vec<String>, Vec<String>)>();
+                // {"argv": [...], "cwd": "..."} (or just the words, from an older hn).
+                let request: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
+                let words: Vec<String> = request.get("argv").or(Some(&request)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+                let cwd = request.get("cwd").and_then(Value::as_str).map(str::to_string);
+                let (tx, rx) = oneshot::channel::<crate::app::Reply>();
                 let command = words.iter().map(|w| crate::tmuxconf::quote_word(w)).collect::<Vec<_>>().join(" ");
                 let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| {
                     app.capture = Some(Vec::new());
                     app.capture_err = Some(Vec::new());
+                    app.cli_tx = Some(tx);
+                    app.cli_code = 0;
+                    app.cli_cwd = cwd;
                     crate::commands::execute(app, &command);
-                    let out = app.capture.take().unwrap_or_default();
-                    let err = app.capture_err.take().unwrap_or_default();
-                    // A command that prints what it makes (-P) answers when it is made.
-                    if app.print_new.is_some() && err.is_empty() { app.held_reply = Some(tx) } else { app.print_new = None; let _ = tx.send((out, err)); }
+                    // Still waiting on a job (run-shell, if-shell): it answers when it is done.
+                    if app.capture.is_some() { app.finish_cli() }
                 })));
-                let (out, err) = rx.await.unwrap_or_default();
-                let _ = write.write_all(format!("{}\n", json!({ "out": out, "err": err })).as_bytes()).await;
+                let (out, err, code) = rx.await.unwrap_or_default();
+                let _ = write.write_all(format!("{}\n", json!({ "out": out, "err": err, "code": code })).as_bytes()).await;
             });
         }
     });
@@ -103,7 +107,8 @@ pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) ->
         match tokio::net::UnixStream::connect(&path).await {
             Ok(stream) => {
                 let (read, mut write) = stream.into_split();
-                if write.write_all(format!("{}\n", serde_json::to_string(words).unwrap_or_default()).as_bytes()).await.is_err() { return 1 }
+                let cwd = std::env::current_dir().ok().map(|d| d.display().to_string());
+                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd })).as_bytes()).await.is_err() { return 1 }
                 let mut line = String::new();
                 let _ = BufReader::new(read).read_line(&mut line).await;
                 let reply: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
@@ -114,7 +119,7 @@ pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) ->
                 let err: Vec<Value> = reply.get("err").and_then(Value::as_array).cloned().unwrap_or_default();
                 let mut e = std::io::stderr().lock();
                 for l in &err { let _ = writeln!(e, "{}", l.as_str().unwrap_or("")); }
-                return if err.is_empty() { 0 } else { 1 };
+                return match reply.get("code").and_then(Value::as_i64) { Some(c) => c as i32, None => if err.is_empty() { 0 } else { 1 } };
             }
             // A socket left by a client that died: gone, try the next.
             Err(_) => {

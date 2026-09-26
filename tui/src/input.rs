@@ -888,12 +888,12 @@ pub fn new_shell_from(app: &mut App, focused: Option<(String, String)>, placemen
                     // -P: what was made, printed (to the shell waiting on it).
                     if let Some(fmt) = app.print_new.take() {
                         let line: String = crate::format::spans_for_pane(app, &fmt, w, pane, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect();
-                        match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new())); } None => app.say(line, theme::WARN) }
+                        match app.held_reply.take() { Some(tx) => { let _ = tx.send((vec![line], Vec::new(), 0)); } None => app.say(line, theme::WARN) }
                     }
                 }
             }
             Err(e) => {
-                if let Some(tx) = app.held_reply.take() { let _ = tx.send((Vec::new(), vec![format!("create pane failed: {e}")])); }
+                if let Some(tx) = app.held_reply.take() { let _ = tx.send((Vec::new(), vec![format!("create pane failed: {e}")], 1)); }
                 app.print_new = None;
                 app.say(format!("Could not start a shell: {e}"), theme::DANGER)
             }
@@ -2018,35 +2018,56 @@ fn send_copy_action(app: &mut App, words: &[String]) {
     }
 }
 
-pub fn send_keys(app: &mut App, words: &[String]) {
-    if words.iter().take_while(|w| w.starts_with('-')).any(|w| w == "-X") { return send_copy_action(app, &[vec!["send-keys".to_string()], words.to_vec()].concat()) }
-    // send-keys [-lR] [-t target] key …: flags anywhere before the keys, -t takes its target.
-    let mut literal = false;
-    let mut target = None;
-    let mut keys_at = words.len();
-    let mut i = 0;
-    while i < words.len() {
-        match words[i].as_str() {
-            "-t" => { target = words.get(i + 1).cloned(); i += 2; continue }
-            "-l" => literal = true,
-            "-R" | "-M" | "-H" | "-K" | "-F" => {}
-            "-N" => { i += 2; continue }
-            _ => { keys_at = i; break }
-        }
-        i += 1;
-    }
-    let pane = match &target {
-        Some(t) => match crate::commands::pane_target(app, t) { Some((_, p)) => p, None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } },
-        None => match app.focused() { Some(f) => f, None => return },
-    };
+/// One key to a pane, as the pane's program reads it (send-prefix).
+pub fn send_chord(app: &mut App, pane: u64, chord: keys::Chord) {
     let mode = app.panes.get(&pane).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());
+    if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { send_to_pane(app, pane, b) }
+}
+
+/// tmux's send-keys (cmd-send-keys.c) to a pane: each argument a key by its name (`Enter`,
+/// `C-c`, `Space`, `x`) or, naming none (or with -l), its characters; -H a byte in hex; -N the
+/// lot that many times; -X a copy-mode command, which the pane must be in copy mode for; a pane
+/// in copy mode takes the keys as its key table has them.
+pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args, words: &[String]) {
+    let repeat = match args.get('N') {
+        None => 1,
+        Some(n) => match n.parse::<i64>() {
+            Ok(n) if n >= 1 && n <= u32::MAX as i64 => n as u32,
+            Ok(n) if n < 1 => return app.say("repeat count too small", theme::WARN),
+            Ok(_) => return app.say("repeat count too large", theme::WARN),
+            Err(_) => return app.say("repeat count invalid", theme::WARN),
+        },
+    };
+    let in_mode = app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false);
+    if args.has('X') > 0 {
+        if !in_mode { return app.say("not in a mode", theme::WARN) }
+        return send_copy_action(app, words);
+    }
+    if args.values.is_empty() { return }
+    let literal = args.has('l') > 0;
+    let mode = app.panes.get(&pane).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());
+    let mut keys: Vec<KeyEvent> = Vec::new();
     let mut bytes = Vec::new();
-    for word in &words[keys_at.min(words.len())..] {
-        let key = if literal { None } else { keys::parse(word).ok().filter(|c| word.len() > 1 && (c.mods != KeyModifiers::NONE || !matches!(c.code, KeyCode::Char(_)))) };
-        match key {
-            Some(chord) => { if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { bytes.extend(b) } }
-            None => bytes.extend(word.as_bytes()),
+    for _ in 0..repeat {
+        for word in &args.values {
+            if args.has('H') > 0 {
+                // A byte by its hex value (none sent for one that isn't).
+                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { bytes.push(n) } }
+                continue;
+            }
+            match (!literal).then(|| keys::parse(word).ok()).flatten() {
+                Some(chord) => {
+                    let key = KeyEvent::new(chord.code, chord.mods);
+                    if in_mode { keys.push(key) } else if let Some(b) = encode_key(&key, mode) { bytes.extend(b) }
+                }
+                None if in_mode => keys.extend(word.chars().map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))),
+                None => bytes.extend(word.as_bytes()),
+            }
         }
+    }
+    if in_mode {
+        for key in keys { app.modal = Some(Modal::Copy { pane }); copy_key(app, key, pane) }
+        return;
     }
     if !bytes.is_empty() { send_to_pane(app, pane, bytes) }
 }

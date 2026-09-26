@@ -1,8 +1,10 @@
 //! hn from a shell, as `tmux ls` and `tmux send-keys` are used from scripts and editors:
 //!
-//!   hn ls                          every harness on every machine
-//!   hn send -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
-//!   hn tim                         tim, the creature
+//!   hn list-harnesses (lsh)                every harness on every machine
+//!   hn send-message -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
+//!   hn tim                                 tim, the creature
+//!
+//! (`hn ls` and `hn send` are tmux's: list-sessions and send-keys.)
 //!
 //! Anything else starts the client.
 
@@ -66,15 +68,16 @@ pub async fn run(args: &[String], port: u16, socket: Option<&str>, name: Option<
     let name = name.map(str::to_string);
     let cmd = args.first()?.as_str();
     match cmd {
-        // hn's ls: every harness on every machine (tmux's list-sessions runs in the client).
-        "ls" | "list" => Some(ls(port).await),
-        "send" | "send-message" => Some(send(port, &args[1..]).await),
+        // Every harness on every machine (hn's; `ls` is tmux's list-sessions).
+        "list-harnesses" | "lsh" => Some(ls(port).await),
+        "send-message" => Some(send(port, &args[1..]).await),
         "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
         // attach / a: the client itself, as `tmux attach` is.
         "attach" | "attach-session" | "a" | "at" => None,
         // Any tmux command: run on the newest running client, its output printed here.
-        c if crate::commands::is_command_name(c) => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
-        c if !c.starts_with('-') => { eprintln!("unknown command: {c}"); Some(1) }
+        // Any tmux command (by name, alias, or the start of one), or hn's: run by the client.
+        c if crate::commands::is_command_name(c) || crate::cmd::find(c).is_ok() => Some(crate::ipc::call(args, socket.as_deref(), name.as_deref()).await),
+        c if !c.starts_with('-') => { eprintln!("{}", crate::cmd::find(c).err().unwrap_or_default()); Some(1) }
         _ => None,
     }
 }
@@ -103,7 +106,8 @@ async fn roster(port: u16, machine: &str) -> Vec<crate::fleet::Agent> {
     reply.get("agents").and_then(Value::as_array).cloned().unwrap_or_default().iter().map(|r| agent_from(machine, r, None)).collect()
 }
 
-/// `hn ls`: `machine: name (engine) status  folder`, one line each, as `tmux ls` is one per session.
+/// `hn list-harnesses`: `machine: name (engine) status  folder`, one line each, as `tmux ls` is
+/// one per session.
 async fn ls(port: u16) -> i32 {
     let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("hn: {e}"); return 1 } };
     for (id, name, up) in list {
@@ -116,7 +120,7 @@ async fn ls(port: u16) -> i32 {
     0
 }
 
-/// `hn send -t <harness> <text…>`: the harness is a name (its start will do) or an id.
+/// `hn send-message -t <harness> <text…>`: the harness is a name (its start will do) or an id.
 async fn send(port: u16, args: &[String]) -> i32 {
     let mut target = None;
     let mut text = Vec::new();
@@ -126,7 +130,7 @@ async fn send(port: u16, args: &[String]) -> i32 {
         text.push(args[i].clone());
         i += 1;
     }
-    let (Some(target), false) = (target, text.is_empty()) else { eprintln!("usage: hn send -t <harness> <text>"); return 2 };
+    let (Some(target), false) = (target, text.is_empty()) else { eprintln!("usage: hn send-message -t <harness> <text>"); return 2 };
     let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("hn: {e}"); return 1 } };
     let want = target.to_lowercase();
     for (id, _, up) in list {
