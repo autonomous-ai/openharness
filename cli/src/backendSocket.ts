@@ -61,6 +61,7 @@ import { OrchestratorError } from './orchestrator/model.js'
 import { orchestratorRequest } from './orchestrator/wire.js'
 import { shellQuote } from './orchestrator/prompts.js'
 import type { SessionInputDelivery } from './lib/sessionInput.js'
+import type { QuestionAnswerResult } from './lib/askQuestion.js'
 import { engineLabel } from './lib/agentNames.js'
 import { DSH_ID_RE, dshSupportedEngines } from './dsh/manifest.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
@@ -604,7 +605,7 @@ export class BackendSocket {
   /** Called when a device answers an AskUserQuestion (`question_response`) — cli.ts drives the CLI's own
    *  terminal dialog (option digit / free text), since a remote machine has no
    *  programmatic answer channel the way the hosted runtime’s brain does. */
-  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => void) | null = null
+  onQuestionAnswer: ((payload: { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }) => Promise<QuestionAnswerResult> | void) | null = null
   /** Called when this machine was deleted/revoked (a `machine_revoked` down-frame, or a 401/403 on the
    *  upgrade) — CLI clears the saved SSO session and shuts down instead of retrying forever. */
   onRevoked: (() => void) | null = null
@@ -2714,7 +2715,15 @@ export class BackendSocket {
           // A device answered an AskUserQuestion. There's no control channel into an interactive CLI, so
           // cli.ts keys the answer straight into that session's tmux dialog.
           const p = payload as { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }
-          this.onQuestionAnswer?.(p)
+          const answered = this.onQuestionAnswer?.(p)
+          // Detached: driving a dialog takes seconds of keystrokes and repaints. The outcome goes back
+          // under the QUESTION's requestId, so the client that answered can say why nothing happened —
+          // STALE_QUESTION when the dialog changed before the answer arrived and nothing was typed.
+          if (answered) {
+            void answered
+              .then((result) => reply(type, requestId, result.ok ? { ok: true } : { error: result.error, detail: result.detail }))
+              .catch(() => reply(type, requestId, { error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' }))
+          }
           return
         }
 

@@ -11,7 +11,9 @@
  *        `commander_question`, in the SAME shape the hosted runtime sends, so the firmware's existing question
  *        screen renders it unchanged (commanderQuestions in websocket.ts). NOT from the transcript —
  *        see the QuestionWatcher docblock for why that source cannot work.
- *   IN   the device's `question_response` → keystrokes into the pane's dialog.
+ *   IN   the device's `question_response` → keystrokes into the pane's dialog — only once the dialog on
+ *        screen is shown to be the one that answer was for (its requestId); a late answer is refused
+ *        with STALE_QUESTION and types nothing.
  *
  * Dialog mechanics (verified against Claude Code 2.1.220, `tmux capture-pane`):
  *   - single-select : the option's digit selects AND submits, advancing to the next question / review.
@@ -594,16 +596,48 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
     ?? null
 }
 
-/** Pick the answer for the question the dialog is currently showing: by its own text, else positionally. */
-export function pickAnswer(answers: Record<string, string>, question: string, used: Set<string>): { key: string; value: string } | null {
+/**
+ * Pick the answer for the question the dialog is currently showing: the entry keyed by its own text.
+ *
+ * `positional` also takes the next unused entry when none names it. Only for a dialog the answer's
+ * requestId proves it was written for: without that proof, an answer that names no question on screen
+ * belongs to one that is gone, and typing it here would answer — or approve — something nobody saw.
+ */
+export function pickAnswer(
+  answers: Record<string, string>,
+  question: string,
+  used: Set<string>,
+  opts: { positional?: boolean } = {},
+): { key: string; value: string } | null {
   const entries = Object.entries(answers)
   const q = norm(question)
   const byText = entries.find(([k]) => norm(k) === q)
     ?? (q.length >= 6 ? entries.find(([k]) => norm(k).startsWith(q) || q.startsWith(norm(k))) : undefined)
   if (byText && !used.has(byText[0])) return { key: byText[0], value: byText[1] }
+  if (!opts.positional) return null
   const next = entries.find(([k]) => !used.has(k))
   return next ? { key: next[0], value: next[1] } : null
 }
+
+/**
+ * The id a dialog is announced under — the SAME function the watcher names it with, so the answer's
+ * requestId can be checked against the dialog on screen at the moment of typing rather than against
+ * whatever the watcher last saw (it polls every 1.5s, and forgets on a reset).
+ */
+export function questionRequestId(sessionId: string, view: QuestionView): string {
+  return `q_${hash(sessionId + fingerprintOf(view))}`
+}
+
+/** Why an answer was not keyed. Sent back to the client as `question_response_result.error`. */
+export type QuestionAnswerError = 'STALE_QUESTION' | 'AGENT_NOT_FOUND' | 'ANSWER_BUSY' | 'ANSWER_FAILED'
+
+export type QuestionAnswerResult = { ok: true } | { ok: false; error: QuestionAnswerError; detail: string }
+
+const STALE_CHANGED: QuestionAnswerResult = { ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' }
+const STALE_GONE: QuestionAnswerResult = { ok: false, error: 'STALE_QUESTION', detail: 'That question is no longer open.' }
+const failed = (detail: string): QuestionAnswerResult => ({ ok: false, error: 'ANSWER_FAILED', detail })
+const KEYS_FAILED = failed('The answer could not be typed into the agent\'s terminal.')
+const STUCK = failed('The question did not take the answer.')
 
 export interface AskQuestionDeps {
   getSession: (sessionId: string) => RegisteredSession | undefined
@@ -641,23 +675,24 @@ export class AskQuestionController {
     this.pending.set(requestId, sessionId)
   }
 
-  async answer(payload: QuestionAnswerPayload): Promise<boolean> {
+  async answer(payload: QuestionAnswerPayload): Promise<QuestionAnswerResult> {
     const requestId = payload.requestId ?? ''
-    const sessionId = payload.sessionId || payload.agentId || this.pending.get(requestId) || ''
+    const remembered = this.pending.get(requestId)
+    const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? payload.answers : null
     if (!sessionId || !answers || Object.keys(answers).length === 0) {
       console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
-      return false
+      return failed('The answer named no agent or carried no choice.')
     }
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
     if (!terminalTarget) {
       console.warn(`[question] no terminal target for ${sessionId.slice(0, 8)} — answer dropped`)
-      return false
+      return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That agent is no longer running.' }
     }
     if (this.driving.has(sessionId)) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · already driving this dialog`)
-      return false
+      return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this agent.' }
     }
     // `forAnswer`: a dialog is the engine waiting for input mid-turn, so the open turn must not block it.
     const release = this.deps.acquireControl?.(terminalTarget, { forAnswer: true })
@@ -665,63 +700,106 @@ export class AskQuestionController {
     // nothing keys it in, and the pane sits on the dialog looking like a hung agent.
     if (this.deps.acquireControl && !release) {
       console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · terminal control unavailable`)
-      return false
+      return { ok: false, error: 'ANSWER_BUSY', detail: 'The agent\'s terminal is busy. Try again.' }
     }
+    // The ids the watcher could have announced this dialog under: the session it was remembered for, and
+    // the session as the registry knows it now.
+    const owners = [...new Set([remembered, session?.sessionId].filter((id): id is string => !!id))]
     this.driving.add(sessionId)
     try {
-      const ok = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false)
+      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners })
       this.pending.delete(requestId)
-      console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${ok ? 'submitted' : 'FAILED'}`)
-      return ok
+      const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'
+      console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
+      return result
     } finally {
       this.driving.delete(sessionId)
       release?.()
     }
   }
 
-  /** Key the answers into the pane's dialog, question by question, ending on the review screen. */
-  private async drive(terminalTarget: string, answers: Record<string, string>, engine: AgentEngine, allowPermissions = true): Promise<boolean> {
+  /**
+   * Key the answers into the pane's dialog, question by question, ending on the review screen.
+   *
+   * Nothing is typed until the dialog on screen is shown to be the question the answer was written for:
+   * its requestId when the answer carries one, else its own text. An answer can arrive late — the agent
+   * moved on, another client answered, the next question of the form is up — and positionally matching
+   * it to whatever is showing now is how a person's "Yes" lands on a permission prompt they never saw.
+   */
+  private async drive(
+    terminalTarget: string,
+    answers: Record<string, string>,
+    engine: AgentEngine,
+    allowPermissions: boolean,
+    asked: { requestId: string; owners: string[] },
+  ): Promise<QuestionAnswerResult> {
     const wait = this.deps.wait ?? sleep
     const used = new Set<string>()
     let lastQuestion = ''
     let repeats = 0
+    let blanks = 0
     let answered = 0
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const capture = await this.deps.capture(terminalTarget, CAPTURE_LINES)
       const view = parseEngineQuestionPane(engine, capture ?? '')
       if (!view) {
-        // Nothing on screen: either the dialog was never open, or the last keystroke submitted it.
-        return answered > 0
+        // Nothing on screen: either the dialog was already gone, or the last keystroke submitted it.
+        return answered > 0 ? { ok: true } : STALE_GONE
       }
-      if (!allowPermissions && view.kind === 'question' && view.permission) return false
+      if (!allowPermissions && view.kind === 'question' && view.permission) return failed('Permission prompts cannot be answered from here.')
       if (view.kind === 'question' && view.partial) {
         // The dialog's top is out of the pane. If we have keyed an answer it has not been taken yet;
         // give the TUI a beat. If we have not, there is nothing to match an answer against.
-        if (answered === 0) { console.warn('[question] dialog scrolled out of view — cannot key an answer'); return false }
-        if (++repeats >= 2) { console.warn('[question] dialog stuck (scrolled)'); return false }
+        if (answered === 0) { console.warn('[question] dialog scrolled out of view — cannot key an answer'); return failed('The question is scrolled out of view.') }
+        if (++repeats >= 2) { console.warn('[question] dialog stuck (scrolled)'); return STUCK }
         await wait(STEP_MS)
         continue
       }
       if (view.kind === 'review') {
-        if (!allowPermissions && answered === 0) return false
-        return this.deps.sendKey(terminalTarget, view.submitRow)
+        // Reached by our own keys, this submits the form. Reached first, it means every question was
+        // answered somewhere else — submitting would send answers this person never gave.
+        if (answered === 0) return STALE_GONE
+        return await this.deps.sendKey(terminalTarget, view.submitRow) ? { ok: true } : failed('The answers could not be submitted.')
       }
+      // Mid-repaint the question line can read blank for a capture (see parseQuestionPane). Neither its id
+      // nor its text can be checked against a blank, so look again rather than judge the dialog by it.
+      if (!view.question) {
+        if (++blanks > 2) return answered > 0 ? { ok: true } : failed('The question could not be read.')
+        await wait(STEP_MS)
+        continue
+      }
+      blanks = 0
       // The same question still showing after we acted on it: give the TUI one more beat to repaint,
       // then treat it as stuck rather than hammering the pane with more keystrokes. Never consume a
       // second answer for it.
-      if (view.question && view.question === lastQuestion) {
-        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return false }
+      if (view.question === lastQuestion) {
+        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return STUCK }
         await wait(STEP_MS)
         continue
       }
       repeats = 0
       lastQuestion = view.question
 
+      // Is this the question the answer was for? Only the FIRST one needs the id: every later screen is
+      // one our own keys advanced to, and must be named by its text (below).
+      let positional = false
+      if (answered === 0 && asked.requestId) {
+        if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId)) {
+          console.warn(`[question] answer for req=${asked.requestId} arrived after the dialog changed to "${view.question.slice(0, 60)}" — nothing typed`)
+          return STALE_CHANGED
+        }
+        positional = true
+      }
+
       // Out of answers with the dialog still up = a multi-QUESTION dialog whose next question the device
       // hasn't been shown yet. Leave it open: the watcher pushes that one and the device answers it next.
-      const picked = pickAnswer(answers, view.question, used)
-      if (!picked) return answered > 0
+      const picked = pickAnswer(answers, view.question, used, { positional })
+      if (!picked) {
+        if (answered > 0) return { ok: true }
+        console.warn(`[question] no answer names "${view.question.slice(0, 60)}" — nothing typed`)
+        return STALE_CHANGED
+      }
       used.add(picked.key)
       answered++
 
@@ -732,13 +810,13 @@ export class AskQuestionController {
         for (const label of labels) {
           const row = matchRow(view.rows, label)
           if (!row || row.checked) continue
-          if (!await this.deps.sendKey(terminalTarget, row.number)) return false
+          if (!await this.deps.sendKey(terminalTarget, row.number)) return KEYS_FAILED
           await wait(TEXT_MS)
           toggled++
         }
         if (!toggled && view.typeRow
-          && !await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return false
-        if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return false // advance to the next question / review
+          && !await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
+        if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return KEYS_FAILED // advance to the next question / review
         await wait(STEP_MS)
         continue
       }
@@ -748,17 +826,17 @@ export class AskQuestionController {
         // One digit selects AND submits — except on Amp, whose rows are unnumbered and reached by
         // walking the list, so this is a short sequence rather than a single key.
         for (const key of rowKeys(engine, row, view)) {
-          if (!await this.deps.sendKey(terminalTarget, key)) return false
+          if (!await this.deps.sendKey(terminalTarget, key)) return KEYS_FAILED
           await wait(TEXT_MS)
         }
         await wait(STEP_MS)
         continue
       }
-      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return false }
-      if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return false
+      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
+      if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
       await wait(STEP_MS)
     }
-    return false
+    return STUCK
   }
 
   /** True while a dialog is being keyed — the watcher pauses so a half-driven dialog isn't re-announced. */
@@ -984,8 +1062,10 @@ export class QuestionWatcher {
 
     // A pane-derived question has no tool_use id. The key only has to round-trip through the device and
     // back (the answer is keyed into the pane, not matched to a tool call), so the question's own text
-    // serves as both — and the device dedups a repeated push by this id.
-    const requestId = `q_${hash(sessionId + fingerprint)}`
+    // serves as both — and the device dedups a repeated push by this id. The answer brings the id back,
+    // and AskQuestionController recomputes it off the live pane before typing: a different id there
+    // means a different dialog, and the answer is refused (STALE_QUESTION) instead of keyed into it.
+    const requestId = questionRequestId(sessionId, view)
     this.lastId.set(sessionId, requestId)
     this.deps.onQuestion(sessionId, requestId, [{
       key: view.question,

@@ -7,6 +7,7 @@ import {
   parseEngineQuestionPane,
   parseQuestionPane,
   QuestionWatcher,
+  questionRequestId,
   shapeQuestions,
   type QuestionView,
   type ReviewView,
@@ -176,72 +177,200 @@ function machine(captures: string[], engine?: string): Machine {
 
 const CLOSED = '❯ \n  ⏸ plan mode on (shift+tab to cycle)'
 
+/** The requestId the watcher announces this capture under — what a client echoes back with its answer. */
+const idOf = (capture: string, engine: Parameters<typeof parseEngineQuestionPane>[0] = 'claude'): string =>
+  questionRequestId('s1', asQuestion(parseEngineQuestionPane(engine, capture)))
+
 describe('AskQuestionController.answer', () => {
   it('presses the option digit for a single-select answer', async () => {
     const h = machine([fixture('single'), CLOSED])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which drink would you like?': 'Coffee' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { 'Which drink would you like?': 'Coffee' } })
+    expect(r).toEqual({ ok: true })
     expect(h.keys).toEqual(['2'])
   })
 
   it('types a voice/free-text answer into the "Type something." row and submits it', async () => {
     const h = machine([fixture('single'), CLOSED])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which drink would you like?': 'nuoc mia' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { 'Which drink would you like?': 'nuoc mia' } })
+    expect(r.ok).toBe(true)
     expect(h.keys).toEqual(['3', 'Enter'])
     expect(h.texts).toEqual(['nuoc mia'])
   })
 
   it('toggles each selected checkbox then Tabs on, and submits from the review screen', async () => {
     const h = machine([fixture('multi'), fixture('review')])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which toppings do you want?': 'Cheese, Basil' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('multi')), sessionId: 's1', answers: { 'Which toppings do you want?': 'Cheese, Basil' } })
+    expect(r.ok).toBe(true)
     expect(h.keys).toEqual(['1', '3', 'Tab', '1'])
   })
 
-  it('answers each question of a multi-question dialog positionally when the text does not match', async () => {
+  it('fills a multi-question form in order when the answers name each question', async () => {
     const h = machine([fixture('tabs'), fixture('single'), CLOSED])
-    const ok = await h.controller.answer({
-      requestId: 'r1',
+    const r = await h.controller.answer({
+      requestId: idOf(fixture('tabs')),
+      sessionId: 's1',
+      answers: { 'Which colors do you like?': 'Blue', 'Which drink would you like?': 'Tea' },
+    })
+    expect(r.ok).toBe(true)
+    expect(h.keys).toEqual(['2', 'Tab', '1'])
+  })
+
+  it('never types into a later question of the form that the answers do not name', async () => {
+    // Used to be answered POSITIONALLY: the second entry went into whatever question came next, named or
+    // not. The form's next screen is a question this answer was never written for — it stays open for the
+    // watcher to announce, and whoever sees it answers it.
+    const h = machine([fixture('tabs'), fixture('single'), CLOSED])
+    const r = await h.controller.answer({
+      requestId: idOf(fixture('tabs')),
       sessionId: 's1',
       answers: { 'Which colors do you like?': 'Blue', 'Which size do you want?': 'Tea' },
     })
-    expect(ok).toBe(true)
-    expect(h.keys).toEqual(['2', 'Tab', '1'])
+    expect(r.ok).toBe(true)
+    expect(h.keys).toEqual(['2', 'Tab'])
   })
 
   it('leaves a multi-question dialog open on the question the device has not been shown yet', async () => {
     // The device answers ONE question at a time (the watcher pushes them as the pane advances), so the
     // drive loop must stop at the next question instead of guessing an answer for it.
     const h = machine([fixture('tabs'), fixture('single'), CLOSED])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which colors do you like?': 'Blue' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('tabs')), sessionId: 's1', answers: { 'Which colors do you like?': 'Blue' } })
+    expect(r.ok).toBe(true)
     expect(h.keys).toEqual(['2', 'Tab'])
   })
 
   it('does nothing when the dialog is already gone', async () => {
     const h = machine([CLOSED])
-    expect(await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { q: 'a' } })).toBe(false)
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { q: 'a' } }))
+      .toEqual({ ok: false, error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
     expect(h.keys).toEqual([])
   })
 
   it('gives up instead of hammering keys when the dialog never advances', async () => {
     const h = machine([fixture('single')])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which drink would you like?': 'Tea' } })
-    expect(ok).toBe(false)
+    const r = await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { 'Which drink would you like?': 'Tea' } })
+    expect(r).toMatchObject({ ok: false, error: 'ANSWER_FAILED' })
     expect(h.keys.length).toBeLessThanOrEqual(3)
   })
 
   it('falls back to the remembered session when the device sends no sessionId', async () => {
     const h = machine([fixture('single'), CLOSED])
-    h.controller.remember('r9', 's1')
-    expect(await h.controller.answer({ requestId: 'r9', answers: { 'Which drink would you like?': 'Tea' } })).toBe(true)
+    h.controller.remember(idOf(fixture('single')), 's1')
+    expect((await h.controller.answer({ requestId: idOf(fixture('single')), answers: { 'Which drink would you like?': 'Tea' } })).ok).toBe(true)
     expect(h.keys).toEqual(['1'])
   })
 
   it('drops an answer with no answers map', async () => {
     const h = machine([fixture('single')])
-    expect(await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: {} })).toBe(false)
+    expect((await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: {} })).ok).toBe(false)
+    expect(h.keys).toEqual([])
+  })
+})
+
+describe('an answer that arrives after its question changed', () => {
+  // The person saw one approval; by the time their "Yes" arrived the agent had moved on to ANOTHER. The
+  // old positional fallback typed that "Yes" into the new prompt — approving a command nobody was shown.
+  const promptA = (): string => permission('claude')
+  const promptB = (): string => permission('claude').replaceAll('curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', 'rm -rf ~/projects')
+  const yesToA = { 'Approve Bash command: curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'Yes' }
+
+  it('the two prompts are different dialogs with different ids', () => {
+    expect(asQuestion(parseQuestionPane(promptB())).question).toBe('Approve Bash command: rm -rf ~/projects')
+    expect(idOf(promptB())).not.toBe(idOf(promptA()))
+  })
+
+  it('types nothing into the new dialog and says the question changed', async () => {
+    const h = machine([promptB(), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(promptA()), sessionId: 's1', answers: yesToA })
+    expect(r).toEqual({ ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    expect(h.keys).toEqual([])
+    expect(h.texts).toEqual([])
+  })
+
+  it('still answers when the dialog on screen is the one it was for', async () => {
+    const h = machine([promptA(), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(promptA()), sessionId: 's1', answers: yesToA })
+    expect(r).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('refuses one with no requestId whose text names a different question', async () => {
+    const h = machine([promptB(), CLOSED])
+    const r = await h.controller.answer({ sessionId: 's1', answers: yesToA })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('accepts one with no requestId whose text names the question on screen', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect((await h.controller.answer({ sessionId: 's1', answers: { 'Which drink would you like?': 'Tea' } })).ok).toBe(true)
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('looks again when a repaint blanks the question, instead of calling it stale', async () => {
+    // Mid-repaint the question line can read empty for one capture; its id then matches nothing.
+    const blank = fixture('single').replace('Which drink would you like?', '')
+    const h = machine([blank, fixture('single'), CLOSED])
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { Drink: 'Tea' } })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('types nothing into a dialog whose question never becomes readable', async () => {
+    const h = machine([fixture('single').replace('Which drink would you like?', '')])
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { Drink: 'Tea' } })).toMatchObject({ ok: false })
+    expect(h.keys).toEqual([])
+  })
+
+  it('never submits a form it finds already on its review screen', async () => {
+    // Every question was answered elsewhere first: pressing Submit would send answers nobody here gave.
+    const h = machine([fixture('review')])
+    const r = await h.controller.answer({ requestId: idOf(fixture('multi')), sessionId: 's1', answers: { 'Which toppings do you want?': 'Cheese' } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+})
+
+describe('positional answers', () => {
+  // An answer keyed by something other than the question's text (a header, an id) is matched by POSITION
+  // — but only to the dialog its requestId names. Anywhere else, position means "whatever is showing".
+  const byHeader = { Drink: 'Tea' }
+
+  it('fill the question their requestId names', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: byHeader })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('are refused for a dialog announced under another requestId', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(fixture('multi')), sessionId: 's1', answers: byHeader })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('are refused with no requestId at all', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ sessionId: 's1', answers: byHeader })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('stop at the next question of the form — a new question is a new request', async () => {
+    const h = machine([fixture('tabs'), fixture('single'), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(fixture('tabs')), sessionId: 's1', answers: { Colors: 'Blue', Drink: 'Tea' } })
+    expect(r.ok).toBe(true)
+    expect(h.keys).toEqual(['2', 'Tab'])
+  })
+
+  it('match the id the watcher announced the dialog under', async () => {
+    // The two sides must compute the SAME id, or every answer would be refused as stale.
+    const announced: string[] = []
+    const w = new QuestionWatcher({
+      getSession: () => ({ sessionId: 's1', tmuxPane: '%1', engine: 'claude' } as RegisteredSession),
+      capture: async () => fixture('single'),
+      hasDevice: () => true,
+      onQuestion: (_s, requestId) => { announced.push(requestId) },
+    })
+    await (w as unknown as { tick(id: string): Promise<void> }).tick('s1')
+    expect(announced).toEqual([idOf(fixture('single'))])
   })
 })
 
@@ -637,8 +766,8 @@ describe('answering a permission prompt from the device', () => {
     // Verified on a live claude pane: one digit selects AND submits, so no Enter follows it.
     const h = machine([permission('claude'), CLOSED])
     const answers = { 'Approve Bash command: curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'No' }
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('claude')), sessionId: 's1', answers }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['3'])
     })
   })
@@ -647,8 +776,8 @@ describe('answering a permission prompt from the device', () => {
     // Devin's "No" is row 7 of 7; two unanswerable editor rows are dropped from what the device shows, so
     // the label→digit mapping must survive that filter.
     const h = machine([permission('devin'), CLOSED], 'devin')
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Approve curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'No' } }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('devin'), 'devin'), sessionId: 's1', answers: { 'Approve curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'No' } }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['7'])
     })
   })
@@ -657,8 +786,8 @@ describe('answering a permission prompt from the device', () => {
     // opencode draws BOTH a numbered ask dialog and kilo's horizontal prompt, so the direction travels on
     // the ROW. Keying "2" here would select nothing at all.
     const h = machine([permission('opencode'), CLOSED], 'opencode')
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Access external directory /private/etc': 'Reject' } }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('opencode'), 'opencode'), sessionId: 's1', answers: { 'Access external directory /private/etc': 'Reject' } }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['Right', 'Right', 'Enter'])
     })
   })
@@ -666,8 +795,8 @@ describe('answering a permission prompt from the device', () => {
   it('matches an option the device truncated to its 80-byte buffer', () => {
     const h = machine([permission('codex'), CLOSED], 'codex')
     const truncated = "Yes, and don't ask again for commands that start with `printf 'hi\\n' > /priva"
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { "$ printf 'hi\\n' > /private/etc/harness-probe.txt": truncated } }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('codex'), 'codex'), sessionId: 's1', answers: { "$ printf 'hi\\n' > /private/etc/harness-probe.txt": truncated } }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['2'])
     })
   })

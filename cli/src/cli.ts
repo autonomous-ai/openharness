@@ -2636,7 +2636,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // that gap is exactly where the stale recap used to flash back.
     const target = payload.sessionId || payload.agentId
     if (typeof target === 'string' && target) showAwaitingAnswer(target)
-    void questions.answer(payload)
+    // Returned so the client that answered hears a refusal — STALE_QUESTION when the dialog changed
+    // before its answer arrived — as `question_response_result`.
+    return questions.answer(payload)
   }
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => registry.resolve(id),
@@ -5919,7 +5921,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The dial's own object, forwarded verbatim. It used to be rebuilt here as `{ [requestId]: optionId }`
     // — keyed by the REQUEST id rather than by the question key `onQuestionAnswer` expects, so the answer
     // named a question that does not exist.
-    answer: (agentId, requestId, answers) => backend.onQuestionAnswer?.({ agentId, requestId, answers }),
+    answer: (agentId, requestId, answers) => { void backend.onQuestionAnswer?.({ agentId, requestId, answers }) },
     recent: (id, n) => mirror.recent(registry.resolve(id)?.sessionId || id, n),
     recentAsks: (id) => mirror.recentAsks(registry.resolve(id)?.sessionId || id),
     runtimeProfile: (session) => runtimeProfiles.selectedModel(session),
@@ -6003,7 +6005,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     cancelDelivery: id => deviceInput.cancelDelivery(id),
     stop: id => cancelAgent(id, true),
-    answer: (agentId, requestId, answers) => questions.answer({ agentId, requestId, answers, allowPermissions: false }),
+    answer: async (agentId, requestId, answers) => (await questions.answer({ agentId, requestId, answers, allowPermissions: false })).ok,
     recent: (id, n) => mirror.recent(registry.byAgent(id)?.sessionId ?? id, n),
     fullText: id => mirror.lastFullText(registry.byAgent(id)?.sessionId ?? id),
     emit: (frame, deviceId) => backend.emitAutonomousDeviceEvent(frame, deviceId),
