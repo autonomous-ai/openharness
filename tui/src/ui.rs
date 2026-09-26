@@ -279,7 +279,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         Some(Modal::Find { query, found, up, .. }) => Some((if *up { "(search up) ".into() } else { "(search down) ".into() }, query.clone(), query.chars().count(), if *found == Some(false) && !query.is_empty() { "no match".into() } else { String::new() })),
         _ => None,
     };
-    if let Some((label, value, cursor, hint)) = prompt_like {
+    if let Some((mut label, value, cursor, hint)) = prompt_like {
+        if !label.ends_with(' ') && label != ":" { label.push(' ') }
         buf.set_style(rect, yellow);
         buf.set_string(rect.x, rect.y, &label, yellow);
         let x0 = rect.x + label.width() as u16;
@@ -289,15 +290,15 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
         let skip = before.width().saturating_sub(room);
         let visible: String = { let mut w = 0; value.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
         buf.set_stringn(x0, rect.y, &visible, room, yellow);
-        let cx = x0 + before.width().saturating_sub(skip) as u16;
-        if let Some(c) = buf.cell_mut((cx.min(rect.x + rect.width - 1), rect.y)) { let st = c.style(); c.set_style(st.add_modifier(Modifier::REVERSED)); }
+        // The terminal's own cursor sits in the prompt, as in tmux: it blinks, it has your shape.
+        let cx = (x0 + before.width().saturating_sub(skip) as u16).min(rect.x + rect.width - 1);
         if !hint.is_empty() {
             let used = label.width() + value.width() + 3;
             if used + hint.width() < rect.width as usize {
                 buf.set_string(rect.x + rect.width - hint.width() as u16 - 1, rect.y, &hint, yellow.add_modifier(Modifier::DIM));
             }
         }
-        return None;
+        return Some(Position::new(cx, rect.y));
     }
     if let Some((text, _, at)) = &app.toast {
         if at.elapsed() < Duration::from_millis(app.display_ms) {
