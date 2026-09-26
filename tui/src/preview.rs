@@ -24,7 +24,7 @@ pub fn lines(app: &App, kind: &PickerKind, id: &str) -> Vec<Line<'static>> {
         PickerKind::Projects => project(app, id),
         PickerKind::Palette => command(app, id),
         PickerKind::Keys => id.split_once('\t').map(|(k, c)| vec![Line::from(vec![bold(format!("{} {k}", crate::keys::name(&app.keymap.prefix)))]), Line::raw(""), Line::raw(c.to_string())]).unwrap_or_default(),
-        PickerKind::Buffers => id.parse::<usize>().ok().and_then(|i| app.buffers.get(i)).map(|b| b.lines().map(|l| Line::raw(l.to_string())).collect()).unwrap_or_default(),
+        PickerKind::Buffers => app.paste.get(id).map(|b| b.data.lines().map(|l| Line::raw(l.to_string())).collect()).unwrap_or_default(),
         PickerKind::Store => store(app, id),
         PickerKind::Models => vec![Line::raw(id.rsplit(':').next().unwrap_or(id).to_string())],
         _ => vec![],

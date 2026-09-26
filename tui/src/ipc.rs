@@ -51,6 +51,7 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
                 let request: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
                 let words: Vec<String> = request.get("argv").or(Some(&request)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
                 let cwd = request.get("cwd").and_then(Value::as_str).map(str::to_string);
+                let stdin = request.get("stdin").and_then(Value::as_str).map(str::to_string);
                 let (tx, rx) = oneshot::channel::<crate::app::Reply>();
                 let command = words.iter().map(|w| crate::tmuxconf::quote_word(w)).collect::<Vec<_>>().join(" ");
                 let _ = sink.send(Event::Apply(Box::new(move |app: &mut crate::app::App| {
@@ -59,12 +60,16 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
                     app.cli_tx = Some(tx);
                     app.cli_code = 0;
                     app.cli_cwd = cwd;
+                    app.cli_stdin = stdin;
                     crate::commands::execute(app, &command);
                     // Still waiting on a job (run-shell, if-shell): it answers when it is done.
                     if app.capture.is_some() { app.finish_cli() }
                 })));
-                let (out, err, code) = rx.await.unwrap_or_default();
-                let _ = write.write_all(format!("{}\n", json!({ "out": out, "err": err, "code": code })).as_bytes()).await;
+                let (mut out, err, code) = rx.await.unwrap_or_default();
+                // A last line marked bare (show-buffer's data without a newline) is printed bare.
+                let bare = out.last().map(|l| l.ends_with(crate::app::BARE)).unwrap_or(false);
+                if let Some(l) = out.last_mut() { if let Some(s) = l.strip_suffix(crate::app::BARE) { *l = s.to_string() } }
+                let _ = write.write_all(format!("{}\n", json!({ "out": out, "err": err, "code": code, "bare": bare })).as_bytes()).await;
             });
         }
     });
@@ -107,6 +112,17 @@ fn shim() -> Option<PathBuf> {
     }).clone()
 }
 
+/// tmux's find_cwd: $PWD when it is where we are (symlinks kept, as the shell shows it), else
+/// the real folder.
+fn find_cwd() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let Some(pwd) = std::env::var("PWD").ok().filter(|p| !p.is_empty()) else { return Some(cwd.display().to_string()) };
+    match (std::fs::canonicalize(&pwd), std::fs::canonicalize(&cwd)) {
+        (Ok(a), Ok(b)) if a == b => Some(pwd),
+        _ => Some(cwd.display().to_string()),
+    }
+}
+
 /// Remove sockets nobody answers on (a client that was killed).
 fn sweep(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -143,15 +159,25 @@ pub async fn call(words: &[String], socket: Option<&str>, name: Option<&str>) ->
         match tokio::net::UnixStream::connect(&path).await {
             Ok(stream) => {
                 let (read, mut write) = stream.into_split();
-                let cwd = std::env::current_dir().ok().map(|d| d.display().to_string());
-                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd })).as_bytes()).await.is_err() { return 1 }
+                let cwd = find_cwd();
+                // load-buffer - and source-file -: what is piped in goes with the command.
+                let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| w == "-");
+                let stdin = if reads_stdin { let mut s = String::new(); let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut s); Some(s) } else { None };
+                if write.write_all(format!("{}\n", json!({ "argv": words, "cwd": cwd, "stdin": stdin })).as_bytes()).await.is_err() { return 1 }
                 let mut line = String::new();
                 let _ = BufReader::new(read).read_line(&mut line).await;
                 let reply: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
                 // Written quietly: `hn … | head` closing the pipe is not an error.
                 use std::io::Write;
                 let mut out = std::io::stdout().lock();
-                for l in reply.get("out").and_then(Value::as_array).cloned().unwrap_or_default() { if writeln!(out, "{}", l.as_str().unwrap_or("")).is_err() { break } }
+                // The last line without its newline when the command printed none (show-buffer).
+                let lines = reply.get("out").and_then(Value::as_array).cloned().unwrap_or_default();
+                let bare = reply.get("bare").and_then(Value::as_bool).unwrap_or(false);
+                for (i, l) in lines.iter().enumerate() {
+                    let l = l.as_str().unwrap_or("");
+                    let r = if bare && i + 1 == lines.len() { write!(out, "{l}") } else { writeln!(out, "{l}") };
+                    if r.is_err() { break }
+                }
                 let err: Vec<Value> = reply.get("err").and_then(Value::as_array).cloned().unwrap_or_default();
                 let mut e = std::io::stderr().lock();
                 for l in &err { let _ = writeln!(e, "{}", l.as_str().unwrap_or("")); }

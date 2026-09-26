@@ -296,7 +296,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
                     Some(text) => {
                         crate::clipboard::store(&text);
                         // tmux puts a mouse copy in a paste buffer too (C-b ] pastes it).
-                        app.buffers.insert(0, text.clone());
+                        app.add_buffer(text.clone());
                         let n = text.chars().count();
                         app.say(format!("Copied {n} character{}", if n == 1 { "" } else { "s" }), theme::ONLINE);
                     }
@@ -544,9 +544,9 @@ pub fn fill(app: &App, kind: &PickerKind, picker: &mut Picker) {
         }
         PickerKind::Buffers => {
             picker.keep_order = true;
-            let rows = app.buffers.iter().enumerate().map(|(i, b)| {
-                let one: String = b.replace('\n', "\\n").chars().take(200).collect();
-                crate::picker::Row::new(i.to_string(), format!("\"{one}\"")).lead(vec![ratatui::text::Span::styled(format!("buffer{i}: {} bytes: ", b.len()), theme::fg(theme::MUTED))])
+            // tmux's choose-buffer rows: `name: size bytes: "sample"`, newest first.
+            let rows = app.paste.walk().map(|b| {
+                crate::picker::Row::new(b.name.clone(), format!("\"{}\"", crate::paste::sample(b))).lead(vec![ratatui::text::Span::styled(format!("{}: {} bytes: ", b.name, b.data.len()), theme::fg(theme::MUTED))])
             }).collect();
             picker.set_rows(rows);
             picker.empty = "no buffers".into();
@@ -1143,7 +1143,7 @@ fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
         (None, KeyCode::Char(op @ ('d' | 'c' | 'r'))) => p.vi_pending = Some(op),
         (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { if matches!(p.kind, PromptKind::Command { template: None }) { prompt_history(app, &mut p, true) } }
         (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { if matches!(p.kind, PromptKind::Command { template: None }) { prompt_history(app, &mut p, false) } }
-        (None, KeyCode::Char('p')) => { if let Some(b) = app.buffers.first() { let mut v = chars.clone(); let ins: Vec<char> = b.chars().filter(|c| *c != '\n').collect(); let k = ins.len(); for (i, c) in ins.into_iter().enumerate() { v.insert((at + 1 + i).min(v.len()), c) } set(&mut p, v, at + k) } }
+        (None, KeyCode::Char('p')) => { if let Some(b) = app.paste.top().map(|b| b.data.clone()) { let mut v = chars.clone(); let ins: Vec<char> = b.chars().filter(|c| *c != '\n').collect(); let k = ins.len(); for (i, c) in ins.into_iter().enumerate() { v.insert((at + 1 + i).min(v.len()), c) } set(&mut p, v, at + k) } }
         _ => {}
     }
     app.modal = Some(Modal::Prompt(p));
@@ -1465,7 +1465,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             p.copy_select_to_eol();
             let text = p.selection_text();
             p.copy_end();
-            if let Some(text) = text { crate::clipboard::store(&text); app.buffers.insert(0, text) }
+            if let Some(text) = text { crate::clipboard::store(&text); app.add_buffer(text) }
             return;
         }
         KeyCode::Char('A') => {
@@ -1473,8 +1473,11 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
             let text = p.selection_text();
             p.copy_end();
             if let Some(text) = text {
-                match app.buffers.first_mut() { Some(b) => b.push_str(&text), None => app.buffers.insert(0, text.clone()) }
-                if let Some(b) = app.buffers.first() { crate::clipboard::store(b) }
+                // window_copy_append_selection: onto the newest automatic buffer (else a new one).
+                match app.paste.top().map(|b| (b.name.clone(), b.data.clone())) {
+                    Some((name, data)) => { let joined = data + &text; crate::clipboard::store(&joined); app.paste.replace(&name, joined) }
+                    None => { crate::clipboard::store(&text); app.add_buffer(text) }
+                }
             }
             return;
         }
@@ -1511,8 +1514,7 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
                 crate::clipboard::store(&text);
                 // copy-pipe's command, or tmux's copy-command, gets the text on its stdin.
                 if let Some(cmd) = app.copy_pipe.take().or_else(|| app.opts.copy_command.clone()) { pipe_to(&cmd, &text) }
-                app.buffers.insert(0, text);
-                app.buffers.truncate(50);
+                app.add_buffer(text);
             }
             return;
         }
@@ -1681,7 +1683,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         }
         PickerKind::Messages | PickerKind::Output { .. } => {}
         PickerKind::Keys => { if let Some(id) = id { if let Some((_, command)) = id.split_once('\t') { commands::execute(app, command) } } }
-        PickerKind::Buffers => { if let Some(i) = id.and_then(|i| i.parse::<usize>().ok()) { paste_buffer(app, i) } }
+        PickerKind::Buffers => { if let Some(name) = id { let name = name.to_string(); paste_buffer(app, &name) } }
         PickerKind::Help => {
             // A prefix row switches the box to that mode; a shortcut row is just a reminder.
             let Some(id) = id else { return keep(app, kind, picker) };
@@ -1960,12 +1962,27 @@ pub fn focused_title(app: &App) -> String {
 }
 
 
-/// `paste-buffer`: the buffer, pasted into the pane.
-pub fn paste_buffer(app: &mut App, index: usize) {
-    let Some(text) = app.buffers.get(index).cloned() else { app.say("no buffers", theme::WARN); return };
+/// choose-buffer's pick: that buffer pasted into this pane, as paste-buffer -b does.
+pub fn paste_buffer(app: &mut App, name: &str) {
+    let Some(text) = app.paste.get(name).map(|b| b.data.clone()) else { return app.say(format!("no buffer {name}"), theme::WARN) };
     let Some(focus) = app.focused() else { return };
-    let live = app.panes.get(&focus).map(|p| p.stream.is_some() && !p.read_only).unwrap_or(false);
-    if live { app.send_paste(focus, &text) } else { send_to_focused(app, text.into_bytes()) }
+    paste_into(app, focus, &text, "\r", false);
+}
+
+/// tmux's paste-buffer into a pane: the text's lines joined by `sep` (a carriage return, as Enter
+/// types, unless -r or -s say otherwise), in bracketed-paste marks (-p) when the pane's program
+/// asked for them; nothing for a pane whose input is off.
+pub fn paste_into(app: &mut App, pane: u64, text: &str, sep: &str, bracket: bool) {
+    let Some(p) = app.panes.get(&pane) else { return };
+    if p.input_off { return }
+    let bracket = bracket && p.mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE);
+    let mut bytes = Vec::new();
+    if bracket { bytes.extend_from_slice(b"\x1b[200~") }
+    let mut rest = text;
+    while let Some(i) = rest.find('\n') { bytes.extend_from_slice(rest[..i].as_bytes()); bytes.extend_from_slice(sep.as_bytes()); rest = &rest[i + 1..] }
+    bytes.extend_from_slice(rest.as_bytes());
+    if bracket { bytes.extend_from_slice(b"\x1b[201~") }
+    send_to_pane(app, pane, bytes)
 }
 
 /// `send-keys`: words are typed as text, key names (`Enter`, `C-c`, `Up`) as keys.
@@ -2011,8 +2028,7 @@ fn send_copy_action(app: &mut App, words: &[String]) {
                 Some(text) => {
                     crate::clipboard::store(&text);
                     if let Some(cmd) = cmd { pipe_to(&cmd, &text) }
-                    app.buffers.insert(0, text);
-                    app.buffers.truncate(50);
+                    app.add_buffer(text);
                 }
                 None if selecting => { if let Some(cmd) = cmd { pipe_to(&cmd, "") } }
                 None => {}

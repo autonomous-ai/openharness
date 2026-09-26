@@ -833,6 +833,16 @@ pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layo
 /// one), or None when there is no such variable. Times are seconds since the epoch.
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
+    // A paste buffer's (list-buffers -F, choose-buffer).
+    if let Some(b) = app.format_buffer.as_ref().and_then(|n| app.paste.get(n)) {
+        match name {
+            "buffer_name" => return Some(Val::Str(b.name.clone())),
+            "buffer_size" => return Some(Val::Str(b.data.len().to_string())),
+            "buffer_sample" => return Some(Val::Str(crate::paste::sample(b))),
+            "buffer_created" => return Some(Val::Time(b.created)),
+            _ => {}
+        }
+    }
     // No window (a target tmux could not find): its window and pane have nothing to say.
     if tab.is_none() && (name.starts_with("window_") || name.starts_with("pane_")) { return Some(Val::Str(String::new())) }
     let focus = pane_id.or_else(|| tab.and_then(|t| t.focus));
