@@ -938,10 +938,8 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     if picker.cursor < picker.scroll + so { picker.scroll = picker.cursor.saturating_sub(so) }
     if picker.cursor + so >= picker.scroll + list_h { picker.scroll = (picker.cursor + so + 1).saturating_sub(list_h) }
     picker.scroll = picker.scroll.min(n.saturating_sub(list_h.max(1)));
-    // The right column lines up down the list: one edge for every row on screen, after the widest
-    // line, within the list.
-    let shown = picker.scroll..(picker.scroll + list_h.min(n - picker.scroll));
-    let right_edge = shown.clone().map(|vi| { let r = &picker.rows[picker.visible[vi].0]; r.lead.iter().map(|s| s.content.width()).sum::<usize>() + crate::picker::line(r).width() }).max().unwrap_or(0).min(text_w);
+    // The right column lines up down the list: one edge for every row, after the widest line.
+    let right_edge = right_edge(picker, text_w, false);
     for slot in 0..list_h.min(n - picker.scroll) {
         let vi = picker.scroll + slot;
         let y = if reverse { list_top + slot as u16 } else { list_bottom - 1 - slot as u16 };
@@ -1020,6 +1018,13 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }
     buf.set_line(x + gutter_width(), y, &Line::from(spans), text_w as u16);
+}
+
+/// Where the right column lines up: after the widest line of the list — all of it, not only what
+/// the query leaves, so typing does not move it (with --wrap, of the rows that fit their line).
+fn right_edge(p: &Picker, text_w: usize, wrapping: bool) -> usize {
+    p.rows.iter().filter(|r| !r.disabled && (!wrapping || fits_line(r, text_w)))
+        .map(|r| r.lead.iter().map(|s| s.content.width()).sum::<usize>() + crate::picker::line(r).width()).max().unwrap_or(0).min(text_w)
 }
 
 /// printItem's preTask and pairs for a row: the pointer on the current line, the gutter elsewhere
@@ -1307,7 +1312,7 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
         let counted: Vec<usize> = (from..n).take(max_lines).map(|vi| lines(vi, max_lines as i64).0).collect();
         if counted.is_empty() { 1 } else { counted.iter().sum::<usize>() / counted.len() }
     };
-    let right_edge = placed.iter().filter(|x| x.2.is_none()).map(|x| { let r = &p.rows[p.visible[x.0].0]; r.lead.iter().map(|s| s.content.width()).sum::<usize>() + crate::picker::line(r).width() }).max().unwrap_or(0).min(text_w);
+    let right_edge = right_edge(p, text_w, p.wrap);
     picker.scroll = offset;
     for (vi, fline, part) in placed {
         let y = if reverse { list_top + fline as u16 } else { list_bottom - 1 - fline as u16 };
