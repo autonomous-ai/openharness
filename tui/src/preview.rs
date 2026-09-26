@@ -72,7 +72,7 @@ fn harness(app: &App, machine_id: &str, agent_id: &str) -> Vec<Line<'static>> {
 fn machine(app: &App, id: &str) -> Vec<Line<'static>> {
     let Some(m) = app.fleet.machine(id) else { return vec![] };
     let mut out = vec![Line::from(vec![bold(m.name.clone()), dim(if m.local { "  this computer" } else { "" })]), Line::raw("")];
-    if let Some(rtt) = app.rtt.get(id) { out.push(kv("round trip", format!("{}ms", rtt.as_millis()))) }
+    if let Some(rtt) = app.rtt.get(id) { out.push(kv("rtt", format!("{}ms", rtt.as_millis()))) }
     let mut agents: Vec<_> = app.fleet.agents.values().filter(|a| a.machine_id == id && a.status != "stopped").collect();
     agents.sort_by_key(|a| std::cmp::Reverse(a.recency()));
     out.push(kv("running", agents.len().to_string()));
@@ -91,8 +91,7 @@ fn project(app: &App, id: &str) -> Vec<Line<'static>> {
 }
 
 fn command(app: &App, id: &str) -> Vec<Line<'static>> {
-    let key = app.keymap.prefix_table.iter().find(|b| b.command == id || b.command.starts_with(&format!("{id} ")))
-        .map(|b| format!("{} {}", crate::keys::name(&app.keymap.prefix), crate::keys::name(&b.chord)));
+    let key = app.keymap.key_for_name(id);
     let about = crate::commands::COMMANDS.iter().find(|(n, _, _)| *n == id).map(|(_, _, d)| d.to_string())
         .or_else(|| crate::modal::COMMANDS.iter().find(|c| c.0 == id).map(|c| c.3.to_string())).unwrap_or_default();
     let mut out = vec![bold(id.to_string()).into(), Line::raw("")];

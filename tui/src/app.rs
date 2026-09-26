@@ -143,6 +143,8 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// The home list's order while it is on screen (see `home_agents`).
+    pub home_order: std::cell::RefCell<Vec<(String, String)>>,
     pub mouse_changed: bool,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
@@ -174,6 +176,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            home_order: Default::default(),
             mouse_changed: false,
             pane_base_index: 0,
             messages: Vec::new(),
@@ -1030,12 +1033,13 @@ impl App {
         self.tabs.insert(at, tab);
         self.active = at;
         self.home_cursor = 0;
+        self.home_order.borrow_mut().clear();
         self.fit_panes();
     }
 
     pub fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
-            if index != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()) }
+            if index != self.active { self.last_tab = Some(self.tabs[self.active].id.clone()); self.home_order.borrow_mut().clear() }
             self.active = index;
             if let Some(f) = self.tabs[index].focus { self.seen(f) }
             self.fit_panes();
