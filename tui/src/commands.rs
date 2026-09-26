@@ -67,7 +67,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("load-buffer", "loadb", "Read a file into a buffer"),
     ("previous-layout", "prevl", "The layout before this one"),
     ("show-window-options", "showw", "Same as show-options"),
-    ("rename-session", "rename", "Sessions are computers here — rename it from the desktop app"),
+    ("rename-session", "rename", "What this session (this computer) is called here"),
     ("clock-mode", "clock-mode", "A clock"),
     ("refresh-client", "refresh", "Redraw"),
     ("detach-client", "detach", "Detach — everything keeps running"),
@@ -156,6 +156,11 @@ pub fn pane_target(app: &App, target: &str) -> Option<(usize, u64)> {
         return app.tabs.iter().position(|t| t.panes().contains(&id)).map(|w| (w, id));
     }
     if target == "!" || target == "{last}" { return app.tab().last_focus.map(|p| (app.active, p)) }
+    if target == "{marked}" { return app.marked.and_then(|m| app.tabs.iter().position(|t| t.panes().contains(&m)).map(|w| (w, m))) }
+    // {up-of} {down-of} {left-of} {right-of}: the pane that way from this one.
+    for (name, toward) in [("{up-of}", Toward::Up), ("{down-of}", Toward::Down), ("{left-of}", Toward::Left), ("{right-of}", Toward::Right)] {
+        if target == name { return app.focused().and_then(|f| crate::layout::neighbour(&app.rects, f, toward)).map(|p| (app.active, p)) }
+    }
     // {top} {bottom} {left} {right} and their corners: the pane at that edge of this window.
     if target.starts_with('{') && target.ends_with('}') {
         let rects = &app.rects;
@@ -267,6 +272,17 @@ fn listing(app: &App, command: &str) -> Vec<String> {
     }
 }
 
+/// A bound command as tmux prints it: canonical names, double quotes, `\;` between commands.
+fn canonical(command: &str) -> String {
+    let word = |i: usize, w: &String| -> String {
+        let w = if i == 0 { resolve(w).to_string() } else { w.clone() };
+        if w == ";" { "\\;".into() }
+        else if w.is_empty() || w.chars().any(|c| c.is_whitespace() || "#\"'$;\\".contains(c)) { format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\"")) }
+        else { w }
+    };
+    split(command).iter().map(|words| words.iter().enumerate().map(|(i, w)| word(i, w)).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join(" \\; ")
+}
+
 /// A tmux command's name or alias (for `hn <command>` from a shell).
 pub fn is_command_name(name: &str) -> bool {
     COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
@@ -366,13 +382,22 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "rename-window" => { let name = rest(words); if !name.trim().is_empty() { app.rename_tab(name.trim()) } }
         "move-window" => {
+            // -r renumbers every window; -s moves that window (you stay put); else this one.
+            if flag(words, "-r") { app.renumber_all(); return }
             if flag(words, "-L") { app.move_tab(-1) } else if flag(words, "-R") { app.move_tab(1) }
             else if let Some(n) = opt(words, "-t").or_else(|| Some(rest(words))).and_then(|t| t.trim_start_matches(':').parse::<usize>().ok()) {
-                if let Err(e) = app.move_tab_to(n) { app.say(e, theme::WARN) }
+                let cur = app.tab().id.clone();
+                if let Some(src) = opt(words, "-s").and_then(|t| window_target(app, &t)) { app.active = src }
+                let moved = app.move_tab_to(n);
+                if let Some(i) = app.tabs.iter().position(|t| t.id == cur) { app.active = i }
+                if let Err(e) = moved { app.say(e, theme::WARN) }
             }
         }
         "select-pane" => {
-            if flag(words, "-m") { app.say("marked panes are not used here", theme::WARN); return }
+            // -m marks this pane (again: unmarks), -M clears the mark; join-pane and swap-pane
+            // take the marked pane as their source, as tmux's do.
+            if flag(words, "-M") { app.marked = None; return }
+            if flag(words, "-m") { let f = app.focused(); app.marked = if app.marked == f { None } else { f }; return }
             let toward = if flag(words, "-L") { Some(Toward::Left) } else if flag(words, "-R") { Some(Toward::Right) } else if flag(words, "-U") { Some(Toward::Up) } else if flag(words, "-D") { Some(Toward::Down) } else { None };
             match toward {
                 Some(t) => app.focus_toward(t),
@@ -412,7 +437,10 @@ fn run_words(app: &mut App, words: &[String]) {
         "swap-pane" => {
             // -s/-t name the two (in this window); else -U/-D, the previous / next.
             let src = opt(words, "-s").and_then(|t| pane_target(app, &t)).map(|(_, p)| p).or(app.focused());
-            match (src, opt(words, "-t").and_then(|t| pane_target(app, &t)).map(|(_, p)| p)) {
+            // No target: the marked pane and this one trade places (tmux's swap-pane with a mark).
+            let dst = opt(words, "-t").and_then(|t| pane_target(app, &t)).map(|(_, p)| p)
+                .or_else(|| if !flag(words, "-U") && !flag(words, "-D") && opt(words, "-s").is_none() { app.marked.filter(|m| Some(*m) != app.focused()) } else { None });
+            match (src, dst) {
                 (Some(a), Some(b)) if a != b && app.tab().panes().contains(&a) && app.tab().panes().contains(&b) => {
                     if let Some(root) = app.tab_mut().root.as_mut() { root.swap(a, b) }
                     app.sync_titles();
@@ -511,13 +539,15 @@ fn run_words(app: &mut App, words: &[String]) {
             // -T copy-mode-vi / copy-mode / root: that table.
             if let Some(t) = opt(words, "-T").and_then(|t| crate::keys::table_named(&t)) {
                 let list = app.keymap.table_mut(t).clone();
-                let lines = list.iter().map(|b| format!("bind-key -T {} {:<10} {}", opt(words, "-T").unwrap_or_default(), crate::keys::name(&b.chord), b.command.replace(" ; ", " \\; "))).collect();
+                let lines = list.iter().map(|b| format!("bind-key -T {} {:<10} {}", opt(words, "-T").unwrap_or_default(), crate::keys::name(&b.chord), canonical(&b.command))).collect();
                 app.print("list-keys", lines);
             } else if app.capture.is_some() {
                 // From a shell: tmux's own lines, `bind-key [-r] -T prefix KEY command`.
                 let mut lines = Vec::new();
-                for b in &app.keymap.prefix_table { lines.push(format!("bind-key {}-T prefix {:<10} {}", if b.repeat { "-r " } else { "   " }, crate::keys::name(&b.chord), b.command.replace(" ; ", " \\; "))) }
-                for b in &app.keymap.root_table { lines.push(format!("bind-key    -T root   {:<10} {}", crate::keys::name(&b.chord), b.command.replace(" ; ", " \\; "))) }
+                for b in &app.keymap.prefix_table { lines.push(format!("bind-key {}-T prefix {:<10} {}", if b.repeat { "-r " } else { "   " }, crate::keys::name(&b.chord), canonical(&b.command))) }
+                for b in &app.keymap.root_table { lines.push(format!("bind-key    -T root   {:<10} {}", crate::keys::name(&b.chord), canonical(&b.command))) }
+                for b in &app.keymap.copy_vi { lines.push(format!("bind-key    -T copy-mode-vi {:<10} {}", crate::keys::name(&b.chord), canonical(&b.command))) }
+                for b in &app.keymap.copy_emacs { lines.push(format!("bind-key    -T copy-mode {:<10} {}", crate::keys::name(&b.chord), canonical(&b.command))) }
                 app.print("list-keys", lines);
             } else { input::run(app, "keys") }
         }
@@ -610,7 +640,7 @@ fn run_words(app: &mut App, words: &[String]) {
             // -s names the pane to move (default: this one), -t the pane to split beside (default:
             // the current one of that window); -h side by side, else above/below.
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
-            let src = match opt(words, "-s") { Some(t) => pane_target(app, &t), None => app.focused().map(|f| (app.active, f)) };
+            let src = match opt(words, "-s") { Some(t) => pane_target(app, &t), None => pane_target(app, "{marked}").or_else(|| app.focused().map(|f| (app.active, f))) };
             let dst = match opt(words, "-t") { Some(t) => pane_target(app, &t), None => app.tabs[app.active].focus.map(|f| (app.active, f)) };
             let (Some((_, sp)), Some((dw, dp))) = (src, dst) else { app.say("join-pane: can't find pane", theme::WARN); return };
             if sp == dp { return }
@@ -670,7 +700,7 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "respawn-pane" => input::run(app, "restart"),
         "suspend-client" => app.suspend = true,
-        "rename-session" => app.say("sessions are computers here: rename one from the desktop app", theme::WARN),
+        "rename-session" => { let name = rest(words); if name.trim().is_empty() { app.say("rename-session: a name", theme::WARN) } else { app.session_alias = Some(name.trim().to_string()) } }
         "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }
         "detach-client" | "kill-server" | "kill-session" => app.quit = true,

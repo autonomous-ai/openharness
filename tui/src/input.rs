@@ -157,6 +157,19 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
         match mouse.kind {
             // The list reads bottom-up: the wheel moves the way the rows do; over the preview it
             // scrolls the preview, as fzf's does.
+            // Copy mode: the wheel moves the view; entered by the wheel, it ends back at the bottom
+            // (tmux's WheelUpPane → copy-mode -e).
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if matches!(app.modal, Some(Modal::Copy { .. })) => {
+                let pane = match &app.modal { Some(Modal::Copy { pane }) => *pane, _ => return };
+                let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+                let mut done = false;
+                if let Some(p) = app.panes.get_mut(&pane) {
+                    p.copy_scroll(if up { 3 } else { -3 });
+                    if !up && p.scrolled() == 0 && p.copy_by_wheel { p.copy_end(); done = true }
+                }
+                if done { app.modal = None }
+                return;
+            }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
                 let half = app.size.0 / 2;
@@ -293,7 +306,12 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
             if pane.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN) {
                 let bytes = if pane.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR) { b"\x1bOA\x1bOA\x1bOA".to_vec() } else { b"\x1b[A\x1b[A\x1b[A".to_vec() };
                 app.send_input(id, &bytes);
-            } else { pane.scroll(3) }
+            } else {
+                // tmux: the wheel enters copy mode, which ends when scrolled back to the bottom.
+                if pane.copy.is_none() { pane.copy_start(); pane.copy_by_wheel = true }
+                pane.copy_scroll(3);
+                app.modal = Some(Modal::Copy { pane: id });
+            }
         }
         MouseEventKind::ScrollDown => {
             if pane.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN) {
@@ -914,6 +932,10 @@ fn modal_key(app: &mut App, key: KeyEvent) {
 fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
+    let vi = app.opts.status_keys_vi.unwrap_or_else(|| { let e = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default(); e.contains("vi") });
+    if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
+    if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; p.vi_pending = None; app.modal = Some(Modal::Prompt(p)); return }
     let chars: Vec<char> = p.value.chars().collect();
     let at = p.cursor.min(chars.len());
     let set = |p: &mut Prompt, v: Vec<char>, c: usize| { p.value = v.into_iter().collect(); p.cursor = c; };
@@ -951,20 +973,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         // tmux's status prompt: C-u clears the whole line.
         KeyCode::Char('u') if ctrl => { set(&mut p, Vec::new(), 0) }
         KeyCode::Char('w') if ctrl => { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
-        KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None }) => {
-            let n = app.history.len();
-            if n > 0 {
-                let next = match (p.history_at, key.code) {
-                    (None, KeyCode::Up) => Some(n - 1),
-                    (Some(i), KeyCode::Up) => Some(i.saturating_sub(1)),
-                    (Some(i), KeyCode::Down) if i + 1 < n => Some(i + 1),
-                    _ => None,
-                };
-                p.history_at = next;
-                p.value = next.map(|i| app.history[i].clone()).unwrap_or_default();
-                p.cursor = p.value.chars().count();
-            }
-        }
+        KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None }) => prompt_history(app, &mut p, key.code == KeyCode::Up),
         KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None }) => {
             // Complete the command name: the only match, or the part every match shares.
             if !p.value.contains(' ') {
@@ -981,6 +990,78 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             }
         }
         KeyCode::Char(c) if !ctrl && !alt => { let mut v = chars.clone(); v.insert(at, c); set(&mut p, v, at + 1); p.hint.clear() }
+        _ => {}
+    }
+    app.modal = Some(Modal::Prompt(p));
+}
+
+/// The command history, a step up or down (Up/Down; k/j in vi normal mode).
+fn prompt_history(app: &App, p: &mut Prompt, up: bool) {
+    let n = app.history.len();
+    if n == 0 { return }
+    let next = match (p.history_at, up) {
+        (None, true) => Some(n - 1),
+        (Some(i), true) => Some(i.saturating_sub(1)),
+        (Some(i), false) if i + 1 < n => Some(i + 1),
+        _ => None,
+    };
+    p.history_at = next;
+    p.value = next.map(|i| app.history[i].clone()).unwrap_or_default();
+    p.cursor = p.value.chars().count();
+}
+
+/// tmux's status-keys vi, normal mode: h l 0 ^ $ w b e move; i a I A insert; x X D C S dd dw
+/// cw c$ r delete or change; k j the history; Enter runs it; Esc (again) cancels.
+fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let chars: Vec<char> = p.value.chars().collect();
+    let n = chars.len();
+    let at = p.cursor.min(n);
+    let set = |p: &mut Prompt, v: Vec<char>, c: usize| { p.value = v.into_iter().collect(); p.cursor = c; };
+    let word_left = |from: usize| { let mut i = from; while i > 0 && chars[i - 1] == ' ' { i -= 1 } while i > 0 && chars[i - 1] != ' ' { i -= 1 } i };
+    let word_right = |from: usize| { let mut i = from; while i < n && chars[i] != ' ' { i += 1 } while i < n && chars[i] == ' ' { i += 1 } i };
+    let word_end = |from: usize| { let mut i = (from + 1).min(n); while i < n && chars[i] == ' ' { i += 1 } while i + 1 < n && chars[i + 1] != ' ' { i += 1 } i.min(n.saturating_sub(1)) };
+    let insert = |p: &mut Prompt| p.vi_normal = false;
+    let pending = p.vi_pending.take();
+    match (pending, key.code) {
+        // An operator and its motion.
+        (Some('d'), KeyCode::Char('d')) => set(&mut p, Vec::new(), 0),
+        (Some('c'), KeyCode::Char('c')) => { set(&mut p, Vec::new(), 0); insert(&mut p) }
+        (Some(op @ ('d' | 'c')), KeyCode::Char(m @ ('w' | 'b' | '$' | '0' | 'e' | 'h' | 'l'))) => {
+            let (from, to) = match m { 'w' => (at, word_right(at)), 'b' => (word_left(at), at), '$' => (at, n), '0' => (0, at), 'e' => (at, (word_end(at) + 1).min(n)), 'h' => (at.saturating_sub(1), at), _ => (at, (at + 1).min(n)) };
+            let mut v = chars.clone(); v.drain(from..to); set(&mut p, v, from);
+            if op == 'c' { insert(&mut p) }
+        }
+        (Some('r'), KeyCode::Char(c)) if !ctrl => { if at < n { let mut v = chars.clone(); v[at] = c; set(&mut p, v, at) } }
+        (Some(_), _) => {}
+        (None, KeyCode::Esc) => return,
+        (None, KeyCode::Char('c' | 'g')) if ctrl => return,
+        (None, KeyCode::Enter) => {
+            if matches!(p.kind, PromptKind::Command { template: None }) && !p.value.trim().is_empty() { app.history.retain(|h| h != &p.value); app.history.push(p.value.clone()) }
+            submit_prompt(app, p);
+            return;
+        }
+        (None, KeyCode::Char('i')) => insert(&mut p),
+        (None, KeyCode::Char('a')) => { p.cursor = (at + 1).min(n); insert(&mut p) }
+        (None, KeyCode::Char('I')) => { p.cursor = 0; insert(&mut p) }
+        (None, KeyCode::Char('A')) => { p.cursor = n; insert(&mut p) }
+        (None, KeyCode::Char('h')) | (None, KeyCode::Left) => p.cursor = at.saturating_sub(1),
+        (None, KeyCode::Char('l')) | (None, KeyCode::Right) => p.cursor = (at + 1).min(n.saturating_sub(1)),
+        (None, KeyCode::Char('0')) | (None, KeyCode::Home) => p.cursor = 0,
+        (None, KeyCode::Char('^')) => p.cursor = chars.iter().position(|c| *c != ' ').unwrap_or(0),
+        (None, KeyCode::Char('$')) | (None, KeyCode::End) => p.cursor = n.saturating_sub(1),
+        (None, KeyCode::Char('w')) => p.cursor = word_right(at).min(n.saturating_sub(1)),
+        (None, KeyCode::Char('b')) => p.cursor = word_left(at),
+        (None, KeyCode::Char('e')) => p.cursor = word_end(at),
+        (None, KeyCode::Char('x')) => { if at < n { let mut v = chars.clone(); v.remove(at); let l = v.len(); set(&mut p, v, at.min(l.saturating_sub(1))) } }
+        (None, KeyCode::Char('X')) => { if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1) } }
+        (None, KeyCode::Char('D')) => { let v = chars[..at].to_vec(); set(&mut p, v, at.saturating_sub(1)) }
+        (None, KeyCode::Char('C')) => { let v = chars[..at].to_vec(); set(&mut p, v, at); insert(&mut p) }
+        (None, KeyCode::Char('S')) => { set(&mut p, Vec::new(), 0); insert(&mut p) }
+        (None, KeyCode::Char(op @ ('d' | 'c' | 'r'))) => p.vi_pending = Some(op),
+        (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { if matches!(p.kind, PromptKind::Command { template: None }) { prompt_history(app, &mut p, true) } }
+        (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { if matches!(p.kind, PromptKind::Command { template: None }) { prompt_history(app, &mut p, false) } }
+        (None, KeyCode::Char('p')) => { if let Some(b) = app.buffers.first() { let mut v = chars.clone(); let ins: Vec<char> = b.chars().filter(|c| *c != '\n').collect(); let k = ins.len(); for (i, c) in ins.into_iter().enumerate() { v.insert((at + 1 + i).min(v.len()), c) } set(&mut p, v, at + k) } }
         _ => {}
     }
     app.modal = Some(Modal::Prompt(p));
@@ -1122,6 +1203,12 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
 }
 
 /// Copy mode, `mode-keys vi`: tmux's copy-mode-vi table.
+/// $VISUAL / $EDITOR names vi (or is unset — vim is family here): copy mode's default keys.
+fn vi_editor() -> bool {
+    let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default();
+    editor.is_empty() || editor.contains("vi")
+}
+
 /// copy-mode's emacs table, as the vi one it mirrors (`set -g mode-keys emacs`, or tmux's own
 /// choice when EDITOR is not vi).
 fn emacs_copy(key: KeyEvent) -> Option<KeyEvent> {
@@ -1169,11 +1256,7 @@ fn copy_action_key(action: &str) -> Option<KeyEvent> {
 }
 
 fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
-    let emacs = app.opts.mode_keys_emacs.unwrap_or_else(|| {
-        // tmux: vi keys when $VISUAL or $EDITOR mentions vi, else emacs.
-        let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_default();
-        !editor.is_empty() && !editor.contains("vi")
-    });
+    let emacs = app.opts.mode_keys_emacs.unwrap_or_else(|| !vi_editor());
     // Your tmux.conf's copy-mode bindings come first (`bind -T copy-mode-vi v send -X begin-selection`).
     if app.copy_pending.is_none() {
         let chord = keys::of(&key);

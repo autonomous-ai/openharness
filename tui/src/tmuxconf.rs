@@ -55,6 +55,7 @@ pub struct Options {
     pub main_pane_width: Option<u16>,
     pub main_pane_height: Option<u16>,
     pub copy_command: Option<String>,
+    pub status_keys_vi: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -274,6 +275,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "history-limit" => { if let Ok(n) = value.parse::<usize>() { crate::pane::HISTORY.store(n, std::sync::atomic::Ordering::Relaxed) } }
                 "main-pane-width" => s.options.main_pane_width = value.trim_end_matches('%').parse().ok().map(|n: u16| if value.ends_with('%') { 1000 + n } else { n }),
                 "main-pane-height" => s.options.main_pane_height = value.trim_end_matches('%').parse().ok().map(|n: u16| if value.ends_with('%') { 1000 + n } else { n }),
+                "status-keys" => s.options.status_keys_vi = Some(value == "vi"),
                 "copy-command" => s.options.copy_command = Some(value.to_string()).filter(|v| !v.is_empty()),
                 "status-justify" => s.options.status_justify = Some(value.to_string()),
                 "window-status-style" => { let (fg, bg) = style(value); s.options.window_status_style = Some((fg, bg)) }
@@ -292,7 +294,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "status" => s.options.status = on_off(value),
                 // Options with no effect here (the terminal's, the server's): accepted quietly.
                 "escape-time" | "default-terminal" | "terminal-overrides" | "terminal-features" | "focus-events" | "set-clipboard"
-                | "allow-passthrough" | "extended-keys" | "default-shell" | "default-command" | "aggressive-resize" | "status-keys" | "status-interval"
+                | "allow-passthrough" | "extended-keys" | "default-shell" | "default-command" | "aggressive-resize" | "status-interval"
                 | "monitor-activity" | "visual-activity" | "visual-bell" | "bell-action" | "automatic-rename" | "allow-rename"
                 | "set-titles" | "set-titles-string" | "update-environment" | "destroy-unattached" | "exit-empty" | "word-separators" | "wrap-search"
                 | "status-left-style" | "status-right-style" | "window-status-activity-style" | "window-status-bell-style"

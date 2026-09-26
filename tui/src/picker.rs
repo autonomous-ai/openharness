@@ -174,6 +174,12 @@ impl Picker {
             else if !self.keep_order && positive && !o.no_sort { scored.sort_by(|a, b| b.1.cmp(&a.1).then(line_len(&self.rows[a.0]).cmp(&line_len(&self.rows[b.0]))).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
             self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
         }
+        // --tac: the input order reversed (wherever the order is the input's).
+        {
+            let o = crate::theme::fzf_opts();
+            let sorted = !self.keep_order && !o.no_sort && !self.query.trim().is_empty();
+            if o.tac && !sorted { self.visible.reverse() }
+        }
         // Keep the cursor on the same item across a rebuild.
         let keep = self.selected_id.as_ref().and_then(|id| self.visible.iter().position(|(i, _)| &self.rows[*i].id == id));
         self.cursor = keep.unwrap_or(self.cursor.min(self.visible.len().saturating_sub(1)));

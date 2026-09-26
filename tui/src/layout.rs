@@ -70,14 +70,20 @@ impl Node {
             out.push_str(&format!("{}x{},{},{}", r.width, r.height, r.x, r.y));
             match n {
                 Node::Leaf(id) => out.push_str(&format!(",{id}")),
-                Node::Split { dir, ratio, a, b } => {
-                    let (ra, rb) = split_rect(r, *dir, *ratio);
+                Node::Split { dir, .. } => {
+                    // Splits the same way in a row are one list, as tmux writes them: {a,b,c}.
+                    let mut kids = Vec::new();
+                    flat(n, r, *dir, &mut kids);
                     out.push(if *dir == Dir::Horizontal { '{' } else { '[' });
-                    body(a, ra, out);
-                    out.push(',');
-                    body(b, rb, out);
+                    for (i, (k, kr)) in kids.iter().enumerate() { if i > 0 { out.push(',') } body(k, *kr, out) }
                     out.push(if *dir == Dir::Horizontal { '}' } else { ']' });
                 }
+            }
+        }
+        fn flat<'a>(n: &'a Node, r: Rect, dir: Dir, out: &mut Vec<(&'a Node, Rect)>) {
+            match n {
+                Node::Split { dir: d, ratio, a, b } if *d == dir => { let (ra, rb) = split_rect(r, dir, *ratio); flat(a, ra, dir, out); flat(b, rb, dir, out) }
+                _ => out.push((n, r)),
             }
         }
         let mut b = String::new();
@@ -338,6 +344,13 @@ mod tests {
         let back = Node::from_tmux(&text, &[7, 8]).unwrap();
         assert_eq!(back.leaves(), vec![7, 8]);
         assert!(Node::from_tmux("81x20,0,0[81x10,0,0,1,81x9,0,11{40x9,0,11,2,40x9,41,11,3}]", &[1, 2, 3]).is_some());
+        // Three side by side: one flat list, as tmux writes it.
+        let mut three = Node::Leaf(1);
+        three.split(1, 2, Dir::Horizontal);
+        three.split(2, 3, Dir::Horizontal);
+        let text = three.to_tmux(Rect::new(0, 0, 122, 20));
+        assert_eq!(text.matches('{').count(), 1, "{text}");
+        assert_eq!(Node::from_tmux(&text, &[1, 2, 3]).unwrap().leaves(), vec![1, 2, 3]);
     }
 
     #[test]

@@ -98,6 +98,8 @@ pub struct Pane {
     pub predictions: Vec<(u16, u16, char, Instant)>,
     /// The match ⌥F is on.
     pub find_at: Option<alacritty_terminal::term::search::Match>,
+    /// Copy mode was entered by the wheel (tmux's `copy-mode -e`): it ends at the bottom.
+    pub copy_by_wheel: bool,
     /// Every match of the search (tmux 3.1+ lights them all and counts them), at most 1000.
     pub find_all: Vec<alacritty_terminal::term::search::Match>,
     /// Bumped on every open; a reply carrying an older one is stale.
@@ -177,6 +179,7 @@ impl Pane {
             bell: false,
             queued: Vec::new(),
             find_all: Vec::new(),
+            copy_by_wheel: false,
             cwd: None,
             in_screen_title: false,
             pending_esc: false,
@@ -479,8 +482,22 @@ impl Pane {
 
     pub fn copy_end(&mut self) {
         self.copy = None;
+        self.copy_by_wheel = false;
         self.clear_selection();
         self.scroll_bottom();
+    }
+
+    /// The wheel in copy mode: the view moves, the cursor kept on screen.
+    pub fn copy_scroll(&mut self, lines: i32) {
+        use alacritty_terminal::index::{Line, Point};
+        self.term.scroll_display(Scroll::Delta(lines));
+        let offset = self.term.grid().display_offset() as i32;
+        let rows = self.term.screen_lines() as i32;
+        if let Some(c) = self.copy {
+            let line = c.point.line.0.clamp(-offset, rows - 1 - offset);
+            if line != c.point.line.0 { self.copy_set(Point::new(Line(line), c.point.column)) }
+        }
+        self.dirty = true;
     }
 
     fn copy_bounds(&self) -> (i32, i32, usize) {
