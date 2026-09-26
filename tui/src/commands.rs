@@ -841,7 +841,8 @@ pub fn load_config(app: &mut App) -> Vec<String> {
     for file in files {
         match source(app, &file, false, false) {
             Ok(items) => { queue.extend(items); read.push(file) }
-            Err(e) => app.error(e),
+            // load_cfg: a file that does not parse is a cause, and none of it runs.
+            Err(e) => { app.config_causes.push(e); read.push(file) }
         }
     }
     run_queue(app, queue);

@@ -299,6 +299,9 @@ pub struct App {
     pub pending_hooks: std::collections::VecDeque<crate::commands::Item>,
     /// Errors said so far (a command that failed fires command-error, not its after- hook).
     pub errors: u64,
+    /// A config file's errors (cfg_add_cause), shown in the current pane's view mode once there
+    /// is one (cfg_show_causes), as tmux shows them when the client attaches.
+    pub config_causes: Vec<String>,
     /// pipe-pane's pipes, by pane: what the pane prints goes to the command (-O).
     pub pipes: HashMap<u64, Pipe>,
     pipe_seq: u64,
@@ -383,6 +386,7 @@ impl App {
             pending_hooks: std::collections::VecDeque::new(),
             errors: 0,
             pipes: HashMap::new(),
+            config_causes: Vec::new(),
             pipe_seq: 0,
             hooks_seen: HooksSeen::default(),
 
@@ -480,6 +484,10 @@ impl App {
     pub fn error(&mut self, text: impl Into<String>) {
         self.errors += 1;
         let mut text = text.into();
+        // A config file's command (cfg_add_cause): kept, with its file and line, for view mode.
+        if self.capture_err.is_none() {
+            if let Some((file, line)) = &self.origin { self.config_causes.push(format!("{file}:{line}: {text}")); return }
+        }
         if self.capture_err.is_none() && self.origin.is_none() {
             if let Some(c) = text.chars().next() { text = c.to_uppercase().collect::<String>() + &text[c.len_utf8()..] }
         }
@@ -1833,6 +1841,14 @@ impl App {
             if app.pipes.get(&pane).map(|p| p.id == id).unwrap_or(false) { app.pipes.remove(&pane); }
         });
         self.pipes.insert(pane, Pipe { out, id });
+    }
+
+    /// cfg_show_causes: a config file's errors into the current pane's view mode, once there is
+    /// a pane to show them in.
+    pub fn show_causes(&mut self) {
+        if self.config_causes.is_empty() || self.capture.is_some() || self.focused().is_none() { return }
+        let causes = std::mem::take(&mut self.config_causes);
+        if !crate::copy::print(self, &causes, false) { self.config_causes = causes }
     }
 
     /// The last window (the top of tmux's lastw stack): C-b l's, the - flag's.

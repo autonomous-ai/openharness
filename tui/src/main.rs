@@ -253,9 +253,11 @@ async fn run(config: config::Config) -> io::Result<()> {
         if let Some(event) = first { apply(&mut app, event, &mut refill); need_draw = true }
         // Everything else already waiting goes into the same frame.
         while let Ok(event) = rx.try_recv() { apply(&mut app, event, &mut refill); need_draw = true }
-        // The event hooks for what that changed, then any waiting.
+        // The event hooks for what that changed, then any waiting; a config's errors, once there
+        // is a pane to show them in.
         app.notify_changes();
         commands::run_pending_hooks(&mut app);
+        app.show_causes();
         if app.quit { break }
         if std::mem::take(&mut app.mouse_changed) {
             if app.mouse { execute!(term.backend_mut(), EnableMouseCapture)?; } else { execute!(term.backend_mut(), DisableMouseCapture)?; }
