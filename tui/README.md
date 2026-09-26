@@ -1,11 +1,15 @@
-# harness tui
+# tim — tmux improved
 
 All of Harness in a terminal — every harness on every machine, in tabs and panes, from any
 terminal you can type into: a laptop, a server over SSH, a tablet's SSH app.
 
 ```bash
-hn            # or: harness tui
+tim           # or hn, or harness tui
 ```
+
+vim is vi improved: every vi key works, and more. tim is that for tmux — every tmux key and
+`~/.tmux.conf` line works, with every harness on every machine behind them. What tmux users have
+asked for over the years, and what tim does about it: [docs/tmux-improved.md](docs/tmux-improved.md).
 
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
@@ -40,7 +44,7 @@ your binds (vim-tmux-navigator's `C-h/j/k/l` included), `base-index`, `mouse`,
 | `C-b x` | close the pane (the harness keeps running) |
 | `C-b [` `C-b /` `C-b ]` | copy mode (vi keys), search back, paste |
 | `C-b :` | the command prompt — tmux commands, `Tab` completes |
-| `C-b ?` | every key, fzf-searchable |
+| `C-b ?` | every key, fzf-searchable — or just pause after `C-b` and they show |
 | `C-b d` | detach — everything keeps running |
 
 Harness's own, on the letters tmux leaves free:
@@ -54,7 +58,10 @@ Harness's own, on the letters tmux leaves free:
 
 In every list, fzf's keys: `C-j/C-k` `C-n/C-p` move, `Tab` marks, `C-/` toggles the preview,
 `S-↑/↓` scrolls it, `C-a C-e C-w C-u` edit the query, `enter` opens, `C-t` in a new window,
-`C-v` beside, `C-x` below, `esc` leaves.
+`C-v` beside, `C-x` below, `esc` leaves. fzf's search syntax works (`'exact ^prefix suffix$ !not a | b`),
+and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`, `16`, `bw`).
+
+Colours are the terminal's 16, as tmux's are, so tim reads on dark, light and Solarized themes.
 
 ## Mouse and clipboard
 
@@ -92,7 +99,7 @@ notify = true              # OS notifications through the terminal
 "M-x" = "none"
 ```
 
-`hn --keys` lists every binding, tmux-style, and reports problems in either file.
+`tim --keys` lists every binding, tmux-style, and reports problems in either file.
 
 ## Environment
 
