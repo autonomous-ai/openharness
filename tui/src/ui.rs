@@ -35,7 +35,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let body = app.body();
     let buf = frame.buffer_mut();
     let mut cursor: Option<Position> = None;
-    let full_screen = matches!(app.modal, Some(Modal::Picker { .. }) | Some(Modal::Tree { .. }));
+    // A list takes the window (with --height, only its bottom rows: the panes stay in view).
+    let full_screen = matches!(app.modal, Some(Modal::Tree { .. })) || matches!(app.modal, Some(Modal::Picker { .. }) if theme::fzf_opts().height.is_none());
     if !full_screen {
         if app.tab().root.is_none() { empty_window(buf, app, body) }
         else { cursor = window(buf, app, body) }
@@ -57,7 +58,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // The picker drew with a placeholder preview; a live pane preview needs the whole app.
     if let Some(Modal::Picker { kind, picker }) = &app.modal {
-        if let Some(area) = picker_preview_area(fzf_inner(body), picker) { preview(buf, app, kind, picker, area) }
+        if let Some(area) = picker_preview_area(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, area) }
     }
     if let Some(Modal::Tree { cursor: at, collapsed }) = &app.modal { tree(buf, app, body, *at, collapsed) }
     let popup = match &app.modal { Some(Modal::Popup { pane, width, height, title }) => Some((*pane, *width, *height, title.clone())), _ => None };
@@ -494,16 +495,115 @@ fn local_time(offset: i64) -> (String, String) {
 
 // ── fzf ──────────────────────────────────────────────────────────────────────
 
-/// FZF_DEFAULT_OPTS --border: the lists' box (rounded, sharp, bold, double, horizontal, vertical,
-/// top, bottom, left, right, none), drawn in the border colour; the list lives inside it.
-fn fzf_inner(body: Rect) -> Rect {
-    let Some(style) = theme::fzf_opts().border.as_deref() else { return body };
-    // fzf's margins for a border: a row for the top or bottom, two columns for a side (the glyph and
-    // a column of padding inside it).
-    let (t, b, l, r) = match style { "none" => (0, 0, 0, 0), "horizontal" => (1, 1, 0, 0), "vertical" => (0, 0, 2, 2), "top" => (1, 0, 0, 0), "bottom" => (0, 1, 0, 0), "left" => (0, 0, 2, 0), "right" => (0, 0, 0, 2), _ => (1, 1, 2, 2) };
-    Rect::new(body.x + l, body.y + t, body.width.saturating_sub(l + r), body.height.saturating_sub(t + b))
+/// Where a list is drawn (fzf's adjustMarginAndPadding and resizeWindows): the screen it has — the
+/// window, or with --height its bottom rows, as fzf takes the rows under a prompt at the bottom of
+/// a terminal (the panes stay in view above) — the outer --border's box, and the area inside the
+/// margin, the border and the padding, where the list and its preview go.
+pub struct FzfFrame { pub screen: Rect, pub border: Option<Rect>, pub inner: Rect }
+
+/// The --border shape's sides (top, right, bottom, left); none without one.
+fn border_sides() -> (bool, bool, bool, bool) {
+    match theme::fzf_opts().border.as_deref() {
+        None | Some("none") | Some("line") => (false, false, false, false),
+        Some("horizontal") => (true, false, true, false), Some("vertical") => (false, true, false, true),
+        Some("top") => (true, false, false, false), Some("right") => (false, true, false, false),
+        Some("bottom") => (false, false, true, false), Some("left") => (false, false, false, true),
+        _ => (true, true, true, true),
+    }
 }
 
+/// fzf's noSeparatorLine: no line for the separator (--info=inline, or hidden and inline-right
+/// with --no-separator).
+fn no_separator_line() -> bool {
+    let o = theme::fzf_opts();
+    match o.info_mode.as_str() { "inline" => true, "hidden" | "inline-right" => !o.separator, _ => false }
+}
+
+/// fzf's --height over a screen [h] rows tall: at least its minimum, no more than the screen
+/// (maxHeightFunc); with `~` no more than its items and the lines around them need (Loop's fit).
+fn fzf_rows(h: u16, height: theme::Height, picker: &Picker) -> u16 {
+    let o = theme::fzf_opts();
+    let term = h as i64;
+    let border_lines = |(t, _, b, _): (bool, bool, bool, bool)| t as i64 + b as i64;
+    // --min-height's automatic value (10 and what surrounds the list) for a height in percent.
+    let mut min_height = o.min_height;
+    if height.size.percent && min_height < 0 {
+        min_height = -min_height + border_lines(border_sides()) + 1 + if no_separator_line() { 0 } else { 1 };
+        if !picker.hints.is_empty() || picker.heading.is_some() { min_height += 1 }
+        for s in [o.margin[0], o.margin[2], o.padding[0], o.padding[2]] { if !s.percent { min_height += s.size as i64 } }
+    }
+    let size = height.size.size;
+    let evaluated = if height.size.percent {
+        ((if height.inverse { 100.0 - size } else { size } * term as f64 / 100.0) as i64).max(min_height)
+    } else if height.inverse { term - size as i64 } else { size as i64 };
+    let effective_min = 3 - no_separator_line() as i64 + border_lines(border_sides());
+    let mut rows = term.min(evaluated.max(effective_min));
+    if height.auto {
+        // The rows it takes: its items (as many as fit) and the lines around them, and the margins.
+        let (_, m, p) = margin_and_padding(Rect::new(0, 0, 1000, rows.max(0) as u16));
+        let pad = (m[0] + m[2] + p[0] + p[2]) as i64;
+        let extra = 1 + !no_separator_line() as i64 + (!picker.hints.is_empty() || picker.heading.is_some()) as i64;
+        let fit = (rows - pad - extra).max(0);
+        let items = picker.rows.iter().filter(|r| !r.disabled).count() as i64;
+        rows = term.min(items.min(fit) + extra + pad);
+    }
+    rows.clamp(0, term) as u16
+}
+
+/// adjustMarginAndPadding over [screen]: the margins (each with the border's width in it) and the
+/// paddings, top, right, bottom, left — both given up, in proportion, where the screen cannot hold
+/// them and fzf's smallest list.
+fn margin_and_padding(screen: Rect) -> (Rect, [u16; 4], [u16; 4]) {
+    let o = theme::fzf_opts();
+    let (sw, sh) = (screen.width as i64, screen.height as i64);
+    let to_int = |idx: usize, s: theme::Size| -> i64 { if s.percent { ((if idx % 2 == 0 { sh } else { sw }) as f64 * s.size * 0.01) as i64 } else { s.size as i64 } };
+    let mut padding = [0i64; 4];
+    let mut margin = [0i64; 4];
+    let mut extra = [0i64; 4];
+    let (t, r, b, l) = border_sides();
+    for idx in 0..4 {
+        padding[idx] = to_int(idx, o.padding[idx]);
+        // A row for a top or bottom side, two columns (the glyph and a blank) for a left or right one.
+        extra[idx] = match idx { 0 => t as i64, 1 => 2 * r as i64, 2 => b as i64, _ => 2 * l as i64 };
+        margin[idx] = to_int(idx, o.margin[idx]) + extra[idx];
+    }
+    let mut adjust = |i1: usize, i2: usize, max: i64, min: i64| {
+        let min = min.min(max);
+        let total = margin[i1] + margin[i2] + padding[i1] + padding[i2];
+        if max - total < min {
+            let desired = max - min;
+            padding[i1] = desired * padding[i1] / total;
+            padding[i2] = desired * padding[i2] / total;
+            margin[i1] = extra[i1].max(desired * margin[i1] / total);
+            margin[i2] = extra[i2].max(desired * margin[i2] / total);
+        }
+    };
+    adjust(1, 3, sw, 4);
+    adjust(0, 2, sh, 3 - no_separator_line() as i64);
+    let m = margin.map(|v| v.max(0) as u16);
+    let p = padding.map(|v| v.max(0) as u16);
+    (screen, m, p)
+}
+
+pub fn fzf_frame(body: Rect, picker: &Picker) -> FzfFrame {
+    let screen = match theme::fzf_opts().height { Some(h) => { let rows = fzf_rows(body.height, h, picker); Rect::new(body.x, body.y + body.height - rows, body.width, rows) } None => body };
+    let (_, m, p) = margin_and_padding(screen);
+    let width = screen.width.saturating_sub(m[1] + m[3]);
+    let height = screen.height.saturating_sub(m[0] + m[2]);
+    let (t, r, b, l) = border_sides();
+    let border = (t || r || b || l).then(|| {
+        let x = screen.x + m[3] - 2 * l as u16;
+        let y = screen.y + m[0] - t as u16;
+        Rect::new(x, y, width + 2 * l as u16 + 2 * r as u16, height + t as u16 + b as u16)
+    });
+    let inner = Rect::new(screen.x + m[3] + p[3], screen.y + m[0] + p[0], width.saturating_sub(p[1] + p[3]), height.saturating_sub(p[0] + p[2]));
+    FzfFrame { screen, border, inner }
+}
+
+/// The outer --border (rounded, sharp, bold, block, thinblock, double, horizontal, vertical, top,
+/// bottom, left, right) around [body], in the border colour, and --border-label on it where
+/// --border-label-pos puts it (printLabel: centred by default; a column from the left, or from the
+/// right when negative; the bottom line with :bottom), cut with the ellipsis when it is too long.
 fn fzf_border(buf: &mut Buffer, body: Rect) {
     let Some(style) = theme::fzf_opts().border.clone() else { return };
     let st = theme::fzf().border_style();
@@ -530,6 +630,19 @@ fn fzf_border(buf: &mut Buffer, body: Rect) {
     if top && right { buf.set_string(x1, body.y, tr, st) }
     if bottom && left { buf.set_string(body.x, y1, bl, st) }
     if bottom && right { buf.set_string(x1, y1, br, st) }
+    let o = theme::fzf_opts();
+    if o.border_label.is_empty() || !(top || bottom) { return }
+    let w = body.width as i64;
+    let len = o.border_label.width() as i64;
+    let (column, at_bottom) = o.border_label_pos;
+    let col = if column == 0 { ((w - len) / 2).max(0) } else if column < 0 { (w + column + 1 - len).max(0) } else { (column - 1).min(w - len) };
+    let row = if style == "bottom" || at_bottom { y1 } else { body.y };
+    // ansiLabelPrinter: the whole label when it fits, else as much as fits and the ellipsis.
+    let text = if len > w {
+        let ell: String = { let mut used = 0; o.ellipsis.chars().take_while(|c| { used += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0) as i64; used <= w }).collect() };
+        trim_right(&o.border_label, (w - ell.width() as i64) as i32) + &ell
+    } else { o.border_label.clone() };
+    if col >= 0 { buf.set_stringn(body.x + col as u16, row, &text, (w - col).max(0) as usize, theme::fzf().pal.border_label.style()); }
 }
 
 fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
@@ -543,8 +656,13 @@ fn picker_preview_area(body: Rect, picker: &Picker) -> Option<Rect> {
 /// (236; the current row's in 161 on 236), matches in 108 (151 on the current row), the info line
 /// `  4/7 ───` (144, separator 59), the prompt `> ` (110). Returns where the cursor goes.
 fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: &str) -> Position {
-    fzf_border(buf, body);
-    let body = fzf_inner(body);
+    let frame = fzf_frame(body, picker);
+    // (A --height list is drawn over the panes: its rows are its own.)
+    for y in frame.screen.y..frame.screen.y + frame.screen.height {
+        for x in frame.screen.x..frame.screen.x + frame.screen.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } }
+    }
+    if let Some(b) = frame.border { fzf_border(buf, b) }
+    let body = frame.inner;
     // --color=bg: under everything (the preview too); list-bg: under the list alone.
     let pal = theme::fzf().pal;
     if let Some(bg) = pal.border.style().bg { buf.set_style(body, Style::default().bg(bg)) }

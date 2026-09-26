@@ -203,7 +203,7 @@ pub mod fzfcolor {
         pub prompt: P, pub normal: P, pub selected: P, pub input: P, pub ghost: P, pub matched: P, pub selected_match: P,
         pub cursor: P, pub cursor_empty_char: P, pub marker: P, pub current: P, pub current_match: P, pub current_cursor: P,
         pub current_cursor_empty: P, pub current_marker: P, pub current_selected_empty: P, pub spinner: P, pub info: P,
-        pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P,
+        pub separator: P, pub scrollbar: P, pub border: P, pub header: P, pub list_border: P, pub border_label: P,
         /// --color=alt-bg: every other row's background (undefined: no stripes).
         pub alt_bg: CA,
         /// Whether the base theme has colours (not bw / NO_COLOR).
@@ -295,7 +295,7 @@ pub mod fzfcolor {
             current_cursor_empty: pair(blank, t.dark_bg), current_marker: pair(t.marker, t.dark_bg), current_selected_empty: pair(blank, t.dark_bg),
             spinner: pair(t.spinner, t.input_bg), info: pair(t.info, t.input_bg), separator: pair(t.separator, t.input_bg),
             scrollbar: pair(t.scrollbar, t.list_bg), border: pair(t.border, t.bg), header: pair(t.header, t.header_bg),
-            list_border: pair(t.list_border, t.list_bg), alt_bg: t.alt_bg, colored: base.colored,
+            list_border: pair(t.list_border, t.list_bg), border_label: pair(t.border_label, t.bg), alt_bg: t.alt_bg, colored: base.colored,
         }
     }
 
@@ -478,15 +478,64 @@ fn marker_multi(spec: Option<&str>, marker: &str) -> [String; 3] {
     multi
 }
 
+/// A --margin, --padding or --height size: cells, or a percentage of the screen.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct Size { pub size: f64, pub percent: bool }
+
+/// --height: its size, `-` (the screen less it), `~` (no taller than its items need).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Height { pub size: Size, pub inverse: bool, pub auto: bool }
+
+/// fzf's parseSize: N or N%.
+fn parse_size(s: &str) -> Option<Size> {
+    let (n, percent) = match s.strip_suffix('%') { Some(n) => (n, true), None => (s, false) };
+    n.trim().parse::<f64>().ok().filter(|v| *v >= 0.0).map(|size| Size { size, percent })
+}
+
+/// parseHeight: `~` adaptive, `-` inverse; none for fzf's full screen (0, or 100% not adaptive).
+fn parse_height(s: &str) -> Option<Height> {
+    let (auto, s) = match s.strip_prefix('~') { Some(r) => (true, r), None => (false, s) };
+    let (inverse, s) = match s.strip_prefix('-') { Some(r) if !auto => (true, r), _ => (false, s) };
+    let size = parse_size(s)?;
+    if !auto && (size.size == 0.0 || size.percent && size.size == 100.0) && !inverse { return None }
+    Some(Height { size, inverse, auto })
+}
+
+/// parseMargin: T | TB,RL | T,RL,B | T,R,B,L.
+fn parse_margin(s: &str) -> Option<[Size; 4]> {
+    let v: Vec<Size> = s.split(',').map(parse_size).collect::<Option<_>>()?;
+    match v.len() { 1 => Some([v[0]; 4]), 2 => Some([v[0], v[1], v[0], v[1]]), 3 => Some([v[0], v[1], v[2], v[1]]), 4 => Some([v[0], v[1], v[2], v[3]]), _ => None }
+}
+
+/// parseLabelPosition: a column (negative from the right, 0 the centre) and top or bottom.
+fn parse_label_pos(s: &str) -> (i64, bool) {
+    let (mut column, mut bottom) = (0, false);
+    for token in s.to_lowercase().split(':') {
+        match token { "center" => column = 0, "bottom" => bottom = true, "top" => bottom = false, n => { if let Ok(c) = n.parse() { column = c } } }
+    }
+    (column, bottom)
+}
+
+/// A label's text without its ANSI colours.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' { if chars.peek() == Some(&'[') { chars.next(); for d in chars.by_ref() { if d.is_ascii_alphabetic() { break } } } continue }
+        out.push(c);
+    }
+    out
+}
+
 /// The rest of FZF_DEFAULT_OPTS that shapes a list: --cycle, --exact, -i/+i, --no-separator,
 /// --ellipsis, fg:/bg: colours, and --bind key:action pairs.
-pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String }
+pub struct FzfOpts { pub info_mode: String, pub prompt_top: bool, pub header_first: bool, pub border: Option<String>, pub no_sort: bool, pub tac: bool, pub tiebreak: Vec<crate::fzf::Tiebreak>, pub selected_bg: Option<Color>, pub info_prefix: String, pub separator_char: String, pub scrollbar: Option<String>, pub preview_scrollbar: Option<String>, pub cycle: bool, pub exact: bool, pub case: Option<bool>, pub separator: bool, pub ellipsis: String, pub fg: Option<Color>, pub bg: Option<Color>, pub list_bg: Option<Color>, pub binds: Vec<(String, String)>, pub hscroll: bool, pub hscroll_off: usize, pub highlight_line: bool, pub scroll_off: usize, pub tabstop: usize, pub wrap: bool, pub wrap_sign: String, pub height: Option<Height>, pub min_height: i64, pub margin: [Size; 4], pub padding: [Size; 4], pub border_label: String, pub border_label_pos: (i64, bool) }
 
 pub fn fzf_opts() -> &'static FzfOpts {
     static OPTS: std::sync::OnceLock<FzfOpts> = std::sync::OnceLock::new();
     OPTS.get_or_init(|| {
         let opts = default_opts();
-        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into() };
+        let mut o = FzfOpts { info_mode: "default".into(), prompt_top: false, header_first: false, border: None, no_sort: false, tac: false, tiebreak: vec![crate::fzf::Tiebreak::Length], selected_bg: None, info_prefix: String::new(), separator_char: "─".into(), scrollbar: Some("│".into()), preview_scrollbar: Some("│".into()), cycle: false, exact: false, case: None, separator: true, ellipsis: "··".into(), fg: None, bg: None, list_bg: None, binds: Vec::new(), hscroll: true, hscroll_off: 10, highlight_line: false, scroll_off: 3, tabstop: 8, wrap: false, wrap_sign: "↳ ".into(), height: None, min_height: -10, margin: [Size::default(); 4], padding: [Size::default(); 4], border_label: String::new(), border_label_pos: (0, false) };
         let mut i = 0;
         while i < opts.len() {
             let w = &opts[i];
@@ -516,8 +565,24 @@ pub fn fzf_opts() -> &'static FzfOpts {
                 "--layout" => { if let Some(v) = take() { o.prompt_top = v == "reverse" } }
                 "--reverse" => o.prompt_top = true,
                 "--header-first" => o.header_first = true,
-                "--border" => o.border = Some(value.clone().unwrap_or_else(|| "rounded".into())),
+                // (Its style is optional: the next word when it is not an option, as optionalNextString takes it.)
+                "--border" => {
+                    let next = value.clone().or_else(|| opts.get(i + 1).filter(|w| !w.starts_with('-') && !w.starts_with('+')).cloned().inspect(|_| i += 1));
+                    o.border = Some(next.unwrap_or_else(|| "rounded".into()))
+                }
                 "--no-border" => o.border = None,
+                // --height=[~][-]HEIGHT[%] (100% or 0: the whole screen), --min-height=N[+].
+                "--height" => { if let Some(v) = take() { o.height = parse_height(&v) } }
+                "--no-height" => o.height = None,
+                "--min-height" => { if let Some(v) = take() { let auto = v.ends_with('+'); if let Ok(n) = v.trim_end_matches('+').parse::<i64>() { o.min_height = if auto { -n } else { n } } } }
+                "--margin" => { if let Some(v) = take() { if let Some(m) = parse_margin(&v) { o.margin = m } } }
+                "--no-margin" => o.margin = [Size::default(); 4],
+                "--padding" => { if let Some(v) = take() { if let Some(m) = parse_margin(&v) { o.padding = m } } }
+                "--no-padding" => o.padding = [Size::default(); 4],
+                // Its first line, the ANSI colours in it aside.
+                "--border-label" => { if let Some(v) = take() { o.border_label = strip_ansi(v.split('\n').next().unwrap_or("")) } }
+                "--no-border-label" => o.border_label.clear(),
+                "--border-label-pos" => { if let Some(v) = take() { o.border_label_pos = parse_label_pos(&v) } }
                 "--no-sort" | "+s" => o.no_sort = true,
                 "--tac" => o.tac = true,
                 // --tiebreak=length,begin,…: after the score, in that order (index: the input's).
@@ -776,5 +841,24 @@ mod opts_tests {
         // What fzf refuses: a quote left open, a ( that is not $(.
         assert_eq!(shell_words("--prompt='open"), None);
         assert_eq!(shell_words("--bind=a:execute(ls)"), None);
+    }
+
+    /// --height, --margin/--padding and --border-label-pos as fzf 0.67 parses them.
+    #[test]
+    fn layout_options_parse_as_fzf_parses_them() {
+        use super::{parse_height, parse_label_pos, parse_margin, Height, Size};
+        let s = |size: f64, percent: bool| Size { size, percent };
+        assert_eq!(parse_height("40%"), Some(Height { size: s(40.0, true), inverse: false, auto: false }));
+        assert_eq!(parse_height("~20"), Some(Height { size: s(20.0, false), inverse: false, auto: true }));
+        assert_eq!(parse_height("-5"), Some(Height { size: s(5.0, false), inverse: true, auto: false }));
+        // The whole screen: no height of its own.
+        assert_eq!(parse_height("100%"), None);
+        assert_eq!(parse_height("0"), None);
+        assert_eq!(parse_margin("1,3"), Some([s(1.0, false), s(3.0, false), s(1.0, false), s(3.0, false)]));
+        assert_eq!(parse_margin("1,10%,2"), Some([s(1.0, false), s(10.0, true), s(2.0, false), s(10.0, true)]));
+        assert_eq!(parse_margin("1,x"), None);
+        assert_eq!(parse_label_pos("3:bottom"), (3, true));
+        assert_eq!(parse_label_pos("-2"), (-2, false));
+        assert_eq!(parse_label_pos("bottom"), (0, true));
     }
 }

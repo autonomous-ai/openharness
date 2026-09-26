@@ -84,7 +84,10 @@ opens, `C-t` in a new window, `C-v` beside, `C-x` below, `esc` leaves. fzf's sea
 (`'exact ^prefix suffix$ !not a | b`), and its colours follow `FZF_DEFAULT_OPTS` (`--color=light`,
 `16`, `bw`). One key differs on purpose: fzf 0.67 binds `ctrl-/` to toggle-wrap as well as `alt-/`,
 but hn keeps `C-/` for the preview, as fzf's own README binds `ctrl-/` in its preview examples and
-most people's fingers already know it.
+most people's fingers already know it. Its layout options apply too (`--layout`, `--border` and
+`--border-label`, `--margin`, `--padding`, `--info`); `--height` docks a list at the bottom of the
+window, that many rows tall with the panes still in view above it, where fzf would draw it under a
+prompt at the bottom of a terminal.
 
 Colours are the terminal's 16, as tmux's are, so hn reads on dark, light and Solarized themes.
 
