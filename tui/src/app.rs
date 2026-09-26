@@ -147,6 +147,8 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// tim, the creature in the status line.
+    pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
     pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
@@ -192,6 +194,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
             copy_count: 0,
@@ -469,6 +472,8 @@ impl App {
                     // Only harnesses you have on a tab: a hundred others finish turns all day.
                     let name = agent.name.clone();
                     let mine = opened.contains(&agent.key());
+                    // tim hatches on the first turn finished while you watch, and is pleased after each.
+                    if mine { self.tim.turn_done() }
                     if mine && !visible.contains(&agent.key()) {
                         agent.unread = true;
                         self.say(format!("{name} finished"), theme::ONLINE);
@@ -817,6 +822,7 @@ impl App {
         }
         let (o, n) = (&mut self.opts, &s.options);
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
+        if let Some(off) = s.options.tim_off { self.tim.off = off }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
             window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format);
         self.fit_panes();

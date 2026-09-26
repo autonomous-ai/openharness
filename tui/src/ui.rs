@@ -419,6 +419,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
             }
             let who = match machine { Some(m) => format!("\"{title}\" {m} "), None => format!("\"{title}\" ") };
             right.push(Span::styled(who, base));
+            // tim, before the clock.
+            if let Some((f, st)) = crate::tim::face(app) { right.push(Span::styled(f, base.patch(st))); right.push(Span::styled(" ", base)) }
             right.push(Span::styled(format!("{clock} {date}"), base));
             // tmux's status-right-length is 40 (60 here: a waiting count, a far machine), and the
             // window list comes first. Too long: the pane title goes first, then the date, then

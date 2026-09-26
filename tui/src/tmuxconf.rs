@@ -49,6 +49,7 @@ pub struct Options {
     pub status_justify: Option<String>,
     pub window_status_style: Option<(Option<Color>, Option<Color>)>,
     pub pane_border_format: Option<String>,
+    pub tim_off: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -203,6 +204,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 | "status-left-style" | "status-right-style" | "window-status-activity-style" | "window-status-bell-style"
                 | "mode-style" | "message-command-style" | "clock-mode-colour" | "clock-mode-style" | "display-panes-colour" | "display-panes-active-colour"
                 | "pane-border-lines" | "popup-style" | "popup-border-style" | "main-pane-width" | "main-pane-height" => {}
+                "@tim" => s.options.tim_off = Some(matches!(value, "off" | "0" | "no")),
                 n if n.starts_with('@') => {}
                 "pane-border-style" => { let (fg, _) = style(value); s.look.border = fg }
                 // Not an error in your tmux.conf: noted (`hn --keys` lists them, `:set` says so).

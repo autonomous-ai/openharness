@@ -57,6 +57,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("show-buffer", "showb", "Show the newest paste buffer"),
     ("respawn-pane", "respawnp", "Restart the harness in this pane"),
     ("suspend-client", "suspendc", "Suspend (C-z); fg brings it back"),
+    ("tim", "tim", "tim, the creature in the status line: how it is (set -g @tim off hides it)"),
     ("display-popup", "popup", "A shell (or a command: display-popup -E lazygit) floating over the window"),
     ("rename-session", "rename", "Sessions are computers here — rename it from the desktop app"),
     ("clock-mode", "clock-mode", "A clock"),
@@ -427,6 +428,13 @@ fn run_words(app: &mut App, words: &[String]) {
                 let args: Vec<usize> = (1..words.len()).filter(|i| !words[*i].starts_with('-')).collect();
                 if let Some(&at) = args.first() {
                     let name = words[at].clone();
+                    // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
+                    if name == "@tim" {
+                        let v = args.get(1).map(|i| words[*i].clone()).unwrap_or_default();
+                        let off = match v.as_str() { "off" | "0" | "no" => true, "on" | "1" | "yes" => false, _ => !app.tim.off };
+                        app.tim.set_off(off);
+                        return;
+                    }
                     let now = match name.as_str() {
                         "status" => Some(app.opts.status != Some(false)), "mouse" => Some(app.mouse),
                         "synchronize-panes" => Some(app.tab().sync), "renumber-windows" => Some(app.opts.renumber_windows == Some(true)),
@@ -549,6 +557,7 @@ fn run_words(app: &mut App, words: &[String]) {
             }
             input::popup(app, &w, &h, cwd, command, title);
         }
+        "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
         "run-shell" | "run" => {
             let cmd = rest(words);
             if cmd.is_empty() { return }
