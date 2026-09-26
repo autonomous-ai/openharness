@@ -31,7 +31,8 @@ impl Chord {
         let mods = mods.intersection(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT | KeyModifiers::SUPER);
         match code {
             KeyCode::Char(c) if c.is_alphabetic() && c.is_uppercase() => Chord { code: KeyCode::Char(c.to_ascii_lowercase()), mods: mods | KeyModifiers::SHIFT },
-            KeyCode::Char(c) if !c.is_alphabetic() => Chord { code: KeyCode::Char(c), mods: mods - KeyModifiers::SHIFT },
+            // A mouse key (tmux's MouseDown1Pane…) keeps S- as tmux's does.
+            KeyCode::Char(c) if !c.is_alphabetic() && !crate::keys::is_mouse(&code) => Chord { code: KeyCode::Char(c), mods: mods - KeyModifiers::SHIFT },
             other => Chord { code: other, mods },
         }
     }

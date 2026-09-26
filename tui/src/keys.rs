@@ -169,7 +169,10 @@ impl Keymap {
             }
         }
         for b in t.iter_mut() { if let Some(n) = notes.get(&name(&b.chord)) { b.note = n.clone() } }
-        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: Vec::new(), copy_vi: Vec::new(), copy_emacs: Vec::new(), named: Default::default(), copy_unbound: Vec::new(), removed: Vec::new(), repeat_ms: 500, hint_ms: 600 }
+        // The root table's defaults are tmux's mouse bindings (a click selects the pane, the wheel
+        // enters copy mode, a drag on a border resizes, the right button opens the menus).
+        let root: Vec<Binding> = include_str!("../tests/fixtures/tmux-3.5a-root.txt").lines().filter_map(fixture_binding).collect();
+        Keymap { prefix: k(KeyCode::Char('b'), ctrl), prefix2: None, prefix_table: t, root_table: root, copy_vi: Vec::new(), copy_emacs: Vec::new(), named: Default::default(), copy_unbound: Vec::new(), removed: Vec::new(), repeat_ms: 500, hint_ms: 600 }
     }
 
     /// Every key table, as `list-keys` walks them: by name, each by key code. The copy-mode tables
@@ -190,6 +193,23 @@ impl Keymap {
         out.sort_by(|a, b| a.0.cmp(&b.0));
         for (_, list) in out.iter_mut() { list.sort_by_key(|b| order(&b.chord)) }
         out
+    }
+
+    /// The binding a table has for a key, as list-keys shows it — the copy-mode tables' defaults
+    /// included, less what was unbound.
+    pub fn lookup(&self, table: &str, chord: &Chord) -> Option<Binding> {
+        match table {
+            "prefix" => self.prefix_command(chord).cloned(),
+            "root" => self.root_command(chord).cloned(),
+            "copy-mode" | "copy-mode-vi" => {
+                let t = if table == "copy-mode" { Table::CopyEmacs } else { Table::CopyVi };
+                let own = if t == Table::CopyVi { &self.copy_vi } else { &self.copy_emacs };
+                if let Some(b) = own.iter().rev().find(|b| &b.chord == chord) { return Some(b.clone()) }
+                if self.removed.contains(&t) || self.copy_unbound.contains(&(t, *chord)) { return None }
+                copy_defaults(t).iter().find(|b| &b.chord == chord).cloned()
+            }
+            other => self.named.get(other).and_then(|l| l.iter().rev().find(|b| &b.chord == chord)).cloned(),
+        }
     }
 
     pub fn prefix_command(&self, chord: &Chord) -> Option<&Binding> { self.prefix_table.iter().rev().find(|b| &b.chord == chord) }
@@ -233,35 +253,129 @@ impl Keymap {
     }
 
     pub fn hint(&self, command: &str) -> Option<String> {
-        if let Some(b) = self.root_table.iter().find(|b| b.command == command) { return Some(name(&b.chord)) }
+        if let Some(b) = self.root_table.iter().find(|b| b.command == command && !is_mouse(&b.chord.code)) { return Some(name(&b.chord)) }
         self.prefix_table.iter().find(|b| b.command == command).map(|b| format!("{} {}", name(&self.prefix), name(&b.chord)))
     }
 }
 
 fn name_of(chord: &Chord) -> String { name(chord) }
 
-/// A `-T` table name.
-/// Where tmux's key tables put a key: by its key code — the character, or the special key's place
-/// in tmux's list — with M-, C- and S- as higher bits.
+/// Where tmux's key tables put a key: by its key code (key_bindings_cmp) — the character, or
+/// the special key's place in tmux's list past KEYC_BASE — with M-, C- and S- as higher bits.
 pub fn order(chord: &Chord) -> (u8, u32) {
     let shifted_letter = matches!(chord.code, KeyCode::Char(c) if c.is_alphabetic()) && chord.mods.contains(KeyModifiers::SHIFT);
     let mut m = 0u8;
     if chord.mods.contains(KeyModifiers::ALT) { m |= 1 }
     if chord.mods.contains(KeyModifiers::CONTROL) { m |= 2 }
     if chord.mods.contains(KeyModifiers::SHIFT) && !shifted_letter { m |= 4 }
-    const SPECIAL: u32 = 0x10e000;
+    // KEYC_BSPACE and what follows it: after the mouse keys.
+    const AFTER_MOUSE: u32 = MOUSE_FIRST + MOUSE_SLOTS * 6;
     let base = match chord.code {
         KeyCode::Char(c) if shifted_letter => c.to_ascii_uppercase() as u32,
         KeyCode::Char(c) => c as u32,
         KeyCode::Enter => 0x0d, KeyCode::Tab => 0x09, KeyCode::Esc => 0x1b,
-        KeyCode::Backspace => SPECIAL + 200,
-        KeyCode::F(n) => SPECIAL + 200 + n as u32,
-        KeyCode::Insert => SPECIAL + 213, KeyCode::Delete => SPECIAL + 214, KeyCode::Home => SPECIAL + 215, KeyCode::End => SPECIAL + 216,
-        KeyCode::PageDown => SPECIAL + 217, KeyCode::PageUp => SPECIAL + 218, KeyCode::BackTab => SPECIAL + 219,
-        KeyCode::Up => SPECIAL + 220, KeyCode::Down => SPECIAL + 221, KeyCode::Left => SPECIAL + 222, KeyCode::Right => SPECIAL + 223,
-        _ => SPECIAL + 400,
+        KeyCode::Backspace => AFTER_MOUSE,
+        KeyCode::F(n) if n >= 100 => KEYC_USER + (n - 100) as u32,
+        KeyCode::F(n) if n > 12 => AFTER_MOUSE + 24 + (n - 13) as u32,
+        KeyCode::F(n) => AFTER_MOUSE + n as u32,
+        KeyCode::Insert => AFTER_MOUSE + 13, KeyCode::Delete => AFTER_MOUSE + 14, KeyCode::Home => AFTER_MOUSE + 15, KeyCode::End => AFTER_MOUSE + 16,
+        KeyCode::PageDown => AFTER_MOUSE + 17, KeyCode::PageUp => AFTER_MOUSE + 18, KeyCode::BackTab => AFTER_MOUSE + 19,
+        KeyCode::Up => AFTER_MOUSE + 20, KeyCode::Down => AFTER_MOUSE + 21, KeyCode::Left => AFTER_MOUSE + 22, KeyCode::Right => AFTER_MOUSE + 23,
+        _ => KEYC_USER - 1,
     };
     (m, base)
+}
+
+// ── tmux's mouse keys ────────────────────────────────────────────────────────
+
+/// tmux's KEYC_BASE: its special keys are characters past it, in the private-use plane — so are
+/// hn's mouse keys, in tmux's order, and they sort as tmux's key codes do.
+const KEYC_BASE: u32 = 0x10e000;
+const KEYC_USER: u32 = 0x10f000;
+/// KEYC_MOUSEMOVE_PANE, the first mouse key: each event takes six, one for each place.
+const MOUSE_FIRST: u32 = KEYC_BASE + 8;
+const MOUSE_SLOTS: u32 = 66;
+/// Where a mouse event was (the six of each mouse key, in tmux's order).
+pub const WHERE: [&str; 6] = ["Pane", "Status", "StatusLeft", "StatusRight", "StatusDefault", "Border"];
+pub const PANE: usize = 0;
+pub const STATUS: usize = 1;
+pub const STATUS_LEFT: usize = 2;
+pub const STATUS_RIGHT: usize = 3;
+pub const STATUS_DEFAULT: usize = 4;
+pub const BORDER: usize = 5;
+/// The buttons a mouse key can name (tmux has no 4 or 5: those are the wheel).
+pub const MOUSE_BUTTONS: [u8; 9] = [1, 2, 3, 6, 7, 8, 9, 10, 11];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseKind { Move, Down, Up, Drag, DragEnd, WheelUp, WheelDown, Second, Double, Triple }
+
+/// tmux's mouse events in its order, each with a key per button or just the one.
+const EVENTS: [(MouseKind, &str, bool); 10] = [
+    (MouseKind::Move, "MouseMove", false), (MouseKind::Down, "MouseDown", true), (MouseKind::Up, "MouseUp", true),
+    (MouseKind::Drag, "MouseDrag", true), (MouseKind::DragEnd, "MouseDragEnd", true), (MouseKind::WheelUp, "WheelUp", false),
+    (MouseKind::WheelDown, "WheelDown", false), (MouseKind::Second, "SecondClick", true), (MouseKind::Double, "DoubleClick", true),
+    (MouseKind::Triple, "TripleClick", true),
+];
+
+/// The key for a mouse event: its kind, its button (1–3, 6–11; none for the wheel and a move)
+/// and where it was (WHERE's index).
+pub fn mouse_code(kind: MouseKind, button: u8, place: usize) -> Option<KeyCode> {
+    let mut slot = 0;
+    for (k, _, buttons) in EVENTS {
+        if k == kind {
+            let b = if buttons { MOUSE_BUTTONS.iter().position(|x| *x == button)? as u32 } else { 0 };
+            return char::from_u32(MOUSE_FIRST + (slot + b) * 6 + place as u32).map(KeyCode::Char);
+        }
+        slot += if buttons { 9 } else { 1 };
+    }
+    None
+}
+
+/// A mouse key's kind, button and place.
+pub fn mouse_parts(code: &KeyCode) -> Option<(MouseKind, u8, usize)> {
+    let KeyCode::Char(c) = code else { return None };
+    let i = (*c as u32).checked_sub(MOUSE_FIRST)?;
+    if i >= MOUSE_SLOTS * 6 { return None }
+    let (mut slot, place) = (i / 6, (i % 6) as usize);
+    for (k, _, buttons) in EVENTS {
+        let n = if buttons { 9 } else { 1 };
+        if slot < n { return Some((k, if buttons { MOUSE_BUTTONS[slot as usize] } else { 0 }, place)) }
+        slot -= n;
+    }
+    None
+}
+
+pub fn is_mouse(code: &KeyCode) -> bool { mouse_parts(code).is_some() }
+
+fn mouse_name(code: &KeyCode) -> Option<String> {
+    let (kind, button, place) = mouse_parts(code)?;
+    let (_, name, buttons) = EVENTS.iter().find(|(k, _, _)| *k == kind)?;
+    Some(if *buttons { format!("{name}{button}{}", WHERE[place]) } else { format!("{name}{}", WHERE[place]) })
+}
+
+/// A mouse key by its name, in any case (key_string_search_table); MouseMove… is not one tmux
+/// lets you bind.
+fn mouse_from_name(s: &str) -> Option<KeyCode> {
+    let lower = s.to_ascii_lowercase();
+    for (kind, name, buttons) in EVENTS {
+        if kind == MouseKind::Move { continue }
+        let Some(rest) = lower.strip_prefix(&name.to_ascii_lowercase()) else { continue };
+        let (button, place) = if buttons {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            match digits.parse::<u8>() { Ok(b) if b.to_string() == digits => (b, &rest[digits.len()..]), _ => continue }
+        } else { (0, rest) };
+        let Some(place) = WHERE.iter().position(|w| w.to_ascii_lowercase() == place) else { continue };
+        if let Some(code) = mouse_code(kind, button, place) { return Some(code) }
+    }
+    None
+}
+
+/// tmux's copy-mode tables as it starts (tests/fixtures), read once.
+fn copy_defaults(t: Table) -> &'static [Binding] {
+    static VI: std::sync::OnceLock<Vec<Binding>> = std::sync::OnceLock::new();
+    static EMACS: std::sync::OnceLock<Vec<Binding>> = std::sync::OnceLock::new();
+    if t == Table::CopyVi { VI.get_or_init(|| include_str!("../tests/fixtures/tmux-3.5a-copy-mode-vi.txt").lines().filter_map(fixture_binding).collect()) }
+    else { EMACS.get_or_init(|| include_str!("../tests/fixtures/tmux-3.5a-copy-mode.txt").lines().filter_map(fixture_binding).collect()) }
 }
 
 /// A line of `tmux list-keys` as a binding (the fixtures).
@@ -300,45 +414,73 @@ pub fn name(chord: &Chord) -> String {
     if chord.mods.contains(KeyModifiers::SHIFT) && !shifted_letter { out.push_str("S-") }
     out.push_str(&match chord.code {
         KeyCode::Char(' ') => "Space".into(),
+        KeyCode::Char(_) if is_mouse(&chord.code) => mouse_name(&chord.code).unwrap_or_default(),
         KeyCode::Char(c) if shifted_letter && chord.mods.contains(KeyModifiers::SHIFT) => c.to_ascii_uppercase().to_string(),
         KeyCode::Char(c) => c.to_string(),
         KeyCode::Enter => "Enter".into(), KeyCode::Tab => "Tab".into(), KeyCode::BackTab => "BTab".into(), KeyCode::Esc => "Escape".into(),
         KeyCode::Backspace => "BSpace".into(), KeyCode::Up => "Up".into(), KeyCode::Down => "Down".into(), KeyCode::Left => "Left".into(),
         KeyCode::Right => "Right".into(), KeyCode::PageUp => "PPage".into(), KeyCode::PageDown => "NPage".into(), KeyCode::Home => "Home".into(),
-        KeyCode::End => "End".into(), KeyCode::Delete => "DC".into(), KeyCode::Insert => "IC".into(), KeyCode::F(n) if n >= 100 => format!("User{}", n - 100), KeyCode::F(n) => format!("F{n}"),
+        KeyCode::End => "End".into(), KeyCode::Delete => "DC".into(), KeyCode::Insert => "IC".into(), KeyCode::F(n) if n >= 100 => format!("User{}", n - 100),
+        KeyCode::F(n) if n > 12 => KEYPAD.get(n as usize - 13).map(|k| k.to_string()).unwrap_or_else(|| format!("F{n}")),
+        KeyCode::F(n) => format!("F{n}"),
         _ => "?".into(),
     });
     out
 }
 
-/// A key as tmux writes it (`C-a`, `M-Left`, `S-Up`, `Space`, `\;`) or as a person does (`ctrl+a`).
+/// tmux's keypad keys (KP/ … KP.), kept past F12 so they bind and list as tmux's do.
+const KEYPAD: [&str; 16] = ["KP/", "KP*", "KP-", "KP7", "KP8", "KP9", "KP+", "KP4", "KP5", "KP6", "KP1", "KP2", "KP3", "KPEnter", "KP0", "KP."];
+
+/// A key as tmux writes it (`C-a`, `M-Left`, `S-Up`, `Space`, `\;`, `MouseDown1Pane`) or as a
+/// person does (`ctrl+a`) — tmux's key_string_lookup_string: modifiers in either case, `^x` for
+/// C-x, a key's name in any case.
 pub fn parse(text: &str) -> Result<Chord, String> {
     let raw = text.trim();
     // A lone quote IS the key (`unbind '"'` arrives here as `"`).
     if raw.chars().count() == 1 { return Ok(Chord::normal(KeyCode::Char(raw.chars().next().unwrap()), KeyModifiers::NONE)) }
     let t = raw.trim_matches('"').trim_matches('\'');
     let t = t.strip_prefix('\\').unwrap_or(t);
-    if t.contains('+') && t.len() > 1 { return Chord::parse(t) }
+    // `ctrl+a`, `alt+shift+x`: a person's spelling (tmux's `C-+` and `KP+` are not).
+    let words_first = t.split('+').next().map(|w| w.len() > 1 && w.chars().all(|c| c.is_ascii_alphabetic())).unwrap_or(false);
+    if t.contains('+') && t.len() > 1 && words_first && !t.to_ascii_uppercase().starts_with("KP") { return Chord::parse(t) }
+    let unknown = || format!("unknown key: {raw}");
     let mut mods = KeyModifiers::NONE;
     let mut rest = t;
+    // ^x: C-x (`^` alone, or with more after it, is the start of a longer name).
+    if let Some(r) = rest.strip_prefix('^') {
+        if r.chars().count() == 1 { return Ok(Chord::normal(KeyCode::Char(r.chars().next().unwrap().to_ascii_lowercase()), KeyModifiers::CONTROL)) }
+        if !r.is_empty() { mods |= KeyModifiers::CONTROL; rest = r }
+    }
     loop {
-        if rest.len() > 2 {
-            let (head, tail) = rest.split_at(2);
-            let m = match head { "C-" => Some(KeyModifiers::CONTROL), "M-" => Some(KeyModifiers::ALT), "S-" => Some(KeyModifiers::SHIFT), "D-" => Some(KeyModifiers::SUPER), _ => None };
-            if let Some(m) = m { mods |= m; rest = tail; continue }
+        let b = rest.as_bytes();
+        if b.len() >= 2 && b[1] == b'-' {
+            let m = match b[0] { b'C' | b'c' => KeyModifiers::CONTROL, b'M' | b'm' => KeyModifiers::ALT, b'S' | b's' => KeyModifiers::SHIFT, b'D' | b'd' if b.len() > 2 => KeyModifiers::SUPER, _ => return Err(unknown()) };
+            mods |= m;
+            rest = &rest[2..];
+            continue;
         }
         break;
     }
-    let code = match rest {
-        "Space" => KeyCode::Char(' '), "Enter" => KeyCode::Enter, "Tab" => KeyCode::Tab, "BTab" => KeyCode::BackTab, "Escape" => KeyCode::Esc,
-        "BSpace" => KeyCode::Backspace, "Up" => KeyCode::Up, "Down" => KeyCode::Down, "Left" => KeyCode::Left, "Right" => KeyCode::Right,
-        "PPage" | "PageUp" | "PgUp" => KeyCode::PageUp, "NPage" | "PageDown" | "PgDn" => KeyCode::PageDown, "Home" => KeyCode::Home, "End" => KeyCode::End,
-        "DC" => KeyCode::Delete, "IC" => KeyCode::Insert,
+    if rest.is_empty() { return Err(unknown()) }
+    if rest.chars().count() == 1 {
+        let c = rest.chars().next().unwrap();
+        if (c as u32) < 32 { return Err(unknown()) }
+        return Ok(Chord::normal(KeyCode::Char(c), mods));
+    }
+    let lower = rest.to_ascii_lowercase();
+    let code = match lower.as_str() {
+        "space" => KeyCode::Char(' '), "enter" => KeyCode::Enter, "tab" => KeyCode::Tab, "btab" => KeyCode::BackTab, "escape" => KeyCode::Esc,
+        "bspace" => KeyCode::Backspace, "up" => KeyCode::Up, "down" => KeyCode::Down, "left" => KeyCode::Left, "right" => KeyCode::Right,
+        "ppage" | "pageup" | "pgup" => KeyCode::PageUp, "npage" | "pagedown" | "pgdn" => KeyCode::PageDown, "home" => KeyCode::Home, "end" => KeyCode::End,
+        "dc" | "delete" => KeyCode::Delete, "ic" | "insert" => KeyCode::Insert,
         // tmux knows F1 to F12, and User0… (user-keys) — kept here past the F keys.
-        f if f.len() > 1 && f.starts_with('F') && matches!(f[1..].parse::<u8>(), Ok(1..=12)) => KeyCode::F(f[1..].parse().unwrap()),
-        u if u.starts_with("User") && matches!(u[4..].parse::<u8>(), Ok(0..=155)) => KeyCode::F(100 + u[4..].parse::<u8>().unwrap()),
-        c if c.chars().count() == 1 => KeyCode::Char(c.chars().next().unwrap()),
-        _ => return Err(format!("unknown key: {raw}")),
+        f if f.len() > 1 && f.starts_with('f') && matches!(f[1..].parse::<u8>(), Ok(1..=12)) && !f[1..].starts_with('0') => KeyCode::F(f[1..].parse().unwrap()),
+        u if u.starts_with("user") && matches!(u[4..].parse::<u8>(), Ok(0..=155)) => KeyCode::F(100 + u[4..].parse::<u8>().unwrap()),
+        k if KEYPAD.iter().any(|p| p.to_ascii_lowercase() == k) => KeyCode::F(13 + KEYPAD.iter().position(|p| p.to_ascii_lowercase() == k).unwrap() as u8),
+        _ => match mouse_from_name(rest) { Some(code) => code, None => {
+            // One character as UTF-8 (a key tmux reads as the character).
+            return Err(unknown())
+        } },
     };
     Ok(Chord::normal(code, mods))
 }
@@ -363,13 +505,35 @@ mod tests {
     }
 
     #[test]
+    fn mouse_keys_as_tmux_names_them() {
+        for n in ["MouseDown1Pane", "MouseDragEnd1Pane", "WheelUpStatus", "DoubleClick3Border", "MouseUp11StatusDefault", "TripleClick1StatusLeft", "SecondClick2StatusRight", "M-MouseDown3Pane", "S-WheelDownPane", "C-M-MouseDrag1Border"] {
+            assert_eq!(name(&parse(n).unwrap()), n);
+        }
+        assert_eq!(name(&parse("mousedown1pane").unwrap()), "MouseDown1Pane");
+        assert!(parse("MouseMovePane").is_err());
+        assert!(parse("MouseDown4Pane").is_err());
+        assert!(parse("MouseDown01Pane").is_err());
+        assert_eq!(name(&parse("enter").unwrap()), "Enter");
+        assert_eq!(name(&parse("c-M-x").unwrap()), "C-M-x");
+        assert_eq!(name(&parse("^A").unwrap()), "C-a");
+        assert_eq!(name(&parse("KP+").unwrap()), "KP+");
+        assert_eq!(name(&parse("C-+").unwrap()), "C-+");
+        // tmux's key codes: the mouse keys before BSpace, F1 and the arrows; modifiers after all.
+        let o = |n: &str| order(&parse(n).unwrap());
+        assert!(o("MouseDown1Pane") < o("MouseDown1Status") && o("WheelUpPane") < o("DoubleClick1Pane") && o("TripleClick11Border") < o("BSpace"));
+        assert!(o("~") < o("MouseDown1Pane") && o("Right") < o("KP/") && o("KP.") < o("User0") && o("User0") < o("M-a"));
+    }
+
+    #[test]
     fn defaults_are_tmux() {
         let km = Keymap::tmux_defaults();
         assert_eq!(km.prefix_command(&ch('%')).unwrap().command, "split-window -h");
         assert_eq!(km.prefix_command(&ch('"')).unwrap().command, "split-window");
         assert_eq!(km.prefix_command(&ch('c')).unwrap().command, "new-window");
         assert!(km.prefix_command(&Chord::normal(KeyCode::Up, KeyModifiers::NONE)).unwrap().repeat);
-        assert!(km.root_table.is_empty());
+        // The root table is tmux's: its mouse keys, nothing else.
+        assert!(km.root_table.iter().all(|b| is_mouse(&b.chord.code)));
+        assert_eq!(km.root_table.len(), 16);
         assert_eq!(km.hint("new-window").as_deref(), Some("C-b c"));
     }
 }

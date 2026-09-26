@@ -418,6 +418,46 @@ impl Node {
         self.resize_layout(lc, dir, change, opposite);
     }
 
+    /// layout_search_by_border: the cell whose border (after it) is at x, y — inside a cell,
+    /// the search goes on in it.
+    fn search_by_border(&self, i: usize, x: u32, y: u32) -> Option<usize> {
+        let mut last: Option<usize> = None;
+        for &k in &self.c[i].cells {
+            let c = &self.c[k];
+            if x >= c.xoff && x < c.xoff + c.sx && y >= c.yoff && y < c.yoff + c.sy { return self.search_by_border(k, x, y) }
+            let Some(l) = last else { last = Some(k); continue };
+            let lc = &self.c[l];
+            match self.c[i].dir {
+                Some(Dir::Horizontal) => if x < c.xoff && x >= lc.xoff + lc.sx { return Some(l) },
+                Some(Dir::Vertical) => if y < c.yoff && y >= lc.yoff + lc.sy { return Some(l) },
+                None => {}
+            }
+            last = Some(k);
+        }
+        None
+    }
+
+    /// cmd_resize_pane_mouse_update: a border dragged from (lx, ly) to (x, y) — every cell with a
+    /// border at or beside where the drag was moves its border by as much. True when one moved.
+    pub fn drag_border(&mut self, lx: u32, ly: u32, x: u32, y: u32) -> bool {
+        let mut cells: Vec<usize> = Vec::new();
+        for (dx, dy) in [(0i64, 0i64), (0, 1), (1, 0), (0, -1), (-1, 0)] {
+            let (px, py) = (lx as i64 + dx, ly as i64 + dy);
+            if px < 0 || py < 0 { continue }
+            if let Some(lc) = self.search_by_border(self.root, px as u32, py as u32) { if !cells.contains(&lc) { cells.push(lc) } }
+        }
+        let mut moved = false;
+        for lc in cells {
+            let Some(p) = self.c[lc].parent else { continue };
+            match self.c[p].dir {
+                Some(Dir::Vertical) if y != ly => { self.resize_layout(lc, Dir::Vertical, y as i32 - ly as i32, false); moved = true }
+                Some(Dir::Horizontal) if x != lx => { self.resize_layout(lc, Dir::Horizontal, x as i32 - lx as i32, false); moved = true }
+                _ => {}
+            }
+        }
+        moved
+    }
+
     /// layout_resize_pane_to: [pane] made `size` cells in a direction.
     pub fn resize_pane_to(&mut self, pane: u64, dir: Dir, size: u32) {
         let Some(mut lc) = self.find(pane) else { return };

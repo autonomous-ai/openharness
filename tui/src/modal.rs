@@ -99,13 +99,30 @@ impl Prompt {
     }
 }
 
-/// One row of a tmux display-menu: a label, its shortcut key, the command it runs.
+/// One row of a tmux display-menu: a label (a format, its styles kept), its shortcut key, the
+/// command it runs.
 #[derive(Clone, Debug)]
 pub struct MenuItem { pub label: String, pub key: String, pub command: String, pub disabled: bool, pub separator: bool }
 
+/// tmux's display-menu (menu.c): its items, where its box is (x, y: the top-left corner; the box
+/// is width + 4 by the items + 2), which item is chosen (none yet when the mouse opened it), -O,
+/// and the mouse event of the command that opened it (its items' commands run with it).
+#[derive(Clone, Debug)]
+pub struct Menu {
+    pub title: String,
+    pub items: Vec<MenuItem>,
+    pub choice: Option<usize>,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub stay_open: bool,
+    pub no_mouse: bool,
+    pub mouse: Option<crate::mouse::Event>,
+}
+
 pub enum Modal {
     /// tmux's display-menu: a box of items, each with its key; Enter or the key runs one.
-    Menu { title: String, items: Vec<MenuItem>, cursor: usize },
+    Menu(Menu),
     Picker { kind: PickerKind, picker: Picker },
     Prompt(Prompt),
     /// tmux `confirm-before`: `Confirm 'kill-pane'? (y/n)` in the status line; `key` answers

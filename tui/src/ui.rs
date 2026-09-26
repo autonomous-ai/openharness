@@ -51,6 +51,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         _ => {}
     }
     let rects = app.rects.clone();
+    // Copy mode is a pane's: every pane in it shows where it is.
+    for (id, rect) in &rects {
+        if let Some(p) = app.panes.get(id) { if p.copy.is_some() { copy_indicator(buf, p, app.content_of(app.tab(), *rect)) } }
+    }
     if let Some(modal) = &mut app.modal {
         match modal {
             Modal::Picker { kind, picker } => { cursor = Some(fzf(buf, body, picker, kind, &*app_preview_placeholder())) }
@@ -58,7 +62,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Modal::Copy { pane } => {
                 if let (Some(p), Some((_, rect))) = (app.panes.get(pane), rects.iter().find(|(id, _)| id == pane)) {
                     let content = app.content_of(app.tab(), *rect);
-                    copy_indicator(buf, p, content);
                     cursor = p.copy.and_then(|c| {
                         let row = c.point.line.0 + p.term.grid().display_offset() as i32;
                         let col = c.point.column.0 as u16;
@@ -89,7 +92,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let inner = Rect::new(area.x + 1, area.y + 1, w.saturating_sub(2), h.saturating_sub(2));
         if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, (None, None)); }
     }
-    if let Some(Modal::Menu { title, items, cursor }) = &app.modal { menu(buf, body, title, items, *cursor) }
+    if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
@@ -98,38 +101,53 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
 
-/// tmux's display-menu: a box in the middle, the title in its top border, `Label  (k)` rows, the
-/// chosen one in menu-selected-style (yellow on black), disabled ones dim, '' a rule across.
-fn menu(buf: &mut Buffer, body: Rect, title: &str, items: &[crate::modal::MenuItem], cursor: usize) {
-    let row_w = items.iter().filter(|it| !it.separator).map(|it| it.label.width() + if it.key.is_empty() { 0 } else { it.key.width() + 4 }).max().unwrap_or(0);
-    let w = (row_w.max(title.width() + 2) as u16 + 4).min(body.width);
-    let h = (items.len() as u16 + 2).min(body.height);
-    let area = Rect::new(body.x + (body.width - w) / 2, body.y + (body.height - h) / 2, w, h);
-    for y in area.y..area.y + h { for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
-    let border = Style::default();
-    let (x1, y1) = (area.x + w - 1, area.y + h - 1);
-    for x in area.x..=x1 { buf.set_string(x, area.y, "─", border); buf.set_string(x, y1, "─", border) }
-    for y in area.y..=y1 { buf.set_string(area.x, y, "│", border); buf.set_string(x1, y, "│", border) }
-    buf.set_string(area.x, area.y, "┌", border); buf.set_string(x1, area.y, "┐", border);
-    buf.set_string(area.x, y1, "└", border); buf.set_string(x1, y1, "┘", border);
-    if !title.is_empty() {
-        let t = clip(&format!(" {title} "), w.saturating_sub(2) as usize);
-        buf.set_string(area.x + (w - t.width() as u16) / 2, area.y, &t, border);
-    }
-    let inner = w.saturating_sub(2) as usize;
-    for (i, it) in items.iter().enumerate().take(h.saturating_sub(2) as usize) {
-        let y = area.y + 1 + i as u16;
+/// tmux's menu (menu_draw_cb, screen_write_menu, screen_write_box): a box width + 4 wide at its
+/// place in menu-border-lines and menu-border-style, the title drawn over the top border from its
+/// third column, each item from the third column in menu-style — menu-selected-style when chosen,
+/// dim when disabled — its key right-aligned as (k); '' a rule across, joined to the sides.
+fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
+    let tab_id = app.tab().id.clone();
+    let opt = |name: &str, default: &str| app.options.get(name, &tab_id, None).unwrap_or_else(|| default.to_string());
+    let base = Style::default();
+    let style = crate::draw::style_over(&opt("menu-style", "default"), base);
+    let selected = crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base);
+    let border = crate::draw::style_over(&opt("menu-border-style", "default"), style);
+    let lines = opt("menu-border-lines", "single");
+    // screen_write_box_border_set: corners, sides, and the rule's joins.
+    let (tl, tr, bl, br, hz, vt, lj, rj) = match lines.as_str() {
+        "double" => ("╔", "╗", "╚", "╝", "═", "║", "╠", "╣"),
+        "heavy" => ("┏", "┓", "┗", "┛", "━", "┃", "┣", "┫"),
+        "simple" => ("+", "+", "+", "+", "-", "|", "+", "+"),
+        "rounded" => ("╭", "╮", "╰", "╯", "─", "│", "├", "┤"),
+        "padded" | "none" => (" ", " ", " ", " ", " ", " ", " ", " "),
+        _ => ("┌", "┐", "└", "┘", "─", "│", "├", "┤"),
+    };
+    let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
+    let (x0, y0) = (m.x, m.y);
+    let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
+    for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
+    let (x1, y1) = (x0 + w - 1, y0 + h - 1);
+    for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
+    for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
+    put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+    let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
+        for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
+            if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+        }
+    };
+    if !m.title.is_empty() { draw_at(buf, x0 + 2, y0, &m.title, border, w.saturating_sub(4)) }
+    for (i, it) in m.items.iter().enumerate() {
+        let y = y0 + 1 + i as u16;
         if it.separator {
-            buf.set_string(area.x, y, "├", border);
-            for x in area.x + 1..x1 { buf.set_string(x, y, "─", border) }
-            buf.set_string(x1, y, "┤", border);
+            put(buf, x0, y, lj, border);
+            for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
+            put(buf, x1, y, rj, border);
             continue;
         }
-        let key = if it.key.is_empty() { String::new() } else { format!("({})", it.key) };
-        let gap = inner.saturating_sub(it.label.width() + key.width() + 2);
-        let text = format!(" {}{}{} ", it.label, " ".repeat(gap), key);
-        let style = if i == cursor && !it.disabled { Style::default().bg(Color::Yellow).fg(Color::Black) } else if it.disabled { Style::default().add_modifier(Modifier::DIM) } else { Style::default() };
-        buf.set_stringn(area.x + 1, y, clip(&text, inner), inner, style);
+        let st = if m.choice == Some(i) && !it.disabled { selected } else if it.disabled { style.add_modifier(Modifier::DIM) } else { style };
+        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", st) }
+        let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
+        draw_at(buf, x0 + 2, y, &text, st, m.width);
     }
 }
 
@@ -237,7 +255,7 @@ fn border_style(app: &App, active: bool) -> Style {
     // tmux's pane-active-border-style: yellow while the pane is in copy mode, red while the
     // window's panes are synchronized, else green (or your tmux.conf's colour).
     if active {
-        let in_mode = matches!(app.modal, Some(Modal::Copy { .. }) | Some(Modal::Find { .. }));
+        let in_mode = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.copy.is_some()).unwrap_or(false) || matches!(app.modal, Some(Modal::Find { .. }));
         let colour = if app.look.active_border.is_some() { app.look.active_border.unwrap() } else if in_mode { Color::Yellow } else if app.tab().sync { Color::Red } else { theme::TMUX_ACTIVE_BORDER };
         Style::default().fg(colour)
     }
@@ -420,7 +438,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     // Each line is its status-format, expanded and drawn as tmux's format_draw draws it: the
     // left, the window list (cut around the current window, `<` `>` where it was cut) and the
     // right; the windows' ranges are where a click selects them.
-    app.tab_hits.clear();
+    app.status_ranges.clear();
     let tab_id = app.tab().id.clone();
     for row in 0..rect.height {
         let Some(fmt) = app.options.get(&format!("status-format[{row}]"), &tab_id, None) else { continue };
@@ -432,13 +450,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
                 cell.set_style(*st);
             }
         }
-        if row == 0 {
-            for r in ranges {
-                if let crate::draw::RangeKind::Window(n) = r.kind {
-                    if let Some(i) = app.tab_by_num(n as usize) { app.tab_hits.push((i, rect.x + r.start, rect.x + r.end)) }
-                }
-            }
-        }
+        for mut r in ranges { r.start += rect.x; r.end += rect.x; app.status_ranges.push((row, r)) }
     }
     None
 }
@@ -1088,9 +1100,6 @@ fn clip_spans(spans: Vec<Span<'static>>, cols: usize) -> Line<'static> {
     Line::from(out)
 }
 
-pub fn tab_at(app: &App, x: u16) -> Option<usize> {
-    app.tab_hits.iter().find(|(_, from, to)| x >= *from && x < *to).map(|(i, _, _)| *i)
-}
 
 
 #[allow(dead_code)]
