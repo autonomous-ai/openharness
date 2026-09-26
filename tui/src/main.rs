@@ -23,6 +23,7 @@ mod input;
 mod layout;
 mod modal;
 mod options;
+mod paste;
 mod pane;
 mod picker;
 mod proto;

@@ -520,6 +520,24 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
     }
 }
 
+/// A path as tmux's file_read/file_write take it: from the folder of the shell that ran the
+/// command (else hn's), `-` as it is.
+fn client_path(app: &App, path: &str) -> String {
+    if path == "-" || path.starts_with('/') { return path.to_string() }
+    let cwd = app.cli_cwd.clone().or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string())).unwrap_or_else(|| "/".into());
+    format!("{cwd}/{path}")
+}
+
+/// strerror's words for a file error.
+fn io_error(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "No such file or directory".into(),
+        std::io::ErrorKind::PermissionDenied => "Permission denied".into(),
+        std::io::ErrorKind::IsADirectory => "Is a directory".into(),
+        _ => e.to_string(),
+    }
+}
+
 /// A tmux.conf read as tmux reads one (cmd-parse.y): parsed whole — `file:line: error` and none
 /// of it runs — then checked command by command; its commands, each with its file and line (-n:
 /// none; -v: each line printed as tmux prints it).
@@ -897,21 +915,42 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "search-backward" | "search-forward" => { if let Some(pane) = app.focused() { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: command == "search-backward" }) } }
         "paste-buffer" => {
-            // -b a named buffer, -t the pane.
-            let text = match opt(words, "-b") { Some(b) => app.named_buffers.get(&b).cloned(), None => app.buffers.first().cloned() };
-            let Some(text) = text else { app.say("no buffers", theme::WARN); return };
-            match opt(words, "-t").map(|t| pane_target(app, &t)) {
-                Some(Some((_, p))) => { if let Some(pane) = app.panes.get(&p) { if pane.stream.is_some() { app.send_paste(p, &text) } } }
-                Some(None) => app.say(format!("can't find pane: {}", opt(words, "-t").unwrap_or_default()), theme::WARN),
-                None => { if let Some(f) = app.focused() { app.send_paste(f, &text) } }
-            }
+            // tmux's paste-buffer [-dpr] [-s separator] [-b buffer-name] [-t target-pane]: the
+            // buffer (the newest automatic one without -b) into the pane — its newlines as -s, a
+            // newline with -r, else a carriage return; -p bracketed; -d the buffer then deleted.
+            let Some((_, pane)) = target_pane(app, words) else { return };
+            let name = match opt(words, "-b") {
+                Some(b) => { if app.paste.get(&b).is_none() { return app.say(format!("no buffer {b}"), theme::WARN) } Some(b) }
+                None => app.paste.top().map(|b| b.name.clone()),
+            };
+            let Some(name) = name else { return };
+            let text = app.paste.get(&name).map(|b| b.data.clone()).unwrap_or_default();
+            let sep = opt(words, "-s").unwrap_or_else(|| if flag(words, "-r") { "\n".into() } else { "\r".into() });
+            input::paste_into(app, pane, &text, &sep, flag(words, "-p"));
+            if flag(words, "-d") { app.paste.free(&name) }
         }
-        "list-buffers" | "choose-buffer" if app.capture.is_some() => {
-            let lines = app.buffers.iter().enumerate().map(|(i, b)| format!("buffer{i}: {} bytes: \"{}\"", b.len(), b.lines().next().unwrap_or("").chars().take(50).collect::<String>())).collect();
+        "list-buffers" if app.capture.is_some() => {
+            // tmux's list-buffers [-F format] [-f filter]: newest first.
+            let fmt = opt(words, "-F").unwrap_or_else(|| "#{buffer_name}: #{buffer_size} bytes: \"#{buffer_sample}\"".into());
+            let filter = opt(words, "-f");
+            let names: Vec<String> = app.paste.walk().map(|b| b.name.clone()).collect();
+            let mut lines = Vec::new();
+            for n in names {
+                app.format_buffer = Some(n);
+                let keep = filter.as_ref().map(|f| { let v = expand(app, f); !v.is_empty() && v != "0" }).unwrap_or(true);
+                if keep { lines.push(expand(app, &fmt)) }
+            }
+            app.format_buffer = None;
             app.print("list-buffers", lines)
         }
         "list-buffers" | "choose-buffer" => input::run(app, "choose-buffer"),
-        "delete-buffer" => { match opt(words, "-b") { Some(b) => { app.named_buffers.remove(&b); } None => { if !app.buffers.is_empty() { app.buffers.remove(0); } } } }
+        "delete-buffer" => {
+            let name = match opt(words, "-b") {
+                Some(b) => { if app.paste.get(&b).is_none() { return app.say(format!("unknown buffer: {b}"), theme::WARN) } b }
+                None => match app.paste.top() { Some(b) => b.name.clone(), None => return app.say("no buffer", theme::WARN) },
+            };
+            app.paste.free(&name);
+        }
         "choose-tree" => {
             if flag(words, "-s") { input::launch(app, "", Filter::All) }
             else if flag(words, "-m") { input::launch(app, "@", Filter::All) }
@@ -1159,7 +1198,11 @@ fn run_words(app: &mut App, words: &[String]) {
             let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.focused() };
             let range = (opt(words, "-S").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MIN) } else { None })), opt(words, "-E").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MAX) } else { None })));
             let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.text_range(range.0, range.1)) else { return };
-            if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) } else { app.buffers.insert(0, text) }
+            if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) }
+            else {
+                let limit = app.buffer_limit();
+                if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.say(e, theme::WARN) }
+            }
         }
         // has-session: its -t was found (else tmux's error, and 1) before it ran.
         "has-session" => {}
@@ -1208,15 +1251,31 @@ fn run_words(app: &mut App, words: &[String]) {
         "set-hook" | "show-hooks" => {}
         "wait-for" | "wait" => {}
         "pipe-pane" => app.say("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)", theme::WARN),
-        "save-buffer" | "saveb" => {
-            let path = rest(words);
-            let text = app.buffers.first().cloned().unwrap_or_default();
-            if path.is_empty() || path == "-" { app.print("save-buffer", text.lines().map(str::to_string).collect()) }
-            else if let Err(e) = std::fs::write(crate::tmuxconf::expand_home(&path), text) { app.say(format!("{path}: {e}"), theme::WARN) }
+        "save-buffer" | "saveb" | "show-buffer" => {
+            // tmux's save-buffer [-a] [-b buffer-name] path (show-buffer: to the shell, or a view):
+            // the newest automatic buffer without -b; a path from the shell's folder (- its stdout).
+            let b = match opt(words, "-b") {
+                Some(n) => match app.paste.get(&n) { Some(b) => b.clone(), None => return app.say(format!("no buffer {n}"), theme::WARN) },
+                None => match app.paste.top() { Some(b) => b.clone(), None => return app.say("no buffers", theme::WARN) },
+            };
+            let path = if command == "show-buffer" { "-".to_string() } else { expand(app, &positional(words).first().cloned().unwrap_or_default()) };
+            if path == "-" { return app.print_data(command, &b.data) }
+            let path = client_path(app, &path);
+            let written = if flag(words, "-a") {
+                use std::io::Write;
+                std::fs::OpenOptions::new().append(true).create(true).open(&path).and_then(|mut f| f.write_all(b.data.as_bytes()))
+            } else { std::fs::write(&path, &b.data) };
+            if let Err(e) = written { app.say(format!("{path}: {}", io_error(&e)), theme::WARN) }
         }
         "load-buffer" | "loadb" => {
-            let path = rest(words);
-            match std::fs::read_to_string(crate::tmuxconf::expand_home(&path)) { Ok(t) => app.buffers.insert(0, t), Err(e) => app.say(format!("{path}: {e}"), theme::WARN) }
+            // tmux's load-buffer [-w] [-b buffer-name] path: the file (from the shell's folder)
+            // into a buffer — named, or a new automatic one.
+            let path = client_path(app, &expand(app, &positional(words).first().cloned().unwrap_or_default()));
+            let text = if path == "-" { app.cli_stdin.clone().unwrap_or_default() } else {
+                match std::fs::read(&path) { Ok(t) => String::from_utf8_lossy(&t).into_owned(), Err(e) => return app.say(format!("{path}: {}", io_error(&e)), theme::WARN) }
+            };
+            let limit = app.buffer_limit();
+            if let Err(e) = app.paste.set(text, opt(words, "-b").as_deref(), limit) { app.say(e, theme::WARN) }
         }
         "previous-layout" => { let at = (app.tab().layout_at + 3) % 5; app.tab_mut().layout_at = at; app.next_layout() }
         "resize-window" => app.say("resize-window: a window is the terminal's size here", theme::WARN),
@@ -1228,20 +1287,27 @@ fn run_words(app: &mut App, words: &[String]) {
             for p in panes { respawn(app, p) }
         }
         "set-buffer" => {
-            // set-buffer [-a] [-b name] text
-            let mut text = Vec::new();
-            let mut i = 1;
-            while i < words.len() { match words[i].as_str() { "-b" | "-n" | "-t" => i += 1, "-a" | "-w" => {}, w => text.push(w.to_string()) } i += 1 }
-            let text = text.join(" ");
-            match opt(words, "-b") {
-                Some(b) => { let e = app.named_buffers.entry(b).or_default(); if flag(words, "-a") { e.push_str(&text) } else { *e = text } }
-                None => { if flag(words, "-a") && !app.buffers.is_empty() { app.buffers[0].push_str(&text) } else if !text.is_empty() { app.buffers.insert(0, text) } }
+            // tmux's set-buffer [-aw] [-b buffer-name] [-n new-buffer-name] data: -n renames (the
+            // newest automatic buffer without -b), -a appends; an automatic buffer without -b.
+            let name = opt(words, "-b");
+            let exists = name.as_ref().map(|n| app.paste.get(n).is_some()).unwrap_or(false);
+            if let Some(new) = opt(words, "-n") {
+                let old = match &name {
+                    Some(n) if exists => n.clone(),
+                    Some(n) => return app.say(format!("unknown buffer: {n}"), theme::WARN),
+                    None => match app.paste.top() { Some(b) => b.name.clone(), None => return app.say("no buffer", theme::WARN) },
+                };
+                if let Err(e) = app.paste.rename(&old, &new) { app.say(e, theme::WARN) }
+                return;
             }
-        }
-        "show-buffer" => {
-            let text = match opt(words, "-b") { Some(b) => app.named_buffers.get(&b).cloned(), None => app.buffers.first().cloned() };
-            let lines = text.map(|b| b.lines().map(str::to_string).collect()).unwrap_or_default();
-            app.print("show-buffer", lines);
+            let args = positional(words);
+            if args.len() != 1 { return app.say("no data specified", theme::WARN) }
+            if args[0].is_empty() { return }
+            let mut data = String::new();
+            if flag(words, "-a") && exists { data = app.paste.get(name.as_deref().unwrap_or("")).map(|b| b.data.clone()).unwrap_or_default() }
+            data.push_str(&args[0]);
+            let limit = app.buffer_limit();
+            if let Err(e) = app.paste.set(data, name.as_deref(), limit) { app.say(e, theme::WARN) }
         }
         "respawn-pane" => {
             // tmux's respawn-pane: a pane whose harness still runs needs -k.

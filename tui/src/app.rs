@@ -41,6 +41,9 @@ impl crate::cmdparse::Env for App {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnvVar { pub value: Option<String>, pub hidden: bool }
 
+/// Marks a printed text's last line as having no newline of its own (show-buffer's data).
+pub const BARE: char = '\u{2}';
+
 /// A command's answer to the shell that ran it: printed lines, errors, exit status.
 pub type Reply = (Vec<String>, Vec<String>, i32);
 
@@ -159,7 +162,8 @@ pub struct App {
     /// Everything said in the status line, for `show-messages` (C-b ~).
     pub messages: Vec<(std::time::SystemTime, String)>,
     /// Paste buffers, newest first (copy mode's `y`, and `paste-buffer`).
-    pub buffers: Vec<String>,
+    /// tmux's paste buffers (paste.c).
+    pub paste: crate::paste::Paste,
     pub keymap: crate::keys::Keymap,
     /// Colours from ~/.tmux.conf (status, messages, borders).
     pub look: crate::tmuxconf::Look,
@@ -251,13 +255,15 @@ pub struct App {
     /// Copy mode reading a key as copy-mode-vi's, whatever mode-keys is (a `send -X` action run
     /// as the vi key that does it).
     pub copy_as_vi: bool,
+    /// The paste buffer a format is expanded for (list-buffers -F).
+    pub format_buffer: Option<String>,
+    /// What the shell running the command piped in (load-buffer -, source-file -).
+    pub cli_stdin: Option<String>,
     /// The file and line the running command was read from (a config's): its errors say so.
     pub origin: Option<(std::sync::Arc<str>, usize)>,
     /// Commands to run next, before the rest of the queue (source-file's).
     pub insert_next: std::collections::VecDeque<crate::commands::Item>,
 
-    /// set-buffer -b name: named paste buffers.
-    pub named_buffers: std::collections::BTreeMap<String, String>,
     pub capture_err: Option<Vec<String>>,
     /// tmux's global environment: what hn started with, then set-environment -g and a config's
     /// `NAME=value` (%hidden ones hidden).
@@ -332,9 +338,10 @@ impl App {
             cli_cwd: None,
             copy_as_vi: false,
             origin: None,
+            format_buffer: None,
+            cli_stdin: None,
             insert_next: std::collections::VecDeque::new(),
 
-            named_buffers: Default::default(),
             capture_err: None,
             global_env: std::env::vars().map(|(k, v)| (k, EnvVar { value: Some(v), hidden: false })).collect(),
             session_env: Default::default(),
@@ -351,7 +358,7 @@ impl App {
             mouse_changed: false,
             pane_base_index: 0,
             messages: Vec::new(),
-            buffers: Vec::new(),
+            paste: Default::default(),
             keymap: crate::keys::Keymap::tmux_defaults(),
             look: Default::default(),
             repeat_until: None,
@@ -971,6 +978,14 @@ impl App {
         let _ = tx.send((out, err, code));
     }
 
+    /// Data printed as it is (show-buffer): to a shell exactly, its last line without a newline
+    /// when it has none; else shown as print shows lines.
+    pub fn print_data(&mut self, title: &str, data: &str) {
+        let mut lines: Vec<String> = data.split('\n').map(str::to_string).collect();
+        if data.ends_with('\n') { lines.pop(); } else if self.capture.is_some() { if let Some(l) = lines.last_mut() { l.push(BARE) } }
+        self.print(title, lines)
+    }
+
     /// What a command prints: to the shell that asked (hn <command>), else a message or a list.
     pub fn print(&mut self, title: &str, lines: Vec<String>) {
         if let Some(out) = self.capture.as_mut() { out.extend(lines); return }
@@ -1172,6 +1187,12 @@ impl App {
             for (k, v) in found { self.session_env.insert(k, EnvVar { value: Some(v), hidden: false }); }
         }
     }
+
+    /// buffer-limit: how many automatic paste buffers are kept.
+    pub fn buffer_limit(&self) -> usize { self.options.get("buffer-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(50) }
+
+    /// A copied text into a new automatic paste buffer (tmux's paste_add).
+    pub fn add_buffer(&mut self, text: String) { let limit = self.buffer_limit(); self.paste.add(text, limit) }
 
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {
