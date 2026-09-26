@@ -113,7 +113,8 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
                 if let Some(cell) = buf.cell_mut((seam, y)) { cell.set_symbol("│").set_style(border_style(app, touches)); }
             }
         }
-        junctions(buf, body);
+        let contents: Vec<Rect> = rects.iter().map(|(_, r)| Rect::new(r.x, r.y + hdr, r.width, r.height.saturating_sub(hdr))).collect();
+        junctions(buf, body, &contents);
     }
     if app.modal.is_some() && !matches!(app.modal, Some(Modal::Copy { .. })) { None } else { cursor }
 }
@@ -162,8 +163,10 @@ fn pane_state_word(app: &App, pane: &Pane) -> Option<Span<'static>> {
 }
 
 /// Where a seam meets a border line, the box-drawing character that joins them.
-fn junctions(buf: &mut Buffer, body: Rect) {
-    let sym = |buf: &Buffer, x: u16, y: u16| -> String { buf.cell((x, y)).map(|c| c.symbol().to_string()).unwrap_or_default() };
+fn junctions(buf: &mut Buffer, body: Rect, contents: &[Rect]) {
+    // Only border cells join: a pane's own `────` touching a seam is the pane's business.
+    let inside = |x: u16, y: u16| contents.iter().any(|r| r.contains(Position::new(x, y)));
+    let sym = |buf: &Buffer, x: u16, y: u16| -> String { if inside(x, y) { String::new() } else { buf.cell((x, y)).map(|c| c.symbol().to_string()).unwrap_or_default() } };
     let horizontal = |s: &str| matches!(s, "─" | "┬" | "┴" | "┼" | "├" | "┤");
     let vertical = |s: &str| matches!(s, "│" | "┬" | "┴" | "┼" | "├" | "┤");
     for y in body.y..body.y + body.height {

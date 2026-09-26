@@ -13,7 +13,7 @@ use std::time::Instant;
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use uuid::Uuid;
 
@@ -106,7 +106,22 @@ pub struct Pane {
     pending_esc: bool,
 }
 
-fn config() -> Config { Config { scrolling_history: 5_000, ..Config::default() } }
+// A hollow block marks "the program never chose a cursor": the user's own shape stays.
+fn config() -> Config { Config { scrolling_history: 5_000, default_cursor_style: CursorStyle { shape: CursorShape::HollowBlock, blinking: false }, ..Config::default() } }
+
+impl Pane {
+    /// The cursor the program in this pane asked for (DECSCUSR), as crossterm spells it.
+    pub fn cursor_style(&self) -> crossterm::cursor::SetCursorStyle {
+        use crossterm::cursor::SetCursorStyle as S;
+        let style = self.term.cursor_style();
+        match (style.shape, style.blinking) {
+            (CursorShape::Block, true) => S::BlinkingBlock, (CursorShape::Block, false) => S::SteadyBlock,
+            (CursorShape::Underline, true) => S::BlinkingUnderScore, (CursorShape::Underline, false) => S::SteadyUnderScore,
+            (CursorShape::Beam, true) => S::BlinkingBar, (CursorShape::Beam, false) => S::SteadyBar,
+            _ => S::DefaultUserShape,
+        }
+    }
+}
 
 impl Pane {
     pub fn new(id: u64, machine_id: &str, agent_id: &str, cols: u16, rows: u16) -> Pane {

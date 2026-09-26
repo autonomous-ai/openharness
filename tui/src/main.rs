@@ -114,7 +114,7 @@ async fn run(config: config::Config) -> io::Result<()> {
     crossterm::style::force_color_output(true);
     terminal::enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange, cursor::SetCursorStyle::SteadyBar)?;
+    execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
     // The kitty keyboard protocol, where the terminal has it: ⌘ arrives as SUPER, and ^I is not Tab.
     // Pushed without asking first: the capability query waits for an answer that terminals without
     // the protocol never send (half a second of blank screen), and those terminals ignore the push.
@@ -124,7 +124,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let mut out = io::stdout();
-        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, LeaveAlternateScreen, cursor::Show);
+        if enhanced { let _ = execute!(out, PopKeyboardEnhancementFlags); }
+        let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, LeaveAlternateScreen, cursor::Show, cursor::SetCursorStyle::DefaultUserShape);
         let _ = terminal::disable_raw_mode();
         default_hook(info);
     }));
@@ -155,7 +156,9 @@ async fn run(config: config::Config) -> io::Result<()> {
     let settings = tmuxconf::load(&mut app.keymap);
     if let Some(n) = settings.base_index { app.base_index = n }
     if let Some(n) = settings.pane_base_index { app.pane_base_index = n }
-    if let Some(m) = settings.mouse { app.mouse = m }
+    // With a ~/.tmux.conf, tmux's default: no mouse unless it says `set -g mouse on`.
+    app.mouse = settings.mouse.unwrap_or(settings.path.is_none());
+    if !app.mouse { execute!(io::stdout(), DisableMouseCapture)?; }
     if let Some(t) = settings.status_top { app.status_top = t }
     if let Some(ms) = settings.display_ms { app.display_ms = ms.max(300) }
     if let Some(ms) = settings.display_panes_ms { app.display_panes_ms = ms }
@@ -201,6 +204,10 @@ async fn run(config: config::Config) -> io::Result<()> {
             queue!(backend, BeginSynchronizedUpdate)?;
             term.draw(|frame| ui::draw(frame, &mut app))?;
             execute!(term.backend_mut(), EndSynchronizedUpdate)?;
+            // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
+            let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
+            let code = format!("{shape:?}");
+            if code != app.cursor_shape { execute!(term.backend_mut(), shape)?; app.cursor_shape = code }
             if !app.fleet.agents.is_empty() && !app.fleet_marked { app.fleet_marked = true; mark("first frame with harnesses") }
             if !app.first_frame { app.first_frame = true; mark("first frame") }
             last_draw = Instant::now();

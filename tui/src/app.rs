@@ -139,6 +139,8 @@ pub struct App {
     pub last_tab: Option<String>,
     /// tmux's window indexes, by tab id: given once, kept until the window closes (a gap stays).
     pub nums: HashMap<String, usize>,
+    /// The cursor shape last sent to the terminal.
+    pub cursor_shape: String,
     /// Whether the terminal window has focus (focus reporting) — notifications go out when it does not.
     pub terminal_focused: bool,
     pub fleet_marked: bool,
@@ -167,6 +169,7 @@ impl App {
             display_panes_ms: 1000,
             base_index: 0,
             nums: HashMap::new(),
+            cursor_shape: String::new(),
             pane_base_index: 0,
             messages: Vec::new(),
             buffers: Vec::new(),
@@ -1074,7 +1077,8 @@ impl App {
         let ids = self.tab().panes();
         if ids.len() < 2 { return }
         let n = ids.len() as i64;
-        let rotated: Vec<u64> = (0..n).map(|i| ids[((i - by).rem_euclid(n)) as usize]).collect();
+        // tmux's rotate-window (C-o) moves panes up: each position takes the pane after it.
+        let rotated: Vec<u64> = (0..n).map(|i| ids[((i + by).rem_euclid(n)) as usize]).collect();
         if let Some(root) = self.tab_mut().root.as_mut() {
             // Relabel leaves in order: position i now holds rotated[i].
             let mut i = 0;
