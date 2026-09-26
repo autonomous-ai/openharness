@@ -100,6 +100,16 @@ impl Store {
 
     /// The value in force for `name` here: the pane's, the window's, the session's, the global one,
     /// then tmux's default. None for an option nobody set and tmux has no default for (`@x`).
+    /// A global array option's items in index order (command-alias, update-environment): the
+    /// defaults, as set over them.
+    pub fn array(&self, name: &str) -> Vec<String> {
+        let prefix = format!("{name}[");
+        let index = |k: &str| k.strip_prefix(&prefix).and_then(|r| r.strip_suffix(']')).and_then(|n| n.parse::<usize>().ok());
+        let mut items: BTreeMap<usize, String> = BTreeMap::new();
+        for (k, v) in defaults().iter().chain(self.server.iter()).chain(self.global_session.iter()).chain(self.global_window.iter()) { if let Some(i) = index(k) { items.insert(i, v.clone()); } }
+        items.into_values().collect()
+    }
+
     pub fn get(&self, name: &str, window: &str, pane: Option<u64>) -> Option<String> {
         let layers: Vec<Option<&BTreeMap<String, String>>> = if name.starts_with('@') {
             vec![pane.and_then(|p| self.panes.get(&p)), self.windows.get(window), Some(&self.global_window), Some(&self.session), Some(&self.global_session), Some(&self.server)]
@@ -259,13 +269,22 @@ pub fn escape(s: &str) -> String {
         if c0 != ' ' && (quotes.is_some() || c0 == '~') { return format!("\\{c0}") }
     }
     let mut esc = String::new();
-    for c in s.chars() {
+    let all: Vec<char> = s.chars().collect();
+    for (i, &c) in all.iter().enumerate() {
         match c {
             '\t' => esc.push_str("\\t"),
             '\n' => esc.push_str("\\n"),
             '\r' => esc.push_str("\\r"),
             '\\' => esc.push_str("\\\\"),
-            '"' | '$' if quotes == Some('"') => { esc.push('\\'); esc.push(c) }
+            '"' if quotes == Some('"') => { esc.push('\\'); esc.push(c) }
+            // utf8_strvis: a `$` a variable could follow ($HOME, $_x, ${x}) is escaped, another not.
+            '$' if quotes == Some('"') && all.get(i + 1).map(|n| n.is_ascii_alphabetic() || *n == '_' || *n == '{').unwrap_or(false) => { esc.push('\\'); esc.push(c) }
+            // vis(3) VIS_CSTYLE: the C escapes by name, \0 (\000 before an octal digit), else octal.
+            '\x07' => esc.push_str("\\a"),
+            '\x08' => esc.push_str("\\b"),
+            '\x0b' => esc.push_str("\\v"),
+            '\x0c' => esc.push_str("\\f"),
+            '\0' => esc.push_str(if all.get(i + 1).map(|n| ('0'..='7').contains(n)).unwrap_or(false) { "\\000" } else { "\\0" }),
             c if (c as u32) < 0x20 || c as u32 == 0x7f => esc.push_str(&format!("\\{:03o}", c as u32)),
             c => esc.push(c),
         }

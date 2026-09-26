@@ -32,7 +32,11 @@ being a tab and a pane being a harness. If you have a `~/.tmux.conf`, it is read
 binds (copy-mode-vi's and vim-tmux-navigator's too), `source-file`, `if-shell`, `base-index`,
 `renumber-windows`, `mouse`, `mode-keys`, `status-left`/`status-right` and the window formats
 (`#[…]` styles, `#{?…}`, `%H:%M`), `pane-border-format`, `synchronize-panes` and your colours come
-with you. Plugins (tpm) do not load; `hn --keys` lists every line not used.
+with you. It is read as tmux reads it (tmux's own parser, ported): quotes and escapes, `$VAR` and
+`~`, `VAR=value` and `%hidden`, `%if`/`%elif`/`%else`, `{ }` blocks, `source-file` globs — the
+whole file checked first, so a bad line is `file:line: why` and none of that file runs, as in
+tmux. `run-shell` lines run too: a plugin's `tmux …` reaches hn (the `tmux` on its PATH is hn),
+never a tmux server you have running.
 
 Splits, `resize-pane`, the seven layouts, `swap-pane`, `rotate-window`, `join-pane`, `break-pane`
 and `select-pane` are tmux 3.5a's own arithmetic (layout.c, window.c): the same sizes, the same

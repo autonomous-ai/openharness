@@ -71,6 +71,42 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
     Some(path)
 }
 
+/// What hn's jobs (run-shell, if-shell, #(), copy-pipe) run with, as tmux's run with TMUX set:
+/// HN_SOCKET naming this client, TMUX saying they run under one, and a `tmux` on the PATH that
+/// is hn — so a script's (or a plugin's) `tmux …` reaches this client, never a tmux server.
+pub fn job_env() -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    let Some(sock) = here() else { return env };
+    env.push(("HN_SOCKET".into(), sock.display().to_string()));
+    env.push(("TMUX".into(), format!("{},{},0", sock.display(), std::process::id())));
+    if let Some(bin) = shim() {
+        let path = std::env::var("PATH").unwrap_or_default();
+        env.push(("PATH".into(), format!("{}:{path}", bin.display())));
+    }
+    env
+}
+
+/// The folder holding hn's `tmux` (made once): a script running this hn as tmux.
+fn shim() -> Option<PathBuf> {
+    static SHIM: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    SHIM.get_or_init(|| {
+        // One folder per hn binary: a test build's tmux never stands in for another hn's.
+        let me = std::env::current_exe().ok()?;
+        let tag = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); me.hash(&mut h); h.finish() };
+        let bin = dir().join(format!("bin-{tag:016x}"));
+        std::fs::create_dir_all(&bin).ok()?;
+        let script = format!("#!/bin/sh\n# hn's tmux: what hn runs reaches hn, not a tmux server.\nHN_AS_TMUX=1 exec '{}' \"$@\"\n", me.display().to_string().replace('\'', "'\\''"));
+        let path = bin.join("tmux");
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(script.as_str()) {
+            let tmp = bin.join(format!(".tmux.{}", std::process::id()));
+            std::fs::write(&tmp, &script).ok()?;
+            #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).ok()?; }
+            std::fs::rename(&tmp, &path).ok()?;
+        }
+        Some(bin)
+    }).clone()
+}
+
 /// Remove sockets nobody answers on (a client that was killed).
 fn sweep(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };

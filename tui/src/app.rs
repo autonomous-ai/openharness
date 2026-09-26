@@ -20,6 +20,27 @@ use crate::pane::{self, Pane, Phase};
 use crate::proto::{self, Kind};
 use crate::theme;
 
+/// What tmux's parser asks of the server: its global environment, formats, home folders.
+impl crate::cmdparse::Env for App {
+    fn var(&self, name: &str) -> Option<String> { self.global_env.get(name).and_then(|e| e.value.clone()) }
+    fn assign(&mut self, assignment: &str, hidden: bool) {
+        let Some((k, v)) = assignment.split_once('=') else { return };
+        self.global_env.insert(k.to_string(), EnvVar { value: Some(v.to_string()), hidden });
+    }
+    fn expand(&mut self, format: &str) -> String { crate::format::expand_nojobs(self, format) }
+    fn home(&self, user: Option<&str>) -> Option<String> {
+        if user.is_none() { if let Some(h) = self.var("HOME").filter(|h| !h.is_empty()) { return Some(h) } }
+        let pw = unsafe { match user { Some(u) => { let c = std::ffi::CString::new(u).ok()?; libc::getpwnam(c.as_ptr()) } None => libc::getpwuid(libc::getuid()) } };
+        if pw.is_null() { return None }
+        Some(unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) }.to_string_lossy().into_owned())
+    }
+}
+
+/// An environment's variable, as tmux's environ keeps one: a value, or none (cleared: `-NAME`,
+/// taken away from what runs), and whether it is hidden (%hidden, set-environment -h).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnvVar { pub value: Option<String>, pub hidden: bool }
+
 /// A command's answer to the shell that ran it: printed lines, errors, exit status.
 pub type Reply = (Vec<String>, Vec<String>, i32);
 
@@ -230,11 +251,20 @@ pub struct App {
     /// Copy mode reading a key as copy-mode-vi's, whatever mode-keys is (a `send -X` action run
     /// as the vi key that does it).
     pub copy_as_vi: bool,
+    /// The file and line the running command was read from (a config's): its errors say so.
+    pub origin: Option<(std::sync::Arc<str>, usize)>,
+    /// Commands to run next, before the rest of the queue (source-file's).
+    pub insert_next: std::collections::VecDeque<crate::commands::Item>,
+
     /// set-buffer -b name: named paste buffers.
     pub named_buffers: std::collections::BTreeMap<String, String>,
     pub capture_err: Option<Vec<String>>,
-    /// setenv's variables (this client's).
-    pub env: std::collections::BTreeMap<String, String>,
+    /// tmux's global environment: what hn started with, then set-environment -g and a config's
+    /// `NAME=value` (%hidden ones hidden).
+    pub global_env: std::collections::BTreeMap<String, EnvVar>,
+    /// The session's environment: update-environment's variables, as they were when hn started
+    /// (set, or cleared when hn had none).
+    pub session_env: std::collections::BTreeMap<String, EnvVar>,
     /// tim, the creature in the status line.
     pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
@@ -301,9 +331,13 @@ impl App {
             cli_code: 0,
             cli_cwd: None,
             copy_as_vi: false,
+            origin: None,
+            insert_next: std::collections::VecDeque::new(),
+
             named_buffers: Default::default(),
             capture_err: None,
-            env: Default::default(),
+            global_env: std::env::vars().map(|(k, v)| (k, EnvVar { value: Some(v), hidden: false })).collect(),
+            session_env: Default::default(),
             tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
@@ -383,6 +417,8 @@ impl App {
     /// A message in the status line (tmux `display-message`), kept for `show-messages`.
     pub fn say(&mut self, text: impl Into<String>, color: Color) {
         let text = text.into();
+        // A config's command: its errors say where it was read (file:line:), as tmux's do.
+        let text = match &self.origin { Some((file, line)) => format!("{file}:{line}: {text}"), None => text };
         // Run from a shell: a message is the command's error, printed there.
         if let Some(err) = self.capture_err.as_mut() { err.push(text); return }
         self.messages.push((std::time::SystemTime::now(), text.clone()));
@@ -1126,6 +1162,16 @@ impl App {
 
     /// A pane's own border line: tmux draws none for a lone pane, and with `pane-border-status top`
     /// a titled line above each pane when a window holds several.
+
+    /// environ_update: each update-environment pattern's variables from hn's own environment
+    /// into the session's, or the pattern cleared there when none match.
+    pub fn update_environment(&mut self) {
+        for pattern in self.options.array("update-environment") {
+            let found: Vec<(String, String)> = std::env::vars().filter(|(k, _)| crate::cmd::fnmatch(&pattern, k)).collect();
+            if found.is_empty() { self.session_env.insert(pattern, EnvVar { value: None, hidden: false }); }
+            for (k, v) in found { self.session_env.insert(k, EnvVar { value: Some(v), hidden: false }); }
+        }
+    }
 
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {

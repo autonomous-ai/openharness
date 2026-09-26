@@ -310,8 +310,39 @@ fn listing(app: &App, command: &str) -> Vec<String> {
 /// A bound command as tmux prints it: canonical names, double quotes, `\;` between commands.
 fn canonical(command: &str) -> String { canonical_with(command, " \\; ") }
 
-/// Inside a block, tmux separates the commands with a plain `;`.
+/// A command list's text in its line groups: split where a top-level ` ;; ` stands (quotes and
+/// blocks kept whole) — what cmdparse writes between the commands of different lines.
+fn split_groups(text: &str) -> Vec<&str> {
+    let (mut out, mut start, mut depth, mut quote) = (Vec::new(), 0, 0i32, None::<char>);
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as char;
+        match (quote, c) {
+            (Some('"'), '\\') => i += 1,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\\') => i += 1,
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => depth += 1,
+            (None, '}') => depth -= 1,
+            (None, ' ') if depth == 0 && text[i..].starts_with(" ;; ") => { out.push(&text[start..i]); i += 4; start = i; continue }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(&text[start..]);
+    out
+}
+
+/// Inside a block, tmux separates the commands with a plain `;` (`;;` where a new line starts);
+/// outside, list-keys writes `\;` (and `\;\;`).
 fn canonical_with(command: &str, separator: &str) -> String {
+    let groups = split_groups(command);
+    if groups.len() > 1 {
+        let between = if separator.contains('\\') { " \\;\\; " } else { " ;; " };
+        return groups.iter().map(|g| canonical_with(g, separator)).collect::<Vec<_>>().join(between);
+    }
     split_blocks(command).iter().map(|words| {
         words.iter().enumerate().map(|(i, (w, block))| {
             if *block { return format!("{{ {} }}", canonical_with(w, " ; ")) }
@@ -348,8 +379,11 @@ pub fn is_command_name(name: &str) -> bool {
 #[cfg(test)]
 pub fn canonical_name(name: &str) -> String { resolve(name).to_string() }
 
+/// A command's full name: hn's table, then tmux's (an alias, or the start of one name).
 fn resolve(name: &str) -> &str {
-    COMMANDS.iter().find(|(full, alias, _)| *full == name || *alias == name).map(|(full, _, _)| *full).unwrap_or(name)
+    COMMANDS.iter().find(|(full, alias, _)| *full == name || *alias == name).map(|(full, _, _)| *full)
+        .or_else(|| crate::cmd::find(name).ok().map(|e| e.name))
+        .unwrap_or(name)
 }
 
 /// Run a command line (one or more commands separated by `;`), in order. A shell command tmux
@@ -359,25 +393,40 @@ pub fn execute(app: &mut App, line: &str) {
     run_queue(app, queue_of(line));
 }
 
+/// A command waiting in the queue, and the file and line it was read from (a config's).
+#[derive(Clone, Debug)]
+pub struct Item { pub words: Vec<String>, pub origin: Option<(std::sync::Arc<str>, usize)> }
+
+pub type Queue = std::collections::VecDeque<Item>;
+
 /// A command line as the queue's commands: blocks split where `\;` or `;` stood.
-fn queue_of(line: &str) -> std::collections::VecDeque<Vec<String>> {
+fn queue_of(line: &str) -> Queue {
     // A bound `\;` runs here as the separator it stood for.
     crate::tmuxconf::split_marked(line).into_iter()
         .flat_map(|words| words.split(|w| w == ";").filter(|p| !p.is_empty()).map(|p| p.to_vec()).collect::<Vec<_>>())
+        .map(|words| Item { words, origin: None })
         .collect()
 }
 
-fn run_queue(app: &mut App, mut queue: std::collections::VecDeque<Vec<String>>) {
-    while let Some(words) = queue.pop_front() {
-        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.say(e, theme::WARN); continue } };
-        let Some(Job { command, cwd, delay, background, done }) = job else { run_words(app, &words); continue };
+fn run_queue(app: &mut App, mut queue: Queue) {
+    while let Some(Item { words, origin }) = queue.pop_front() {
+        app.origin = origin;
+        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.say(e, theme::WARN); app.origin = None; continue } };
+        let Some(Job { command, cwd, delay, background, done }) = job else {
+            run_words(app, &words);
+            app.origin = None;
+            // What source-file read runs next, before the rest.
+            if !app.insert_next.is_empty() { let mut next = std::mem::take(&mut app.insert_next); next.extend(queue); queue = next }
+            continue;
+        };
+        app.origin = None;
         let run = async move {
             if delay > 0.0 { tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await }
             let Some(command) = command else { return Outcome::default() };
             let mut c = tokio::process::Command::new("/bin/sh");
             // tmux's job: the shell's output read, its errors to /dev/null.
             c.arg("-c").arg(&command).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-            if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
+            c.envs(crate::ipc::job_env());
             if let Some(d) = cwd { c.current_dir(d); }
             match c.output().await {
                 Ok(o) => {
@@ -414,7 +463,7 @@ fn run_queue(app: &mut App, mut queue: std::collections::VecDeque<Vec<String>>) 
 struct Outcome { code: i32, signal: Option<i32>, out: String, failed: Option<String> }
 
 /// A shell command to run, and what to do when it has: the commands to run next, first.
-struct Job { command: Option<String>, cwd: Option<String>, delay: f64, background: bool, done: Box<dyn FnOnce(&mut App, Outcome) -> std::collections::VecDeque<Vec<String>> + Send> }
+struct Job { command: Option<String>, cwd: Option<String>, delay: f64, background: bool, done: Box<dyn FnOnce(&mut App, Outcome) -> Queue + Send> }
 
 /// if-shell and run-shell, as cmd-if-shell.c and cmd-run-shell.c run them: the command expanded
 /// as a format for the target pane (a target not found leaves none), run by /bin/sh in the
@@ -469,6 +518,75 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
             }) }))
         }
     }
+}
+
+/// A tmux.conf read as tmux reads one (cmd-parse.y): parsed whole — `file:line: error` and none
+/// of it runs — then checked command by command; its commands, each with its file and line (-n:
+/// none; -v: each line printed as tmux prints it).
+pub fn source(app: &mut App, file: &str, parse_only: bool, verbose: bool) -> Result<Queue, String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {}", match e.kind() {
+        std::io::ErrorKind::NotFound => "No such file or directory".to_string(),
+        std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
+        _ => e.to_string(),
+    }))?;
+    if text.is_empty() { return Ok(Queue::new()) }
+    let parsed = crate::cmdparse::parse(&text, app, parse_only).map_err(|(line, e)| format!("{file}:{line}: {e}"))?;
+    let aliases = app.options.array("command-alias");
+    let alias = |name: &str| aliases.iter().find_map(|a| a.split_once('=').filter(|(n, _)| *n == name).map(|(_, v)| v.to_string()));
+    let built = crate::cmdparse::build(&parsed, app, Some(file), verbose, &alias);
+    let (built, error) = match built { Ok(b) => (b, None), Err((b, e)) => (b, Some(e)) };
+    if verbose && !built.verbose.is_empty() { app.print("source-file", built.verbose.clone()) }
+    if let Some(e) = error { return Err(e) }
+    if parse_only { return Ok(Queue::new()) }
+    let origin: std::sync::Arc<str> = std::sync::Arc::from(file);
+    Ok(built.commands.iter().map(|c| Item { words: crate::cmdparse::words(c), origin: Some((origin.clone(), c.line)) }).collect())
+}
+
+/// The config at start, as tmux reads it: ~/.tmux.conf and the XDG ones that exist (or -f's);
+/// a missing one is no error. Its commands then run in order.
+pub fn load_config(app: &mut App) -> Vec<String> {
+    let files: Vec<String> = match std::env::var("HARNESS_TUI_TMUX_CONF") {
+        Ok(v) if v == "off" => Vec::new(),
+        Ok(v) => vec![v],
+        Err(_) => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let xdg = std::env::var("XDG_CONFIG_HOME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("{home}/.config"));
+            let mut all = vec!["/etc/tmux.conf".to_string(), format!("{home}/.tmux.conf"), format!("{xdg}/tmux/tmux.conf")];
+            if xdg != format!("{home}/.config") { all.push(format!("{home}/.config/tmux/tmux.conf")) }
+            all.into_iter().filter(|f| std::path::Path::new(f).exists()).collect()
+        }
+    };
+    let (mut queue, mut read) = (Queue::new(), Vec::new());
+    for file in files {
+        match source(app, &file, false, false) {
+            Ok(items) => { queue.extend(items); read.push(file) }
+            Err(e) => app.say(e, theme::WARN),
+        }
+    }
+    run_queue(app, queue);
+    read
+}
+
+/// glob(3) as source-file uses it: `*` `?` `[…]` in any part of the path, the matches sorted.
+fn glob(pattern: &str) -> Vec<String> {
+    if !pattern.contains(['*', '?', '[']) { return if std::path::Path::new(pattern).exists() { vec![pattern.to_string()] } else { Vec::new() } }
+    let mut found = vec![String::new()];
+    for (i, part) in pattern.split('/').enumerate() {
+        if i == 0 && part.is_empty() { found = vec!["/".into()]; continue }
+        let mut next = Vec::new();
+        for base in &found {
+            let join = |n: &str| if base.is_empty() { n.to_string() } else if base.ends_with('/') { format!("{base}{n}") } else { format!("{base}/{n}") };
+            if !part.contains(['*', '?', '[']) { next.push(join(part)); continue }
+            let dir = if base.is_empty() { ".".to_string() } else { base.clone() };
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let mut names: Vec<String> = entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| (!n.starts_with('.') || part.starts_with('.')) && crate::cmd::fnmatch(part, n)).collect();
+            names.sort();
+            next.extend(names.iter().map(|n| join(n)));
+        }
+        found = next;
+    }
+    found.into_iter().filter(|p| std::path::Path::new(p).exists()).collect()
 }
 
 /// A command's words, and — for tmux's own commands — how tmux's args_parse reads them, which
@@ -532,7 +650,7 @@ fn rest(words: &Words) -> String {
 }
 
 /// hn's own commands, and the tmux names hn gives its own meaning (checked before tmux's table).
-fn hn_owned(name: &str) -> bool {
+pub fn hn_owned(name: &str) -> bool {
     COMMANDS.iter().any(|(full, alias, _)| (*full == name || *alias == name) && crate::cmd::find(full).map(|e| e.name != *full).unwrap_or(true))
 }
 
@@ -818,11 +936,12 @@ fn run_words(app: &mut App, words: &[String]) {
                     None => expand(app, &text),
                 }
             };
-            // -p prints (to the shell that asked); without it the message is the client's, as tmux's.
+            // -p prints (to the shell that asked); without it the message is the client's, as tmux's
+            // (a message, not an error: no file:line before it).
             if flag(words, "-p") { app.print("display", vec![out]) } else {
-                let cap = app.capture_err.take();
+                let (cap, origin) = (app.capture_err.take(), app.origin.take());
                 app.say(out, theme::WARN);
-                app.capture_err = cap;
+                (app.capture_err, app.origin) = (cap, origin);
             }
         }
         "show-messages" if app.capture.is_some() => { let lines = app.messages.iter().map(|(_, t)| t.clone()).collect(); app.print("show-messages", lines) }
@@ -985,17 +1104,26 @@ fn run_words(app: &mut App, words: &[String]) {
             }
         }
         "source-file" => {
-            let path = rest(words);
-            let path = if let Some(r) = path.strip_prefix("~/") { format!("{}/{r}", std::env::var("HOME").unwrap_or_default()) } else { path };
-            match std::fs::read_to_string(&path) {
-                Ok(text) => {
-                    let mut settings = crate::tmuxconf::Settings::default();
-                    crate::tmuxconf::apply(&text, &mut app.keymap, &mut settings);
-                    let problems = settings.problems.clone();
-                    app.apply_settings(&settings);
-                    for p in problems { app.say(p, theme::WARN) }
+            // tmux's source-file [-Fnqv] [-t target-pane] path …: each path a glob, from the folder
+            // of the shell that ran it; each file parsed whole — an error in it and none of it runs,
+            // said with its line; -n parsed only, -v each line printed as tmux read it, -q a
+            // missing file no error, -F the paths expanded first. What it read runs next.
+            let (quiet, parse_only, verbose) = (flag(words, "-q"), flag(words, "-n"), flag(words, "-v"));
+            let cwd = app.cli_cwd.clone().or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string())).unwrap_or_else(|| "/".into());
+            let mut files = Vec::new();
+            for path in positional(words) {
+                let path = if flag(words, "-F") { expand(app, &path) } else { path };
+                if path == "-" { app.say("-: reading the shell's input is not supported", theme::WARN); continue }
+                let pattern = if path.starts_with('/') { path.clone() } else { format!("{cwd}/{path}") };
+                let found = glob(&pattern);
+                if found.is_empty() { if !quiet { app.say(format!("{path}: No such file or directory"), theme::WARN) } continue }
+                files.extend(found);
+            }
+            for file in files {
+                match source(app, &file, parse_only, verbose) {
+                    Ok(items) => app.insert_next.extend(items),
+                    Err(e) => app.say(e, theme::WARN),
                 }
-                Err(_) => app.say(format!("{path}: No such file or directory"), theme::WARN),
             }
         }
         "swap-window" => {
@@ -1036,8 +1164,47 @@ fn run_words(app: &mut App, words: &[String]) {
         // has-session: its -t was found (else tmux's error, and 1) before it ran.
         "has-session" => {}
         "list-commands" => { let lines = COMMANDS.iter().map(|(n, a, d)| format!("{n} ({a}) — {d}")).collect(); app.print("list-commands", lines) }
-        "set-environment" | "setenv" => { if let (Some(k), Some(v)) = (words.iter().skip(1).find(|w| !w.starts_with('-')), words.last()) { app.env.insert(k.clone(), v.clone()); } }
-        "show-environment" | "showenv" => { let lines = app.env.iter().map(|(k, v)| format!("{k}={v}")).collect(); app.print("show-environment", lines) }
+        "set-environment" | "setenv" => {
+            // tmux's set-environment [-Fhgru] [-t target-session] name [value]: -g the global
+            // environment (else the session's), -u unset, -r cleared (taken from what runs),
+            // -h hidden, -F the value expanded.
+            let args = positional(words);
+            let name = args.first().cloned().unwrap_or_default();
+            if name.is_empty() { return app.say("empty variable name", theme::WARN) }
+            if name.contains('=') { return app.say("variable name contains =", theme::WARN) }
+            let value = args.get(1).map(|v| if flag(words, "-F") { expand(app, v) } else { v.clone() });
+            let env = if flag(words, "-g") { &mut app.global_env } else { &mut app.session_env };
+            if flag(words, "-u") {
+                if value.is_some() { return app.say("can't specify a value with -u", theme::WARN) }
+                env.remove(&name);
+            } else if flag(words, "-r") {
+                if value.is_some() { return app.say("can't specify a value with -r", theme::WARN) }
+                env.insert(name, crate::app::EnvVar { value: None, hidden: false });
+            } else {
+                let Some(value) = value else { return app.say("no value specified", theme::WARN) };
+                env.insert(name, crate::app::EnvVar { value: Some(value), hidden: flag(words, "-h") });
+            }
+        }
+        "show-environment" | "showenv" => {
+            // tmux's show-environment [-hgs] [-t target-session] [name]: NAME=value (-NAME when
+            // cleared), -s as sh would set it, -h only the hidden ones (else only the others).
+            let env = if flag(words, "-g") { &app.global_env } else { &app.session_env };
+            let (hidden, shell) = (flag(words, "-h"), flag(words, "-s"));
+            let show = |k: &str, e: &crate::app::EnvVar| -> Option<String> {
+                if e.hidden != hidden { return None }
+                Some(match (&e.value, shell) {
+                    (Some(v), false) => format!("{k}={v}"),
+                    (None, false) => format!("-{k}"),
+                    (Some(v), true) => { let esc: String = v.chars().flat_map(|c| if matches!(c, '$' | '`' | '"' | '\\') { vec!['\\', c] } else { vec![c] }).collect(); format!("{k}=\"{esc}\"; export {k};") }
+                    (None, true) => format!("unset {k};"),
+                })
+            };
+            let lines: Vec<String> = match positional(words).first() {
+                Some(name) => match env.get(name) { Some(e) => show(name, e).into_iter().collect(), None => return app.say(format!("unknown variable: {name}"), theme::WARN) },
+                None => env.iter().filter_map(|(k, e)| show(k, e)).collect(),
+            };
+            app.print("show-environment", lines)
+        }
         "set-hook" | "show-hooks" => {}
         "wait-for" | "wait" => {}
         "pipe-pane" => app.say("pipe-pane: a harness pane's output lives on its machine (use capture-pane -p)", theme::WARN),
