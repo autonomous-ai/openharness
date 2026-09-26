@@ -889,6 +889,58 @@ fn wrap_cells(cells: &[Cell], cols: usize, sign_w: usize, at_most: usize) -> (Ve
     }
 }
 
+/// fzf's numItemLines with --wrap: how many lines a row takes (no more than [at_most]), and
+/// whether it needs more.
+fn item_lines(p: &Picker, vi: usize, at_most: i64, text_w: usize) -> (usize, bool) {
+    if at_most <= 0 { return (0, true) }
+    let (ri, hits) = &p.visible[vi];
+    let row = &p.rows[*ri];
+    if fits_line(row, text_w) { return (1, false) }
+    let (l, over) = wrap_cells(&line_cells(row, hits), text_w.max(1), theme::fzf_opts().wrap_sign.width(), at_most as usize);
+    (l.len(), over)
+}
+
+/// fzf's page-up/-down and half-page-up/-down ([direction] as move_by's: toward the far end of the
+/// list is positive): a page is the list's lines less one, half a page half of them; with --wrap
+/// the cursor goes a row at a time, constrain() after each, and stops before the screen would
+/// scroll past the rows that were on it.
+pub fn page(p: &mut Picker, direction: i64, half: bool) {
+    let max_items = p.page_rows.get().max(0) as usize;
+    let lines_to_move = (if half { max_items / 2 } else { max_items.saturating_sub(1) }).max(1) as i64;
+    let text_w = p.wrap_width.get();
+    if !p.wrap || text_w == 0 || p.visible.is_empty() { return p.vset(p.cursor as i64 + direction * lines_to_move, direction) }
+    let n = p.visible.len();
+    let (mut min_offset, mut max_offset, mut sum) = (0i64, 0i64, 0usize);
+    if direction > 0 {
+        max_offset = p.scroll as i64;
+        while (max_offset as usize) < n {
+            sum += item_lines(p, max_offset as usize, max_items as i64, text_w).0;
+            if sum >= max_items { break }
+            max_offset += 1;
+        }
+    } else {
+        min_offset = p.scroll as i64;
+        while min_offset >= 0 && (min_offset as usize) < n {
+            sum += item_lines(p, min_offset as usize, max_items as i64, text_w).0;
+            if sum >= max_items { if sum > max_items { min_offset += 1 } break }
+            min_offset -= 1;
+        }
+    }
+    for i in 0..lines_to_move {
+        let (cy, offset) = (p.cursor, p.scroll);
+        p.vset(cy as i64 + direction, direction);
+        let q: &Picker = p;
+        let next = constrain_wrapped(q, max_items, &|vi, at_most| item_lines(q, vi, at_most, text_w));
+        p.scroll = next;
+        if cy == p.cursor { break }
+        if i > 0 && ((direction > 0 && p.scroll as i64 > max_offset) || (direction < 0 && (p.scroll as i64) < min_offset)) {
+            p.vset(cy as i64, -direction);
+            p.scroll = offset;
+            break;
+        }
+    }
+}
+
 /// fzf's constrain() with rows of more than one line: the offset (the first row on the prompt's
 /// side) that fits the current row, then keeps --scroll-off lines on either side of it.
 fn constrain_wrapped(p: &Picker, max_lines: usize, lines: &dyn Fn(usize, i64) -> (usize, bool)) -> usize {
@@ -948,15 +1000,9 @@ fn fzf_wrapped(buf: &mut Buffer, picker: &mut Picker, area: Rect, list_top: u16,
     let n = picker.visible.len();
     if max_lines == 0 || n == 0 { return }
     let (cols, sign_w) = (text_w.max(1), o.wrap_sign.width());
+    picker.wrap_width.set(text_w);
     let p: &Picker = picker;
-    let lines = |vi: usize, at_most: i64| -> (usize, bool) {
-        if at_most <= 0 { return (0, true) }
-        let (ri, hits) = &p.visible[vi];
-        let row = &p.rows[*ri];
-        if fits_line(row, text_w) { return (1, false) }
-        let (l, over) = wrap_cells(&line_cells(row, hits), cols, sign_w, at_most as usize);
-        (l.len(), over)
-    };
+    let lines = |vi: usize, at_most: i64| item_lines(p, vi, at_most, text_w);
     let offset = constrain_wrapped(p, max_lines, &lines);
     // The rows from the prompt: (visible index, fzf's line — 0 nearest the prompt — and the part of
     // a wrapped row on it: its cells, whether it goes on from the line before, its marker's place).

@@ -82,8 +82,10 @@ pub struct Picker {
     pub preview: bool,
     pub preview_scroll: u16,
     preview_of: Option<String>,
-    /// fzf's --wrap, toggled by toggle-wrap (M-/): a long row goes on over the lines below it.
+    /// fzf's --wrap, toggled by toggle-wrap (M-/): a long row goes on over the lines below it —
+    /// and the columns it was last wrapped at (0 before it is drawn so), for the page keys.
     pub wrap: bool,
+    pub wrap_width: std::cell::Cell<usize>,
 }
 
 impl Picker {
@@ -113,6 +115,7 @@ impl Picker {
             preview_scroll: 0,
             preview_of: None,
             wrap: crate::theme::fzf_opts().wrap,
+            wrap_width: Default::default(),
             preview_max: Default::default(),
             preview_lines: Default::default(),
             preview_rows: Default::default(),
@@ -208,6 +211,13 @@ impl Picker {
         let bottom = self.preview_lines.get().saturating_sub(self.preview_rows.get() as usize) as i64;
         self.preview_scroll = 0;
         self.preview_by(bottom);
+    }
+
+    /// fzf's vset: the cursor to [to], kept in the list (no --cycle), off a disabled row.
+    pub fn vset(&mut self, to: i64, direction: i64) {
+        if self.visible.is_empty() { return }
+        self.cursor = to.clamp(0, self.visible.len() as i64 - 1) as usize;
+        self.skip_disabled(if direction >= 0 { 1 } else { -1 });
     }
 
     pub fn move_by(&mut self, delta: i64) {

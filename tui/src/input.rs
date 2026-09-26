@@ -1106,7 +1106,6 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         return;
     }
     let before = picker.query.clone();
-    let page = (picker.page_rows.get() - 1).max(1);
     let multi = matches!(kind, PickerKind::Open { .. }) && !picker.query.starts_with(['>', '@', '#', ':', '*', '?']);
     let up: i64 = if theme::fzf().reverse { -1 } else { 1 };
     // FZF_DEFAULT_OPTS --bind: your key:action pairs come first (the last bind for a key wins,
@@ -1115,7 +1114,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     let name = fzf_key_name(&key);
     let bound = theme::fzf_opts().binds.iter().rev().find(|(k, _)| *k == name).map(|(_, a)| a.clone());
     if let Some(actions) = bound {
-        match bound_actions(&mut picker, &actions, page, up, multi) {
+        match bound_actions(&mut picker, &actions, up, multi) {
             End::Accept => { choose(app, kind, picker, Choice::Enter); return }
             End::Abort => { SPLIT.with(|s| s.set(None)); return }
             End::Stay => {}
@@ -1131,8 +1130,8 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
             KeyCode::Down => picker.move_by(-up),
             KeyCode::Char('k' | 'p') if ctrl => picker.move_by(up),
             KeyCode::Char('j' | 'n') if ctrl => picker.move_by(-up),
-            KeyCode::PageUp => picker.move_by(page * up),
-            KeyCode::PageDown => picker.move_by(-page * up),
+            KeyCode::PageUp => crate::ui::page(&mut picker, up, false),
+            KeyCode::PageDown => crate::ui::page(&mut picker, -up, false),
             // fzf: C-d on an empty query closes the list; C-l redraws (no link here).
             KeyCode::Char('d') if ctrl && picker.query.is_empty() => { SPLIT.with(|s| s.set(None)); return }
             KeyCode::Char('l') if ctrl => { app.redraw_all = true }
@@ -1193,7 +1192,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
         // --bind change:…, fzf's event for a query that changed (change:first puts the cursor back
         // on the best match).
         if let Some(actions) = theme::fzf_opts().binds.iter().rev().find(|(k, _)| k == "change").map(|(_, a)| a.clone()) {
-            match bound_actions(&mut picker, &actions, page, up, multi) {
+            match bound_actions(&mut picker, &actions, up, multi) {
                 End::Accept => { choose(app, kind, picker, Choice::Enter); return }
                 End::Abort => { SPLIT.with(|s| s.set(None)); return }
                 End::Stay => {}
@@ -1513,13 +1512,11 @@ fn split_chain(actions: &str) -> Vec<String> {
 
 /// A bound key's (or event's) actions, in order: the ones this list knows, as fzf does them; the
 /// others (execute, become, change-prompt …) do nothing.
-fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, page: i64, up: i64, multi: bool) -> End {
-    // fzf: a page is the list's lines less one, half a page half of its lines (maxItems/2).
-    let half = (picker.page_rows.get() / 2).max(1);
+fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, up: i64, multi: bool) -> End {
     let len = picker.visible.len() as i64;
     for action in split_chain(actions) {
         match action.as_str() {
-            "half-page-up" => picker.move_by(half * up), "half-page-down" => picker.move_by(-half * up),
+            "half-page-up" => crate::ui::page(picker, up, true), "half-page-down" => crate::ui::page(picker, -up, true),
             "top" | "first" => picker.move_by(-len), "last" => picker.move_by(len),
             "toggle-in" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { 1 } else { -1 }) }
             "toggle-out" => { picker.toggle_mark(); picker.move_by(if theme::fzf().reverse { -1 } else { 1 }) }
@@ -1536,7 +1533,7 @@ fn bound_actions(picker: &mut crate::picker::Picker, actions: &str, page: i64, u
             "accept" => return End::Accept,
             "abort" | "cancel" => return End::Abort,
             "up" => picker.move_by(up), "down" => picker.move_by(-up),
-            "page-up" => picker.move_by(page * up), "page-down" => picker.move_by(-page * up),
+            "page-up" => crate::ui::page(picker, up, false), "page-down" => crate::ui::page(picker, -up, false),
             "toggle" => picker.toggle_mark(),
             "select-all" => { if multi { picker.marked = picker.visible.iter().map(|(i, _)| picker.rows[*i].id.clone()).collect() } }
             "deselect-all" => picker.marked.clear(),
