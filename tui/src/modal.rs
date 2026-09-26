@@ -104,6 +104,8 @@ pub enum Modal {
     Tree { cursor: usize, collapsed: Vec<String> },
     /// Search in the focused pane's history (copy mode's / and ?). `found` is None before the first search.
     Find { pane: u64, query: String, found: Option<bool>, up: bool },
+    /// display-popup: a shell floating over the window; it goes when its program exits.
+    Popup { pane: u64, width: u16, height: u16, title: String },
     /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.
     Copy { pane: u64 },
 }

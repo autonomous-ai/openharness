@@ -147,6 +147,8 @@ pub struct App {
     pub cursor_shape: String,
     /// suspend-client (C-z): the main loop hands the terminal back and stops itself.
     pub suspend: bool,
+    /// Shells tim made for split-window / new-window: they end with their pane.
+    pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
     pub starting_shell: Option<Vec<Vec<u8>>>,
     /// Copy mode's pending count (5k), f/F/t/T waiting for a character, and the last one for ; and ,.
@@ -190,6 +192,7 @@ impl App {
             nums: HashMap::new(),
             cursor_shape: String::new(),
             suspend: false,
+            shells: HashSet::new(),
             starting_shell: None,
             copy_count: 0,
             copy_pending: None,
@@ -671,6 +674,12 @@ impl App {
 
     /// The stream ended with nobody taking it: say why, from the agent's state.
     fn after_end(&mut self, pane_id: u64, reason: String) {
+        // A popup's program that exits closes the popup (display-popup -E).
+        if matches!(self.modal, Some(crate::modal::Modal::Popup { pane, .. }) if pane == pane_id) { self.close_popup(); return }
+        // A split's shell that exits takes its pane with it, as in tmux.
+        if let Some(key) = self.panes.get(&pane_id).map(|p| (p.machine_id.clone(), p.agent_id.clone())) {
+            if self.shells.contains(&key) { self.shells.remove(&key); self.close_pane(pane_id); return }
+        }
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         let agent = self.fleet.agent(&pane.machine_id, &pane.agent_id);
         pane.stream = None;
@@ -769,6 +778,28 @@ impl App {
     // ── tabs & panes ─────────────────────────────────────────────────────────
 
     pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
+
+    /// Close the popup and end its shell.
+    pub fn close_popup(&mut self) {
+        let Some(crate::modal::Modal::Popup { pane, .. }) = self.modal.take() else { return };
+        let key = self.panes.get(&pane).map(|p| (p.machine_id.clone(), p.agent_id.clone()));
+        self.drop_pane(pane);
+        if let Some((m, a)) = key {
+            self.shells.remove(&(m.clone(), a.clone()));
+            if let Some(link) = self.link(&m) { self.spawn(async move { link.rpc("agent_delete", json!({ "agentId": a }), Duration::from_secs(30)).await }, |_, _| {}) }
+        }
+        self.redraw_all = true;
+    }
+
+    /// The popup's inner size for a percentage or cell size (tmux: -w 50% -h 50%).
+    pub fn popup_size(&self, w: &str, h: &str) -> (u16, u16) {
+        let dim = |v: &str, total: u16| -> u16 {
+            let v = v.trim();
+            let n = if let Some(p) = v.strip_suffix('%') { p.parse::<u32>().map(|p| (total as u32 * p / 100) as u16).unwrap_or(total / 2) } else { v.parse().unwrap_or(total / 2) };
+            n.clamp(10, total.saturating_sub(2))
+        };
+        (dim(w, self.size.0), dim(h, self.size.1.saturating_sub(1)))
+    }
 
     /// What a tmux.conf (or `set`, `source-file`) said, over what is set now.
     pub fn apply_settings(&mut self, s: &crate::tmuxconf::Settings) {
@@ -928,7 +959,7 @@ impl App {
         self.rects.iter().filter_map(|(id, _)| self.panes.get(id)).map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect()
     }
 
-    fn new_pane(&mut self, machine_id: &str, agent_id: &str) -> u64 {
+    pub fn new_pane(&mut self, machine_id: &str, agent_id: &str) -> u64 {
         let id = self.next_pane;
         self.next_pane += 1;
         let (cols, rows) = pane::stream_size(self.size.0, self.size.1.saturating_sub(2));
@@ -1040,6 +1071,14 @@ impl App {
     pub fn close_pane(&mut self, id: u64) {
         let Some(index) = self.tabs.iter().position(|t| t.panes().contains(&id)) else { return };
         let agent = self.panes.get(&id).map(|p| (p.machine_id.clone(), p.agent_id.clone()));
+        // A shell made by a split or new-window goes when its pane does (tmux kills the pane's
+        // shell); an agent keeps running.
+        if let Some(key) = agent.clone().filter(|k| self.shells.remove(k)) {
+            if let Some(link) = self.link(&key.0) {
+                let agent_id = key.1.clone();
+                self.spawn(async move { link.rpc("agent_delete", json!({ "agentId": agent_id }), Duration::from_secs(30)).await }, |_, _| {});
+            }
+        }
         let tab = &mut self.tabs[index];
         let leaves = tab.panes();
         let at = leaves.iter().position(|x| *x == id).unwrap_or(0);

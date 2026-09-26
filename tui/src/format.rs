@@ -43,7 +43,7 @@ fn var(app: &App, name: &str, window: usize) -> String {
         "pane_index" | "P" => focus.and_then(|f| tab.and_then(|t| t.panes().iter().position(|p| *p == f))).map(|i| (i + app.pane_base_index).to_string()).unwrap_or_default(),
         "pane_title" | "T" => agent.map(|a| a.name.clone()).unwrap_or_else(|| host.clone()),
         "pane_id" | "D" => focus.map(|f| format!("%{f}")).unwrap_or_default(),
-        "pane_current_path" => agent.map(|a| a.cwd.clone()).unwrap_or_default(),
+        "pane_current_path" => pane.and_then(|p| p.cwd.clone()).or_else(|| agent.map(|a| a.cwd.clone())).unwrap_or_default(),
         "pane_current_command" => agent.map(|a| a.engine.clone()).unwrap_or_default(),
         "pane_width" => pane.map(|p| p.cols.to_string()).unwrap_or_default(),
         "pane_height" => pane.map(|p| p.rows.to_string()).unwrap_or_default(),

@@ -87,6 +87,8 @@ pub struct Pane {
     pub bell: bool,
     /// A key that arrived while a watcher was being promoted to controller.
     pub queued: Vec<Vec<u8>>,
+    /// The folder the shell says it is in (OSC 7), for #{pane_current_path} and new splits.
+    pub cwd: Option<String>,
     /// When the oldest unanswered keystroke left — its echo closes the measurement.
     pub input_at: Option<Instant>,
     /// Keystroke → first output back, in microseconds (the last 256).
@@ -104,6 +106,25 @@ pub struct Pane {
     in_screen_title: bool,
     /// An ESC ended the last chunk; the next byte decides what it was.
     pending_esc: bool,
+}
+
+/// The last `ESC ] 7 ; file://host/path` (BEL or ST) in a chunk: the shell's current folder.
+fn osc7(bytes: &[u8]) -> Option<String> {
+    let start = bytes.windows(4).rposition(|w| w == b"\x1b]7;")?;
+    let rest = &bytes[start + 4..];
+    let end = rest.iter().position(|b| *b == 0x07 || *b == 0x1b)?;
+    let url = std::str::from_utf8(&rest[..end]).ok()?;
+    let path = url.strip_prefix("file://").map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("")).unwrap_or(url);
+    // Percent-decoding (a space arrives as %20).
+    let mut out = Vec::new();
+    let b = path.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() { if let Ok(v) = u8::from_str_radix(&path[i + 1..i + 3], 16) { out.push(v); i += 3; continue } }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).ok().filter(|p| p.starts_with('/'))
 }
 
 // A hollow block marks "the program never chose a cursor": the user's own shape stays.
@@ -150,6 +171,7 @@ impl Pane {
             dirty: true,
             bell: false,
             queued: Vec::new(),
+            cwd: None,
             in_screen_title: false,
             pending_esc: false,
             input_at: None,
@@ -197,6 +219,7 @@ impl Pane {
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
+        if let Some(dir) = osc7(bytes) { self.cwd = Some(dir) }
         let clean = self.strip_screen_titles(bytes);
         self.parser.advance(&mut self.term, &clean);
         self.dirty = true;
@@ -815,5 +838,15 @@ mod tests {
         let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
         assert_eq!(encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 2, KeyModifiers::NONE, mode).unwrap(), b"\x1b[<0;5;3M");
         assert!(encode_mouse(MouseEventKind::ScrollUp, 0, 0, KeyModifiers::NONE, TermMode::empty()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod osc7_tests {
+    #[test]
+    fn reads_the_folder() {
+        assert_eq!(super::osc7(b"x\x1b]7;file://mac.lan/Users/me/my%20code\x07y").as_deref(), Some("/Users/me/my code"));
+        assert_eq!(super::osc7(b"\x1b]7;file:///tmp\x1b\\").as_deref(), Some("/tmp"));
+        assert_eq!(super::osc7(b"plain"), None);
     }
 }
