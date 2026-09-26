@@ -37,7 +37,7 @@ pub fn handle(app: &mut App, event: CEvent) {
 
 /// Overlays that type text keep every key (tmux's prompt ignores the prefix too).
 fn typing(app: &App) -> bool {
-    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }))
+    matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Picker { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }))
 }
 
 fn on_key(app: &mut App, key: KeyEvent) {
@@ -83,10 +83,17 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
     // The prefix works over the lists too (they are tmux's choose modes); only a line being typed
     // at the status line keeps it.
-    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }));
+    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }) | Some(Modal::Menu { .. }));
     if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.prefix = true;
         app.prefix_at = Some(std::time::Instant::now());
+        return;
+    }
+    // A pane in copy mode or view mode: its mode's table first, then root; a key in neither does
+    // nothing — it never reaches the pane's program (server_client_key_callback).
+    if let Some(Modal::Copy { pane }) = app.modal {
+        if mode_key(app, pane, &chord) { return }
+        if let Some(binding) = app.keymap.root_command(&chord).cloned() { commands::execute_bound(app, &binding.command) }
         return;
     }
     if !typing(app) {
@@ -114,7 +121,6 @@ fn on_key(app: &mut App, key: KeyEvent) {
         Phase::Live | Phase::Watching(_) => {
             if let Some(bytes) = encode_key(&key, pane.mode()) {
                 if let Some(p) = app.panes.get_mut(&focus) {
-                    p.clear_selection();
                     p.scroll_bottom();
                     // Local echo on a slow link: plain characters appear now, confirmed when the echo lands.
                     let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
@@ -228,12 +234,7 @@ pub fn scroll_by(app: &mut App, lines: i32) {
         }
         Some(Modal::Copy { pane }) => {
             let pane = *pane;
-            let mut done = false;
-            if let Some(p) = app.panes.get_mut(&pane) {
-                p.copy_scroll(lines);
-                if !up && p.scrolled() == 0 && p.copy_by_wheel { p.copy_end(); done = true }
-            }
-            if done { app.modal = None }
+            copy_scroll(app, pane, up, n as u32);
             return;
         }
         Some(_) => return,
@@ -253,13 +254,31 @@ pub fn scroll_by(app: &mut App, lines: i32) {
         key.repeat(n)
     } else {
         if up {
-            if pane.copy.is_none() { pane.copy_start(); pane.copy_by_wheel = true }
-            pane.copy_scroll(lines);
-            app.modal = Some(Modal::Copy { pane: id });
+            // copy-mode -e, then the view up as the wheel moves it.
+            crate::copy::enter(app, id, id, true, false);
+            app.sync_copy_modal();
+            copy_scroll(app, id, true, n as u32);
         }
         return;
     };
     if live && !bytes.is_empty() { app.send_input(id, &bytes) }
+}
+
+/// copy mode's search prompt, as its table opens it: vi's `?` and `/`, emacs's C-r and C-s
+/// (incremental).
+pub fn search_prompt(app: &mut App, up: bool) {
+    let Some(pane) = app.focused() else { return };
+    if !app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false) { return }
+    let (label, cmd) = if up { ("(search up)", "search-backward") } else { ("(search down)", "search-forward") };
+    let command = if crate::copy::ctx(app, pane).vi { format!("command-prompt -T search -p \"{label}\" {{ send-keys -X {cmd} \"%%\" }}") }
+        else { format!("command-prompt -i -I \"#{{pane_search_string}}\" -T search -p \"{label}\" {{ send-keys -X {cmd}-incremental \"%%\" }}") };
+    commands::execute(app, &command);
+}
+
+/// The wheel's commands in copy mode (send -X -N n scroll-up / scroll-down).
+fn copy_scroll(app: &mut App, pane: u64, up: bool, n: u32) {
+    if let Some(m) = app.panes.get_mut(&pane).and_then(|p| p.modes.last_mut()) { m.prefix = n.max(1) }
+    crate::copy::command(app, pane, &[if up { "scroll-up" } else { "scroll-down" }.to_string()], false, None);
 }
 
 // ── home: the empty tab ─────────────────────────────────────────────────────
@@ -610,15 +629,8 @@ pub fn run(app: &mut App, command: &str) {
             let tab = app.active;
             app.resize_pane(tab, focus, dir, delta);
         }
-        "copy-mode" => {
-            let Some(pane) = app.focused() else { return };
-            if let Some(p) = app.panes.get_mut(&pane) { p.copy_start() }
-            app.modal = Some(Modal::Copy { pane });
-        }
-        "find" => {
-            let Some(pane) = app.focused() else { return };
-            app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: true });
-        }
+        "copy-mode" => commands::execute(app, "copy-mode"),
+        "find" => { commands::execute(app, "copy-mode"); search_prompt(app, true) }
         "tab-left" => app.move_tab(-1),
         "tab-right" => app.move_tab(1),
         "last-tab" => {
@@ -901,56 +913,17 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             app.modal = Some(Modal::Popup { pane, width, height, title });
         }
         Modal::Tree { cursor, collapsed } => tree_key(app, key, cursor, collapsed),
-        Modal::Copy { pane } => copy_key(app, key, pane),
-        Modal::Find { pane, mut query, mut found, up } => {
-            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            let Some(p) = app.panes.get_mut(&pane) else { return };
-            match key.code {
-                KeyCode::Esc => { if p.copy.is_some() { app.modal = Some(Modal::Copy { pane }); return } p.end_find(); return }
-                KeyCode::Char('c' | 'g') if ctrl => { p.end_find(); return }
-                // Enter keeps the match and goes on in copy mode, as tmux's search does.
-                KeyCode::Enter => {
-                    app.last_search = Some(query.clone());
-                    app.last_search_up = up;
-                    if p.copy.is_none() { p.copy_start() }
-                    if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) }
-                    app.modal = Some(Modal::Copy { pane });
-                    return;
-                }
-                KeyCode::Up => { found = Some(p.find(&query, true, false)) }
-                KeyCode::Down => { found = Some(p.find(&query, false, false)) }
-                KeyCode::Char('p' | 'k') if ctrl => { found = Some(p.find(&query, true, false)) }
-                KeyCode::Char('n' | 'j') if ctrl => { found = Some(p.find(&query, false, false)) }
-                KeyCode::Backspace => { query.pop(); found = Some(p.find(&query, up, true)) }
-                KeyCode::Char('u') if ctrl => { query.clear(); p.end_find() }
-                KeyCode::Char(c) if !ctrl => { query.push(c); found = Some(p.find(&query, up, true)) }
-                _ => {}
-            }
-            app.modal = Some(Modal::Find { pane, query, found, up });
-        }
+        Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }
         Modal::Prompt(p) => prompt_key(app, key, p),
         Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
     }
 }
 
-/// The status-line prompt: tmux's `status-keys emacs`, command history on Up/Down, Tab completes.
+/// The status-line prompt (status_prompt_key): tmux's `status-keys emacs` — each change runs an
+/// incremental prompt's template again; Up/Down its type's history; Tab completes.
 fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    // command-prompt -1: the first key is the answer (-N: a digit, else nothing).
-    if let PromptKind::Command { one: true, digits, .. } = &p.kind {
-        let digits = *digits;
-        match key.code {
-            KeyCode::Esc => return,
-            KeyCode::Char('c' | 'g') if ctrl => return,
-            KeyCode::Char(c) if !ctrl && !alt && (!digits || c.is_ascii_digit()) => { p.value = c.to_string(); submit_prompt(app, p); return }
-            _ => { if digits { return } app.modal = Some(Modal::Prompt(p)); return }
-        }
-    }
-    // command-prompt -N: numbers only.
-    if let PromptKind::Command { digits: true, .. } = &p.kind {
-        if let KeyCode::Char(c) = key.code { if !ctrl && !alt && !c.is_ascii_digit() { app.modal = Some(Modal::Prompt(p)); return } }
-    }
     // command-prompt -k: the key itself is the answer, by its tmux name (C-b / then x → "x").
     if let PromptKind::Key { template } = &p.kind {
         let name = keys::name(&keys::of(&key));
@@ -958,48 +931,104 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         commands::execute(app, &command);
         return;
     }
+    // command-prompt -N: digits go in; any other key ends it (the number to the template), and
+    // then does what it does as if there had been no prompt.
+    if let PromptKind::Command { digits: true, .. } = &p.kind {
+        let digit = matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit()) && !ctrl && !alt;
+        if !digit {
+            submit_prompt(app, p);
+            app.sync_copy_modal();
+            return on_key(app, key);
+        }
+    }
+    let (single, incremental, ptype) = match &p.kind { PromptKind::Command { one, incremental, ptype, .. } => (*one, *incremental, *ptype), _ => (false, false, 0) };
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
     let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
     if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; p.vi_pending = None; app.modal = Some(Modal::Prompt(p)); return }
+    let ws = app.options.get("word-separators", "", None).unwrap_or_default();
     let chars: Vec<char> = p.value.chars().collect();
-    let at = p.cursor.min(chars.len());
+    let size = chars.len();
+    let at = p.cursor.min(size);
+    let space = |i: usize| chars.get(i) == Some(&' ');
+    let in_list = |i: usize| chars.get(i).map(|c| ws.contains(*c)).unwrap_or(false);
     let set = |p: &mut Prompt, v: Vec<char>, c: usize| { p.value = v.into_iter().collect(); p.cursor = c; };
-    let word_left = |from: usize| { let mut i = from; while i > 0 && chars[i - 1] == ' ' { i -= 1 } while i > 0 && chars[i - 1] != ' ' { i -= 1 } i };
-    let word_right = |from: usize| { let mut i = from; while i < chars.len() && chars[i] == ' ' { i += 1 } while i < chars.len() && chars[i] != ' ' { i += 1 } i };
+    let (mut changed, mut appended, mut prefix) = (false, false, '=');
     match key.code {
         KeyCode::Esc => return,
         KeyCode::Char('c' | 'g') if ctrl => return,
         KeyCode::Enter => {
-            if matches!(p.kind, PromptKind::Command { template: None, .. }) && !p.value.trim().is_empty() {
-                app.history.retain(|h| h != &p.value);
-                app.history.push(p.value.clone());
-            }
+            if !p.value.is_empty() && matches!(p.kind, PromptKind::Command { .. }) { add_history(app, ptype, &p.value) }
+            // An incremental prompt has done its work as it went.
+            if incremental { return }
             submit_prompt(app, p);
             return;
         }
         KeyCode::Backspace | KeyCode::Char('h') if key.code == KeyCode::Backspace || ctrl => {
-            if alt { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
-            else if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1) }
-            else if p.value.is_empty() { return } // tmux: backspace on an empty prompt closes it
+            if alt {
+                let mut from = at;
+                while from > 0 && chars[from - 1] == ' ' { from -= 1 }
+                while from > 0 && chars[from - 1] != ' ' { from -= 1 }
+                let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from); changed = true;
+            } else if at > 0 { let mut v = chars.clone(); v.remove(at - 1); set(&mut p, v, at - 1); changed = true }
+            else if p.value.is_empty() && !incremental { return } // backspace on an empty prompt closes it
         }
-        KeyCode::Delete => { if at < chars.len() { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at) } }
-        KeyCode::Char('d') if ctrl => { if at < chars.len() { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at) } }
-        KeyCode::Left => p.cursor = at.saturating_sub(1),
+        KeyCode::Delete => { if at < size { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at); changed = true } }
+        KeyCode::Char('d') if ctrl => { if at < size { let mut v = chars.clone(); v.remove(at); set(&mut p, v, at); changed = true } }
+        KeyCode::Left if !ctrl => p.cursor = at.saturating_sub(1),
         KeyCode::Char('b') if ctrl => p.cursor = at.saturating_sub(1),
-        KeyCode::Right => p.cursor = (at + 1).min(chars.len()),
-        KeyCode::Char('f') if ctrl => p.cursor = (at + 1).min(chars.len()),
-        KeyCode::Char('b') if alt => p.cursor = word_left(at),
-        KeyCode::Char('f') if alt => p.cursor = word_right(at),
+        KeyCode::Right if !ctrl => p.cursor = (at + 1).min(size),
+        KeyCode::Char('f') if ctrl => p.cursor = (at + 1).min(size),
         KeyCode::Home => p.cursor = 0,
         KeyCode::Char('a') if ctrl => p.cursor = 0,
-        KeyCode::End => p.cursor = chars.len(),
-        KeyCode::Char('e') if ctrl => p.cursor = chars.len(),
-        KeyCode::Char('k') if ctrl => { let v = chars[..at].to_vec(); set(&mut p, v, at) }
-        // tmux's status prompt: C-u clears the whole line.
-        KeyCode::Char('u') if ctrl => { set(&mut p, Vec::new(), 0) }
-        KeyCode::Char('w') if ctrl => { let from = word_left(at); let mut v = chars.clone(); v.drain(from..at); set(&mut p, v, from) }
-        KeyCode::Up | KeyCode::Down if matches!(p.kind, PromptKind::Command { template: None, .. }) => prompt_history(app, &mut p, key.code == KeyCode::Up),
+        KeyCode::End => p.cursor = size,
+        KeyCode::Char('e') if ctrl => p.cursor = size,
+        KeyCode::Char('u') if ctrl => { set(&mut p, Vec::new(), 0); changed = true }
+        KeyCode::Char('k') if ctrl => { if at < size { let v = chars[..at].to_vec(); set(&mut p, v, at); changed = true } }
+        KeyCode::Char('w') if ctrl => {
+            // Back over blanks, then over the word (a run of word-separators, or of the rest).
+            let mut idx = at;
+            while idx != 0 { idx -= 1; if !space(idx) { break } }
+            let word_is_separators = in_list(idx);
+            while idx != 0 {
+                idx -= 1;
+                if space(idx) || word_is_separators != in_list(idx) { idx += 1; break }
+            }
+            p.saved = Some(chars[idx..at].iter().collect());
+            let mut v = chars.clone(); v.drain(idx..at); set(&mut p, v, idx); changed = true;
+        }
+        KeyCode::Right if ctrl => { p.cursor = forward_word(&chars, at, &ws); changed = true }
+        KeyCode::Char('f') if alt => { p.cursor = forward_word(&chars, at, &ws); changed = true }
+        KeyCode::Left if ctrl => { p.cursor = backward_word(&chars, at, &ws); changed = true }
+        KeyCode::Char('b') if alt => { p.cursor = backward_word(&chars, at, &ws); changed = true }
+        KeyCode::Up => { if prompt_history(app, &mut p, true) { changed = true } }
+        KeyCode::Char('p') if ctrl => { if prompt_history(app, &mut p, true) { changed = true } }
+        KeyCode::Down => { if prompt_history(app, &mut p, false) { changed = true } }
+        KeyCode::Char('n') if ctrl => { if prompt_history(app, &mut p, false) { changed = true } }
+        KeyCode::Char('y') if ctrl => {
+            // What C-w cut, else the newest buffer up to its first control character.
+            let text: String = match &p.saved { Some(s) => s.clone(), None => match app.paste.top() { Some(b) => b.data.chars().take_while(|c| (*c as u32) > 31 && *c as u32 != 127).collect(), None => String::new() } };
+            if !text.is_empty() || p.saved.is_some() || app.paste.top().is_some() {
+                let mut v = chars.clone();
+                let n = text.chars().count();
+                for (i, c) in text.chars().enumerate() { v.insert(at + i, c) }
+                set(&mut p, v, at + n);
+                changed = true;
+            }
+        }
+        KeyCode::Char('t') if ctrl => {
+            let mut idx = at;
+            if idx < size { idx += 1 }
+            if idx >= 2 { let mut v = chars.clone(); v.swap(idx - 2, idx - 1); set(&mut p, v, idx); changed = true }
+        }
+        KeyCode::Char('r') if ctrl && incremental => {
+            if p.value.is_empty() { prefix = '='; if let PromptKind::Command { last, .. } = &p.kind { let l = last.clone(); let n = l.chars().count(); set(&mut p, l.chars().collect(), n) } } else { prefix = '-' }
+            changed = true;
+        }
+        KeyCode::Char('s') if ctrl && incremental => {
+            if p.value.is_empty() { prefix = '='; if let PromptKind::Command { last, .. } = &p.kind { let l = last.clone(); let n = l.chars().count(); set(&mut p, l.chars().collect(), n) } } else { prefix = '+' }
+            changed = true;
+        }
         KeyCode::Tab if matches!(p.kind, PromptKind::Command { template: None, .. }) => {
             // Complete the command name: the only match, or the part every match shares.
             if !p.value.contains(' ') {
@@ -1013,27 +1042,98 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
                     p.hint = matches.join("  ");
                 }
                 p.cursor = p.value.chars().count();
+                changed = true;
             }
         }
-        KeyCode::Char(c) if !ctrl && !alt => { let mut v = chars.clone(); v.insert(at, c); set(&mut p, v, at + 1); p.hint.clear() }
+        KeyCode::Char(c) if !ctrl && !alt => { let mut v = chars.clone(); v.insert(at, c); set(&mut p, v, at + 1); p.hint.clear(); appended = true; changed = true }
         _ => {}
     }
+    // command-prompt -1: the first character typed is the answer.
+    if single && appended {
+        if p.value.chars().count() != 1 { return }
+        submit_prompt(app, p);
+        return;
+    }
+    if changed && incremental { prompt_changed(app, &p, prefix) }
     app.modal = Some(Modal::Prompt(p));
 }
 
-/// The command history, a step up or down (Up/Down; k/j in vi normal mode).
-fn prompt_history(app: &App, p: &mut Prompt, up: bool) {
-    let n = app.history.len();
-    if n == 0 { return }
-    let next = match (p.history_at, up) {
-        (None, true) => Some(n - 1),
-        (Some(i), true) => Some(i.saturating_sub(1)),
-        (Some(i), false) if i + 1 < n => Some(i + 1),
-        _ => None,
-    };
-    p.history_at = next;
-    p.value = next.map(|i| app.history[i].clone()).unwrap_or_default();
+/// An incremental prompt's text changed: its template runs with it, after `=` (as typed), `+`
+/// (C-s: again, forward) or `-` (C-r: again, back).
+pub fn prompt_changed(app: &mut App, p: &Prompt, prefix: char) {
+    let PromptKind::Command { template: Some(t), answers, .. } = &p.kind else { return };
+    let text = format!("{prefix}{}", p.value);
+    let mut all = answers.clone();
+    all.push(text);
+    let command = all.iter().enumerate().fold(t.clone(), |cmd, (i, a)| crate::commands::template_replace(&cmd, a, i + 1));
+    let was = app.modal.take();
+    commands::execute(app, &command);
+    app.modal = was;
+}
+
+/// status_prompt_forward_word (emacs): past blanks, then to the end of the word.
+fn forward_word(chars: &[char], at: usize, ws: &str) -> usize {
+    let size = chars.len();
+    let space = |i: usize| chars.get(i) == Some(&' ');
+    let in_list = |i: usize| chars.get(i).map(|c| ws.contains(*c)).unwrap_or(false);
+    let mut idx = at;
+    while idx != size && space(idx) { idx += 1 }
+    if idx == size { return idx }
+    let word_is_separators = in_list(idx) && !space(idx);
+    loop {
+        idx += 1;
+        if space(idx) { break }
+        if !(idx != size && word_is_separators == in_list(idx)) { break }
+    }
+    idx
+}
+
+/// status_prompt_backward_word: back over blanks, then to the start of the word.
+fn backward_word(chars: &[char], at: usize, ws: &str) -> usize {
+    let space = |i: usize| chars.get(i) == Some(&' ');
+    let in_list = |i: usize| chars.get(i).map(|c| ws.contains(*c)).unwrap_or(false);
+    let mut idx = at;
+    while idx != 0 { idx -= 1; if !space(idx) { break } }
+    let word_is_separators = in_list(idx);
+    while idx != 0 {
+        idx -= 1;
+        if space(idx) || word_is_separators != in_list(idx) { idx += 1; break }
+    }
+    idx
+}
+
+/// status_prompt_add_history: a line onto its type's history (not twice in a row), at most
+/// prompt-history-limit of them.
+fn add_history(app: &mut App, ptype: usize, line: &str) {
+    let limit: usize = app.options.get("prompt-history-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(100);
+    let h = &mut app.history[ptype.min(3)];
+    if h.last().map(|l| l == line).unwrap_or(false) { return }
+    if limit == 0 { h.clear(); return }
+    h.push(line.to_string());
+    while h.len() > limit { h.remove(0); }
+}
+
+/// status_prompt_up_history / _down_history: the prompt's type's history a step back or on
+/// (the step past the newest is an empty line). False when there is nowhere to go.
+fn prompt_history(app: &App, p: &mut Prompt, up: bool) -> bool {
+    let ptype = match &p.kind { PromptKind::Command { ptype, .. } => *ptype, _ => 0 };
+    let h = &app.history[ptype.min(3)];
+    let n = h.len();
+    let idx = p.history_at.unwrap_or(0);
+    if up {
+        if n == 0 || idx == n { return false }
+        let idx = idx + 1;
+        p.history_at = Some(idx);
+        p.value = h[n - idx].clone();
+    } else {
+        if n == 0 || idx == 0 { p.value.clear() } else {
+            let idx = idx - 1;
+            p.history_at = Some(idx);
+            p.value = if idx == 0 { String::new() } else { h[n - idx].clone() };
+        }
+    }
     p.cursor = p.value.chars().count();
+    true
 }
 
 /// tmux's status-keys vi, normal mode: h l 0 ^ $ w b e move; i a I A insert; x X D C S dd dw
@@ -1063,7 +1163,8 @@ fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
         (None, KeyCode::Esc) => return,
         (None, KeyCode::Char('c' | 'g')) if ctrl => return,
         (None, KeyCode::Enter) => {
-            if matches!(p.kind, PromptKind::Command { template: None, .. }) && !p.value.trim().is_empty() { app.history.retain(|h| h != &p.value); app.history.push(p.value.clone()) }
+            let ptype = match &p.kind { PromptKind::Command { ptype, .. } => *ptype, _ => 0 };
+            if !p.value.is_empty() && matches!(p.kind, PromptKind::Command { .. }) { add_history(app, ptype, &p.value) }
             submit_prompt(app, p);
             return;
         }
@@ -1085,8 +1186,8 @@ fn prompt_vi_normal(app: &mut App, key: KeyEvent, mut p: Prompt) {
         (None, KeyCode::Char('C')) => { let v = chars[..at].to_vec(); set(&mut p, v, at); insert(&mut p) }
         (None, KeyCode::Char('S')) => { set(&mut p, Vec::new(), 0); insert(&mut p) }
         (None, KeyCode::Char(op @ ('d' | 'c' | 'r'))) => p.vi_pending = Some(op),
-        (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { if matches!(p.kind, PromptKind::Command { template: None, .. }) { prompt_history(app, &mut p, true) } }
-        (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { if matches!(p.kind, PromptKind::Command { template: None, .. }) { prompt_history(app, &mut p, false) } }
+        (None, KeyCode::Char('k')) | (None, KeyCode::Up) => { prompt_history(app, &mut p, true); }
+        (None, KeyCode::Char('j')) | (None, KeyCode::Down) => { prompt_history(app, &mut p, false); }
         (None, KeyCode::Char('p')) => { if let Some(b) = app.paste.top().map(|b| b.data.clone()) { let mut v = chars.clone(); let ins: Vec<char> = b.chars().filter(|c| *c != '\n').collect(); let k = ins.len(); for (i, c) in ins.into_iter().enumerate() { v.insert((at + 1 + i).min(v.len()), c) } set(&mut p, v, at + k) } }
         _ => {}
     }
@@ -1207,248 +1308,19 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, mut picker: Picker
     app.modal = Some(Modal::Picker { kind, picker });
 }
 
-/// Copy mode, `mode-keys vi`: tmux's copy-mode-vi table.
-/// $VISUAL / $EDITOR names vi (or is unset — vim is family here): copy mode's default keys.
-/// copy-mode's emacs table, as the vi one it mirrors (`set -g mode-keys emacs`, or tmux's own
-/// choice when EDITOR is not vi).
-fn emacs_copy(key: KeyEvent) -> Option<KeyEvent> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let k = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-    let code = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
-    Some(match key.code {
-        KeyCode::Char('f') if ctrl => k('l'), KeyCode::Char('b') if ctrl => k('h'),
-        KeyCode::Char('n') if ctrl => k('j'), KeyCode::Char('p') if ctrl => k('k'),
-        KeyCode::Char('a') if ctrl => k('0'), KeyCode::Char('e') if ctrl => k('$'),
-        KeyCode::Char('v') if ctrl => code(KeyCode::PageDown), KeyCode::Char('v') if alt => code(KeyCode::PageUp),
-        KeyCode::Char(' ') if ctrl => k(' '), KeyCode::Char('@') if ctrl => k(' '),
-        KeyCode::Char('w') if alt => k('y'), KeyCode::Char('w') if ctrl => k('y'),
-        KeyCode::Char('f') if alt => k('w'), KeyCode::Char('b') if alt => k('b'),
-        KeyCode::Char('<') if alt => k('g'), KeyCode::Char('>') if alt => k('G'),
-        KeyCode::Char('s') if ctrl => k('/'), KeyCode::Char('r') if ctrl => k('?'),
-        KeyCode::Char('g') if ctrl => code(KeyCode::Esc),
-        KeyCode::Esc => k('q'),
-        KeyCode::Char('q') | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Enter => key,
-        KeyCode::Char('n') => k('n'), KeyCode::Char('N') => k('N'),
-        _ => return None,
-    })
-}
-
-/// `send -X <action>` from a copy-mode binding, as the key that does it here.
-fn copy_action_key(action: &str) -> Option<KeyEvent> {
-    let k = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-    let c = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
-    let code = |x: KeyCode| KeyEvent::new(x, KeyModifiers::NONE);
-    Some(match action {
-        "begin-selection" => k(' '), "select-line" => k('V'), "rectangle-toggle" | "rectangle-on" => c('v'),
-        a if a.starts_with("copy-selection") || a.starts_with("copy-pipe") || a == "copy-end-of-line" => k('y'),
-        "cancel" => k('q'), "clear-selection" => code(KeyCode::Esc),
-        "cursor-up" => k('k'), "cursor-down" => k('j'), "cursor-left" => k('h'), "cursor-right" => k('l'),
-        "start-of-line" => k('0'), "end-of-line" => k('$'), "back-to-indentation" => k('^'),
-        "top-line" => k('H'), "middle-line" => k('M'), "bottom-line" => k('L'), "history-top" => k('g'), "history-bottom" => k('G'),
-        "page-up" => code(KeyCode::PageUp), "page-down" => code(KeyCode::PageDown), "halfpage-up" => c('u'), "halfpage-down" => c('d'),
-        "scroll-up" => c('y'), "scroll-down" => c('e'),
-        "next-word" | "next-space" => k('w'), "previous-word" | "previous-space" => k('b'), "next-word-end" | "next-space-end" => k('e'),
-        "search-forward" | "search-forward-incremental" => k('/'), "search-backward" | "search-backward-incremental" => k('?'),
-        "search-again" => k('n'), "search-reverse" => k('N'), "next-paragraph" => k('}'), "previous-paragraph" => k('{'),
-        "next-matching-bracket" => k('%'), "jump-again" => k(';'), "jump-reverse" => k(','), "toggle-position" => k('P'),
-        "append-selection-and-cancel" => k('A'), "copy-pipe-end-of-line-and-cancel" | "copy-end-of-line-and-cancel" => k('D'),
-        "refresh-from-pane" => k('r'),
-        _ => return None,
-    })
-}
-
-fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
-    let emacs = !app.copy_as_vi && app.mode_keys_emacs();
-    let region = app.mode_keys_emacs();
-    if let Some(p) = app.panes.get_mut(&pane) { p.copy_emacs = region }
-    // Your tmux.conf's copy-mode bindings come first (`bind -T copy-mode-vi v send -X begin-selection`).
-    if app.copy_pending.is_none() {
-        let chord = keys::of(&key);
-        let table = if emacs { &app.keymap.copy_emacs } else { &app.keymap.copy_vi };
-        if let Some(b) = table.iter().find(|b| b.chord == chord).cloned() {
-            let words: Vec<&str> = b.command.split_whitespace().collect();
-            let is_send = matches!(words.first(), Some(&"send" | &"send-keys")) && words.contains(&"-X");
-            if is_send {
-                let action = words.iter().skip_while(|w| **w != "-X").nth(1).copied().unwrap_or("");
-                // copy-pipe[-and-cancel] "cmd": the copied text goes to that command too.
-                if action.starts_with("copy-pipe") {
-                    let parts = crate::commands::split(&b.command).into_iter().next().unwrap_or_default();
-                    let cmd = parts.iter().skip_while(|w| *w != "-X").nth(2).cloned();
-                    app.copy_pipe = cmd.filter(|c| !c.is_empty());
-                }
-                if let Some(k) = copy_action_key(action) {
-                    // Run it as the vi key it is (no second lookup: the table is not asked again).
-                    let saved = std::mem::take(&mut app.keymap.copy_vi);
-                    let saved_e = std::mem::take(&mut app.keymap.copy_emacs);
-                    let was = std::mem::replace(&mut app.copy_as_vi, true);
-                    copy_key(app, k, pane);
-                    app.copy_as_vi = was;
-                    app.keymap.copy_vi = saved;
-                    app.keymap.copy_emacs = saved_e;
-                } else { app.say(format!("{action}: not a copy-mode action here"), theme::WARN); app.modal = Some(Modal::Copy { pane }) }
-            } else {
-                // Any other command (select-pane -L): copy mode ends where tmux's would lose focus.
-                let before = app.focused();
-                commands::execute_bound(app, &b.command);
-                if app.focused() == before && app.modal.is_none() { app.modal = Some(Modal::Copy { pane }) }
-            }
-            return;
-        }
+/// server_client_key_callback for a pane in a mode: the binding its table (copy-mode, or
+/// copy-mode-vi with mode-keys vi) has for the key runs, the pane its target. False when the
+/// table has none.
+pub fn mode_key(app: &mut App, pane: u64, chord: &keys::Chord) -> bool {
+    let table = if crate::copy::ctx(app, pane).vi { "copy-mode-vi" } else { "copy-mode" };
+    match app.keymap.lookup(table, chord) {
+        Some(b) => { commands::execute_bound(app, &b.command); true }
+        None => false,
     }
-    // A key unbound from the copy-mode table (or the table removed) does nothing, as in tmux.
-    if app.copy_pending.is_none() && !app.copy_as_vi {
-        let table = if emacs { keys::Table::CopyEmacs } else { keys::Table::CopyVi };
-        if !app.keymap.copy_key_bound(table, &keys::of(&key)) { app.modal = Some(Modal::Copy { pane }); return }
-    }
-    let key = if emacs { match emacs_copy(key) { Some(k) => k, None => { app.modal = Some(Modal::Copy { pane }); return } } } else { key };
-    // f/F/t/T wait for their character.
-    if let Some(kind) = app.copy_pending.take() {
-        if let KeyCode::Char(c) = key.code {
-            let n = std::mem::take(&mut app.copy_count).max(1);
-            app.copy_last_find = Some((kind, c));
-            if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..n { p.copy_find_char(c, matches!(kind, 'f' | 't'), matches!(kind, 't' | 'T')); } }
-        }
-        app.modal = Some(Modal::Copy { pane });
-        return;
-    }
-    // A count: 5k, 3w.
-    if let KeyCode::Char(d @ '0'..='9') = key.code {
-        if key.modifiers.is_empty() && (d != '0' || app.copy_count > 0) { app.copy_count = (app.copy_count * 10 + (d as usize - '0' as usize)).min(9999); app.modal = Some(Modal::Copy { pane }); return }
-    }
-    let count = std::mem::take(&mut app.copy_count);
-    if count > 1 && matches!(key.code, KeyCode::Char('h' | 'j' | 'k' | 'l' | 'w' | 'b' | 'e' | 'W' | 'B' | 'E' | 'n' | 'N' | ';' | ',' | '{' | '}') | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right) {
-        // Each run puts copy mode back (or leaves it, as the key says); the next run needs it there.
-        for _ in 0..count { if !matches!(app.modal, None | Some(Modal::Copy { .. })) { break } app.modal = None; copy_key(app, key, pane); if app.modal.is_none() { break } app.modal = None }
-        if app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false) { app.modal = Some(Modal::Copy { pane }) }
-        return;
-    }
-    match key.code {
-        KeyCode::Char(c @ ('f' | 'F' | 't' | 'T')) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => { app.copy_pending = Some(c); app.copy_count = count; app.modal = Some(Modal::Copy { pane }); return }
-        KeyCode::Char(c @ (';' | ',')) => {
-            if let Some((kind, ch)) = app.copy_last_find {
-                let forward = matches!(kind, 'f' | 't') == (c == ';');
-                if let Some(p) = app.panes.get_mut(&pane) { p.copy_find_char(ch, forward, matches!(kind, 't' | 'T')); }
-            }
-            app.modal = Some(Modal::Copy { pane });
-            return;
-        }
-        KeyCode::Char('%') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_match_bracket() } app.modal = Some(Modal::Copy { pane }); return }
-        KeyCode::Char('{') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(false) } app.modal = Some(Modal::Copy { pane }); return }
-        KeyCode::Char('}') => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_paragraph(true) } app.modal = Some(Modal::Copy { pane }); return }
-        _ => {}
-    }
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let Some(p) = app.panes.get_mut(&pane) else { return };
-    match key.code {
-        KeyCode::Char('q') => { p.copy_end(); return }
-        KeyCode::Char('c') if ctrl => { p.copy_end(); return }
-        // Escape clears the selection and stays (tmux's copy-mode-vi); q leaves.
-        KeyCode::Esc => { if p.copy.map(|c| c.selecting).unwrap_or(false) { p.copy_toggle(false) } }
-        KeyCode::Char('h') | KeyCode::Left if !ctrl => p.copy_move(-1, 0),
-        KeyCode::Char('l') | KeyCode::Right => p.copy_move(1, 0),
-        KeyCode::Char('k') | KeyCode::Up if !ctrl => p.copy_move(0, -1),
-        KeyCode::Char('j') | KeyCode::Down if !ctrl => p.copy_move(0, 1),
-        // halfpage-up/-down and page-up/-down, as tmux moves the view.
-        KeyCode::Char('u') if ctrl => { p.copy_page(true, true); }
-        KeyCode::Char('d') if ctrl => { p.copy_page(false, true); }
-        KeyCode::Char('b') if ctrl => { p.copy_page(true, false); }
-        KeyCode::Char('f') if ctrl => { p.copy_page(false, false); }
-        KeyCode::Char('y') if ctrl => p.copy_move(0, -1),
-        KeyCode::Char('e') if ctrl => p.copy_move(0, 1),
-        // tmux's copy-mode-vi, key for key: v / C-v rectangle-toggle, Space begin-selection.
-        KeyCode::Char('v') if ctrl => p.copy_rect_toggle(),
-        KeyCode::Char('h') if ctrl => p.copy_move(-1, 0),
-        KeyCode::Backspace => p.copy_move(-1, 0),
-        KeyCode::PageUp => { p.copy_page(true, false); }
-        KeyCode::PageDown => { p.copy_page(false, false); }
-        KeyCode::Up if ctrl => p.copy_scroll(1),
-        KeyCode::Down if ctrl => p.copy_scroll(-1),
-        KeyCode::Char('K') => p.copy_scroll(1),
-        KeyCode::Char('J') => p.copy_scroll(-1),
-        KeyCode::Char('z') => p.copy_scroll_middle(),
-        KeyCode::Char('o') => p.copy_other_end(),
-        KeyCode::Char('X') => p.copy_set_mark(),
-        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::ALT) => p.copy_jump_mark(),
-        KeyCode::Char('P') => { p.copy_hide_position = !p.copy_hide_position; p.dirty = true }
-        KeyCode::Char('r') => p.dirty = true,
-        KeyCode::Char('#') | KeyCode::Char('*') => {
-            // The word under the cursor, searched for up (#) or down (*).
-            let word = p.copy_word_here();
-            if word.is_empty() { app.modal = Some(Modal::Copy { pane }); return }
-            let up = key.code == KeyCode::Char('#');
-            if p.find(&word, up, true) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } }
-            app.last_search = Some(word);
-            app.last_search_up = up;
-        }
-        KeyCode::Char(':') => {
-            app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: Some(format!("send-keys -X -t {} goto-line \"%%\"", crate::pane::tag(pane))), more: Vec::new(), answers: Vec::new(), one: false, digits: false }, "(goto line) ", "")));
-            return;
-        }
-        KeyCode::Char('D') => {
-            p.copy_select_to_eol();
-            let text = p.selection_text();
-            p.copy_end();
-            if let Some(text) = text { crate::clipboard::store(&text); app.add_buffer(text) }
-            return;
-        }
-        KeyCode::Char('A') => {
-            // append-selection-and-cancel: onto the newest buffer.
-            let text = p.selection_text();
-            p.copy_end();
-            if let Some(text) = text {
-                // window_copy_append_selection: onto the newest automatic buffer (else a new one).
-                match app.paste.top().map(|b| (b.name.clone(), b.data.clone())) {
-                    Some((name, data)) => { let joined = data + &text; crate::clipboard::store(&joined); app.paste.replace(&name, joined) }
-                    None => { crate::clipboard::store(&text); app.add_buffer(text) }
-                }
-            }
-            return;
-        }
-        KeyCode::Char('w') => p.copy_word(true),
-        KeyCode::Char('b') => p.copy_word(false),
-        KeyCode::Char('e') => p.copy_word_end(),
-        KeyCode::Char('W') => p.copy_word_by(true, true),
-        KeyCode::Char('B') => p.copy_word_by(false, true),
-        KeyCode::Char('E') => p.copy_word_end_by(true),
-        KeyCode::Char('0') | KeyCode::Home => p.copy_line_edge(false),
-        KeyCode::Char('^') => p.copy_first_nonblank(),
-        KeyCode::Char('$') | KeyCode::End => p.copy_line_edge(true),
-        KeyCode::Char('g') => p.copy_to(true),
-        KeyCode::Char('G') => p.copy_to(false),
-        KeyCode::Char('H') => p.copy_screen(0),
-        KeyCode::Char('M') => p.copy_screen(1),
-        KeyCode::Char('L') => p.copy_screen(2),
-        KeyCode::Char('v') => p.copy_rect_toggle(),
-        KeyCode::Char(' ') => p.copy_begin(),
-        KeyCode::Char('V') => p.copy_toggle(true),
-        // copy-mode-vi: / searches down, ? up; n goes on the same way, N back (wrapping, as tmux).
-        KeyCode::Char('/') | KeyCode::Char('?') => { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: key.code == KeyCode::Char('?') }); return }
-        KeyCode::Char('n') | KeyCode::Char('N') => {
-            if let Some(q) = app.last_search.clone() {
-                let up = app.last_search_up == (key.code == KeyCode::Char('n'));
-                if p.find(&q, up, false) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } else { app.say(format!("No match: {q}"), theme::WARN) }
-            }
-        }
-        KeyCode::Char('j') if ctrl => { return copy_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), pane) }
-        KeyCode::Char('y') | KeyCode::Enter => {
-            let text = p.selection_text();
-            p.copy_end();
-            if let Some(text) = text {
-                crate::clipboard::store(&text);
-                // copy-pipe's command, or tmux's copy-command, gets the text on its stdin.
-                if let Some(cmd) = app.copy_pipe.take().or_else(|| app.opts.copy_command.clone()) { pipe_to(&cmd, &text) }
-                app.add_buffer(text);
-            }
-            return;
-        }
-        _ => {}
-    }
-    app.modal = Some(Modal::Copy { pane });
 }
 
 /// A copied text to a shell command's stdin (copy-pipe, copy-command), not waited for.
-fn pipe_to(cmd: &str, text: &str) {
+pub fn pipe_to(cmd: &str, text: &str) {
     use std::io::Write;
     let mut c = std::process::Command::new("/bin/sh");
     c.arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -1662,7 +1534,7 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         PickerKind::Palette => {
             let Some(id) = id else { return };
             // A command that needs words goes to the prompt with its name typed; the rest run.
-            if modal::NEEDS_ARGS.contains(&id.as_str()) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None, more: Vec::new(), answers: Vec::new(), one: false, digits: false }, ":", &format!("{id} ")))) }
+            if modal::NEEDS_ARGS.contains(&id.as_str()) { app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template: None, more: Vec::new(), answers: Vec::new(), one: false, digits: false, incremental: false, ptype: 0, last: String::new() }, ":", &format!("{id} ")))) }
             else if is_command(&id) { run(app, &id) } else { commands::execute(app, &id) }
         }
         PickerKind::Messages | PickerKind::Output { .. } => {}
@@ -1838,12 +1710,12 @@ fn submit_prompt(app: &mut App, p: Prompt) {
     match p.kind {
         // Answered by a key press in prompt_key; nothing to submit.
         PromptKind::Key { .. } => {}
-        PromptKind::Command { template, mut more, mut answers, one, digits } => {
+        PromptKind::Command { template, mut more, mut answers, one, digits, incremental, ptype, last } => {
             // The answer as typed (tmux keeps its spaces); the next prompt, if there is one.
             answers.push(p.value.clone());
             if !more.is_empty() {
                 let (label, initial) = more.remove(0);
-                app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template, more, answers, one, digits }, &label, &initial)));
+                app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Command { template, more, answers, one, digits, incremental, ptype, last }, &label, &initial)));
                 return;
             }
             // args_make_commands: each answer into the template (cmd_template_replace).
@@ -1976,88 +1848,6 @@ pub fn paste_into(app: &mut App, pane: u64, text: &str, sep: &str, bracket: bool
 /// use them: history-top, goto-line, search-backward "word", begin-selection …), -N times.
 /// send -X: a copy-mode command for a pane in copy mode (window_copy_command) — run by a mouse
 /// key (not the wheel), the cursor first goes where the mouse is.
-fn send_copy_action(app: &mut App, pane: u64, args: &crate::cmd::Args) {
-    let count = args.get('N').and_then(|n| n.parse().ok()).unwrap_or(1usize);
-    let rest: Vec<String> = args.values.clone();
-    let Some(action) = rest.first().cloned() else { return };
-    let mouse = app.mouse_ev.clone().filter(|m| m.valid);
-    if let Some(m) = mouse.as_ref().filter(|m| !crate::mouse::is_wheel(m.b)) { crate::mouse::copy_move_mouse(app, m) }
-    // begin-selection by the mouse: a drag, its end following the mouse.
-    if action == "begin-selection" { if let Some(m) = &mouse { return crate::mouse::copy_drag_begin(app, m) } }
-    let arg = rest.get(1).cloned().unwrap_or_default();
-    let region = app.mode_keys_emacs();
-    let Some(p) = app.panes.get_mut(&pane) else { return };
-    if p.copy.is_none() { if action == "cancel" { return } p.copy_start() }
-    p.copy_emacs = region;
-    app.modal = Some(Modal::Copy { pane });
-    match action.as_str() {
-        "page-up" | "halfpage-up" => { if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { p.copy_page(true, action == "halfpage-up"); } } }
-        "page-down" | "halfpage-down" | "page-down-and-cancel" | "halfpage-down-and-cancel" => {
-            let mut bottom = false;
-            if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { bottom = p.copy_page(false, action.starts_with("halfpage")); } }
-            if bottom && action.ends_with("-and-cancel") { if let Some(p) = app.panes.get_mut(&pane) { p.copy_end() } app.modal = None }
-        }
-        a if a.starts_with("copy-pipe") || a.starts_with("copy-selection") => {
-            // The selection copied (a paste buffer; copy-pipe's command, or copy-command, gets it
-            // on its stdin); -and-cancel leaves copy mode, else the selection goes and it stays.
-            let cmd = if a.starts_with("copy-pipe") { rest.get(1).cloned().filter(|c| !c.is_empty()).or_else(|| app.opts.copy_command.clone()) } else { None };
-            let selecting = app.panes.get(&pane).and_then(|p| p.copy).map(|c| c.selecting).unwrap_or(false);
-            let text = app.panes.get(&pane).and_then(|p| p.selection_text());
-            match text {
-                Some(text) => {
-                    crate::clipboard::store(&text);
-                    if let Some(cmd) = cmd { pipe_to(&cmd, &text) }
-                    app.add_buffer(text);
-                }
-                None if selecting => { if let Some(cmd) = cmd { pipe_to(&cmd, "") } }
-                None => {}
-            }
-            if let Some(p) = app.panes.get_mut(&pane) { if a.ends_with("-and-cancel") { p.copy_end(); app.modal = None } else { p.copy_toggle(false) } }
-        }
-        "goto-line" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_goto_line(arg.trim().parse().unwrap_or(0)) } }
-        "search-backward" | "search-forward" | "search-backward-text" | "search-forward-text" if !arg.is_empty() => {
-            let up = action.starts_with("search-backward");
-            if let Some(p) = app.panes.get_mut(&pane) { if p.find(&arg, up, true) { if let Some(m) = p.find_at.clone() { p.copy_jump(*m.start()) } } }
-            app.last_search = Some(arg);
-            app.last_search_up = up;
-        }
-        "jump-forward" | "jump-backward" | "jump-to-forward" | "jump-to-backward" if !arg.is_empty() => {
-            let c = arg.chars().next().unwrap_or(' ');
-            let (fwd, till) = match action.as_str() { "jump-forward" => (true, false), "jump-backward" => (false, false), "jump-to-forward" => (true, true), _ => (false, true) };
-            if let Some(p) = app.panes.get_mut(&pane) { for _ in 0..count { p.copy_find_char(c, fwd, till); } }
-        }
-        "begin-selection" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_begin() } }
-        "select-word" => {
-            let ws = app.options.get("word-separators", "", None).unwrap_or_default();
-            let vi = !app.mode_keys_emacs();
-            if let Some(p) = app.panes.get_mut(&pane) { p.copy_select_word(&ws, vi) }
-        }
-        "rectangle-toggle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_rect_toggle() } }
-        "other-end" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_other_end() } }
-        "set-mark" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_set_mark() } }
-        "jump-to-mark" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_jump_mark() } }
-        "scroll-middle" => { if let Some(p) = app.panes.get_mut(&pane) { p.copy_scroll_middle() } }
-        // scroll-down leaves copy mode at the bottom when it was entered to scroll (-e);
-        // scroll-down-and-cancel always does.
-        "scroll-up" | "scroll-down" | "scroll-down-and-cancel" => {
-            let d = if action == "scroll-up" { 1 } else { -1 };
-            if let Some(p) = app.panes.get_mut(&pane) {
-                p.copy_scroll(d * count as i32);
-                if d < 0 && p.scrolled() == 0 && (p.copy_by_wheel || action == "scroll-down-and-cancel") { p.copy_end() }
-            }
-        }
-        a => match copy_action_key(a) {
-            Some(k) => {
-                // The action is the vi key that does it here, whatever mode-keys is.
-                let was = std::mem::replace(&mut app.copy_as_vi, true);
-                for _ in 0..count { app.modal = None; copy_key(app, k, pane); if app.modal.is_none() { break } }
-                app.copy_as_vi = was;
-            }
-            None => app.say(format!("{a}: not a copy-mode command here"), theme::WARN),
-        },
-    }
-}
-
 /// send-prefix to the active pane: the key goes where tmux would send it — to a list or tree open
 /// over the pane (what fzf in the pane would get: C-b is backward-char, C-a beginning-of-line), to
 /// copy mode through its table (C-b is page-up in copy-mode-vi), else to the pane's program.
@@ -2077,55 +1867,57 @@ pub fn send_chord(app: &mut App, pane: u64, chord: keys::Chord) {
 /// lot that many times; -X a copy-mode command, which the pane must be in copy mode for; a pane
 /// in copy mode takes the keys as its key table has them.
 pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
-    let repeat = match args.get('N') {
-        None => 1,
-        Some(n) => match n.parse::<i64>() {
+    let in_mode = app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false);
+    let mut np: u32 = 1;
+    if let Some(n) = args.get('N') {
+        // args_strtonum_and_expand: a format.
+        let n = commands::expand(app, n);
+        np = match n.parse::<i64>() {
             Ok(n) if n >= 1 && n <= u32::MAX as i64 => n as u32,
             Ok(n) if n < 1 => return app.say("repeat count too small", theme::WARN),
             Ok(_) => return app.say("repeat count too large", theme::WARN),
             Err(_) => return app.say("repeat count invalid", theme::WARN),
-        },
-    };
-    let in_mode = app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false);
+        };
+        // In a mode, -N with -X (or with no keys) is the count the mode's next command repeats by.
+        if in_mode && (args.has('X') > 0 || args.values.is_empty()) {
+            if let Some(m) = app.panes.get_mut(&pane).and_then(|p| p.modes.last_mut()) { m.prefix = np }
+        }
+    }
     if args.has('X') > 0 {
         if !in_mode { return app.say("not in a mode", theme::WARN) }
-        return send_copy_action(app, pane, args);
+        let mouse = app.mouse_ev.clone().filter(|m| m.valid);
+        return crate::copy::command(app, pane, &args.values, args.has('F') > 0, mouse.as_ref());
     }
     if args.values.is_empty() { return }
     let literal = args.has('l') > 0;
     let mode = app.panes.get(&pane).map(|p| p.mode()).unwrap_or(alacritty_terminal::term::TermMode::empty());
-    let mut keys: Vec<KeyEvent> = Vec::new();
     let mut bytes = Vec::new();
-    for _ in 0..repeat {
+    for _ in 0..np {
         for word in &args.values {
             if args.has('H') > 0 {
                 // A byte by its hex value (none sent for one that isn't).
-                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { bytes.push(n) } }
+                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { if in_mode { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE)) } else { bytes.push(n) } } }
                 continue;
             }
             match (!literal).then(|| keys::parse(word).ok()).flatten() {
-                // A mouse key by its name: nothing for a program (there is no event with it); in
-                // copy mode, what its table binds it to.
-                Some(chord) if keys::is_mouse(&chord.code) => {
-                    if in_mode {
-                        let table = if app.mode_keys_emacs() { "copy-mode" } else { "copy-mode-vi" };
-                        if let Some(b) = app.keymap.lookup(table, &chord) { commands::execute_bound(app, &b.command) }
-                    }
-                }
-                Some(chord) => {
-                    let key = KeyEvent::new(chord.code, chord.mods);
-                    if in_mode { keys.push(key) } else if let Some(b) = encode_key(&key, mode) { bytes.extend(b) }
-                }
-                None if in_mode => keys.extend(word.chars().map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))),
+                // A key by its name: in a mode, what the mode's table binds it to; a mouse key's
+                // name is nothing to a program (there is no event with it).
+                Some(chord) if in_mode => inject_mode_key(app, pane, chord),
+                Some(chord) if keys::is_mouse(&chord.code) => {}
+                Some(chord) => { if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { bytes.extend(b) } }
+                None if in_mode => { for c in word.chars() { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(c), KeyModifiers::NONE)) } }
                 None => bytes.extend(word.as_bytes()),
             }
         }
     }
-    if in_mode {
-        for key in keys { app.modal = Some(Modal::Copy { pane }); copy_key(app, key, pane) }
-        return;
-    }
     if !bytes.is_empty() { send_to_pane(app, pane, bytes) }
+}
+
+/// cmd_send_keys_inject_key for a pane in a mode: its table's binding for the key, if any (and
+/// none from root).
+fn inject_mode_key(app: &mut App, pane: u64, chord: keys::Chord) {
+    let table = if crate::copy::ctx(app, pane).vi { "copy-mode-vi" } else { "copy-mode" };
+    if let Some(b) = app.keymap.lookup(table, &chord) { commands::execute_bound(app, &b.command) }
 }
 
 /// `new-harness claude @office ~/src/api`: the words `harness new` takes.

@@ -232,12 +232,6 @@ impl Keymap {
         if !self.removed.contains(&table) { self.removed.push(table) }
     }
 
-    /// Whether a copy-mode key is bound there (the table's defaults, less what was unbound).
-    pub fn copy_key_bound(&self, table: Table, chord: &Chord) -> bool {
-        let own = match table { Table::CopyVi => &self.copy_vi, _ => &self.copy_emacs };
-        own.iter().any(|b| &b.chord == chord) || (!self.removed.contains(&table) && !self.copy_unbound.contains(&(table, *chord)))
-    }
-
     pub fn unbind(&mut self, table: Table, chord: &Chord) {
         self.table_mut(table).retain(|b| &b.chord != chord);
         if matches!(table, Table::CopyVi | Table::CopyEmacs) && !self.copy_unbound.contains(&(table, *chord)) { self.copy_unbound.push((table, *chord)) }

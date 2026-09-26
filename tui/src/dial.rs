@@ -149,7 +149,7 @@ pub fn focus(app: &mut App, machine: &str, agent: &str) -> bool {
     if tab == app.active && app.focused() == Some(pane) { return true }
     // Copy mode belongs to the pane it was on; moving away ends it, as a focus change does in hn.
     if let Some(Modal::Copy { pane: was }) = app.modal {
-        if was != pane { if let Some(p) = app.panes.get_mut(&was) { p.copy_end() } app.modal = None }
+        if was != pane { crate::copy::exit_all(app, was); app.modal = None }
     }
     let zoomed = app.tabs[tab].zoomed;
     app.focus_pane(tab, pane);

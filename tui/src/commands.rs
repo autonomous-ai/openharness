@@ -746,7 +746,11 @@ fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
                     None => {}
                 }
                 if o.code != 0 { app.cli_code = o.code }
-                if !lines.is_empty() { app.print("run-shell", lines) }
+                if !lines.is_empty() {
+                    // Waited for, it prints to the client as any command does; with -b, into the
+                    // pane's view mode with its escapes read (cmd_run_shell_print).
+                    if background && app.capture.is_none() && crate::copy::print(app, &lines, true) {} else { app.print("run-shell", lines) }
+                }
                 Default::default()
             }) }))
         }
@@ -1213,39 +1217,35 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "display-panes" => app.modal = Some(Modal::DisplayPanes { until: std::time::Instant::now() + std::time::Duration::from_millis(app.display_panes_ms) }),
         "copy-mode" => {
-            // cmd-copy-mode.c [-deHMqu] [-s src-pane] [-t target-pane]: the pane into copy mode (-M
-            // the one under the mouse, nothing when there is none) — -q out of it instead; -e it
-            // leaves when scrolled back to the bottom, -H its position is not shown, -M a
-            // selection dragged from the mouse; then -u a page up, -d a page down. Copy mode is the
-            // pane's: its keys are its own while it is the active pane.
+            // cmd-copy-mode.c [-deHMqu] [-s src-pane] [-t target-pane]: the pane into copy mode, a
+            // copy of its screen and history (another pane's with -s) — -q every mode it is in
+            // ended instead; -M the pane under the mouse (nothing when there is none), a selection
+            // dragged from where it went down; -e it ends when scrolled back to the bottom, -H its
+            // position not shown; then -u a page up, -d a page down.
             let pane = if flag(words, "-M") {
                 match app.mouse_ev.clone().filter(|m| m.valid).and_then(|m| crate::mouse::mouse_pane(app, &m)) { Some((_, p)) => p, None => return }
             } else {
                 match target_pane(app, words) { Some((_, p)) => p, None => return }
             };
-            if flag(words, "-q") {
-                if let Some(p) = app.panes.get_mut(&pane) { if p.copy.is_some() { p.copy_end() } }
-                return app.sync_copy_modal();
-            }
-            let fresh = app.panes.get(&pane).map(|p| p.copy.is_none()).unwrap_or(false);
-            if fresh {
-                let emacs = app.mode_keys_emacs();
-                if let Some(p) = app.panes.get_mut(&pane) {
-                    p.copy_start();
-                    p.copy_by_wheel = flag(words, "-e");
-                    p.copy_hide_position = flag(words, "-H");
-                    p.copy_emacs = emacs;
-                }
-                if flag(words, "-M") { if let Some(m) = app.mouse_ev.clone() { crate::mouse::copy_drag_begin(app, &m) } }
-            }
-            if flag(words, "-u") { if let Some(p) = app.panes.get_mut(&pane) { p.copy_page(true, false); } }
+            if flag(words, "-q") { crate::copy::exit_all(app, pane); return app.sync_copy_modal() }
+            let source = match opt(words, "-s") {
+                Some(s) => match pane_target(app, &s) { Some((_, p)) => p, None => return app.say(format!("can't find pane: {s}"), theme::WARN) },
+                None => pane,
+            };
+            let already = crate::copy::enter(app, pane, source, flag(words, "-e"), flag(words, "-H"));
+            if !already && flag(words, "-M") { if let Some(m) = app.mouse_ev.clone() { crate::copy::start_drag(app, &m) } }
+            let c = crate::copy::ctx(app, pane);
+            if flag(words, "-u") { if let Some(m) = app.panes.get_mut(&pane).and_then(|p| p.modes.last_mut()) { m.pageup(false, &c) } }
             if flag(words, "-d") {
                 let exit = flag(words, "-e");
-                if let Some(p) = app.panes.get_mut(&pane) { if p.copy_page(false, false) && exit { p.copy_end() } }
+                let done = app.panes.get_mut(&pane).and_then(|p| p.modes.last_mut()).map(|m| m.pagedown(false, exit, &c)).unwrap_or(false);
+                if done { crate::copy::exit(app, pane) }
             }
+            if let Some(p) = app.panes.get_mut(&pane) { p.dirty = true }
             app.sync_copy_modal();
         }
-        "search-backward" | "search-forward" => { if let Some(pane) = app.focused() { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: command == "search-backward" }) } }
+        // hn's own: copy mode's search prompt, as the table opens it.
+        "search-backward" | "search-forward" => { execute(app, "copy-mode"); input::search_prompt(app, command == "search-backward") }
         "paste-buffer" => {
             // tmux's paste-buffer [-dpr] [-s separator] [-b buffer-name] [-t target-pane]: the
             // buffer (the newest automatic one without -b) into the pane — its newlines as -s, a
@@ -1319,8 +1319,15 @@ fn run_words(app: &mut App, words: &[String]) {
                 (app.capture_err, app.origin) = (cap, origin);
             }
         }
-        "show-messages" if app.capture.is_some() => { let lines = app.messages.iter().map(|(_, t)| t.clone()).collect(); app.print("show-messages", lines) }
-        "show-messages" => input::run(app, "messages"),
+        "show-messages" => {
+            // SHOW_MESSAGES_TEMPLATE, newest first: `#{t/p:message_time}: #{message_text}`.
+            let off = crate::app::utc_offset();
+            let lines = app.messages.iter().rev().map(|(at, t)| {
+                let secs = at.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) + off;
+                format!("{:02}:{:02}: {t}", secs.rem_euclid(86400) / 3600, (secs.rem_euclid(3600)) / 60)
+            }).collect();
+            app.print("show-messages", lines)
+        }
         "list-keys" => {
             // tmux's list-keys (cmd-list-keys.c): -T one table, a key for that key alone, -N the notes
             // (-a with the commands of keys without one, -P what goes before them), -1 the first.
@@ -1345,8 +1352,6 @@ fn run_words(app: &mut App, words: &[String]) {
                 } else if key.is_none() { key = Some(w.clone()) }
                 i += 1;
             }
-            // In the client, asked for nothing in particular: the list to look through (C-b ?).
-            if app.capture.is_none() && !one && key.is_none() && table.is_none() { return input::run(app, "keys") }
             let only = match &key { Some(k) => match crate::keys::parse(k) { Ok(c) => Some(c), Err(_) => return app.error(format!("invalid key: {k}")) }, None => None };
             let tables = app.keymap.tables();
             if let Some(t) = &table { if !tables.iter().any(|(n, _)| n == t) { return app.error(format!("table {t} doesn't exist")) } }
@@ -1809,7 +1814,7 @@ fn run_words(app: &mut App, words: &[String]) {
             if flag(words, "-M") {
                 let m = app.mouse_ev.clone().filter(|m| m.valid);
                 let Some((m, (_, pane))) = m.and_then(|m| crate::mouse::mouse_pane(app, &m).map(|t| (m, t))) else { return app.error("no mouse target") };
-                if app.panes.get(&pane).map(|p| p.copy.is_some()).unwrap_or(false) || m.wp != Some(pane) { return }
+                if app.panes.get(&pane).map(|p| p.in_mode()).unwrap_or(false) || m.wp != Some(pane) { return }
                 return crate::mouse::input_key_mouse(app, pane, &m);
             }
             let (Some(args), Some((_, pane))) = (words.args.clone(), target_pane(app, words)) else { return };
@@ -1892,12 +1897,24 @@ fn run_words(app: &mut App, words: &[String]) {
             };
             let inputs: Vec<String> = opt(words, "-I").map(|i| i.split(',').map(|v| expand(app, v)).collect()).unwrap_or_default();
             let mut prompts: Vec<(String, String)> = labels.into_iter().enumerate().map(|(k, l)| (if spaced { format!("{l} ") } else { l }, inputs.get(k).cloned().unwrap_or_default())).collect();
-            // A shell that ran it waits for the answer (not with -b).
-            app.wait_cli = app.capture.is_some() && !flag(words, "-b");
-            if flag(words, "-k") { return app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Key { template }, &prompts[0].0, ""))) }
+            // -T: the prompt's type, for its history.
+            let ptype = match opt(words, "-T").as_deref() {
+                None | Some("command") => 0, Some("search") => 1, Some("target") => 2, Some("window-target") => 3,
+                Some(t) => return app.say(format!("unknown type: {t}"), theme::WARN),
+            };
+            // -1, else -N, else -i, else -k.
+            let (one, digits, incremental) = (flag(words, "-1"), !flag(words, "-1") && flag(words, "-N"), !flag(words, "-1") && !flag(words, "-N") && flag(words, "-i"));
+            // A shell that ran it waits for the answer (not with -b or -i).
+            app.wait_cli = app.capture.is_some() && !flag(words, "-b") && !incremental;
+            if flag(words, "-k") && !one && !digits && !incremental { return app.modal = Some(Modal::Prompt(Prompt::status(PromptKind::Key { template }, &prompts[0].0, ""))) }
             let (label, initial) = prompts.remove(0);
-            let kind = PromptKind::Command { template: (!template.is_empty()).then_some(template), more: prompts, answers: Vec::new(), one: flag(words, "-1"), digits: flag(words, "-N") };
-            app.modal = Some(Modal::Prompt(Prompt::status(kind, &label, &initial)));
+            // -i: the input is what C-r and C-s bring back; the line starts empty, and the template
+            // runs at once with `=`.
+            let (initial, last) = if incremental { (String::new(), initial) } else { (initial, String::new()) };
+            let kind = PromptKind::Command { template: (!template.is_empty()).then_some(template), more: prompts, answers: Vec::new(), one, digits, incremental, ptype, last };
+            let p = Prompt::status(kind, &label, &initial);
+            if incremental { input::prompt_changed(app, &p, '=') }
+            app.modal = Some(Modal::Prompt(p));
         }
         "display-menu" | "menu" => {
             // cmd-display-menu.c: name key command … ('' a separator; a name that expands empty

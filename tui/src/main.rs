@@ -14,6 +14,7 @@ mod ipc;
 mod keys;
 mod preview;
 mod config;
+mod copy;
 mod daemon;
 mod dial;
 mod draw;

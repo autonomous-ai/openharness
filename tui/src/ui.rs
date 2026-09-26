@@ -6,7 +6,6 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
@@ -50,25 +49,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         }
         _ => {}
     }
-    let rects = app.rects.clone();
-    // Copy mode is a pane's: every pane in it shows where it is.
-    for (id, rect) in &rects {
-        if let Some(p) = app.panes.get(id) { if p.copy.is_some() { copy_indicator(buf, p, app.content_of(app.tab(), *rect)) } }
-    }
     if let Some(modal) = &mut app.modal {
         match modal {
             Modal::Picker { kind, picker } => { cursor = Some(fzf(buf, body, picker, kind, &*app_preview_placeholder())) }
-            Modal::Tree { .. } => {}
-            Modal::Copy { pane } => {
-                if let (Some(p), Some((_, rect))) = (app.panes.get(pane), rects.iter().find(|(id, _)| id == pane)) {
-                    let content = app.content_of(app.tab(), *rect);
-                    cursor = p.copy.and_then(|c| {
-                        let row = c.point.line.0 + p.term.grid().display_offset() as i32;
-                        let col = c.point.column.0 as u16;
-                        (row >= 0 && (row as u16) < content.height && col < content.width).then(|| Position::new(content.x + col, content.y + row as u16))
-                    });
-                }
-            }
             _ => {}
         }
     }
@@ -96,7 +79,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
-    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) | Some(Modal::Find { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.display_ms)).unwrap_or(false);
+    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.display_ms)).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
@@ -212,6 +195,16 @@ fn window(buf: &mut Buffer, app: &mut App, body: Rect) -> Option<Position> {
         let content = app.content_of(app.tab(), *rect);
         // tmux's window-style / window-active-style: the default colours a pane's cells fall back to.
         let window = if active && many { (app.look.active_window_fg, app.look.active_window_bg) } else if many { (app.look.window_fg, app.look.window_bg) } else { (app.look.active_window_fg.or(app.look.window_fg), app.look.active_window_bg.or(app.look.window_bg)) };
+        if app.panes.get(id).map(|p| p.in_mode()).unwrap_or(false) {
+            let (styles, ctx) = (crate::copy::styles(app, *id), crate::copy::ctx(app, *id));
+            if let Some(m) = app.panes.get(id).and_then(|p| p.modes.last()) {
+                if let Some(bg) = window.1 { buf.set_style(content, Style::default().bg(bg)) }
+                let (x, y) = m.draw(buf, content, &styles, window, &ctx);
+                if active && x < content.width && y < content.height { cursor = Some(Position::new(content.x + x, content.y + y)) }
+            }
+            if let Some(pane) = app.panes.get_mut(id) { pane.dirty = false }
+            continue;
+        }
         if let Some(pane) = app.panes.get_mut(id) {
             if let Some(pos) = pane_body(buf, pane, content, active, window) { cursor = Some(pos) }
             pane.dirty = false;
@@ -253,7 +246,7 @@ fn border_style(app: &App, active: bool) -> Style {
     // tmux's pane-active-border-style: yellow while the pane is in copy mode, red while the
     // window's panes are synchronized, else green (or your tmux.conf's colour).
     if active {
-        let in_mode = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.copy.is_some()).unwrap_or(false) || matches!(app.modal, Some(Modal::Find { .. }));
+        let in_mode = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.in_mode()).unwrap_or(false);
         let colour = if app.look.active_border.is_some() { app.look.active_border.unwrap() } else if in_mode { Color::Yellow } else if app.tab().sync { Color::Red } else { theme::TMUX_ACTIVE_BORDER };
         Style::default().fg(colour)
     }
@@ -399,35 +392,56 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
     let plain = theme::no_color() && app.look.status_bg.is_none() && app.look.message_bg.is_none();
     let yellow = if plain { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(app.look.message_bg.unwrap_or(theme::TMUX_MESSAGE_BG)).fg(app.look.message_fg.unwrap_or(theme::TMUX_MESSAGE_FG)) };
-    let prompt_like: Option<(String, String, usize, String)> = match &app.modal {
+    let prompt_like: Option<(String, String, usize, String, bool)> = match &app.modal {
         Some(Modal::Prompt(p)) => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
-            Some((p.label.clone(), shown, p.cursor, p.hint.clone()))
+            Some((p.label.clone(), shown, p.cursor, p.hint.clone(), p.vi_normal))
         }
-        Some(Modal::Confirm { prompt, .. }) => Some((format!("{prompt} "), String::new(), 0, String::new())),
-        Some(Modal::Find { query, found, up, .. }) => Some((if *up { "(search up) ".into() } else { "(search down) ".into() }, query.clone(), query.chars().count(), if *found == Some(false) && !query.is_empty() { "no match".into() } else { String::new() })),
+        Some(Modal::Confirm { prompt, .. }) => Some((format!("{prompt} "), String::new(), 0, String::new(), false)),
         _ => None,
     };
-    if let Some((mut label, value, cursor, hint)) = prompt_like {
+    if let Some((mut label, value, cursor, hint, command_mode)) = prompt_like {
+        // status_prompt_redraw: the line in message-style (message-command-style in vi's command
+        // mode), the prompt, then the text with the cursor's cell reversed — a reversed blank
+        // after it at the end; scrolled to keep the cursor in view. The terminal's own cursor is
+        // hidden, as tmux hides it.
         if !label.ends_with(' ') && label != ":" { label.push(' ') }
-        buf.set_style(rect, yellow);
-        buf.set_string(rect.x, rect.y, &label, yellow);
-        let x0 = rect.x + label.width() as u16;
-        let room = rect.width.saturating_sub(label.width() as u16 + 1) as usize;
-        // Keep the cursor in view on a long line.
-        let before: String = value.chars().take(cursor).collect();
-        let skip = before.width().saturating_sub(room);
-        let visible: String = { let mut w = 0; value.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
-        buf.set_stringn(x0, rect.y, &visible, room, yellow);
-        // The terminal's own cursor sits in the prompt, as in tmux: it blinks, it has your shape.
-        let cx = (x0 + before.width().saturating_sub(skip) as u16).min(rect.x + rect.width - 1);
-        if !hint.is_empty() {
-            let used = label.width() + value.width() + 3;
-            if used + hint.width() < rect.width as usize {
-                buf.set_string(rect.x + rect.width - hint.width() as u16 - 1, rect.y, &hint, yellow.add_modifier(Modifier::DIM));
+        let tab_id = app.tab().id.clone();
+        let command_style = app.options.get("message-command-style", &tab_id, None).unwrap_or_else(|| "bg=black,fg=yellow".into());
+        let gc = if command_mode && !plain { crate::draw::style_over(&command_style, Style::default()) } else { yellow };
+        let cursorgc = if gc.add_modifier.contains(Modifier::REVERSED) { gc.remove_modifier(Modifier::REVERSED) } else { gc.add_modifier(Modifier::REVERSED) };
+        for x in rect.x..rect.x + rect.width { if let Some(c) = buf.cell_mut((x, rect.y)) { c.reset(); c.set_symbol(" "); c.set_style(gc); } }
+        let sx = rect.width as usize;
+        let start = label.width().min(sx);
+        for (i, cell) in crate::draw::format_draw_over(&label, gc, start as u16).into_iter().enumerate() {
+            if let Some((ch, st)) = cell { if let Some(c) = buf.cell_mut((rect.x + i as u16, rect.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(st); } }
+        }
+        let left = sx - start;
+        if left > 0 {
+            let chars: Vec<char> = value.chars().collect();
+            let w = |c: &char| unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+            let pcursor: usize = chars.iter().take(cursor).map(w).sum();
+            let mut pwidth: usize = chars.iter().map(w).sum();
+            let offset = if pcursor >= left { pwidth = left; pcursor - left + 1 } else { 0 };
+            if pwidth > left { pwidth = left }
+            let (mut width, mut x, mut i) = (0usize, rect.x + start as u16, 0usize);
+            while i < chars.len() {
+                let cw = w(&chars[i]);
+                if width < offset { width += cw; i += 1; continue }
+                if width >= offset + pwidth { break }
+                width += cw;
+                if width > offset + pwidth { break }
+                if let Some(c) = buf.cell_mut((x, rect.y)) { c.set_char(chars[i]); c.set_style(if i != cursor { gc } else { cursorgc }); }
+                x += cw as u16;
+                i += 1;
+            }
+            if x < rect.x + rect.width && cursor >= i { if let Some(c) = buf.cell_mut((x, rect.y)) { c.set_symbol(" "); c.set_style(cursorgc); } }
+            if !hint.is_empty() {
+                let used = label.width() + value.width() + 3;
+                if used + hint.width() < sx { buf.set_string(rect.x + rect.width - hint.width() as u16 - 1, rect.y, &hint, gc.add_modifier(Modifier::DIM)); }
             }
         }
-        return Some(Position::new(cx, rect.y));
+        return None;
     }
     if let Some((text, _, at)) = &app.toast {
         if at.elapsed() < Duration::from_millis(app.display_ms) {
@@ -1475,17 +1489,6 @@ fn clock(buf: &mut Buffer, rect: Rect) {
     big(buf, &time, rect, Color::Blue);
 }
 
-/// Copy mode's position, top right, in mode-style: `[offset/history]`.
-fn copy_indicator(buf: &mut Buffer, pane: &Pane, content: Rect) {
-    // toggle-position (P): tmux hides the position indicator.
-    if pane.copy_hide_position { return }
-    let grid = pane.term.grid();
-    let count = pane.find_count().map(|(i, n)| format!("({i}/{n} results) ")).unwrap_or_default();
-    let text = format!("{count}[{}/{}]", grid.display_offset(), grid.history_size());
-    let x = (content.x + content.width).saturating_sub(text.width() as u16);
-    buf.set_string(x, content.y, &text, Style::default().bg(Color::Yellow).fg(Color::Black));
-}
-
 fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }
     if cols == 0 { return String::new() }
@@ -1521,7 +1524,7 @@ fn _unused(_: &keys::Keymap, _: PromptKind) {}
 fn _ago(ms: u64) -> String { ago(ms) }
 
 
-fn map_color(color: AColor, colors: &alacritty_terminal::term::color::Colors, fg_side: bool) -> (Color, bool) {
+pub(crate) fn map_color(color: AColor, colors: &alacritty_terminal::term::color::Colors, fg_side: bool) -> (Color, bool) {
     match color {
         AColor::Spec(rgb) => (Color::Rgb(rgb.r, rgb.g, rgb.b), false),
         AColor::Indexed(i) => (colors[i as usize].map(|c| Color::Rgb(c.r, c.g, c.b)).unwrap_or(Color::Indexed(i)), false),
@@ -1567,11 +1570,6 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     let colors = content.colors;
     let mode = content.mode;
     let cursor_point = content.cursor.point;
-    let selection = content.selection;
-    let find = pane.find_at.clone();
-    // Only the matches on screen are asked about, cell by cell.
-    let (lo, hi) = (-(content.display_offset as i32) - 1, pane.rows as i32 - content.display_offset as i32 + 1);
-    let lit: Vec<alacritty_terminal::term::search::Match> = pane.find_all.iter().filter(|m| m.end().line.0 >= lo && m.start().line.0 <= hi).cloned().collect();
     for indexed in content.display_iter {
         let row = indexed.point.line.0 + offset;
         let Some(col) = (indexed.point.column.0 as u16).checked_sub(hshift) else { continue };
@@ -1593,12 +1591,6 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         // theme or dark.
         if cell.flags.contains(Flags::INVERSE) { mods |= Modifier::REVERSED }
         style = style.fg(fg_color).bg(bg_color).add_modifier(mods);
-        // tmux mode-style: selections are yellow on black; the search match is
-        // copy-mode-current-match-style, magenta on black.
-        if find.as_ref().map(|m| m.contains(&indexed.point)).unwrap_or(false) { style = style.bg(Color::Magenta).fg(Color::Black) }
-        // The other matches: copy-mode-match-style, cyan.
-        else if lit.iter().any(|m| m.contains(&indexed.point)) { style = style.bg(Color::Cyan).fg(Color::Black) }
-        else if selection.map(|r| r.contains(indexed.point)).unwrap_or(false) { style = style.bg(Color::Yellow).fg(Color::Black) }
         let target = buf.cell_mut((area.x + col, area.y + row as u16));
         let Some(target) = target else { continue };
         if cell.flags.contains(Flags::HIDDEN) || cell.c == '\0' {

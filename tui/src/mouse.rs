@@ -27,8 +27,6 @@ const WHEEL_DOWN: u32 = 65;
 const RELEASE: u32 = 3;
 /// KEYC_CLICK_TIMEOUT: a second click this soon after the first is a double one, a third a triple.
 const CLICK_TIMEOUT: Duration = Duration::from_millis(300);
-/// WINDOW_COPY_DRAG_REPEAT_TIME: a copy-mode drag held at the top or bottom scrolls this often.
-const DRAG_REPEAT: Duration = Duration::from_millis(50);
 
 fn buttons(b: u32) -> u32 { b & MASK_BUTTONS }
 pub fn is_drag(b: u32) -> bool { b & MASK_DRAG != 0 }
@@ -87,7 +85,7 @@ pub struct State {
     /// Which click timer is the live one (an older one firing does nothing).
     click_gen: u64,
     /// Which copy-mode scroll timer is the live one.
-    scroll_gen: u64,
+    pub scroll_gen: u64,
 }
 
 enum Key { Chord(Chord), Dragging }
@@ -134,7 +132,7 @@ fn handle(app: &mut App, mut m: Event, double: bool) {
     app.toast = None;
     // cmd_find_from_mouse: the pane the key is for, else the current one.
     let pane = mouse_pane(app, &m).map(|(_, p)| p).or_else(|| app.focused());
-    let in_copy = pane.and_then(|p| app.panes.get(&p)).map(|p| p.copy.is_some()).unwrap_or(false);
+    let in_copy = pane.and_then(|p| app.panes.get(&p)).map(|p| p.in_mode()).unwrap_or(false);
     // The table: the prefix's after the prefix, a table of your own (switch-client -T); over a
     // pane in copy mode its table; else root — and root again when that one has nothing.
     let first = if app.prefix { "prefix".to_string() }
@@ -366,14 +364,14 @@ fn encode(m: &Event, x: u16, y: u16, mode: TermMode) -> Option<Vec<u8>> {
 fn drag_update(app: &mut App, m: &Event) {
     match app.mouse_state.drag {
         Some(Drag::Resize) => resize_update(app, m),
-        Some(Drag::Copy) => copy_drag_update(app, m),
+        Some(Drag::Copy) => crate::copy::drag_update(app, m),
         None => {}
     }
 }
 
 fn drag_release(app: &mut App, d: Drag) {
     // window_copy_drag_release: the scroll at the edge stops.
-    if d == Drag::Copy { app.mouse_state.scroll_gen += 1 }
+    if d == Drag::Copy { crate::copy::drag_release(app) }
 }
 
 /// resize-pane -M: the border under the mouse follows it (cmd_resize_pane_mouse_update).
@@ -387,64 +385,6 @@ fn resize_update(app: &mut App, m: &Event) {
     let Some(w) = mouse_window(app, m) else { app.mouse_state.drag = None; return };
     let (x, y, lx, ly) = (m.x as u32, body_y(m, m.y) as u32, m.lx as u32, body_y(m, m.ly) as u32);
     app.drag_border(w, lx, ly, x, y);
-}
-
-/// window_copy_start_drag: a selection begun where the mouse went down in a pane in copy mode,
-/// the motion after it moving its end.
-pub fn copy_drag_begin(app: &mut App, m: &Event) {
-    let Some((_, pane)) = mouse_pane(app, m) else { return };
-    if app.panes.get(&pane).map(|p| p.copy.is_none()).unwrap_or(true) { return }
-    let Some((x, y)) = mouse_at(app, pane, m, true) else { return };
-    app.mouse_state.drag = Some(Drag::Copy);
-    if let Some(p) = app.panes.get_mut(&pane) {
-        p.copy_cursor_at(x, y);
-        p.copy_begin();
-    }
-    copy_drag_update(app, m);
-}
-
-/// window_copy_drag_update: the selection's end to the mouse; held on the pane's top or bottom
-/// row, the view scrolls (again every 50ms while it stays there).
-fn copy_drag_update(app: &mut App, m: &Event) {
-    app.mouse_state.scroll_gen += 1;
-    let Some((_, pane)) = mouse_pane(app, m) else { return };
-    let Some((x, y)) = mouse_at(app, pane, m, false) else { return };
-    let Some(p) = app.panes.get_mut(&pane) else { return };
-    if p.copy.is_none() { return }
-    let before = p.copy.map(|c| (c.point.column.0, c.point.line.0));
-    p.copy_cursor_at(x, y);
-    let after = p.copy.map(|c| (c.point.column.0, c.point.line.0));
-    let (old_cx, old_cy) = before.unwrap_or_default();
-    let (_, cy) = after.unwrap_or_default();
-    if old_cy != cy || Some(old_cx) == after.map(|a| a.0) {
-        let rows = p.rows;
-        if y == 0 || y + 1 == rows {
-            let up = y == 0;
-            p.copy_move(0, if up { -1 } else { 1 });
-            let generation = app.mouse_state.scroll_gen;
-            app.spawn(async move { tokio::time::sleep(DRAG_REPEAT).await }, move |app, _| copy_scroll_timer(app, pane, generation));
-        }
-    }
-}
-
-/// window_copy_scroll_timer: a drag held at the edge keeps the view moving.
-fn copy_scroll_timer(app: &mut App, pane: u64, generation: u64) {
-    if app.mouse_state.scroll_gen != generation || app.mouse_state.drag != Some(Drag::Copy) { return }
-    let Some(p) = app.panes.get_mut(&pane) else { return };
-    let Some(c) = p.copy else { return };
-    let row = c.point.line.0 + p.term.grid().display_offset() as i32;
-    let rows = p.rows as i32;
-    if row != 0 && row != rows - 1 { return }
-    p.copy_move(0, if row == 0 { -1 } else { 1 });
-    app.spawn(async move { tokio::time::sleep(DRAG_REPEAT).await }, move |app, _| copy_scroll_timer(app, pane, generation));
-}
-
-/// window_copy_move_mouse: a copy-mode command run by a mouse key starts where the mouse is.
-pub fn copy_move_mouse(app: &mut App, m: &Event) {
-    let Some((_, pane)) = mouse_pane(app, m) else { return };
-    if app.panes.get(&pane).map(|p| p.copy.is_none()).unwrap_or(true) { return }
-    let Some((x, y)) = mouse_at(app, pane, m, false) else { return };
-    if let Some(p) = app.panes.get_mut(&pane) { p.copy_cursor_only(x, y) }
 }
 
 // ── formats ──────────────────────────────────────────────────────────────────
@@ -475,10 +415,18 @@ pub fn format(app: &App, name: &str) -> Option<String> {
             let (p, (x, y)) = at()?;
             let pane = app.panes.get(&p)?;
             let seps = app.options.get("word-separators", "", None).unwrap_or_default();
-            pane.word_at(x, y, &seps)
+            match pane.modes.last() { Some(m) => m.word_at(x as u32, y as u32, &seps)?, None => pane.word_at(x, y, &seps) }
         }
-        "mouse_line" => { let (p, (_, y)) = at()?; app.panes.get(&p)?.line_at(y) }
-        "mouse_hyperlink" => { let (p, (x, y)) = at()?; app.panes.get(&p)?.hyperlink_at(x, y)? }
+        "mouse_line" => {
+            let (p, (_, y)) = at()?;
+            let pane = app.panes.get(&p)?;
+            match pane.modes.last() { Some(m) => m.line_at(y as u32)?, None => pane.line_at(y) }
+        }
+        "mouse_hyperlink" => {
+            let (p, (x, y)) = at()?;
+            let pane = app.panes.get(&p)?;
+            match pane.modes.last() { Some(m) => m.hyperlink_at(x as u32, y as u32)?, None => pane.hyperlink_at(x, y)? }
+        }
         _ => return None,
     })
 }

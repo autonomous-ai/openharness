@@ -909,7 +909,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             let Some(r) = focus.and_then(|f| content_rect(app, window, f)) else { return Some(Val::Str(String::new())) };
             match name { "pane_width" => r.width, "pane_height" => r.height, "pane_left" => r.x, "pane_top" => r.y, "pane_right" => r.x + r.width.saturating_sub(1), _ => (r.y + r.height).saturating_sub(1) }.to_string()
         }
-        "pane_in_mode" => pane.map(|p| p.copy.is_some()).unwrap_or(false).then_some("1").unwrap_or("0").into(),
+        // format_cb_pane_in_mode: how many modes the pane is in.
+        "pane_in_mode" => pane.map(|p| p.modes.len().to_string()).unwrap_or_else(|| "0".into()),
         "session_windows" => app.tabs.len().to_string(),
         "session_attached" => "1".into(),
         "client_width" => app.size.0.to_string(),
@@ -948,15 +949,15 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
         "client_session" => app.session_name(),
         "client_name" | "client_tty" => crate::app::tty_name(),
-        "pane_mode" => pane.filter(|p| p.copy.is_some()).map(|_| "copy-mode").unwrap_or("").into(),
-        "copy_cursor_x" => pane.and_then(|p| p.copy).map(|c| c.point.column.0.to_string()).unwrap_or_default(),
-        "copy_cursor_y" => pane.and_then(|p| p.copy.map(|c| (c.point.line.0 + p.scrolled() as i32).to_string())).unwrap_or_default(),
-        "copy_cursor_line" => pane.map(|p| p.copy_line()).unwrap_or_default(),
-        "copy_cursor_word" => pane.map(|p| p.copy_word_under(&app.options.get("word-separators", "", None).unwrap_or_default())).unwrap_or_default(),
-        "selection_present" => pane.and_then(|p| p.copy).map(|c| if c.selecting { "1" } else { "0" }.to_string()).unwrap_or_default(),
-        // A copy-mode format (window_copy_formats): none outside the mode.
-        "scroll_position" => pane.filter(|p| p.copy.is_some()).map(|p| p.scrolled().to_string()).unwrap_or_default(),
-        "pane_search_string" => app.last_search.clone().unwrap_or_default(),
+        "pane_mode" => pane.and_then(|p| p.modes.last()).map(|m| if m.view { "view-mode" } else { "copy-mode" }).unwrap_or("").into(),
+        // window_copy_formats: a pane in copy or view mode has them (some only with a selection
+        // or a search); others none.
+        "scroll_position" | "rectangle_toggle" | "copy_cursor_x" | "copy_cursor_y" | "selection_start_x" | "selection_start_y" | "selection_end_x" | "selection_end_y"
+        | "selection_active" | "selection_present" | "search_present" | "search_count" | "search_count_partial" | "search_match" | "copy_cursor_word" | "copy_cursor_line" | "copy_cursor_hyperlink" => {
+            let ws = app.options.get("word-separators", "", None).unwrap_or_default();
+            pane.and_then(|p| p.modes.last()).and_then(|m| m.format(name, &ws)).unwrap_or_default()
+        }
+        "pane_search_string" => pane.and_then(|p| p.search.str.clone()).unwrap_or_default(),
         "client_prefix" => app.prefix.then_some("1").unwrap_or("0").into(),
         // gethostname(3): the whole name (mac.lan); #{host_short} is it up to the first dot.
         "host" => crate::app::full_hostname(),
@@ -1026,7 +1027,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         }).unwrap_or_default(),
         "pane_key_mode" => pane.map(|_| "VT10x".to_string()).unwrap_or_default(),
         "alternate_saved_x" | "alternate_saved_y" => pane.map(|_| "0".to_string()).unwrap_or_default(),
-        "pane_unseen_changes" => pane.map(|_| "0".to_string()).unwrap_or_default(),
+        "pane_unseen_changes" => pane.map(|p| if p.unseen { "1" } else { "0" }.to_string()).unwrap_or_default(),
         "window_marked_flag" => tab.map(|t| app.marked.map(|m| t.panes().contains(&m)).unwrap_or(false)).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         "pane_fg" | "pane_bg" => pane.map(|_| "default".to_string()).unwrap_or_default(),
         "pane_path" => pane.and_then(|p| p.cwd.clone()).unwrap_or_default(),

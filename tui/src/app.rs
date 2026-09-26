@@ -196,10 +196,8 @@ pub struct App {
     /// `agent_recent` answers (asks and recaps), for the preview window.
     pub recent: HashMap<(String, String), Value>,
     /// Seconds east of UTC (for the status line's clock).
-    /// `:` command history (Up/Down in the prompt).
-    pub history: Vec<String>,
-    /// The last copy-mode search (n / N).
-    pub last_search: Option<String>,
+    /// The prompts' histories (Up/Down), one per type: command, search, target, window-target.
+    pub history: [Vec<String>; 4],
     pub size: (u16, u16),
     /// Each visible pane's full rect (header row included), from the last layout.
     pub rects: Vec<(u64, Rect)>,
@@ -265,8 +263,6 @@ pub struct App {
     pub session_alias: Option<String>,
     /// select-pane -m: the marked pane (join-pane and swap-pane take it as their source).
     pub marked: Option<u64>,
-    /// copy-pipe's command, for the copy about to happen.
-    pub copy_pipe: Option<String>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
     pub return_to: Option<(String, Vec<String>)>,
     pub held_reply: Option<tokio::sync::oneshot::Sender<Reply>>,
@@ -281,9 +277,6 @@ pub struct App {
     pub cli_code: i32,
     /// That shell's folder: where run-shell and if-shell run what it asked (tmux's client cwd).
     pub cli_cwd: Option<String>,
-    /// Copy mode reading a key as copy-mode-vi's, whatever mode-keys is (a `send -X` action run
-    /// as the vi key that does it).
-    pub copy_as_vi: bool,
     /// #{command_list_name} #{command_list_alias} #{command_list_usage} (list-commands -F).
     pub format_command: Option<(String, String, String)>,
     /// The config files read at start (#{config_files}).
@@ -325,14 +318,8 @@ pub struct App {
     pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
     pub starting_shell: Option<Vec<Vec<u8>>>,
-    /// Copy mode's pending count (5k), f/F/t/T waiting for a character, and the last one for ; and ,.
-    pub copy_count: usize,
-    pub copy_pending: Option<char>,
-    pub copy_last_find: Option<(char, char)>,
     /// tmux's status/window/border/copy options from tmux.conf or `set`.
     pub opts: crate::tmuxconf::Options,
-    /// Which way the last copy-mode search went (? up, / down).
-    pub last_search_up: bool,
     /// The home list's order while it is on screen (see `home_agents`).
     pub home_order: std::cell::RefCell<Vec<(String, String)>>,
     pub mouse_changed: bool,
@@ -378,7 +365,6 @@ impl App {
             print_new: None,
             session_alias: None,
             marked: None,
-            copy_pipe: None,
             return_to: None,
             held_reply: None,
             wait_cli: false,
@@ -386,7 +372,6 @@ impl App {
             cli_tx: None,
             cli_code: 0,
             cli_cwd: None,
-            copy_as_vi: false,
             origin: None,
             format_buffer: None,
             format_line: None,
@@ -407,12 +392,8 @@ impl App {
             tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
-            copy_count: 0,
-            copy_pending: None,
-            copy_last_find: None,
             opts: Default::default(),
             prefix_at: None,
-            last_search_up: true,
             home_order: Default::default(),
             mouse_changed: false,
             pane_base_index: 0,
@@ -425,9 +406,8 @@ impl App {
             status_top: false,
             mouse: true,
             last_harness: None,
-            history: Vec::new(),
+            history: Default::default(),
             recent: HashMap::new(),
-            last_search: None,
             size,
             rects: Vec::new(),
             quit: false,
@@ -1008,6 +988,7 @@ impl App {
         for (id, rect) in visible {
             let content = self.content_of(self.tab(), rect);
             let content = (content.width, content.height);
+            if self.panes.get(&id).map(|p| p.in_mode()).unwrap_or(false) { crate::copy::fit(self, id, content.0 as u32, content.1 as u32) }
             let Some(pane) = self.panes.get_mut(&id) else { continue };
             pane.dirty = true;
             let want = pane::stream_size(content.0, content.1);
@@ -1079,9 +1060,12 @@ impl App {
         self.print(title, lines)
     }
 
-    /// What a command prints: to the shell that asked (hn <command>), else a message or a list.
+    /// What a command prints: to the shell that asked (hn <command>), else into the current pane's
+    /// view mode as tmux shows it (server_client_print) — with no pane (a window with no harness
+    /// yet), a message or a list.
     pub fn print(&mut self, title: &str, lines: Vec<String>) {
         if let Some(out) = self.capture.as_mut() { out.extend(lines); return }
+        if lines.is_empty() || crate::copy::print(self, &lines, false) { return }
         if lines.len() <= 1 { self.say(lines.into_iter().next().unwrap_or_default(), crate::theme::WARN) }
         else { crate::input::picker(self, crate::modal::PickerKind::Output { title: title.to_string(), lines }, title, "") }
     }
@@ -1312,8 +1296,6 @@ impl App {
     /// buffer-limit: how many automatic paste buffers are kept.
     pub fn buffer_limit(&self) -> usize { self.options.get("buffer-limit", "", None).and_then(|v| v.parse().ok()).unwrap_or(50) }
 
-    /// A copied text into a new automatic paste buffer (tmux's paste_add).
-    pub fn add_buffer(&mut self, text: String) { let limit = self.buffer_limit(); self.paste.add(text, limit) }
 
     /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
     pub fn mode_keys_emacs(&self) -> bool {
@@ -1735,7 +1717,7 @@ impl App {
             current: self.tabs.get(self.active).map(|t| t.id.clone()),
             client,
             session: self.session_name(),
-            modes: self.panes.values().filter(|p| p.copy.is_some()).map(|p| p.id).collect(),
+            modes: self.panes.values().filter(|p| p.in_mode()).map(|p| p.id).collect(),
             focused: self.hooks_seen.focused.clone(),
         };
         let before = std::mem::replace(&mut self.hooks_seen, now.clone());
@@ -2020,7 +2002,7 @@ impl App {
     /// when it is not (whatever other pane is in copy mode).
     pub fn sync_copy_modal(&mut self) {
         if !matches!(self.modal, None | Some(Modal::Copy { .. })) { return }
-        let pane = self.focused().filter(|f| self.panes.get(f).map(|p| p.copy.is_some()).unwrap_or(false));
+        let pane = self.focused().filter(|f| self.panes.get(f).map(|p| p.in_mode()).unwrap_or(false));
         self.modal = pane.map(|pane| Modal::Copy { pane });
     }
 

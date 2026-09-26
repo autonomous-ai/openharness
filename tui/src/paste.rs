@@ -36,7 +36,11 @@ impl Paste {
 
     /// paste_add: a new automatic buffer (nothing for empty text); past buffer-limit, the oldest
     /// automatic ones go.
-    pub fn add(&mut self, data: String, limit: usize) {
+    pub fn add(&mut self, data: String, limit: usize) { self.add_prefixed(None, data, limit) }
+
+    /// paste_add with a prefix: the buffer named after it (copy-selection's `buffer` → buffer3).
+    pub fn add_prefixed(&mut self, prefix: Option<&str>, data: String, limit: usize) {
+        let prefix = prefix.unwrap_or("buffer");
         if data.is_empty() { return }
         loop {
             let automatic = self.list.iter().filter(|b| b.automatic).count();
@@ -45,7 +49,7 @@ impl Paste {
             self.free(&oldest);
         }
         let name = loop {
-            let n = format!("buffer{}", self.next_index);
+            let n = format!("{prefix}{}", self.next_index);
             self.next_index += 1;
             if self.get(&n).is_none() { break n }
         };
@@ -67,8 +71,6 @@ impl Paste {
         Ok(())
     }
 
-    /// paste_replace: new data, the buffer otherwise as it was (append-selection).
-    pub fn replace(&mut self, name: &str, data: String) { if let Some(b) = self.list.iter_mut().find(|b| b.name == name) { b.data = data } }
 
     /// paste_rename: a buffer given a new name (one there already is freed); it is named now.
     pub fn rename(&mut self, old: &str, new: &str) -> Result<(), String> {

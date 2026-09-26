@@ -70,8 +70,10 @@ pub enum PromptKind {
     /// tmux `command-prompt`: with a template, the answers fill it (`%1` `%2` …, `%%` the first
     /// not yet used, `%%%` quoted); without one, the typed text is the command. `more`: the
     /// prompts still to ask (label, initial text); `answers`: those given; `one`: -1, a single
-    /// key is the answer; `digits`: -N, only numbers.
-    Command { template: Option<String>, more: Vec<(String, String)>, answers: Vec<String>, one: bool, digits: bool },
+    /// key is the answer; `digits`: -N, only numbers; `incremental`: -i, the template run on
+    /// every change (after `=`, `+` or `-`), `last` what C-r and C-s bring back; `ptype`: -T,
+    /// whose history Up and Down walk (command, search, target, window-target).
+    Command { template: Option<String>, more: Vec<(String, String)>, answers: Vec<String>, one: bool, digits: bool, incremental: bool, ptype: usize, last: String },
     /// command-prompt -k: the next key pressed, by its tmux name, fills the template.
     Key { template: String },
 }
@@ -91,11 +93,13 @@ pub struct Prompt {
     /// status-keys vi: Esc leaves insert for normal mode; an operator (d, c, r) waits for its motion.
     pub vi_normal: bool,
     pub vi_pending: Option<char>,
+    /// What C-w last cut (prompt_saved): C-y puts it back before the newest paste buffer.
+    pub saved: Option<String>,
 }
 
 impl Prompt {
     pub fn status(kind: PromptKind, label: &str, initial: &str) -> Prompt {
-        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, vi_pending: None }
+        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, vi_pending: None, saved: None }
     }
 }
 
@@ -134,8 +138,6 @@ pub enum Modal {
     Clock { pane: u64 },
     /// tmux `choose-tree -w` (C-b w): windows and their panes, with a preview.
     Tree { cursor: usize, collapsed: Vec<String> },
-    /// Search in the focused pane's history (copy mode's / and ?). `found` is None before the first search.
-    Find { pane: u64, query: String, found: Option<bool>, up: bool },
     /// display-popup: a shell floating over the window; it goes when its program exits.
     Popup { pane: u64, width: u16, height: u16, title: String },
     /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.
