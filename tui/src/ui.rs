@@ -109,9 +109,16 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     buf.set_string(area.x + 2, area.y, &title, Style::default().add_modifier(Modifier::BOLD));
     let inner_rows = area.height.saturating_sub(2) as usize;
     // Column-major, like ls: read down, then across.
+    let fits = cols * inner_rows.max(1);
+    if items.len() > fits && fits > 0 {
+        // Say there is more, bottom right of the box (C-b ? has them all).
+        let more = format!(" +{} more — {} ? ", items.len() - fits + 1, crate::keys::name(&app.keymap.prefix));
+        let mx = (area.x + area.width).saturating_sub(more.width() as u16 + 2);
+        buf.set_string(mx, area.y + area.height - 1, &more, Style::default().add_modifier(Modifier::DIM));
+    }
     for (i, (key, what)) in items.iter().enumerate() {
         let (col, row) = (i / inner_rows.max(1), i % inner_rows.max(1));
-        if col >= cols { break }
+        if col >= cols || (items.len() > fits && i + 1 >= fits) { break }
         let x = area.x + 2 + (col * col_w) as u16;
         let y = area.y + 1 + row as u16;
         buf.set_string(x, y, format!("{key:>key_w$}"), Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD));
@@ -323,7 +330,9 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
 
 /// tmux's status line — or, while there is one, the prompt, question or message that takes it.
 fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> {
-    let yellow = Style::default().bg(app.look.message_bg.unwrap_or(theme::TMUX_MESSAGE_BG)).fg(app.look.message_fg.unwrap_or(theme::TMUX_MESSAGE_FG));
+    // NO_COLOR (and no colours of your own): reverse video carries the status line and messages.
+    let plain = theme::no_color() && app.look.status_bg.is_none() && app.look.message_bg.is_none();
+    let yellow = if plain { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(app.look.message_bg.unwrap_or(theme::TMUX_MESSAGE_BG)).fg(app.look.message_fg.unwrap_or(theme::TMUX_MESSAGE_FG)) };
     let prompt_like: Option<(String, String, usize, String)> = match &app.modal {
         Some(Modal::Prompt(p)) => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
@@ -361,7 +370,7 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
             return None;
         }
     }
-    let base = Style::default().bg(app.look.status_bg.unwrap_or(theme::TMUX_STATUS_BG)).fg(app.look.status_fg.unwrap_or(theme::TMUX_STATUS_FG));
+    let base = if plain { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(app.look.status_bg.unwrap_or(theme::TMUX_STATUS_BG)).fg(app.look.status_fg.unwrap_or(theme::TMUX_STATUS_FG)) };
     buf.set_style(rect, base);
     // status-left: tmux's "[#S] " — here this computer's name, the session a window lives in — or
     // the tmux.conf's own format, cut to status-left-length (10, as tmux).
@@ -546,28 +555,31 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let area = match preview { Some(p) => Rect::new(body.x, body.y, p.x - body.x, body.height), None => body };
     let width = area.width as usize;
     let bottom = area.y + area.height;
-    // Prompt, then info, then the header (the keys), then the list above.
-    let prompt_y = bottom - 1;
-    let info_y = prompt_y.saturating_sub(1);
+    // Prompt, then info, then the header (the keys), then the list above — or, with
+    // `--layout=reverse` in FZF_DEFAULT_OPTS, all of it top-down.
+    let reverse = theme::fzf().reverse;
+    let prompt_y = if reverse { area.y } else { bottom - 1 };
+    let info_y = if reverse { area.y + 1 } else { prompt_y.saturating_sub(1) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
-    let header_y = if header.is_some() { info_y.saturating_sub(1) } else { info_y };
+    let header_y = if header.is_some() { if reverse { info_y + 1 } else { info_y.saturating_sub(1) } } else { info_y };
     let prompt = Style::default().fg(theme::fzf().prompt);
-    buf.set_string(area.x, prompt_y, ">", prompt.add_modifier(Modifier::BOLD));
-    buf.set_string(area.x + 1, prompt_y, " ", prompt);
-    let q_room = width.saturating_sub(3);
+    let prompt_text = theme::fzf().prompt_text.clone();
+    let pw = prompt_text.width() as u16;
+    buf.set_string(area.x, prompt_y, &prompt_text, prompt.add_modifier(Modifier::BOLD));
+    let q_room = width.saturating_sub(pw as usize + 1);
     // A query longer than the line scrolls to keep the cursor in view, as fzf's does.
     let before: String = picker.query.chars().take(picker.qcursor).collect();
     let skip = before.width().saturating_sub(q_room);
     let shown: String = { let mut w = 0; picker.query.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
-    buf.set_stringn(area.x + 2, prompt_y, &shown, q_room, Style::default().add_modifier(Modifier::BOLD));
+    buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, Style::default().add_modifier(Modifier::BOLD));
     if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder's scopes, whole ones only.
         let mut text = String::new();
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > q_room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
-        buf.set_stringn(area.x + 2, prompt_y, &text, q_room, Style::default().add_modifier(Modifier::DIM));
+        buf.set_stringn(area.x + pw, prompt_y, &text, q_room, Style::default().add_modifier(Modifier::DIM));
     }
-    let cursor = Position::new(area.x + 2 + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
+    let cursor = Position::new(area.x + pw + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
     // Info: "  matched/total" then the title, then the separator to the edge.
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
     let mut info = format!("  {}/{}", picker.visible.len(), total);
@@ -595,12 +607,12 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
         buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
     }
     if let Some(h) = header { buf.set_line(area.x, header_y, &h, area.width); }
-    // The list, bottom-up.
-    let list_bottom = header_y; // exclusive
-    let list_h = list_bottom.saturating_sub(area.y) as usize;
+    // The list, bottom-up (or top-down, reversed).
+    let (list_top, list_bottom) = if reverse { (header_y + 1, bottom) } else { (area.y, header_y) };
+    let list_h = list_bottom.saturating_sub(list_top) as usize;
     let n = picker.visible.len();
     if n == 0 {
-        if !picker.empty.is_empty() && list_h > 0 { buf.set_string(area.x + 2, list_bottom - 1, &picker.empty, Style::default().add_modifier(Modifier::DIM)); }
+        if !picker.empty.is_empty() && list_h > 0 { buf.set_string(area.x + 2, if reverse { list_top } else { list_bottom - 1 }, &picker.empty, Style::default().add_modifier(Modifier::DIM)); }
         picker.row_at.clear();
         return cursor;
     }
@@ -613,17 +625,18 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let text_w = width.saturating_sub(if n > list_h && list_h > 2 { 4 } else { 3 });
     for slot in 0..list_h.min(n - picker.scroll) {
         let vi = picker.scroll + slot;
-        let y = list_bottom - 1 - slot as u16;
+        let y = if reverse { list_top + slot as u16 } else { list_bottom - 1 - slot as u16 };
         picker.row_at.push((y, vi));
         fzf_row(buf, picker, vi, area.x, y, text_w);
     }
     // Scrollbar on the right edge, like fzf's: only the thumb, in the border colour.
     if n > list_h && list_h > 2 {
         let thumb = ((list_h * list_h) / n).max(1);
-        let top_frac = (n - list_h - picker.scroll.min(n - list_h)) as f32 / (n - list_h) as f32;
+        let from_top = picker.scroll.min(n - list_h) as f32 / (n - list_h) as f32;
+        let top_frac = if reverse { from_top } else { 1.0 - from_top };
         let start = ((list_h - thumb) as f32 * top_frac).round() as usize;
         for i in 0..thumb {
-            let y = area.y + (start + i) as u16;
+            let y = list_top + (start + i) as u16;
             if y < list_bottom { buf.set_string(area.x + area.width - 1, y, "│", Style::default().fg(theme::fzf().border)); }
         }
     }
@@ -640,12 +653,12 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     // fzf --color=bw: the current line in reverse video, matches underlined.
     let plus = if z.bw { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default().bg(z.bg_plus) };
     if current {
-        buf.set_string(x, y, "▌", if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD) });
+        buf.set_string(x, y, clip(&z.pointer_char, 1), if z.bw { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(z.pointer).bg(z.bg_plus).add_modifier(Modifier::BOLD) });
     } else {
-        buf.set_string(x, y, if z.bw { " " } else { "▌" }, Style::default().fg(z.gutter));
+        buf.set_string(x, y, "▌", Style::default().fg(z.gutter));
     }
     let marker_style = if current { plus.fg(z.marker) } else { Style::default().fg(z.marker) };
-    buf.set_string(x + 1, y, if marked { "┃" } else { " " }, marker_style);
+    buf.set_string(x + 1, y, if marked { clip(&z.marker_char, 1) } else { " ".into() }, marker_style);
     let base = if current { plus.fg(z.fg_plus).add_modifier(Modifier::BOLD) } else { Style::default() };
     let hit = match (current, z.bw) {
         (_, true) => base.add_modifier(Modifier::UNDERLINED),
@@ -661,7 +674,18 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
     // A waiting question keeps some of itself in view; any other detail gives way to the title.
     let asking = row.detail.first().map(|s| s.content.starts_with("? ")).unwrap_or(false);
     let label_room = if asking && avail >= 50 { row.label.width().min((avail * 3 / 5).max(12)).min(avail) } else { avail };
-    let label = clip(&row.label, label_room);
+    // fzf's --hscroll: a hit past the end of the room slides the title left, `..` in front.
+    let label_chars: Vec<char> = row.label.chars().collect();
+    let label_len = label_chars.len();
+    let last_hit = hits.iter().copied().filter(|h| (*h as usize) < label_len).max().map(|h| h as usize);
+    let (label, offset) = match last_hit {
+        Some(h) if row.label.width() > label_room && h + 2 > label_room && label_room > 6 => {
+            let start = (h + 3).saturating_sub(label_room).min(label_len);
+            let tail: String = label_chars[start..].iter().collect();
+            (format!("..{}", clip(&tail, label_room - 2)), start as isize - 2)
+        }
+        _ => (clip(&row.label, label_room), 0),
+    };
     let mut spans: Vec<Span> = Vec::new();
     // The glyphs' colours follow the scheme: none in bw, the 16 in 16.
     let tone = |st: Style| -> Style {
@@ -670,29 +694,41 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         else { st }
     };
     for s in &row.lead { spans.push(Span::styled(s.content.clone(), if current { tone(s.style).patch(plus) } else { tone(s.style) })) }
-    let mut run = String::new();
-    let mut lit = false;
-    for (i, ch) in label.chars().enumerate() {
-        let on = hits.contains(&(i as u32)) && ch != '…';
-        if on != lit && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), if lit { hit } else { base })) }
-        lit = on;
-        run.push(ch);
-    }
-    if !run.is_empty() { spans.push(Span::styled(run, if lit { hit } else { base })) }
+    // Characters, lit where they matched: `at` is each one's place in the searched line.
+    let push_lit = |spans: &mut Vec<Span<'static>>, text: &str, first: isize, plain: Style, lit_style: Style| {
+        let mut run = String::new();
+        let mut lit = false;
+        for (i, ch) in text.chars().enumerate() {
+            let at = first + i as isize;
+            let on = at >= 0 && hits.contains(&(at as u32)) && ch != '…' && ch != '.';
+            if on != lit && !run.is_empty() { spans.push(Span::styled(std::mem::take(&mut run), if lit { lit_style } else { plain })) }
+            lit = on;
+            run.push(ch);
+        }
+        if !run.is_empty() { spans.push(Span::styled(run, if lit { lit_style } else { plain })) }
+    };
+    push_lit(&mut spans, &label, offset, base, hit);
+    // The detail, lit too (dim kept); it starts two cells after the title in the searched line.
     let detail_room = avail.saturating_sub(label.width() + 2);
-    if !row.detail.is_empty() && detail_room > 3 {
+    if !row.detail.is_empty() && detail_room >= 8 {
         spans.push(Span::styled("  ", fill));
         let mut left = detail_room;
+        let mut at = label_len as isize + 2;
         for s in &row.detail {
             if left == 0 { break }
             let t = clip(&s.content, left);
             left = left.saturating_sub(t.width());
-            spans.push(Span::styled(t, if current { s.style.patch(plus) } else { s.style }));
+            let st = tone(if current { s.style.patch(plus) } else { s.style });
+            let lit = if st.add_modifier.contains(Modifier::DIM) { hit.add_modifier(Modifier::DIM) } else { hit };
+            push_lit(&mut spans, &t, at, st, lit);
+            at += s.content.chars().count() as isize;
         }
     }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     if show_right {
-        spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used + right_w)), fill));
+        // The right column sits at the row's end, or not far past a short row's text.
+        let end = text_w.min((used + right_w + 24).max(text_w.min(90)));
+        spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
         spans.push(Span::styled(row.right.clone(), fill.add_modifier(Modifier::DIM)));
     } else if current {
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
