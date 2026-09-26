@@ -575,13 +575,21 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // Prompt, then info, then the header (the keys), then the list above — or, with
     // `--layout=reverse` in FZF_DEFAULT_OPTS, all of it top-down.
     let reverse = theme::fzf().reverse;
-    let prompt_y = if reverse { area.y } else { bottom - 1 };
-    // --info=inline: the count sits on the prompt line, after the query.
-    let inline = theme::fzf_opts().info_inline || theme::fzf_opts().info_hidden;
-    let info_y = if inline { prompt_y } else if reverse { area.y + 1 } else { prompt_y.saturating_sub(1) };
+    let o = theme::fzf_opts();
+    // --layout=reverse puts the prompt on top; reverse-list keeps it at the bottom, rows top-down.
+    let prompt_top = o.prompt_top;
+    // --info: default (its own line), inline (after the query), inline-right (right of the
+    // prompt, the rule on its own line), right (its own line, the count at the right), hidden.
+    let mode = o.info_mode.as_str();
+    let info_own_line = matches!(mode, "default" | "right" | "inline-right");
+    let (prompt_y, info_y) = if prompt_top { (area.y, if info_own_line { area.y + 1 } else { area.y }) } else { (bottom - 1, if info_own_line { bottom.saturating_sub(2) } else { bottom - 1 }) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
-    let header_y = if header.is_some() { if reverse { info_y + 1 } else { info_y.saturating_sub(1) } } else { info_y };
+    // --header-first (reverse): the header above the prompt.
+    let header_first = o.header_first && prompt_top && header.is_some();
+    let (prompt_y, info_y) = if header_first { (prompt_y + 1, info_y + 1) } else { (prompt_y, info_y) };
+    let edge = if prompt_top { prompt_y.max(info_y) } else { prompt_y.min(info_y) };
+    let header_y = if header_first { area.y } else if header.is_some() { if prompt_top { edge + 1 } else { edge.saturating_sub(1) } } else if prompt_top { edge } else { edge };
     let prompt = Style::default().fg(theme::fzf().prompt);
     let prompt_text = theme::fzf().prompt_text.clone();
     let pw = prompt_text.width() as u16;
@@ -594,59 +602,77 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     let skip = before.width().saturating_sub(q_room);
     let shown: String = { let mut w = 0; picker.query.chars().skip_while(|c| { let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0); if w < skip { w += cw; true } else { false } }).collect() };
     buf.set_stringn(area.x + pw, prompt_y, &shown, q_room, Style::default().add_modifier(Modifier::BOLD));
+    let mut typed_w = shown.width().min(q_room) as u16;
     if picker.query.is_empty() && !picker.placeholder.is_empty() {
-        // The placeholder's scopes, whole ones only (leaving the inline count its place).
-        let room = if theme::fzf_opts().info_inline { q_room.saturating_sub(14) } else { q_room };
+        // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
+        let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
         let mut text = String::new();
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
         buf.set_stringn(area.x + pw, prompt_y, &text, q_room, Style::default().add_modifier(Modifier::DIM));
+        typed_w = text.width() as u16;
     }
     let cursor = Position::new(area.x + pw + (before.width().saturating_sub(skip) as u16).min(q_room as u16), prompt_y);
-    // Info: "  matched/total" then the title, then the separator to the edge.
     let total = picker.rows.iter().filter(|r| !r.disabled).count();
-    let mut info = format!("  {}/{}", picker.visible.len(), total);
-    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { info.push_str(&format!(" ({})", picker.marked.len())) }
-    if theme::fzf_opts().info_hidden {
-        // --info=hidden: no count at all.
-    } else if inline {
-        // fzf 0.67: ` < ` in the prompt's bold colour, then the count; right-aligned for
-        // inline-right (and whenever the placeholder holds the line).
-        let count = info.trim_start().to_string();
-        let right = theme::fzf_opts().info_right || picker.query.is_empty();
-        let w = count.width() as u16 + 3;
-        let qx = if right { (area.x + area.width).saturating_sub(w + 1) } else { area.x + pw + shown.width().min(q_room) as u16 + 1 };
-        if qx + w <= area.x + area.width {
-            buf.set_string(qx, info_y, " < ", Style::default().fg(theme::fzf().prompt).add_modifier(Modifier::BOLD));
-            buf.set_string(qx + 3, info_y, &count, Style::default().fg(theme::fzf().info));
+    let mut count = format!("{}/{}", picker.visible.len(), total);
+    if !picker.marked.is_empty() || matches!(kind, PickerKind::Open { .. }) { count.push_str(&format!(" ({})", picker.marked.len())) }
+    let info_style = Style::default().fg(theme::fzf().info);
+    let rule = |buf: &mut Buffer, from: u16, to: u16, y: u16| {
+        if !o.separator || to <= from { return }
+        let ch = o.separator_char.clone();
+        let n = (to - from) as usize / ch.width().max(1);
+        buf.set_string(from, y, ch.repeat(n), Style::default().fg(theme::fzf().border));
+    };
+    let gap = if preview.is_some() { 2 } else { 1 };
+    let end = (area.x + area.width).saturating_sub(gap);
+    match mode {
+        "hidden" => {}
+        "inline" => {
+            // `> query  < 3/6 (0) ────`: the rule runs on to the edge.
+            let x = area.x + pw + typed_w + 1;
+            if x + 3 + count.width() as u16 <= area.x + area.width {
+                buf.set_string(x, info_y, " < ", prompt.add_modifier(Modifier::BOLD));
+                buf.set_string(x + 3, info_y, &count, info_style);
+                rule(buf, x + 4 + count.width() as u16, end, info_y);
+            }
         }
-    } else {
-    buf.set_string(area.x, info_y, &info, Style::default().fg(theme::fzf().info));
-    let mut x = area.x + info.width() as u16;
-    let label = picker.busy.clone().or_else(|| (!picker.title.is_empty()).then(|| picker.title.clone()));
-    if let Some(label) = label {
-        let text = format!(" {label} ");
-        if (x as usize) + text.width() + 4 < (area.x as usize + width) {
-            buf.set_string(x, info_y, " ", Style::default());
-            buf.set_string(x + 1, info_y, &text, Style::default().fg(theme::fzf().header));
-            x += text.width() as u16 + 1;
+        "inline-right" => {
+            // The count at the right of the prompt line; the rule has a line of its own.
+            let x = end.saturating_sub(count.width() as u16);
+            if x > area.x + pw + typed_w + 1 { buf.set_string(x, prompt_y, &count, info_style) }
+            rule(buf, area.x + 1, end, info_y);
         }
-    }
-    if x + 1 < area.x + area.width && theme::fzf_opts().separator {
-        buf.set_string(x, info_y, " ", Style::default());
-        let gap = if preview.is_some() { 2 } else { 1 };
-        let ch = theme::fzf_opts().separator_char.clone();
-        let sep = ch.repeat((area.x + area.width).saturating_sub(x + gap) as usize / ch.width().max(1));
-        buf.set_string(x + 1, info_y, &sep, Style::default().fg(theme::fzf().border));
-    }
+        "right" => {
+            // `──────── 3/6 (0)`: the count at the end of its own line.
+            let x = end.saturating_sub(count.width() as u16);
+            rule(buf, area.x + 1, x.saturating_sub(1), info_y);
+            buf.set_string(x, info_y, &count, info_style);
+        }
+        _ => {
+            // `  3/6 (0)  harnesses  ────`.
+            let info = format!("  {count}");
+            buf.set_string(area.x, info_y, &info, info_style);
+            let mut x = area.x + info.width() as u16;
+            let label = picker.busy.clone().or_else(|| (!picker.title.is_empty()).then(|| picker.title.clone()));
+            if let Some(label) = label {
+                let text = format!(" {label} ");
+                if (x as usize) + text.width() + 4 < (area.x as usize + width) {
+                    buf.set_string(x + 1, info_y, &text, Style::default().fg(theme::fzf().header));
+                    x += text.width() as u16 + 1;
+                }
+            }
+            rule(buf, x + 1, end, info_y);
+        }
     }
     if let Some(flash) = picker.flash.as_ref().map(|f| f.0.clone()) {
         let text = format!(" {flash} ");
         let fx = (area.x + area.width).saturating_sub(text.width() as u16 + 1);
         buf.set_string(fx, info_y, &text, Style::default().fg(Color::Black).bg(Color::Yellow));
     }
-    if let Some(h) = header { buf.set_line(area.x, header_y, &h, area.width); }
-    // The list, bottom-up (or top-down, reversed).
-    let (list_top, list_bottom) = if reverse { (header_y + 1, bottom) } else { (area.y, header_y) };
+    if let Some(h) = &header { buf.set_line(area.x, header_y, h, area.width); }
+    // The list: bottom-up (default), or top-down — under the prompt (reverse) or from the top
+    // with the prompt below (reverse-list).
+    let (list_top, list_bottom) = if prompt_top { (if header.is_some() && !header_first { header_y + 1 } else { edge + 1 }, bottom) } else { (area.y, if header.is_some() { header_y } else { edge }) };
+    picker.page_rows.set(list_bottom.saturating_sub(list_top).max(1) as i64);
     let list_h = list_bottom.saturating_sub(list_top) as usize;
     let n = picker.visible.len();
     if n == 0 {
@@ -789,7 +815,10 @@ fn fzf_row(buf: &mut Buffer, picker: &Picker, vi: usize, x: u16, y: u16, text_w:
         // The right column sits at the row's end, or not far past a short row's text.
         let end = text_w.min((used + right_w + 24).max(text_w.min(90)));
         spans.push(Span::styled(" ".repeat(end.saturating_sub(used + right_w)), fill));
-        spans.push(Span::styled(row.right.clone(), fill.add_modifier(Modifier::DIM)));
+        // The right column is part of the line: its hits are lit too.
+        let detail_len: isize = row.detail.iter().map(|s| s.content.chars().count() as isize).sum();
+        let right_at = label_len as isize + 2 + detail_len + 2;
+        push_lit(&mut spans, &row.right, right_at, fill.add_modifier(Modifier::DIM), hit.remove_modifier(Modifier::DIM));
     } else if current {
         spans.push(Span::styled(" ".repeat(text_w.saturating_sub(used)), fill));
     }

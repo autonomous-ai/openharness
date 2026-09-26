@@ -41,6 +41,8 @@ impl Row {
 }
 
 pub struct Picker {
+    /// Rows on screen, for PgUp/PgDn (a page is what you see).
+    pub page_rows: std::cell::Cell<i64>,
     /// The kill buffer (C-w, M-BSpace, M-d), for C-y.
     pub kill: String,
     /// How far the preview can scroll (the preview sets it as it draws).
@@ -104,6 +106,7 @@ impl Picker {
             matcher: Matcher::new(Config::DEFAULT),
             preview_max: Default::default(),
             kill: String::new(),
+            page_rows: std::cell::Cell::new(10),
         }
     }
 
@@ -151,8 +154,8 @@ impl Picker {
                     // The title first (its hits are what gets highlighted), then the rest of the line
                     // you see, then — whole words only — the keywords behind it (engine, machine).
                     // (A negation must hold for the whole line you see, so it is only asked of that.)
-                    let mut best = group.iter().filter(|t| !t.negative()).filter_map(|t| t.score(&row.label, &row.label, &mut buf, &mut self.matcher)).map(|(s, h)| (s + 40, h)).max_by_key(|(s, _)| *s);
-                    if best.is_none() { best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s) }
+                    // fzf's way: the whole line you see is searched and scored as one.
+                    let mut best = group.iter().filter_map(|t| t.score(&row.label, &visible, &mut buf, &mut self.matcher)).max_by_key(|(s, _)| *s);
                     if best.is_none() { best = group.iter().filter(|t| t.names_word(&hidden)).map(|_| (8u32, Vec::new())).next() }
                     match best { Some((s, hits)) => { total = total.map(|t| t + s); indices.extend(hits) } None => { total = None; break } }
                 }
@@ -166,7 +169,9 @@ impl Picker {
             // fzf's tiebreak: score, then the shorter line, then the original order.
             // Only negations (`!rate`): nothing scores, so the list keeps its order, as fzf's does.
             let positive = groups.iter().any(|g| g.iter().any(|t| !t.negative()));
-            if !self.keep_order && positive { scored.sort_by(|a, b| b.1.cmp(&a.1).then(line_len(&self.rows[a.0]).cmp(&line_len(&self.rows[b.0]))).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
+            let o = crate::theme::fzf_opts();
+            if o.tiebreak_index && !self.keep_order && positive && !o.no_sort { scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0))) }
+            else if !self.keep_order && positive && !o.no_sort { scored.sort_by(|a, b| b.1.cmp(&a.1).then(line_len(&self.rows[a.0]).cmp(&line_len(&self.rows[b.0]))).then(self.rows[b.0].boost.cmp(&self.rows[a.0].boost)).then(a.0.cmp(&b.0))) }
             self.visible = scored.into_iter().map(|(i, _, hits)| (i, hits)).collect();
         }
         // Keep the cursor on the same item across a rebuild.
@@ -309,7 +314,7 @@ impl Picker {
 }
 
 /// The length of the line a row shows (fzf's length tiebreak is the whole line's).
-fn line_len(row: &Row) -> usize { row.label.chars().count() + row.detail.iter().map(|s| s.content.chars().count() + 2).sum::<usize>() }
+fn line_len(row: &Row) -> usize { row.label.chars().count() + row.detail.iter().map(|s| s.content.chars().count() + 2).sum::<usize>() + row.right.chars().count() + 2 }
 
 /// Where an alphanumeric word ends, going back or forward from `at` (readline's M-b / M-f).
 fn word_edge(chars: &[char], mut at: usize, forward: bool) -> usize {
