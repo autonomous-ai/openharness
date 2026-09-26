@@ -213,7 +213,10 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     app.fleet.save_cache();
+    let host = app.fleet.machine(&app.fleet.local_id).map(|m| m.name.clone()).unwrap_or_else(app::hostname);
     drop(term);
     drop(restore);
+    // As tmux says it: the harnesses are still running, and `hn` comes back to them.
+    println!("[detached (from session {host})]");
     Ok(())
 }
