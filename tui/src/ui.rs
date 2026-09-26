@@ -61,12 +61,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if let (_, Some(pbox), _) = fzf_split(fzf_frame(body, picker).inner, picker) { preview(buf, app, kind, picker, &pbox) }
     }
     if let Some(Modal::Tree { cursor: at, collapsed }) = &app.modal { tree(buf, app, body, *at, collapsed) }
-    let popup = match &app.modal { Some(Modal::Popup { pane, width, height, title }) => Some((*pane, *width, *height, title.clone())), _ => None };
-    if let Some((pane, width, height, title)) = popup {
-        // tmux's popup: a single-line box in the middle, the program inside.
-        let (w, h) = (width.min(body.width), height.min(body.height));
-        let area = Rect::new(body.x + (body.width - w) / 2, body.y + (body.height - h) / 2, w, h);
+    let popup = match &app.modal { Some(Modal::Popup { pane, x, y, width, height, border, title }) => Some((*pane, *x, *y, *width, *height, *border, title.clone())), _ => None };
+    if let Some((pane, px, py, width, height, border_on, title)) = popup {
+        // tmux's popup: a single-line box where display-popup placed it, the program inside.
+        let size = *buf.area();
+        let (w, h) = (width.min(size.width), height.min(size.height));
+        let area = Rect::new(px.min(size.width - w), py.min(size.height - h), w, h);
         for y in area.y..area.y + h { for x in area.x..area.x + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); } } }
+        if !border_on {
+            if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, area, true, (None, None)); }
+        } else {
         let border = Style::default();
         for x in area.x..area.x + w { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + h - 1, "─", border) }
         for y in area.y..area.y + h { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + w - 1, y, "│", border) }
@@ -75,6 +79,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if !title.is_empty() { buf.set_stringn(area.x + 2, area.y, format!(" {title} "), w.saturating_sub(4) as usize, border); }
         let inner = Rect::new(area.x + 1, area.y + 1, w.saturating_sub(2), h.saturating_sub(2));
         if let Some(p) = app.panes.get_mut(&pane) { cursor = pane_body(buf, p, inner, true, (None, None)); }
+        }
     }
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }

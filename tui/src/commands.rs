@@ -1855,10 +1855,18 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         // run-shell: on this computer, as tmux's server would; what it prints is shown.
         "display-popup" | "popup" => {
-            // -C closes an open one; -w/-h size (50% by default); -d the folder; -T a title.
+            // cmd_display_popup_exec: -C closes an open one (and nothing opens over one); -w/-h its
+            // size (cells or n% of the terminal, half of it by default); placed by -x/-y as a menu
+            // is (the middle by default); -B no border; -d the folder; -T a title.
             if flag(words, "-C") { app.close_popup(); return }
-            let w = opt(words, "-w").unwrap_or_else(|| "50%".into());
-            let h = opt(words, "-h").unwrap_or_else(|| "50%".into());
+            if matches!(app.modal, Some(Modal::Menu(_)) | Some(Modal::Popup { .. })) { return }
+            let (sx, sy) = (app.size.0 as i64, app.size.1 as i64);
+            let h = match opt(words, "-h") { Some(v) => match percentage(&v, 1, sy, sy) { Ok(n) => n, Err(e) => return app.error(format!("height {e}")) }, None => sy / 2 };
+            let w = match opt(words, "-w") { Some(v) => match percentage(&v, 1, sx, sx) { Ok(n) => n, Err(e) => return app.error(format!("width {e}")) }, None => sx / 2 };
+            let (w, h) = (w.min(sx) as u16, h.min(sy) as u16);
+            let args = words.args.clone().unwrap_or_default();
+            let target = args.get('t').and_then(|t| pane_target(app, t)).or_else(|| app.current());
+            let Some((x, y)) = menu_position(app, &args, target, w, h) else { return };
             let cwd = opt(words, "-d").map(|d| expand(app, &d)).filter(|d| !d.is_empty());
             let title = opt(words, "-T").map(|t| expand(app, &t)).unwrap_or_default();
             let mut i = 1;
@@ -1867,7 +1875,7 @@ fn run_words(app: &mut App, words: &[String]) {
                 match words[i].as_str() { "-w" | "-h" | "-d" | "-T" | "-x" | "-y" | "-t" | "-c" | "-b" | "-s" | "-S" | "-e" => i += 1, w if w.starts_with('-') && w.len() > 1 => {}, w => command = Some(w.to_string()) }
                 i += 1;
             }
-            input::popup(app, &w, &h, cwd, command, title, flag(words, "-E"));
+            input::popup(app, (x, y, w, h), !flag(words, "-B"), cwd, command, title, flag(words, "-E"));
         }
         "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
         // run-shell runs as a job (shell_job); nothing to run gets here.

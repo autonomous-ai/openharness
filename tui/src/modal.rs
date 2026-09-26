@@ -139,7 +139,7 @@ pub enum Modal {
     /// tmux `choose-tree -w` (C-b w): windows and their panes, with a preview.
     Tree { cursor: usize, collapsed: Vec<String> },
     /// display-popup: a shell floating over the window; it goes when its program exits.
-    Popup { pane: u64, width: u16, height: u16, title: String },
+    Popup { pane: u64, x: u16, y: u16, width: u16, height: u16, border: bool, title: String },
     /// copy-mode (C-b [): move a cursor over the pane's text and copy from it, vi-style.
     Copy { pane: u64 },
 }

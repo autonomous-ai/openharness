@@ -775,13 +775,12 @@ fn new_what(app: &mut App, machine: String) {
 /// tmux's split-window / new-window: a shell, now, on this pane's machine and in its folder
 /// (`-c` another), running `command` if one is given. Keys typed before it is up go into it.
 /// display-popup: a shell in a box over the window, running `command` then leaving (-E).
-pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool) {
+pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool) {
     let focused = focused_agent(app);
     let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
     let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
     let Some(link) = app.link(&machine) else { app.say("That machine is not connected", theme::DANGER); return };
-    let (w, h) = app.popup_size(width, height);
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     app.modal = None;
@@ -799,9 +798,10 @@ pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, comm
         app.shells.insert((machine.clone(), id.to_string()));
         let pane = app.new_pane(&machine, id);
         // The far terminal is at least 40×12; the box shows it whole when it can.
-        let (cols, rows) = crate::pane::stream_size(w.saturating_sub(2), h.saturating_sub(2));
+        let inner = if border { 2 } else { 0 };
+        let (cols, rows) = crate::pane::stream_size(w.saturating_sub(inner), h.saturating_sub(inner));
         if let Some(p) = app.panes.get_mut(&pane) { p.cols = cols; p.rows = rows; p.queued.extend(typed) }
-        app.modal = Some(Modal::Popup { pane, width: w, height: h, title: title.clone() });
+        app.modal = Some(Modal::Popup { pane, x, y, width: w, height: h, border, title: title.clone() });
         app.open_stream(pane, true);
     });
 }
@@ -935,12 +935,12 @@ fn modal_key(app: &mut App, key: KeyEvent) {
             app.modal = Some(Modal::Menu(menu));
         }
         // Everything goes to the popup's program (the prefix still works, as in tmux).
-        Modal::Popup { pane, width, height, title } => {
+        Modal::Popup { pane, x, y, width, height, border, title } => {
             if let Some(bytes) = app.panes.get(&pane).and_then(|p| encode_key(&key, p.mode())) {
                 let live = app.panes.get(&pane).map(|p| p.stream.is_some()).unwrap_or(false);
                 if live { app.send_input(pane, &bytes) } else if let Some(p) = app.panes.get_mut(&pane) { p.queued.push(bytes) }
             }
-            app.modal = Some(Modal::Popup { pane, width, height, title });
+            app.modal = Some(Modal::Popup { pane, x, y, width, height, border, title });
         }
         Modal::Tree { cursor, collapsed } => tree_key(app, key, cursor, collapsed),
         Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }

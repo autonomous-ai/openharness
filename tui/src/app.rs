@@ -1109,16 +1109,6 @@ impl App {
         self.redraw_all = true;
     }
 
-    /// The popup's inner size for a percentage or cell size (tmux: -w 50% -h 50%).
-    pub fn popup_size(&self, w: &str, h: &str) -> (u16, u16) {
-        let dim = |v: &str, total: u16| -> u16 {
-            let v = v.trim();
-            let n = if let Some(p) = v.strip_suffix('%') { p.parse::<u32>().map(|p| (total as u32 * p / 100) as u16).unwrap_or(total / 2) } else { v.parse().unwrap_or(total / 2) };
-            n.clamp(10, total.saturating_sub(2))
-        };
-        (dim(w, self.size.0), dim(h, self.size.1.saturating_sub(1)))
-    }
-
     /// What a tmux.conf (or `set`, `source-file`) said, over what is set now.
     pub fn apply_settings(&mut self, s: &crate::tmuxconf::Settings) {
         if let Some(n) = s.base_index { self.base_index = n }
