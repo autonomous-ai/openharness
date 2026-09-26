@@ -1880,21 +1880,52 @@ fn big(buf: &mut Buffer, text: &str, area: Rect, color: Color) {
     }
 }
 
-/// display-panes (C-b q): each pane's index, big, in its middle — the active one red, others blue.
+/// display-panes (C-b q), as cmd_display_panes_draw_pane draws it: each pane's index in the
+/// middle of its content (below its title row), in blocks of display-panes-colour (the active
+/// pane's display-panes-active-colour) — as plain digits when the pane is too small — with its
+/// size (`80x24`) at the top right of its first line and, for panes 10 to 34, the letter that
+/// chooses it under the digits.
 fn display_panes(buf: &mut Buffer, app: &App) {
     let focus = app.focused();
     let ids = app.tab().panes();
+    let tab_id = app.tab().id.clone();
+    let colour = |name: &str, fallback: Color| app.options.get(name, &tab_id, None).and_then(|c| crate::tmuxconf::colour(&c)).unwrap_or(fallback);
+    let (normal, active) = (colour("display-panes-colour", theme::TMUX_DISPLAY_PANES), colour("display-panes-active-colour", theme::TMUX_DISPLAY_PANES_ACTIVE));
     for (id, rect) in &app.rects {
-        let n = ids.iter().position(|p| p == id).unwrap_or(0) + app.pane_base_index;
-        let color = if Some(*id) == focus { theme::TMUX_DISPLAY_PANES_ACTIVE } else { theme::TMUX_DISPLAY_PANES };
-        big(buf, &n.to_string(), *rect, color);
-        // tmux also prints each pane's size in its top-right corner.
-        if app.panes.contains_key(id) {
-            let c = app.content_of(app.tab(), *rect);
-            let size = format!("{}x{}", c.width, c.height);
-            let x = (rect.x + rect.width).saturating_sub(size.width() as u16);
-            buf.set_string(x, rect.y, &size, Style::default().fg(color));
+        if !app.panes.contains_key(id) { continue }
+        let pane = ids.iter().position(|p| p == id).unwrap_or(0) + app.pane_base_index;
+        let c = app.content_of(app.tab(), *rect);
+        let (xoff, yoff, sx, sy) = (c.x as i32, c.y as i32, c.width as i32, c.height as i32);
+        let num = pane.to_string();
+        let len = num.len() as i32;
+        if sx < len { continue }
+        let colour = if Some(*id) == focus { active } else { normal };
+        let fg = Style::default().fg(colour);
+        let size = format!("{}x{}", c.width, c.height);
+        let letter = if (10..35).contains(&pane) { ((b'a' + (pane - 10) as u8) as char).to_string() } else { String::new() };
+        let (mut px, mut py) = (sx / 2, sy / 2);
+        let put = |buf: &mut Buffer, x: i32, y: i32, text: &str, style: Style| { if x >= 0 && y >= 0 { buf.set_string(x as u16, y as u16, text, style); } };
+        if sx < len * 6 || sy < 5 {
+            let llen = letter.len() as i32;
+            let text = if sx >= len + llen + 1 && llen > 0 { format!("{num} {letter}") } else { num.clone() };
+            let width = text.len() as i32;
+            put(buf, xoff + px - width / 2, yoff + py, &text, fg);
+            continue;
         }
+        px -= len * 3;
+        py -= 2;
+        for ch in num.chars() {
+            let Some(d) = ch.to_digit(10) else { continue };
+            for (j, row) in DIGITS[d as usize].iter().enumerate() {
+                for (i, bit) in row.chars().enumerate() {
+                    if bit == 'x' { if let Some(cell) = buf.cell_mut(((xoff + px + i as i32) as u16, (yoff + py + j as i32) as u16)) { cell.set_symbol(" ").set_style(Style::default().bg(colour)); } }
+                }
+            }
+            px += 6;
+        }
+        if sy <= 6 { continue }
+        if sx >= size.len() as i32 { put(buf, xoff + sx - size.len() as i32, yoff, &size, fg) }
+        if !letter.is_empty() { put(buf, xoff + sx / 2 + len * 3 - letter.len() as i32 - 1, yoff + py + 5, &letter, fg) }
     }
 }
 
