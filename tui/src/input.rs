@@ -69,7 +69,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
     }
     // The prefix works over the lists too (they are tmux's choose modes); only a line being typed
     // at the status line keeps it.
-    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }));
+    let line_edit = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Find { .. }) | Some(Modal::Confirm { .. }) | Some(Modal::Popup { .. }));
     if !line_edit && (chord == app.keymap.prefix || Some(chord) == app.keymap.prefix2) {
         app.prefix = true;
         app.prefix_at = Some(std::time::Instant::now());
@@ -757,7 +757,7 @@ pub fn new_shell(app: &mut App, placement: Placement, cwd: Option<String>, comma
 }
 
 /// display-popup: a shell in a box over the window, running `command` then leaving (-E).
-pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, command: Option<String>, title: String) {
+pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool) {
     let focused = focused_agent(app);
     let machine = focused.as_ref().map(|(m, _)| m.clone()).unwrap_or(app.fleet.local_id.clone());
     let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone());
@@ -767,7 +767,10 @@ pub fn popup(app: &mut App, width: &str, height: &str, cwd: Option<String>, comm
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
     app.modal = None;
-    app.starting_shell = Some(command.map(|c| vec![format!("{c}; exit\r").into_bytes()]).unwrap_or_default());
+    // The command runs in the shell's place (-E: the popup goes when it ends) or in it; a leading
+    // space keeps it out of the shell's history, `clear` off the screen.
+    let line = command.map(|c| if close_on_exit { format!(" clear; exec {c}\r") } else { format!(" clear; {c}\r") });
+    app.starting_shell = Some(line.map(|l| vec![l.into_bytes()]).unwrap_or_default());
     app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(60)).await }, move |app, reply| {
         let typed = app.starting_shell.take().unwrap_or_default();
         let Ok(reply) = reply else { app.say("Could not start the popup", theme::DANGER); return };
@@ -1217,9 +1220,12 @@ fn copy_key(app: &mut App, key: KeyEvent, pane: u64) {
         KeyCode::Char('v') if ctrl => p.copy_toggle_block(),
         KeyCode::PageUp => p.copy_move(0, -rows),
         KeyCode::PageDown => p.copy_move(0, rows),
-        KeyCode::Char('w') | KeyCode::Char('W') => p.copy_word(true),
-        KeyCode::Char('b') | KeyCode::Char('B') => p.copy_word(false),
-        KeyCode::Char('e') | KeyCode::Char('E') => p.copy_word_end(),
+        KeyCode::Char('w') => p.copy_word(true),
+        KeyCode::Char('b') => p.copy_word(false),
+        KeyCode::Char('e') => p.copy_word_end(),
+        KeyCode::Char('W') => p.copy_word_by(true, true),
+        KeyCode::Char('B') => p.copy_word_by(false, true),
+        KeyCode::Char('E') => p.copy_word_end_by(true),
         KeyCode::Char('0') | KeyCode::Home => p.copy_line_edge(false),
         KeyCode::Char('^') => p.copy_first_nonblank(),
         KeyCode::Char('$') | KeyCode::End => p.copy_line_edge(true),

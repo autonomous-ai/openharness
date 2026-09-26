@@ -98,6 +98,8 @@ pub struct Pane {
     pub predictions: Vec<(u16, u16, char, Instant)>,
     /// The match ⌥F is on.
     pub find_at: Option<alacritty_terminal::term::search::Match>,
+    /// Every match of the search (tmux 3.1+ lights them all and counts them), at most 1000.
+    pub find_all: Vec<alacritty_terminal::term::search::Match>,
     /// Bumped on every open; a reply carrying an older one is stale.
     pub open_token: u64,
     /// ⌥[ copy mode: the copy cursor, and whether a selection is being made from it.
@@ -128,7 +130,10 @@ fn osc7(bytes: &[u8]) -> Option<String> {
 }
 
 // A hollow block marks "the program never chose a cursor": the user's own shape stays.
-fn config() -> Config { Config { scrolling_history: 10_000, default_cursor_style: CursorStyle { shape: CursorShape::HollowBlock, blinking: false }, ..Config::default() } }
+/// tmux's history-limit (tmux.conf or `set`), for panes opened from now on.
+pub static HISTORY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(10_000);
+
+fn config() -> Config { Config { scrolling_history: HISTORY.load(std::sync::atomic::Ordering::Relaxed).clamp(100, 200_000), default_cursor_style: CursorStyle { shape: CursorShape::HollowBlock, blinking: false }, ..Config::default() } }
 
 impl Pane {
     /// The cursor the program in this pane asked for (DECSCUSR), as crossterm spells it.
@@ -171,6 +176,7 @@ impl Pane {
             dirty: true,
             bell: false,
             queued: Vec::new(),
+            find_all: Vec::new(),
             cwd: None,
             in_screen_title: false,
             pending_esc: false,
@@ -415,6 +421,7 @@ impl Pane {
         // tmux's wrap-search is on: past the top comes the bottom. Only the same match is "no more".
         if let Some(m) = &current { if found.start() == m.start() && found.end() == m.end() && self.find_at.is_some() { self.dirty = true; return true } }
         self.term.scroll_to_point(*found.start());
+        if fresh || self.find_all.is_empty() { self.find_all = self.all_matches(&escaped) }
         let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
         selection.update(*found.end(), Side::Right);
         self.term.selection = Some(selection);
@@ -423,7 +430,33 @@ impl Pane {
         true
     }
 
+    /// Every match, top to bottom (for the count and the lit matches).
+    fn all_matches(&self, pattern: &str) -> Vec<alacritty_terminal::term::search::Match> {
+        use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
+        use alacritty_terminal::term::search::RegexSearch;
+        let Ok(mut regex) = RegexSearch::new(pattern) else { return Vec::new() };
+        let grid = self.term.grid();
+        let top = Point::new(Line(-(grid.history_size() as i32)), Column(0));
+        let mut out: Vec<alacritty_terminal::term::search::Match> = Vec::new();
+        let mut from = top;
+        while out.len() < 1000 {
+            let Some(m) = self.term.search_next(&mut regex, from, Direction::Right, Side::Left, None) else { break };
+            if out.last().map(|l| m.start() <= l.start()).unwrap_or(false) || (out.is_empty() && *m.start() < top) { break }
+            from = m.end().add(&self.term, alacritty_terminal::index::Boundary::None, 1);
+            out.push(m);
+        }
+        out
+    }
+
+    /// Which match the cursor's is, of how many: tmux's `(3/12 results)`.
+    pub fn find_count(&self) -> Option<(usize, usize)> {
+        let at = self.find_at.as_ref()?;
+        let i = self.find_all.iter().position(|m| m.start() == at.start())?;
+        Some((i + 1, self.find_all.len()))
+    }
+
     pub fn end_find(&mut self) {
+        self.find_all.clear();
         self.find_at = None;
         self.clear_selection();
         self.scroll_bottom();
@@ -475,21 +508,29 @@ impl Pane {
     fn copy_char(&self, point: alacritty_terminal::index::Point) -> char { self.term.grid()[point].c }
 
     /// `w` / `b`: to the start of the next / previous word on the line (then the next line).
-    pub fn copy_word(&mut self, forward: bool) {
+    /// w / b (and W / B with `big`): the next / previous word start. Words are vi's — letters and
+    /// digits, or a run of punctuation (tmux's word-separators) — big words anything not blank.
+    pub fn copy_word(&mut self, forward: bool) { self.copy_word_by(forward, false) }
+
+    pub fn copy_word_by(&mut self, forward: bool, big: bool) {
         use alacritty_terminal::index::{Column, Line, Point};
         let Some(copy) = self.copy else { return };
         let (top, bottom, last) = self.copy_bounds();
-        let blank = |c: char| c == ' ' || c == '\0';
-        let mut p = copy.point;
-        let step = |p: Point| -> Option<Point> {
-            if forward { if p.column.0 < last { Some(Point::new(p.line, Column(p.column.0 + 1))) } else if p.line.0 < bottom { Some(Point::new(Line(p.line.0 + 1), Column(0))) } else { None } }
+        let class = |c: char| -> u8 { if c == ' ' || c == '\0' { 0 } else if big || c.is_alphanumeric() || c == '_' { 2 } else { 1 } };
+        let step = |p: Point, fwd: bool| -> Option<Point> {
+            if fwd { if p.column.0 < last { Some(Point::new(p.line, Column(p.column.0 + 1))) } else if p.line.0 < bottom { Some(Point::new(Line(p.line.0 + 1), Column(0))) } else { None } }
             else if p.column.0 > 0 { Some(Point::new(p.line, Column(p.column.0 - 1))) } else if p.line.0 > top { Some(Point::new(Line(p.line.0 - 1), Column(last))) } else { None }
         };
+        let mut p = copy.point;
         if forward {
-            while let Some(n) = step(p) { let was = blank(self.copy_char(p)); p = n; if was && !blank(self.copy_char(p)) { break } if !was && blank(self.copy_char(p)) { continue } }
+            let start = class(self.copy_char(p));
+            while let Some(n) = step(p, true) { p = n; let c = class(self.copy_char(p)); if c != start || n.column.0 == 0 { break } }
+            while class(self.copy_char(p)) == 0 { match step(p, true) { Some(n) => p = n, None => break } }
         } else {
-            while let Some(n) = step(p) { p = n; if !blank(self.copy_char(p)) { break } }
-            while let Some(n) = step(p) { if blank(self.copy_char(n)) { break } p = n; }
+            if let Some(n) = step(p, false) { p = n }
+            while class(self.copy_char(p)) == 0 { match step(p, false) { Some(n) => p = n, None => break } }
+            let c = class(self.copy_char(p));
+            while let Some(n) = step(p, false) { if n.line != p.line || class(self.copy_char(n)) != c { break } p = n }
         }
         self.copy_set(p);
     }
@@ -515,16 +556,20 @@ impl Pane {
     }
 
     /// `e`: to the end of this word, or of the next one.
-    pub fn copy_word_end(&mut self) {
+    /// e (E with `big`): the end of this or the next word, vi's words as in copy_word.
+    pub fn copy_word_end(&mut self) { self.copy_word_end_by(false) }
+
+    pub fn copy_word_end_by(&mut self, big: bool) {
         use alacritty_terminal::index::{Column, Line, Point};
         let Some(copy) = self.copy else { return };
         let (_, bottom, last) = self.copy_bounds();
-        let blank = |c: char| c == ' ' || c == '\0';
+        let class = |c: char| -> u8 { if c == ' ' || c == '\0' { 0 } else if big || c.is_alphanumeric() || c == '_' { 2 } else { 1 } };
         let step = |p: Point| -> Option<Point> { if p.column.0 < last { Some(Point::new(p.line, Column(p.column.0 + 1))) } else if p.line.0 < bottom { Some(Point::new(Line(p.line.0 + 1), Column(0))) } else { None } };
         let mut p = copy.point;
         if let Some(n) = step(p) { p = n }
-        while blank(self.copy_char(p)) { match step(p) { Some(n) => p = n, None => break } }
-        while let Some(n) = step(p) { if blank(self.copy_char(n)) || n.line != p.line { break } p = n }
+        while class(self.copy_char(p)) == 0 { match step(p) { Some(n) => p = n, None => break } }
+        let c = class(self.copy_char(p));
+        while let Some(n) = step(p) { if n.line != p.line || class(self.copy_char(n)) != c { break } p = n }
         self.copy_set(p);
     }
 
@@ -848,5 +893,23 @@ mod osc7_tests {
         assert_eq!(super::osc7(b"x\x1b]7;file://mac.lan/Users/me/my%20code\x07y").as_deref(), Some("/Users/me/my code"));
         assert_eq!(super::osc7(b"\x1b]7;file:///tmp\x1b\\").as_deref(), Some("/tmp"));
         assert_eq!(super::osc7(b"plain"), None);
+    }
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::*;
+    #[test]
+    fn vi_words() {
+        let mut p = Pane::new(1, "m", "a", 40, 12);
+        p.feed(b"utilization.gpu name, x");
+        p.copy_start();
+        p.copy_jump(alacritty_terminal::index::Point::new(alacritty_terminal::index::Line(0), alacritty_terminal::index::Column(0)));
+        p.copy_word_end();
+        assert_eq!(p.copy.unwrap().point.column.0, 10, "e stops before the dot");
+        p.copy_word(true);
+        assert_eq!(p.copy.unwrap().point.column.0, 11, "w to the dot");
+        p.copy_word_by(true, true);
+        assert_eq!(p.copy.unwrap().point.column.0, 16, "W past it to name");
     }
 }
