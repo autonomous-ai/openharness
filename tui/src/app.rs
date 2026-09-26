@@ -1307,8 +1307,7 @@ impl App {
     /// once you set it yourself, as tmux has it — on a lone pane too, and bottom or off.
     pub fn pane_status(&self, tab: &Tab) -> layout::Status {
         if self.opts.border_titles == Some(false) { return layout::Status::Off }
-        let yours = self.options.global_window.contains_key("pane-border-status") || self.options.windows.get(&tab.id).map(|m| m.contains_key("pane-border-status")).unwrap_or(false);
-        if tab.panes().len() < 2 && !yours { return layout::Status::Off }
+        // As tmux draws it: over a lone pane too.
         layout::Status::of(&self.options.get("pane-border-status", &tab.id, None).unwrap_or_default())
     }
 
