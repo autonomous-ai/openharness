@@ -59,18 +59,6 @@ pub fn bell() {
     let _ = out.flush();
 }
 
-fn usage() {
-    println!("hn — tmux improved: Harness in your terminal\n");
-    println!("  hn [--port N] [--keys]      (also: harness tui)");
-    println!("  hn ls                       every harness on every machine");
-    println!("  hn send -t <harness> text   a message to a harness\n");
-    println!("  tmux's keys: C-b s harnesses · C-b c window · C-b % \" split · C-b o next pane · C-b z zoom");
-    println!("  C-b [ copy · C-b w windows · C-b C new harness · C-b ? keys · C-b d detach");
-    println!("  ~/.tmux.conf is read: your prefix and binds work here too.");
-    println!("\n  HARNESS_TUI_DESK=read   show the desk's tabs but never change them");
-    println!("  HARNESS_TUI_DESK=off    keep tabs to this window");
-}
-
 unsafe extern "C" { fn raise(sig: i32) -> i32; }
 /// SIGTSTP, as a shell's job control expects of a program that suspends itself.
 unsafe fn libc_raise_tstp() { unsafe { raise(if cfg!(target_os = "linux") { 20 } else { 18 }); } }
@@ -100,9 +88,17 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if matches!(args.first().map(|a| a.as_str()), Some("-h" | "--help")) { usage(); return Ok(()) }
-    if matches!(args.first().map(|a| a.as_str()), Some("--version" | "-V")) { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), tmuxconf::TMUX_VERSION); return Ok(()) }
-    if args.iter().any(|a| a == "--keys") {
+    // hn's command line, read as tmux reads its own.
+    let f = match cli::flags(&args) {
+        Ok(f) => f,
+        Err(e) => { eprintln!("hn: {e}"); eprintln!("{}", cli::USAGE); std::process::exit(1) }
+    };
+    if f.long_help { println!("{}", cli::USAGE); return Ok(()) }
+    if f.help { eprintln!("{}", cli::USAGE); std::process::exit(1) }
+    if f.version && f.rest.is_empty() { println!("hn {} (tmux {})", env!("CARGO_PKG_VERSION"), tmuxconf::TMUX_VERSION); return Ok(()) }
+    // -f file: that tmux.conf instead of ~/.tmux.conf (-f /dev/null: none).
+    if let Some(c) = &f.config { unsafe { std::env::set_var("HARNESS_TUI_TMUX_CONF", if c == "/dev/null" { "off" } else { c.as_str() }) } }
+    if f.keys {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);
         if config.prefix_set { km.prefix = config.prefix }
@@ -114,14 +110,13 @@ async fn run(config: config::Config) -> io::Result<()> {
         for n in &settings.notes { println!("  - {n}") }
         return Ok(())
     }
-    let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok())
-        .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
-        .unwrap_or(18473u16);
-    // hn ls, hn send …: answered from here, no client.
-    let plain: Vec<String> = { let mut v = Vec::new(); let mut it = args.iter(); while let Some(a) = it.next() { if a == "--port" { it.next(); } else { v.push(a.clone()) } } v };
-    if let Some(code) = cli::run(&plain, port).await { std::process::exit(code) }
+    let port = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok())).unwrap_or(18473u16);
+    // hn <command>: answered from here (hn ls) or by the running client (a tmux command).
+    if let Some(code) = cli::run(&f.rest, port, f.socket.as_deref(), f.name.as_deref()).await { std::process::exit(code) }
+    // -L name, starting a client: its socket's name.
+    if let Some(n) = &f.name { unsafe { std::env::set_var("HN_SOCKET_NAME", n) } }
 
-    if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("harness tui needs a terminal."); std::process::exit(1) }
+    if !io::IsTerminal::is_terminal(&io::stdout()) { eprintln!("open terminal failed: not a terminal"); std::process::exit(1) }
 
     // NO_COLOR is about a program's own output; the panes mirror OTHER programs' screens, whose
     // colours are content. crossterm would otherwise drop every colour, theirs included.
