@@ -210,7 +210,7 @@ fn listing(app: &App, command: &str) -> Vec<String> {
             format!("status {}", if app.opts.status == Some(false) { "off" } else { "on" }),
             format!("status-justify {}", app.opts.status_justify.clone().unwrap_or_else(|| "left".into())),
             format!("pane-border-format {}", app.opts.pane_border_format.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "(hn's: index, title, state, machine)".into())),
-            format!("history-limit {}", 10_000),
+            format!("history-limit {}", crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed)),
             format!("escape-time 0"),
             format!("display-time {}", app.display_ms),
             format!("status-left {}", app.opts.status_left.clone().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "\"[#S] \"".into())),
@@ -555,7 +555,7 @@ fn run_words(app: &mut App, words: &[String]) {
                 match words[i].as_str() { "-w" | "-h" | "-d" | "-T" | "-x" | "-y" | "-t" | "-c" | "-b" | "-s" | "-S" | "-e" => i += 1, w if w.starts_with('-') && w.len() > 1 => {}, w => command = Some(w.to_string()) }
                 i += 1;
             }
-            input::popup(app, &w, &h, cwd, command, title);
+            input::popup(app, &w, &h, cwd, command, title, flag(words, "-E"));
         }
         "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
         "run-shell" | "run" => {

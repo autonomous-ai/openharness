@@ -181,6 +181,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "pane-active-border-style" => { let (fg, _) = style(value); s.look.active_border = fg }
                 "window-style" => { let (fg, bg) = style(value); s.look.window_fg = fg; s.look.window_bg = bg }
                 "window-active-style" => { let (fg, bg) = style(value); s.look.active_window_fg = fg; s.look.active_window_bg = bg }
+                "history-limit" => { if let Ok(n) = value.parse::<usize>() { crate::pane::HISTORY.store(n, std::sync::atomic::Ordering::Relaxed) } }
                 "status-justify" => s.options.status_justify = Some(value.to_string()),
                 "window-status-style" => { let (fg, bg) = style(value); s.options.window_status_style = Some((fg, bg)) }
                 "pane-border-format" => s.options.pane_border_format = Some(value.to_string()),
@@ -197,7 +198,7 @@ pub fn directive(words: &[String], keymap: &mut Keymap, s: &mut Settings) -> Res
                 "mode-keys" => s.options.mode_keys_emacs = Some(value == "emacs"),
                 "status" => s.options.status = on_off(value),
                 // Options with no effect here (the terminal's, the server's): accepted quietly.
-                "escape-time" | "history-limit" | "default-terminal" | "terminal-overrides" | "terminal-features" | "focus-events" | "set-clipboard"
+                "escape-time" | "default-terminal" | "terminal-overrides" | "terminal-features" | "focus-events" | "set-clipboard"
                 | "allow-passthrough" | "extended-keys" | "default-shell" | "default-command" | "aggressive-resize" | "status-keys" | "status-interval"
                 | "monitor-activity" | "visual-activity" | "visual-bell" | "bell-action" | "automatic-rename" | "allow-rename"
                 | "set-titles" | "set-titles-string" | "update-environment" | "destroy-unattached" | "exit-empty" | "word-separators" | "wrap-search"

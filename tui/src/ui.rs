@@ -1013,7 +1013,8 @@ fn clock(buf: &mut Buffer, rect: Rect) {
 /// Copy mode's position, top right, in mode-style: `[offset/history]`.
 fn copy_indicator(buf: &mut Buffer, pane: &Pane, content: Rect) {
     let grid = pane.term.grid();
-    let text = format!("[{}/{}]", grid.display_offset(), grid.history_size());
+    let count = pane.find_count().map(|(i, n)| format!("({i}/{n} results) ")).unwrap_or_default();
+    let text = format!("{count}[{}/{}]", grid.display_offset(), grid.history_size());
     let x = (content.x + content.width).saturating_sub(text.width() as u16);
     buf.set_string(x, content.y, &text, Style::default().bg(Color::Yellow).fg(Color::Black));
 }
@@ -1117,6 +1118,9 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
     let cursor_point = content.cursor.point;
     let selection = content.selection;
     let find = pane.find_at.clone();
+    // Only the matches on screen are asked about, cell by cell.
+    let (lo, hi) = (-(content.display_offset as i32) - 1, pane.rows as i32 - content.display_offset as i32 + 1);
+    let lit: Vec<alacritty_terminal::term::search::Match> = pane.find_all.iter().filter(|m| m.end().line.0 >= lo && m.start().line.0 <= hi).cloned().collect();
     for indexed in content.display_iter {
         let row = indexed.point.line.0 + offset;
         let Some(col) = (indexed.point.column.0 as u16).checked_sub(hshift) else { continue };
@@ -1141,6 +1145,8 @@ fn pane_body(buf: &mut Buffer, pane: &mut Pane, area: Rect, active: bool, window
         // tmux mode-style: selections are yellow on black; the search match is
         // copy-mode-current-match-style, magenta on black.
         if find.as_ref().map(|m| m.contains(&indexed.point)).unwrap_or(false) { style = style.bg(Color::Magenta).fg(Color::Black) }
+        // The other matches: copy-mode-match-style, cyan.
+        else if lit.iter().any(|m| m.contains(&indexed.point)) { style = style.bg(Color::Cyan).fg(Color::Black) }
         else if selection.map(|r| r.contains(indexed.point)).unwrap_or(false) { style = style.bg(Color::Yellow).fg(Color::Black) }
         let target = buf.cell_mut((area.x + col, area.y + row as u16));
         let Some(target) = target else { continue };
