@@ -89,6 +89,8 @@ pub struct Pane {
     pub osc_title: String,
     /// select-pane -d: keys for this pane are dropped until select-pane -e.
     pub input_off: bool,
+    /// Copy mode with mode-keys emacs: a selection stops short of the cursor's cell.
+    pub copy_emacs: bool,
     pub opening: bool,
     pub read_only: bool,
     pub last_alive: Instant,
@@ -192,6 +194,7 @@ impl Pane {
             title: String::new(),
             osc_title: String::new(),
             input_off: false,
+            copy_emacs: false,
             opening: false,
             read_only: false,
             last_alive: Instant::now(),
@@ -522,6 +525,15 @@ impl Pane {
         let (a, p) = (copy.anchor, copy.point);
         let forward = p >= a;
         let kind = if lines { SelectionType::Lines } else if copy.rect { SelectionType::Block } else { SelectionType::Simple };
+        // tmux (window_copy_get_selection): vi's selection takes the cell at its far end, emacs's
+        // stops short of it — the region between mark and point.
+        if self.copy_emacs && !lines && !copy.rect {
+            let mut selection = Selection::new(kind, a, Side::Left);
+            selection.update(p, Side::Left);
+            self.term.selection = Some(selection);
+            self.dirty = true;
+            return;
+        }
         let mut selection = Selection::new(kind, a, if forward { Side::Left } else { Side::Right });
         selection.update(p, if forward { Side::Right } else { Side::Left });
         self.term.selection = Some(selection);
@@ -536,7 +548,7 @@ impl Pane {
         copy.selecting = true;
         copy.anchor = copy.point;
         let mut selection = Selection::new(if copy.rect { SelectionType::Block } else { SelectionType::Simple }, copy.point, Side::Left);
-        selection.update(copy.point, Side::Right);
+        selection.update(copy.point, if self.copy_emacs && !copy.rect { Side::Left } else { Side::Right });
         self.term.selection = Some(selection);
         self.dirty = true;
     }
@@ -611,6 +623,54 @@ impl Pane {
         if let Some(cc) = self.copy.as_mut() { cc.rect = false }
         self.copy_begin();
         self.copy_set(Point::new(c.point.line, Column(end.max(c.point.column.0))));
+    }
+
+    /// tmux's page-up/-down and halfpage-up/-down (window_copy_pageup1/pagedown1): the view moves
+    /// a page (the height less two) or half one, the cursor keeping its row on the screen — at an
+    /// end of the history the cursor goes the rest of the way. True when the view is at the bottom
+    /// after (the -and-cancel commands leave copy mode then).
+    pub fn copy_page(&mut self, up: bool, half: bool) -> bool {
+        use alacritty_terminal::index::{Line, Point};
+        let Some(c) = self.copy else { return false };
+        let rows = self.term.screen_lines() as i32;
+        let hsize = self.term.grid().history_size() as i32;
+        let n = if rows > 2 { if half { rows / 2 } else { rows - 2 } } else { 1 };
+        let was = self.term.grid().display_offset() as i32;
+        let (mut oy, mut cy) = (was, c.point.line.0 + was);
+        if up {
+            if oy + n > hsize { oy = hsize; cy = if cy < n { 0 } else { cy - n } } else { oy += n }
+        } else if oy < n {
+            oy = 0;
+            cy = (cy + n).min(rows - 1);
+        } else { oy -= n }
+        self.term.scroll_display(Scroll::Delta(oy - was));
+        self.copy_set(Point::new(Line(cy - oy), c.point.column));
+        self.dirty = true;
+        oy == 0
+    }
+
+    /// The copy cursor's line, as #{copy_cursor_line} has it.
+    pub fn copy_line(&self) -> String {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(c) = self.copy else { return String::new() };
+        let (_, _, last) = self.copy_bounds();
+        (0..=last).map(|x| self.copy_char(Point::new(c.point.line, Column(x)))).map(|ch| if ch == '\0' { ' ' } else { ch }).collect::<String>().trim_end().to_string()
+    }
+
+    /// The word under the copy cursor (format_grid_word): back to a separator in `ws` or a blank,
+    /// then on to the next one.
+    pub fn copy_word_under(&self, ws: &str) -> String {
+        use alacritty_terminal::index::{Column, Point};
+        let Some(c) = self.copy else { return String::new() };
+        let (_, _, last) = self.copy_bounds();
+        let at = |x: usize| self.copy_char(Point::new(c.point.line, Column(x)));
+        let stop = |ch: char| ch == ' ' || ch == '\0' || ws.contains(ch);
+        let mut x = c.point.column.0;
+        while x > 0 && !stop(at(x)) { x -= 1 }
+        if stop(at(x)) { x += 1 }
+        let mut word = String::new();
+        while x <= last && !stop(at(x)) { word.push(at(x)); x += 1 }
+        word
     }
 
     /// The wheel in copy mode: the view moves, the cursor kept on screen.

@@ -227,6 +227,9 @@ pub struct App {
     pub cli_code: i32,
     /// That shell's folder: where run-shell and if-shell run what it asked (tmux's client cwd).
     pub cli_cwd: Option<String>,
+    /// Copy mode reading a key as copy-mode-vi's, whatever mode-keys is (a `send -X` action run
+    /// as the vi key that does it).
+    pub copy_as_vi: bool,
     /// set-buffer -b name: named paste buffers.
     pub named_buffers: std::collections::BTreeMap<String, String>,
     pub capture_err: Option<Vec<String>>,
@@ -297,6 +300,7 @@ impl App {
             cli_tx: None,
             cli_code: 0,
             cli_cwd: None,
+            copy_as_vi: false,
             named_buffers: Default::default(),
             capture_err: None,
             env: Default::default(),
@@ -1122,6 +1126,12 @@ impl App {
 
     /// A pane's own border line: tmux draws none for a lone pane, and with `pane-border-status top`
     /// a titled line above each pane when a window holds several.
+
+    /// mode-keys as it stands (tmux's default: emacs, unless $VISUAL or $EDITOR is a vi).
+    pub fn mode_keys_emacs(&self) -> bool {
+        let tab = self.tabs.get(self.active).map(|t| t.id.clone()).unwrap_or_default();
+        self.options.get("mode-keys", &tab, self.focused()).as_deref() != Some("vi")
+    }
 
     /// A window's pane-border-status as it shows: hn's default (top) where it has several panes;
     /// once you set it yourself, as tmux has it — on a lone pane too, and bottom or off.
