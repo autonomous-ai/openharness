@@ -177,7 +177,8 @@ fn take_block(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
 pub fn expand(app: &App, text: &str) -> String { crate::format::text(app, text, None) }
 
 /// The shell command a split-window / new-window was given (its last positional word).
-fn shell_command(words: &[String]) -> Option<String> {
+fn shell_command(words: &Words) -> Option<String> {
+    if let Some(a) = &words.args { return a.values.last().cloned().filter(|c| !c.trim().is_empty()) }
     let mut i = 1;
     let mut last = None;
     while i < words.len() {
@@ -204,7 +205,7 @@ fn is_vim_command(cmd: &str) -> bool {
 }
 
 /// split-window's and join-pane's -l (cells, or n%) and -p (a percentage).
-fn split_size(words: &[String]) -> Result<Option<(u16, bool)>, String> {
+fn split_size(words: &Words) -> Result<Option<(u16, bool)>, String> {
     let Some(l) = opt(words, "-l").or_else(|| opt(words, "-p").map(|p| format!("{p}%"))) else { return Ok(None) };
     match l.strip_suffix('%') {
         Some(n) => match n.parse::<u16>() { Ok(n) if n <= 100 => Ok(Some((n, true))), _ => Err(format!("size {l}")) },
@@ -218,83 +219,43 @@ fn size_arg(v: &str, total: u16) -> Option<u16> {
 }
 
 /// A pane target: `:W.P`, `W.P`, `.P`, `P` (index), `%N` (id), `!` (the last pane).
+/// A pane target, found as tmux's cmd-find.c finds one (crate::cmd::resolve).
 pub fn pane_target(app: &App, target: &str) -> Option<(usize, u64)> {
-    let target = unsession(app, target)?;
-    let target = if target.is_empty() { ":" } else { target };
-    if let Some(id) = target.strip_prefix('%').and_then(|n| n.parse::<u64>().ok()) {
-        return app.tabs.iter().position(|t| t.panes().contains(&id)).map(|w| (w, id));
-    }
-    if target == "!" || target == "{last}" { return app.tab().last_focus().map(|p| (app.active, p)) }
-    if target == "{marked}" { return app.marked.and_then(|m| app.tabs.iter().position(|t| t.panes().contains(&m)).map(|w| (w, m))) }
-    // {up-of} {down-of} {left-of} {right-of}: the pane that way from this one.
-    for (name, toward) in [("{up-of}", Toward::Up), ("{down-of}", Toward::Down), ("{left-of}", Toward::Left), ("{right-of}", Toward::Right)] {
-        if target == name { return app.focused().and_then(|f| app.pane_toward(app.active, f, toward)).map(|p| (app.active, p)) }
-    }
-    // {top} {bottom} {left} {right} and their corners: the pane at that edge of this window.
-    if target.starts_with('{') && target.ends_with('}') {
-        let rects = &app.rects;
-        let pick = |key: &dyn Fn(&ratatui::layout::Rect) -> i32| rects.iter().min_by_key(|(_, r)| key(r)).map(|(id, _)| (app.active, *id));
-        return match target {
-            "{top}" => pick(&|r| r.y as i32), "{bottom}" => pick(&|r| -((r.y + r.height) as i32)),
-            "{left}" => pick(&|r| r.x as i32), "{right}" => pick(&|r| -((r.x + r.width) as i32)),
-            "{top-left}" => pick(&|r| r.x as i32 + r.y as i32), "{bottom-right}" => pick(&|r| -((r.x + r.width + r.y + r.height) as i32)),
-            "{top-right}" => pick(&|r| r.y as i32 * 1000 - (r.x + r.width) as i32), "{bottom-left}" => pick(&|r| -((r.y + r.height) as i32 * 1000) + r.x as i32),
-            _ => None,
-        };
-    }
-    let (w, p) = match target.rsplit_once('.') { Some((w, p)) => (w, p), None if target.starts_with(':') => (target, ""), None => ("", target) };
-    let window = if w.is_empty() { app.active } else { window_target(app, w)? };
-    let panes = app.tabs[window].panes();
-    let pane = match p {
-        "" => app.tabs[window].focus?,
-        // +N / -N: that many along the list from the active pane, round the end.
-        _ if p.starts_with('+') || p.starts_with('-') => {
-            let n: i64 = if p.len() == 1 { 1 } else { p[1..].parse().ok()? };
-            let at = panes.iter().position(|x| Some(*x) == app.tabs[window].focus)? as i64;
-            panes[(at + if p.starts_with('+') { n } else { -n }).rem_euclid(panes.len() as i64) as usize]
-        }
-        n => *panes.get(n.parse::<usize>().ok()?.checked_sub(app.pane_base_index)?)?,
-    };
-    Some((window, pane))
+    let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Pane, can_fail: false, window_index: false, default_marked: false };
+    let f = crate::cmd::resolve(app, Some(target), spec).ok()?;
+    Some((f.window?, f.pane?))
 }
 
-/// A window target, as tmux reads one: `:2`, `=2`, `^` first, `$` last, `!` the last window,
-/// `+`/`-` (with a count) next/previous, or a name's start.
-/// `session:rest` → `rest` when the session is this one (tmux scripts qualify every target).
-fn unsession<'a>(app: &App, target: &'a str) -> Option<&'a str> {
-    match target.split_once(':') {
-        Some((sess, rest)) if !sess.is_empty() && !sess.starts_with('{') && !sess.starts_with('%') => {
-            let name = app.session_name();
-            let sess = sess.trim_start_matches('=').trim_start_matches('$');
-            (sess == name || name.starts_with(sess) || sess == "0").then_some(rest)
-        }
-        _ => Some(target),
-    }
-}
-
+/// A window target, found as tmux finds one.
 fn window_target(app: &App, target: &str) -> Option<usize> {
-    let target = unsession(app, target)?;
-    let t = target.trim_start_matches(':').trim_start_matches('=');
-    let n = app.tabs.len();
-    if n == 0 { return None }
-    match t {
-        "" => Some(app.active),
-        "^" | "{start}" => Some(0),
-        "$" | "{end}" => Some(n - 1),
-        "{next}" => Some((app.active + 1) % n),
-        "{previous}" => Some((app.active + n - 1) % n),
-        t if t.starts_with('@') => t[1..].parse::<usize>().ok().and_then(|n| app.tab_by_num(n)),
-        "!" | "{last}" => app.last_tab.as_ref().and_then(|id| app.tabs.iter().position(|x| &x.id == id)),
-        _ if t.starts_with('+') || t.starts_with('-') => {
-            let by: i64 = t[1..].parse().unwrap_or(1);
-            let by = if t.starts_with('-') { -by } else { by };
-            Some((app.active as i64 + by).rem_euclid(n as i64) as usize)
-        }
-        _ => match t.parse::<usize>() {
-            Ok(k) => app.tab_by_num(k),
-            Err(_) => app.tabs.iter().position(|x| x.name.to_lowercase().starts_with(&t.to_lowercase())),
-        },
-    }
+    let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Window, can_fail: false, window_index: false, default_marked: false };
+    crate::cmd::resolve(app, Some(target), spec).ok()?.window
+}
+
+/// The pane a command's -t names (this one without it), as found before the command ran.
+fn target_pane(app: &App, words: &Words) -> Option<(usize, u64)> {
+    match opt(words, "-t") { Some(t) => pane_target(app, &t), None => app.focused().map(|f| (app.active, f)) }
+}
+
+/// `session:window.pane` — how tmux names a pane in its errors.
+fn pane_name(app: &App, w: usize, p: u64) -> String {
+    let index = app.tabs.get(w).and_then(|t| t.panes().iter().position(|x| *x == p)).unwrap_or(0) + app.pane_base_index;
+    format!("{}:{}.{index}", app.session_name(), app.win_num(w))
+}
+
+/// Whether a harness still runs in a pane (respawn-pane needs -k then, as tmux does for a live pane).
+fn pane_alive(app: &App, p: u64) -> bool {
+    app.panes.get(&p).and_then(|x| app.fleet.agent(&x.machine_id, &x.agent_id)).map(|a| a.status != "stopped").unwrap_or(false)
+}
+
+/// Restart the harness in a pane (respawn-pane, respawn-window).
+fn respawn(app: &mut App, p: u64) {
+    let Some((machine, agent)) = app.panes.get(&p).map(|x| (x.machine_id.clone(), x.agent_id.clone())) else { return };
+    let Some(link) = app.link(&machine) else { return app.say("That machine is not connected", theme::WARN) };
+    app.spawn(async move { link.rpc("agent_restart", serde_json::json!({ "agentId": agent }), std::time::Duration::from_secs(120)).await }, move |app, reply| match reply {
+        Ok(_) => app.relist(&machine),
+        Err(e) => app.say(format!("respawn pane failed: {e}"), theme::WARN),
+    });
 }
 
 /// What tmux's list-* commands print.
@@ -395,106 +356,146 @@ fn resolve(name: &str) -> &str {
 /// waits for (if-shell, run-shell) runs off the screen's thread, and the commands after it wait for
 /// it, as tmux's command queue does; from a shell (`hn <command>`) it is simply waited for.
 pub fn execute(app: &mut App, line: &str) {
+    run_queue(app, queue_of(line));
+}
+
+/// A command line as the queue's commands: blocks split where `\;` or `;` stood.
+fn queue_of(line: &str) -> std::collections::VecDeque<Vec<String>> {
     // A bound `\;` runs here as the separator it stood for.
-    let queue: std::collections::VecDeque<Vec<String>> = crate::tmuxconf::split_marked(line).into_iter()
+    crate::tmuxconf::split_marked(line).into_iter()
         .flat_map(|words| words.split(|w| w == ";").filter(|p| !p.is_empty()).map(|p| p.to_vec()).collect::<Vec<_>>())
-        .collect();
-    run_queue(app, queue);
+        .collect()
 }
 
 fn run_queue(app: &mut App, mut queue: std::collections::VecDeque<Vec<String>>) {
     while let Some(words) = queue.pop_front() {
-        if app.capture.is_none() {
-            if let Some(job) = shell_job(app, &words) {
-                let Job { command, cwd, delay, background, done } = job;
-                let run = async move {
-                    if delay > 0.0 { tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await }
-                    let mut c = tokio::process::Command::new("/bin/sh");
-                    c.arg("-c").arg(&command).stdin(std::process::Stdio::null());
-                    if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
-                    if let Some(d) = cwd { c.current_dir(d); }
-                    match c.output().await {
-                        Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
-                        Err(e) => (-1, e.to_string()),
-                    }
-                };
-                if background {
-                    // -b: in the background; the next commands do not wait.
-                    app.spawn(run, move |app, (code, out)| done(app, code, out));
-                    continue;
+        let job = match shell_job(app, &words) { Ok(j) => j, Err(e) => { app.say(e, theme::WARN); continue } };
+        let Some(Job { command, cwd, delay, background, done }) = job else { run_words(app, &words); continue };
+        let run = async move {
+            if delay > 0.0 { tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await }
+            let Some(command) = command else { return Outcome::default() };
+            let mut c = tokio::process::Command::new("/bin/sh");
+            // tmux's job: the shell's output read, its errors to /dev/null.
+            c.arg("-c").arg(&command).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
+            if let Some(d) = cwd { c.current_dir(d); }
+            match c.output().await {
+                Ok(o) => {
+                    use std::os::unix::process::ExitStatusExt;
+                    let (code, signal) = match (o.status.code(), o.status.signal()) { (Some(c), _) => (c, None), (None, Some(s)) => (128 + s, Some(s)), _ => (0, None) };
+                    Outcome { code, signal, out: String::from_utf8_lossy(&o.stdout).to_string(), failed: None }
                 }
-                app.spawn(run, move |app, (code, out)| { done(app, code, out); run_queue(app, queue) });
-                return;
+                Err(e) => Outcome { code: 127, signal: None, out: String::new(), failed: Some(format!("failed to run command: {e}")) },
             }
+        };
+        if background {
+            // -b: in the background; the queue goes on, and so does the shell that asked.
+            app.spawn(run, move |app, o| { let next = done(app, o); if !next.is_empty() { run_queue(app, next) } });
+            continue;
         }
-        run_words(app, &words);
+        // The queue waits for it — and so does the shell that ran the command, if one did.
+        let waiting = (app.capture.take(), app.capture_err.take(), app.cli_tx.take(), app.cli_code, app.cli_cwd.clone());
+        app.spawn(run, move |app, o| {
+            let (cap, err, tx, code, cwd) = waiting;
+            let from_shell = cap.is_some();
+            if from_shell { app.capture = cap; app.capture_err = err; app.cli_tx = tx; app.cli_code = code; app.cli_cwd = cwd }
+            // What it chose to run next (if-shell's command, run-shell -C's) goes first.
+            let mut next = done(app, o);
+            next.extend(queue);
+            run_queue(app, next);
+            if from_shell && app.capture.is_some() { app.finish_cli() }
+        });
+        return;
     }
 }
 
-/// A shell command to run, and what to do with its exit status and output.
-struct Job { command: String, cwd: Option<String>, delay: f64, background: bool, done: Box<dyn FnOnce(&mut App, i32, String) + Send> }
+/// How a job ended: tmux's exit status (128 + the signal for one killed), and what it printed.
+#[derive(Default)]
+struct Outcome { code: i32, signal: Option<i32>, out: String, failed: Option<String> }
 
-/// if-shell and run-shell that go to the shell (not -F, not -C): the job, its command already
-/// expanded as a format for its pane (-t), as tmux's are.
-fn shell_job(app: &App, words: &[String]) -> Option<Job> {
-    let words = &crate::tmuxconf::unblock(words)[..];
-    let command = resolve(words.first()?.as_str());
-    let (mut background, mut format, mut tmux_cmd, mut target, mut cwd, mut delay, mut args) = (false, false, false, None, None, 0.0, Vec::new());
-    let mut i = 1;
-    while i < words.len() {
-        let w = &words[i];
-        if args.is_empty() && w.starts_with('-') && w.len() > 1 {
-            let chars: Vec<char> = w[1..].chars().collect();
-            for (k, c) in chars.iter().enumerate() {
-                match c {
-                    'b' => background = true, 'F' => format = true, 'C' => tmux_cmd = true,
-                    't' | 'c' | 'd' => {
-                        let tail: String = chars[k + 1..].iter().collect();
-                        let v = if tail.is_empty() { i += 1; words.get(i).cloned() } else { Some(tail) };
-                        match c { 't' => target = v, 'c' => cwd = v, _ => delay = v.and_then(|d| d.parse().ok()).unwrap_or(0.0) }
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        } else { args.push(w.clone()) }
-        i += 1;
-    }
-    let (w, p) = match target.as_deref() { Some(t) => pane_target(app, t)?, None => (app.active, app.focused()?) };
-    match command {
+/// A shell command to run, and what to do when it has: the commands to run next, first.
+struct Job { command: Option<String>, cwd: Option<String>, delay: f64, background: bool, done: Box<dyn FnOnce(&mut App, Outcome) -> std::collections::VecDeque<Vec<String>> + Send> }
+
+/// if-shell and run-shell, as cmd-if-shell.c and cmd-run-shell.c run them: the command expanded
+/// as a format for the target pane (a target not found leaves none), run by /bin/sh in the
+/// folder of the shell that ran it (-c another), after -d seconds; -b in the background. if-shell
+/// -F, and the vim-tmux-navigator test hn answers itself, stay with run_words.
+fn shell_job(app: &App, words: &[String]) -> Result<Option<Job>, String> {
+    let Some(entry) = words.first().and_then(|w| crate::cmd::find(w).ok()) else { return Ok(None) };
+    if !matches!(entry.name, "if-shell" | "run-shell") || hn_owned(&words[0]) { return Ok(None) }
+    let words = crate::tmuxconf::unblock(words);
+    let args = crate::cmd::parse(entry, &words)?;
+    let found = entry.target.and_then(|spec| crate::cmd::resolve(app, args.get('t'), spec).ok()).unwrap_or_default();
+    let (w, p) = match (found.window, found.pane) { (Some(w), p) => (w, p), _ => (usize::MAX, None) };
+    let expand = |s: &str| crate::format::expand(app, s, w, p, false);
+    let cwd = args.get('c').map(crate::tmuxconf::expand_home).or_else(|| app.cli_cwd.clone())
+        .or_else(|| std::env::current_dir().ok().map(|d| d.display().to_string()));
+    let background = args.has('b') > 0;
+    match entry.name {
         "if-shell" => {
-            if format { return None }
-            let cond = args.first()?.clone();
-            // vim-tmux-navigator asks `ps` about the pane's tty: a pane on another machine has none
-            // here, so hn answers from what that machine says the pane runs (run_words).
-            if cond.contains("pane_tty") && app.panes.get(&p).and_then(|x| x.remote_tty.clone()).is_none() { return None }
-            let expanded = crate::format::expand(app, &cond, w, Some(p), false);
-            let (yes, no) = (args.get(1).cloned(), args.get(2).cloned());
-            Some(Job { command: expanded, cwd: None, delay: 0.0, background, done: Box::new(move |app, code, _| { if let Some(c) = if code == 0 { yes } else { no } { execute(app, &c) } }) })
+            if args.has('F') > 0 { return Ok(None) }
+            let cond = args.values[0].clone();
+            let tty_unknown = p.and_then(|p| app.panes.get(&p)).and_then(|x| x.remote_tty.clone()).is_none();
+            if (cond.contains("pane_tty") && tty_unknown) || cond.contains("$is_vim") { return Ok(None) }
+            let (yes, no) = (args.values.get(1).cloned(), args.values.get(2).cloned());
+            Ok(Some(Job { command: Some(expand(&cond)), cwd, delay: 0.0, background, done: Box::new(move |app, o| {
+                if let Some(e) = o.failed { app.say(e, theme::WARN); return Default::default() }
+                let pick = if o.code == 0 && o.signal.is_none() { yes } else { no };
+                pick.map(|c| queue_of(&c)).unwrap_or_default()
+            }) }))
         }
-        "run-shell" => {
-            if tmux_cmd || args.is_empty() { return None }
-            let cmd = args.join(" ");
-            let expanded = crate::format::expand(app, &cmd, w, Some(p), false);
-            let shown = cmd.clone();
-            Some(Job { command: expanded, cwd: cwd.map(|d| crate::tmuxconf::expand_home(&d)), delay, background, done: Box::new(move |app, code, out| {
-                // What it printed, in view mode; a failure says so, as tmux's does.
-                let mut lines: Vec<String> = out.lines().map(str::to_string).collect();
-                if code != 0 { lines.push(format!("'{shown}' returned {code}")) }
+        _ => {
+            let delay = match args.get('d') { Some(d) => d.trim().parse::<f64>().map_err(|_| format!("invalid delay time: {d}"))?, None => 0.0 };
+            if args.get('d').is_none() && args.values.is_empty() { return Ok(Some(Job { command: None, cwd: None, delay: 0.0, background: true, done: Box::new(|_, _| Default::default()) })) }
+            if args.has('C') > 0 {
+                // -C: after the delay, the argument runs as tmux commands.
+                let c = args.values.first().cloned();
+                return Ok(Some(Job { command: None, cwd: None, delay, background, done: Box::new(move |_, _| c.map(|c| queue_of(&c)).unwrap_or_default()) }));
+            }
+            let command = args.values.first().map(|c| expand(c));
+            let shown = command.clone().unwrap_or_default();
+            Ok(Some(Job { command, cwd, delay, background, done: Box::new(move |app, o| {
+                if let Some(e) = o.failed { app.say(e, theme::WARN); return Default::default() }
+                // Each line it printed, then how it failed, to the shell that asked (else shown).
+                let mut lines: Vec<String> = o.out.lines().map(str::to_string).collect();
+                match o.signal {
+                    Some(s) => lines.push(format!("'{shown}' terminated by signal {s}")),
+                    None if o.code != 0 => lines.push(format!("'{shown}' returned {}", o.code)),
+                    None => {}
+                }
+                if o.code != 0 { app.cli_code = o.code }
                 if !lines.is_empty() { app.print("run-shell", lines) }
-            }) })
+                Default::default()
+            }) }))
         }
-        _ => None,
     }
 }
 
-fn flag(words: &[String], f: &str) -> bool { words.iter().skip(1).any(|w| w == f || (w.starts_with('-') && !w.starts_with("--") && w.len() > 2 && w[1..].contains(&f[1..]) && f.len() == 2)) }
-fn opt(words: &[String], f: &str) -> Option<String> {
+/// A command's words, and — for tmux's own commands — how tmux's args_parse reads them, which
+/// the helpers below answer from (hn's own commands are read the older, looser way).
+pub struct Words { list: Vec<String>, args: Option<crate::cmd::Args> }
+
+impl std::ops::Deref for Words {
+    type Target = [String];
+    fn deref(&self) -> &[String] { &self.list }
+}
+
+impl Words {
+    fn plain(list: Vec<String>) -> Words { Words { list, args: None } }
+}
+
+fn flag(words: &Words, f: &str) -> bool {
+    if let (Some(a), Some(c)) = (&words.args, f.chars().nth(1)) { return a.has(c) > 0 }
+    words.iter().skip(1).any(|w| w == f || (w.starts_with('-') && !w.starts_with("--") && w.len() > 2 && w[1..].contains(&f[1..]) && f.len() == 2))
+}
+fn opt(words: &Words, f: &str) -> Option<String> {
+    if let (Some(a), Some(c)) = (&words.args, f.chars().nth(1)) { return a.get(c).map(str::to_string) }
     let at = words.iter().position(|w| w == f)?;
     words.get(at + 1).cloned()
 }
 /// The positional words: past the flags and the values the flags take (`-t x`, `-l 10`).
-fn positional(words: &[String]) -> Vec<String> {
+fn positional(words: &Words) -> Vec<String> {
+    if let Some(a) = &words.args { return a.values.clone() }
     const VALUED: &str = "tcdFlnpsxyTIeNPb";
     let mut out = Vec::new();
     let mut i = 1;
@@ -513,7 +514,8 @@ fn positional(words: &[String]) -> Vec<String> {
     out
 }
 
-fn rest(words: &[String]) -> String {
+fn rest(words: &Words) -> String {
+    if let Some(a) = &words.args { return a.values.join(" ") }
     // Everything after the options: the positional text.
     let mut out = Vec::new();
     let mut i = 1;
@@ -529,12 +531,33 @@ fn rest(words: &[String]) -> String {
     out.join(" ")
 }
 
+/// hn's own commands, and the tmux names hn gives its own meaning (checked before tmux's table).
+fn hn_owned(name: &str) -> bool {
+    COMMANDS.iter().any(|(full, alias, _)| (*full == name || *alias == name) && crate::cmd::find(full).map(|e| e.name != *full).unwrap_or(true))
+}
+
 fn run_words(app: &mut App, words: &[String]) {
     let Some(first) = words.first() else { return };
-    let command = resolve(first);
     // Blocks are plain arguments to every command but bind (which writes them back as blocks).
-    let plain;
-    let words = if command == "bind-key" { words } else { plain = crate::tmuxconf::unblock(words); &plain[..] };
+    let list = if resolve(first) == "bind-key" || crate::cmd::find(first).map(|e| e.name == "bind-key").unwrap_or(false) { words.to_vec() } else { crate::tmuxconf::unblock(words) };
+    // tmux's commands: found as cmd.c finds them (alias, name, or its unique start), read as
+    // args_parse reads them, their -t and -s found as cmd-find.c finds them — or tmux's error,
+    // and nothing is done.
+    let words = match crate::cmd::find(first) {
+        Err(e) if e.starts_with("ambiguous") => return app.say(e, theme::WARN),
+        Ok(entry) if !hn_owned(first) => {
+            let args = match crate::cmd::parse(entry, &list) { Ok(a) => a, Err(e) => return app.say(e, theme::WARN) };
+            for (spec, f) in [(entry.target, 't'), (entry.source, 's')] {
+                let Some(spec) = spec else { continue };
+                if let Err(e) = crate::cmd::resolve(app, args.get(f), spec) { if !spec.can_fail { return app.say(e, theme::WARN) } }
+            }
+            let mut list = list;
+            list[0] = entry.name.to_string();
+            &Words { list, args: Some(args) }
+        }
+        _ => &Words::plain(list),
+    };
+    let command = resolve(&words[0]);
     match command {
         "new-window" => {
             let was = app.active;
@@ -782,20 +805,18 @@ fn run_words(app: &mut App, words: &[String]) {
         "choose-client" => input::run(app, "tree"),
         "find-window" => { input::launch(app, "", Filter::All); let q = rest(words); if !q.is_empty() { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in q.chars() { picker.type_char(c) } } } }
         "display-message" => {
-            // display [-p] [-t target] [-d ms] [format]: the format against the target pane.
-            let mut text = Vec::new();
-            let mut i = 1;
-            while i < words.len() {
-                match words[i].as_str() { "-d" | "-c" | "-t" | "-F" => i += 1, w if w.starts_with('-') && w.len() > 1 && text.is_empty() => {}, w => text.push(w.to_string()) }
-                i += 1;
-            }
-            let text = opt(words, "-F").unwrap_or_else(|| text.join(" "));
+            // tmux's display-message [-lp] [-F format] [-t target-pane] [message]: the format
+            // (-l: as it is) against the target pane — one tmux can't find leaves it none.
+            if opt(words, "-F").is_some() && !positional(words).is_empty() { return app.say("only one of -F or argument must be given", theme::WARN) }
+            let text = opt(words, "-F").or_else(|| positional(words).first().cloned()).unwrap_or_default();
             if text.is_empty() && app.capture.is_none() { input::run(app, "info"); return }
             let text = if text.is_empty() { "[#S] #I:#W, current pane #P - (%H:%M %d-%b-%y)".to_string() } else { text };
-            let target = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some(x) => Some(x), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => None };
-            let out = match target {
-                Some((w, p)) => crate::format::expand(app, &text, w, Some(p), true),
-                None => expand(app, &text),
+            let out = if flag(words, "-l") { text } else {
+                match opt(words, "-t").map(|t| pane_target(app, &t)) {
+                    Some(Some((w, p))) => crate::format::expand(app, &text, w, Some(p), true),
+                    Some(None) => crate::format::expand(app, &text, usize::MAX, None, true),
+                    None => expand(app, &text),
+                }
             };
             // -p prints (to the shell that asked); without it the message is the client's, as tmux's.
             if flag(words, "-p") { app.print("display", vec![out]) } else {
@@ -1004,7 +1025,7 @@ fn run_words(app: &mut App, words: &[String]) {
             let at = crate::app::At { tab: app.tabs[dw].id.clone(), pane: Some(dp), dir, before: flag(words, "-b"), full: flag(words, "-f"), size, detached: flag(words, "-d"), zoom: false };
             if let Err(e) = app.join_pane(sp, at) { app.say(e, theme::WARN) }
         }
-        "clear-history" => { if let Some(p) = app.focused().and_then(|f| app.panes.get_mut(&f)) { p.clear_history() } }
+        "clear-history" => { if let Some((_, p)) = target_pane(app, words) { if let Some(x) = app.panes.get_mut(&p) { x.clear_history() } } }
         "capture-pane" => {
             // -p prints it; else it becomes a paste buffer. -t names the pane.
             let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.focused() };
@@ -1012,7 +1033,8 @@ fn run_words(app: &mut App, words: &[String]) {
             let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.text_range(range.0, range.1)) else { return };
             if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) } else { app.buffers.insert(0, text) }
         }
-        "has-session" => { if let Some(t) = opt(words, "-t") { if unsession(app, &format!("{}:", t.trim_end_matches(':'))).is_none() { app.say(format!("can't find session: {t}"), theme::WARN) } } }
+        // has-session: its -t was found (else tmux's error, and 1) before it ran.
+        "has-session" => {}
         "list-commands" => { let lines = COMMANDS.iter().map(|(n, a, d)| format!("{n} ({a}) — {d}")).collect(); app.print("list-commands", lines) }
         "set-environment" | "setenv" => { if let (Some(k), Some(v)) = (words.iter().skip(1).find(|w| !w.starts_with('-')), words.last()) { app.env.insert(k.clone(), v.clone()); } }
         "show-environment" | "showenv" => { let lines = app.env.iter().map(|(k, v)| format!("{k}={v}")).collect(); app.print("show-environment", lines) }
@@ -1031,7 +1053,13 @@ fn run_words(app: &mut App, words: &[String]) {
         }
         "previous-layout" => { let at = (app.tab().layout_at + 3) % 5; app.tab_mut().layout_at = at; app.next_layout() }
         "resize-window" => app.say("resize-window: a window is the terminal's size here", theme::WARN),
-        "respawn-window" => input::run(app, "restart"),
+        "respawn-window" => {
+            // tmux's respawn-window: refused while anything runs in the window, unless -k.
+            let w = match opt(words, "-t") { Some(t) => match window_target(app, &t) { Some(w) => w, None => return }, None => app.active };
+            let panes = app.tabs[w].panes();
+            if !flag(words, "-k") && panes.iter().any(|p| pane_alive(app, *p)) { return app.say(format!("respawn window failed: window {}:{} still active", app.session_name(), app.win_num(w)), theme::WARN) }
+            for p in panes { respawn(app, p) }
+        }
         "set-buffer" => {
             // set-buffer [-a] [-b name] text
             let mut text = Vec::new();
@@ -1048,12 +1076,38 @@ fn run_words(app: &mut App, words: &[String]) {
             let lines = text.map(|b| b.lines().map(str::to_string).collect()).unwrap_or_default();
             app.print("show-buffer", lines);
         }
-        "respawn-pane" => input::run(app, "restart"),
+        "respawn-pane" => {
+            // tmux's respawn-pane: a pane whose harness still runs needs -k.
+            let Some((w, p)) = target_pane(app, words) else { return };
+            if !flag(words, "-k") && pane_alive(app, p) { return app.say(format!("respawn pane failed: pane {} still active", pane_name(app, w, p)), theme::WARN) }
+            respawn(app, p);
+        }
         "suspend-client" => app.suspend = true,
         "rename-session" => { let name = rest(words); if name.trim().is_empty() { app.say("rename-session: a name", theme::WARN) } else { app.session_alias = Some(name.trim().to_string()) } }
         "clock-mode" => { if let Some(f) = app.focused() { app.modal = Some(Modal::Clock { pane: f }) } else { app.modal = Some(Modal::Clock { pane: 0 }) } }
         "refresh-client" => { app.redraw_all = true; for id in app.panes.keys().copied().collect::<Vec<_>>() { if app.rects.iter().any(|(r, _)| *r == id) { app.open_stream(id, false) } } }
-        "detach-client" | "kill-server" | "kill-session" => app.quit = true,
+        "kill-server" => app.quit = true,
+        "kill-session" => {
+            // -C: the windows' alerts cleared; -a: every other session (there is only this one);
+            // else the session goes, and this client with it (its harnesses keep running).
+            if flag(words, "-C") { for p in app.panes.values_mut() { p.bell = false } return }
+            if flag(words, "-a") { return }
+            app.quit = true;
+        }
+        "detach-client" => {
+            // -s: the clients of that session (one not found: nothing); -a: every other client;
+            // -t: that client, by its tty, or tmux's error.
+            if let Some(s) = opt(words, "-s") {
+                let spec = crate::cmd::Spec { kind: crate::cmd::Kind::Session, can_fail: true, window_index: false, default_marked: false };
+                if crate::cmd::resolve(app, Some(&s), spec).is_err() { return }
+            } else if flag(words, "-a") { return }
+            else if let Some(t) = opt(words, "-t") {
+                let t = t.strip_suffix(':').unwrap_or(&t).to_string();
+                let tty = crate::app::tty_name();
+                if t != tty && Some(t.as_str()) != tty.strip_prefix("/dev/") { return app.say(format!("can't find client: {t}"), theme::WARN) }
+            }
+            app.quit = true;
+        }
         "switch-client" => {
             // -T: the key table the next key is looked up in (tmux's modal keys).
             if let Some(t) = opt(words, "-T") {
@@ -1068,8 +1122,25 @@ fn run_words(app: &mut App, words: &[String]) {
             if flag(words, "-l") { input::run(app, "last-harness") }
             else if flag(words, "-n") { input::run(app, "next-tab-harness") }
             else if flag(words, "-p") { input::run(app, "prev-tab-harness") }
+            else if let Some(t) = opt(words, "-t") {
+                // tmux: a target with `:`, `.` or `%` is a pane (its window and pane become the
+                // current ones), else a session.
+                let kind = if t.contains([':', '.', '%']) { crate::cmd::Kind::Pane } else { crate::cmd::Kind::Session };
+                let spec = crate::cmd::Spec { kind, can_fail: false, window_index: false, default_marked: false };
+                match crate::cmd::resolve(app, Some(&t), spec) {
+                    Ok(f) => match (f.window, f.pane) {
+                        (Some(w), Some(p)) if kind == crate::cmd::Kind::Pane => app.focus_pane(w, p),
+                        (Some(w), _) if kind == crate::cmd::Kind::Pane => app.select_tab(w),
+                        _ => {}
+                    },
+                    Err(e) => app.say(e, theme::WARN),
+                }
+            }
         }
-        "send-keys" => input::send_keys(app, &words[1..]),
+        "send-keys" => {
+            let (Some(args), Some((_, pane))) = (words.args.clone(), target_pane(app, words)) else { return };
+            input::send_keys(app, pane, &args, words);
+        }
         // vim-tmux-navigator and friends: `if-shell COND THEN [ELSE]`. The condition asks about the
         // pane's tty, which lives on another machine here; a harness pane is not vim, so the else
         // branch runs (a -F format of 1/0 is honoured).
@@ -1119,26 +1190,14 @@ fn run_words(app: &mut App, words: &[String]) {
             input::popup(app, &w, &h, cwd, command, title, flag(words, "-E"));
         }
         "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
-        "run-shell" | "run" => {
-            // -C: a tmux command, not a shell one.
-            if flag(words, "-C") { let c = rest(words); return execute(app, &c) }
-            let cmd = rest(words);
-            if cmd.is_empty() { return }
-            let cmd = expand(app, &cmd);
-            let mut c = std::process::Command::new("sh");
-            c.arg("-c").arg(&cmd);
-            if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
-            let out = c.output();
-            match out {
-                Ok(o) => {
-                    let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
-                    let lines: Vec<String> = text.lines().map(str::to_string).collect();
-                    if !lines.is_empty() { app.print("run-shell", lines) }
-                }
-                Err(e) => app.say(format!("run-shell: {e}"), theme::WARN),
-            }
+        // run-shell runs as a job (shell_job); nothing to run gets here.
+        "run-shell" | "run" => {}
+        "send-prefix" => {
+            // The prefix key (-2: prefix2) to the pane, as if typed there.
+            let Some((_, pane)) = target_pane(app, words) else { return };
+            let key = if flag(words, "-2") { app.keymap.prefix2 } else { Some(app.keymap.prefix) };
+            if let Some(key) = key { input::send_chord(app, pane, key) }
         }
-        "send-prefix" => { let prefix = crate::keys::name(&app.keymap.prefix); input::send_keys(app, &[prefix]) }
         "command-prompt" => {
             // command-prompt [-1bFikN] [-I initial] [-p prompt] [-T type] [template]:
             // -k takes one key (its name fills %%), -F expands the template as a format first.

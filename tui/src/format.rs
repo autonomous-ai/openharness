@@ -826,13 +826,15 @@ pub fn content_rect(app: &App, window: usize, pane: u64) -> Option<ratatui::layo
 /// one), or None when there is no such variable. Times are seconds since the epoch.
 fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<Val> {
     let tab = app.tabs.get(window);
+    // No window (a target tmux could not find): its window and pane have nothing to say.
+    if tab.is_none() && (name.starts_with("window_") || name.starts_with("pane_")) { return Some(Val::Str(String::new())) }
     let focus = pane_id.or_else(|| tab.and_then(|t| t.focus));
     let pane = focus.and_then(|f| app.panes.get(&f));
     let agent = pane.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let host = crate::app::hostname();
     let v: String = match name {
         "session_name" => app.session_name(),
-        "window_index" => app.win_num(window).to_string(),
+        "window_index" => tab.map(|_| app.win_num(window).to_string()).unwrap_or_default(),
         "window_name" => tab.map(|t| t.name.clone()).unwrap_or_default(),
         "window_flags" => flags(app, window),
         "window_raw_flags" => flags(app, window),
@@ -876,15 +878,15 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "history_limit" => crate::pane::HISTORY.load(std::sync::atomic::Ordering::Relaxed).to_string(),
         "pane_marked" => (focus.is_some() && app.marked == focus).then_some("1").unwrap_or("0").into(),
         "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
-        "window_id" => format!("@{}", app.win_num(window)),
+        "window_id" => tab.map(|t| format!("@{}", t.wid)).unwrap_or_default(),
         "pane_synchronized" => tab.map(|t| t.sync).unwrap_or(false).then_some("1").unwrap_or("0").into(),
         // The tmux level hn speaks (version-gated configs ask); hn's own is #{hn_version}.
         "version" => crate::tmuxconf::TMUX_VERSION.into(),
         "hn_version" => env!("CARGO_PKG_VERSION").into(),
         "pid" => std::process::id().to_string(),
         "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
-        "client_session" | "client_name" => app.session_name(),
-        "client_tty" => std::env::var("SSH_TTY").or_else(|_| std::env::var("TTY")).unwrap_or_default(),
+        "client_session" => app.session_name(),
+        "client_name" | "client_tty" => crate::app::tty_name(),
         "pane_mode" => pane.filter(|p| p.copy.is_some()).map(|_| "copy-mode").unwrap_or("").into(),
         "copy_cursor_x" => pane.and_then(|p| p.copy).map(|c| c.point.column.0.to_string()).unwrap_or_default(),
         "copy_cursor_y" => pane.and_then(|p| p.copy).map(|c| c.point.line.0.to_string()).unwrap_or_default(),
@@ -906,7 +908,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         | "window_activity_flag" | "window_silence_flag" | "client_readonly" | "pane_pipe" => "0".into(),
         "server_sessions" | "session_attached_list" | "client_utf8" => "1".into(),
         "window_start_flag" => (window == 0).then_some("1").unwrap_or("0").into(),
-        "window_end_flag" => (window + 1 == app.tabs.len()).then_some("1").unwrap_or("0").into(),
+        "window_end_flag" => (window.checked_add(1) == Some(app.tabs.len())).then_some("1").unwrap_or("0").into(),
         "client_termname" => std::env::var("TERM").unwrap_or_default(),
         "client_pid" => std::process::id().to_string(),
         "client_key_table" => app.key_table.clone().unwrap_or_else(|| if app.prefix { "prefix".into() } else { "root".into() }),

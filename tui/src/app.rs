@@ -20,9 +20,14 @@ use crate::pane::{self, Pane, Phase};
 use crate::proto::{self, Kind};
 use crate::theme;
 
+/// A command's answer to the shell that ran it: printed lines, errors, exit status.
+pub type Reply = (Vec<String>, Vec<String>, i32);
+
 pub struct Tab {
     /// The desk's tab id (32 hex), shared with every other window on the account.
     pub id: String,
+    /// tmux's window id (#{window_id} `@N`): given when the window is made, never reused.
+    pub wid: u64,
     pub name: String,
     pub named: bool,
     pub root: Option<Node>,
@@ -48,7 +53,9 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(name: &str) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
+        static WID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let wid = WID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Tab { id: Uuid::new_v4().simple().to_string(), wid, name: name.to_string(), named: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), layout_at: 4, on_desk: false, sync: false, layout: json!({}) }
     }
     /// The panes in tmux's order (pane_index); one the list has not placed yet comes last.
     pub fn panes(&self) -> Vec<u64> {
@@ -212,7 +219,14 @@ pub struct App {
     pub copy_pipe: Option<String>,
     /// new-window -d: the window to go back to (and the last window then) once its shell is up.
     pub return_to: Option<(String, Option<String>)>,
-    pub held_reply: Option<tokio::sync::oneshot::Sender<(Vec<String>, Vec<String>)>>,
+    pub held_reply: Option<tokio::sync::oneshot::Sender<Reply>>,
+    /// The shell waiting on the command it ran (hn <command>): its answer goes here when the
+    /// command is done — at once, or when a job it waits on (run-shell, if-shell) has finished.
+    pub cli_tx: Option<tokio::sync::oneshot::Sender<Reply>>,
+    /// That command's exit status (run-shell's, when its shell command failed).
+    pub cli_code: i32,
+    /// That shell's folder: where run-shell and if-shell run what it asked (tmux's client cwd).
+    pub cli_cwd: Option<String>,
     /// set-buffer -b name: named paste buffers.
     pub named_buffers: std::collections::BTreeMap<String, String>,
     pub capture_err: Option<Vec<String>>,
@@ -280,6 +294,9 @@ impl App {
             copy_pipe: None,
             return_to: None,
             held_reply: None,
+            cli_tx: None,
+            cli_code: 0,
+            cli_cwd: None,
             named_buffers: Default::default(),
             capture_err: None,
             env: Default::default(),
@@ -901,6 +918,18 @@ impl App {
     // ── tabs & panes ─────────────────────────────────────────────────────────
 
     pub fn tab(&self) -> &Tab { &self.tabs[self.active] }
+
+    /// The command a shell ran is done: what it printed, its errors and its exit status go back —
+    /// or, for split-window/new-window -P, once the new pane is there.
+    pub fn finish_cli(&mut self) {
+        let out = self.capture.take().unwrap_or_default();
+        let err = self.capture_err.take().unwrap_or_default();
+        let Some(tx) = self.cli_tx.take() else { return };
+        if self.print_new.is_some() && err.is_empty() { self.held_reply = Some(tx); return }
+        self.print_new = None;
+        let code = if self.cli_code != 0 { self.cli_code } else if err.is_empty() { 0 } else { 1 };
+        let _ = tx.send((out, err, code));
+    }
 
     /// What a command prints: to the shell that asked (hn <command>), else a message or a list.
     pub fn print(&mut self, title: &str, lines: Vec<String>) {
@@ -1914,6 +1943,16 @@ pub enum Placement {
     Tab,
     Replace,
     At(At),
+}
+
+/// This client's terminal (tmux's client name): /dev/ttys003.
+pub fn tty_name() -> String {
+    static TTY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TTY.get_or_init(|| {
+        let p = unsafe { libc::ttyname(0) };
+        if p.is_null() { return String::new() }
+        unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }).clone()
 }
 
 /// This computer's offset from UTC, in seconds (`date +%z`), read once.

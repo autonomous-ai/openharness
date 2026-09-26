@@ -6,6 +6,7 @@ mod app;
 mod borders;
 mod cli;
 mod clipboard;
+mod cmd;
 mod commands;
 mod ipc;
 mod keys;

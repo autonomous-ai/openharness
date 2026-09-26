@@ -84,8 +84,8 @@ hn display -p '#{pane_current_path}'
 hn send-keys -t 1 'make test' Enter
 hn capture-pane -p -t 0 | tail
 hn list-panes -F '#{pane_index} #{pane_title}'
-hn ls                        # every harness on every machine
-hn send -t api 'run the tests'   # a message to a harness, as a turn
+hn list-harnesses            # every harness on every machine (hn ls is list-sessions, as in tmux)
+hn send-message -t api 'run the tests'   # a message to a harness, as a turn (hn send is send-keys, as in tmux)
 ```
 
 ## Mouse and clipboard
