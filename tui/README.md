@@ -171,7 +171,10 @@ cd tui && cargo build --release        # target/release/harness-tui
 cargo test
 ```
 
-`harness tui` finds a dev build in `tui/target/` on its own. Releases are built by
+`harness tui` finds a dev build in `tui/target/` on its own. hn contains code translated from tmux and
+fzf and links the crates in `Cargo.lock`; their notices are in `THIRD_PARTY_NOTICES.md`, which the binary
+carries (`hn --licenses`). After changing dependencies, run `python3 scripts/notices.py` (`cargo test`
+fails until you do). Releases are built by
 `.github/workflows/release-tui.yml` — static binaries for macOS (arm64, x64) and Linux (x64,
 arm64, musl) with a checksummed manifest that `harness tui --install` verifies.
 

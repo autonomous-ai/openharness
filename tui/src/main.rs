@@ -83,6 +83,27 @@ impl Drop for Restore {
     }
 }
 
+/// THIRD_PARTY_NOTICES.md (scripts/notices.py writes it from Cargo.lock), printed by `hn --licenses`.
+const NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES.md");
+
+#[cfg(test)]
+mod notices {
+    /// A crate added to Cargo.lock without regenerating the notices (python3 scripts/notices.py).
+    #[test]
+    fn every_locked_crate_has_its_notice() {
+        let lock = include_str!("../Cargo.lock");
+        let mut missing = Vec::new();
+        for block in lock.split("[[package]]").skip(1) {
+            let field = |k: &str| block.lines().find_map(|l| l.strip_prefix(&format!("{k} = \"")).and_then(|v| v.strip_suffix('"')).map(str::to_string));
+            let (Some(name), Some(version)) = (field("name"), field("version")) else { continue };
+            if name == "harness-tui" { continue }
+            if !super::NOTICES.contains(&format!("| {name} | {version} |")) { missing.push(format!("{name} {version}")) }
+        }
+        assert!(missing.is_empty(), "not in THIRD_PARTY_NOTICES.md (run python3 scripts/notices.py): {missing:?}");
+        assert!(super::NOTICES.contains("Nicholas Marriott") && super::NOTICES.contains("Junegunn Choi"));
+    }
+}
+
 fn main() -> io::Result<()> {
     // Before any thread exists: the file may set environment switches; and dates are written in
     // your locale's words, as tmux's are (it sets LC_TIME from the environment too).
@@ -106,6 +127,8 @@ async fn run(config: config::Config) -> io::Result<()> {
         Err(e) => { eprintln!("hn: {e}"); eprintln!("{}", cli::USAGE); std::process::exit(1) }
     };
     if f.long_help { println!("{}", cli::USAGE); return Ok(()) }
+    // The notices of the code and crates hn is built from (THIRD_PARTY_NOTICES.md), which travel with it.
+    if f.licenses { cli::out(NOTICES); return Ok(()) }
     if f.help { eprintln!("{}", cli::USAGE); std::process::exit(1) }
     // Run as `tmux` (hn's jobs' PATH): tmux's version, and no client started without a terminal.
     let as_tmux = std::env::var("HN_AS_TMUX").map(|v| v == "1").unwrap_or(false);
@@ -120,12 +143,14 @@ async fn run(config: config::Config) -> io::Result<()> {
         let mut km = keys::Keymap::tmux_defaults();
         let settings = tmuxconf::load(&mut km);
         if config.prefix_set { km.prefix = config.prefix }
-        if let Some(p) = &settings.path { println!("read {}", p.display()) }
-        println!("prefix {}\n", keys::name(&km.prefix));
-        for b in &km.prefix_table { println!("bind-key {}{:<8} {}", if b.repeat { "-r " } else { "   " }, keys::name(&b.chord), b.command) }
-        for b in &km.root_table { println!("bind-key -n {:<8} {}", keys::name(&b.chord), b.command) }
-        for p in config.problems.iter().chain(settings.problems.iter()) { println!("\n  ! {p}") }
-        for n in &settings.notes { println!("  - {n}") }
+        let mut text = String::new();
+        if let Some(p) = &settings.path { text += &format!("read {}\n", p.display()) }
+        text += &format!("prefix {}\n\n", keys::name(&km.prefix));
+        for b in &km.prefix_table { text += &format!("bind-key {}{:<8} {}\n", if b.repeat { "-r " } else { "   " }, keys::name(&b.chord), b.command) }
+        for b in &km.root_table { text += &format!("bind-key -n {:<8} {}\n", keys::name(&b.chord), b.command) }
+        for p in config.problems.iter().chain(settings.problems.iter()) { text += &format!("\n  ! {p}\n") }
+        for n in &settings.notes { text += &format!("  - {n}\n") }
+        cli::out(&text);
         return Ok(())
     }
     let port = f.port.or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok())).unwrap_or(18473u16);

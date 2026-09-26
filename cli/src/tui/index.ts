@@ -83,7 +83,7 @@ export function opensClient(argv: string[]): boolean {
     const a = argv[i]
     if (a === '--') return i + 1 >= argv.length
     if (!a.startsWith('-') || a === '-') return false
-    if (a === '--help' || a === '--version' || a === '--keys') return false
+    if (a === '--help' || a === '--version' || a === '--keys' || a === '--licenses') return false
     if (a === '--port') { i++; continue }
     if (a.startsWith('--')) return true
     const flags = a.slice(1)

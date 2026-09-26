@@ -33,7 +33,7 @@ describe('harness tui launcher', () => {
     expect(opensClient(['-L', 'work', 'send-keys', '-t', '1', 'ls', 'Enter'])).toBe(false)
     expect(opensClient(['-S', '/tmp/s', 'display', '-p', '#{pane_id}'])).toBe(false)
     expect(opensClient(['--', 'ls'])).toBe(false)
-    for (const info of [['--help'], ['-h'], ['-V'], ['--version'], ['--keys']]) expect(opensClient(info)).toBe(false)
+    for (const info of [['--help'], ['-h'], ['-V'], ['--version'], ['--keys'], ['--licenses']]) expect(opensClient(info)).toBe(false)
   })
 
   it('ignores a HARNESS_TUI_BIN that is not there', () => {

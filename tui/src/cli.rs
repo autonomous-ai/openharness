@@ -22,7 +22,7 @@ pub const USAGE: &str = "usage: hn [-hV] [-f file] [-L socket-name] [-S socket-p
 
 /// The command line, read as tmux reads its own: flags, then a command.
 #[derive(Default, Debug)]
-pub struct Flags { pub help: bool, pub long_help: bool, pub version: bool, pub keys: bool, pub config: Option<String>, pub socket: Option<String>, pub name: Option<String>, pub port: Option<u16>, pub rest: Vec<String> }
+pub struct Flags { pub help: bool, pub long_help: bool, pub version: bool, pub keys: bool, pub licenses: bool, pub config: Option<String>, pub socket: Option<String>, pub name: Option<String>, pub port: Option<u16>, pub rest: Vec<String> }
 
 pub fn flags(args: &[String]) -> Result<Flags, String> {
     let mut f = Flags::default();
@@ -35,6 +35,7 @@ pub fn flags(args: &[String]) -> Result<Flags, String> {
             "--help" => f.long_help = true,
             "--version" => f.version = true,
             "--keys" => f.keys = true,
+            "--licenses" => f.licenses = true,
             "--port" => { i += 1; f.port = Some(args.get(i).and_then(|p| p.parse().ok()).ok_or("--port needs a port")?) }
             _ if a.starts_with("--") => return Err(format!("unknown option -- {}", &a[2..])),
             _ => {
@@ -111,13 +112,21 @@ async fn roster(port: u16, machine: &str) -> Vec<crate::fleet::Agent> {
 async fn ls(port: u16) -> i32 {
     let (_, list) = match machines(port).await { Ok(m) => m, Err(e) => { eprintln!("hn: {e}"); return 1 } };
     for (id, name, up) in list {
-        if !up { println!("{name}: offline"); continue }
+        if !up { if !out(&format!("{name}: offline\n")) { break } continue }
         for a in roster(port, &id).await {
             if a.status == "stopped" { continue }
-            println!("{name}: {} ({}) {}  {}", a.name, a.engine, if a.working { "working" } else { a.status.as_str() }, a.cwd);
+            if !out(&format!("{name}: {} ({}) {}  {}\n", a.name, a.engine, if a.working { "working" } else { a.status.as_str() }, a.cwd)) { return 0 }
         }
     }
     0
+}
+
+/// Standard output, written quietly: `hn … | head` closing the pipe is not an error (tmux's exits
+/// the same way). False once nobody is reading.
+pub fn out(text: &str) -> bool {
+    use std::io::Write;
+    let mut o = std::io::stdout().lock();
+    o.write_all(text.as_bytes()).and_then(|_| o.flush()).is_ok()
 }
 
 /// `hn send-message -t <harness> <text…>`: the harness is a name (its start will do) or an id.
