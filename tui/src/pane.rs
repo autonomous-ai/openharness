@@ -349,17 +349,23 @@ impl Pane {
     /// tmux's clear-history: this window's copy of the scrollback, gone.
     pub fn clear_history(&mut self) { self.term.grid_mut().clear_history(); self.dirty = true }
 
-    /// The whole screen as text, every row (tmux's capture-pane -p keeps the blank ones).
-    pub fn visible_text_full(&self) -> String {
+    /// capture-pane -S/-E: rows from `start` to `end` (0 the top of the screen, negative into
+    /// the history, `-` the ends), every row kept.
+    pub fn text_range(&self, start: Option<i32>, end: Option<i32>) -> String {
         let grid = self.term.grid();
+        let top = -(grid.history_size() as i32);
+        let bottom = self.term.screen_lines() as i32 - 1;
+        let s = start.unwrap_or(0).clamp(top, bottom);
+        let e = end.unwrap_or(bottom).clamp(top, bottom);
         let mut out = Vec::new();
-        for line in 0..self.term.screen_lines() {
-            let row = &grid[alacritty_terminal::index::Line(line as i32)];
+        for line in s..=e {
+            let row = &grid[alacritty_terminal::index::Line(line)];
             let text: String = (0..self.term.columns()).map(|c| row[alacritty_terminal::index::Column(c)].c).collect();
             out.push(text.replace('\0', " ").trim_end().to_string());
         }
         out.join("\n")
     }
+
 
 
     fn grid_point(&self, col: u16, row: u16) -> alacritty_terminal::index::Point {

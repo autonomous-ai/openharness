@@ -47,7 +47,8 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>) -> Option<PathBuf> {
                     crate::commands::execute(app, &command);
                     let out = app.capture.take().unwrap_or_default();
                     let err = app.capture_err.take().unwrap_or_default();
-                    let _ = tx.send((out, err));
+                    // A command that prints what it makes (-P) answers when it is made.
+                    if app.print_new.is_some() && err.is_empty() { app.held_reply = Some(tx) } else { app.print_new = None; let _ = tx.send((out, err)); }
                 })));
                 let (out, err) = rx.await.unwrap_or_default();
                 let _ = write.write_all(format!("{}\n", json!({ "out": out, "err": err })).as_bytes()).await;

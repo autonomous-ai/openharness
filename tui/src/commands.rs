@@ -150,6 +150,8 @@ fn size_arg(v: &str, total: u16) -> Option<u16> {
 
 /// A pane target: `:W.P`, `W.P`, `.P`, `P` (index), `%N` (id), `!` (the last pane).
 pub fn pane_target(app: &App, target: &str) -> Option<(usize, u64)> {
+    let target = unsession(app, target)?;
+    let target = if target.is_empty() { ":" } else { target };
     if let Some(id) = target.strip_prefix('%').and_then(|n| n.parse::<u64>().ok()) {
         return app.tabs.iter().position(|t| t.panes().contains(&id)).map(|w| (w, id));
     }
@@ -180,7 +182,20 @@ pub fn pane_target(app: &App, target: &str) -> Option<(usize, u64)> {
 
 /// A window target, as tmux reads one: `:2`, `=2`, `^` first, `$` last, `!` the last window,
 /// `+`/`-` (with a count) next/previous, or a name's start.
+/// `session:rest` → `rest` when the session is this one (tmux scripts qualify every target).
+fn unsession<'a>(app: &App, target: &'a str) -> Option<&'a str> {
+    match target.split_once(':') {
+        Some((sess, rest)) if !sess.is_empty() && !sess.starts_with('{') && !sess.starts_with('%') => {
+            let name = app.session_name();
+            let sess = sess.trim_start_matches('=').trim_start_matches('$');
+            (sess == name || name.starts_with(sess) || sess == "0").then_some(rest)
+        }
+        _ => Some(target),
+    }
+}
+
 fn window_target(app: &App, target: &str) -> Option<usize> {
+    let target = unsession(app, target)?;
     let t = target.trim_start_matches(':').trim_start_matches('=');
     let n = app.tabs.len();
     if n == 0 { return None }
@@ -253,7 +268,12 @@ fn listing(app: &App, command: &str) -> Vec<String> {
 }
 
 /// A tmux command's name or alias (for `hn <command>` from a shell).
-pub fn is_command_name(name: &str) -> bool { COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name) || matches!(name, "display" | "send" | "neww" | "splitw" | "killp" | "killw" | "selectw" | "selectp" | "lsw" | "lsp" | "ls" | "capturep" | "showw" | "show" | "set" | "bind" | "unbind" | "source" | "run" | "if") }
+pub fn is_command_name(name: &str) -> bool {
+    COMMANDS.iter().any(|(full, alias, _)| *full == name || *alias == name)
+        || matches!(name, "display" | "send" | "neww" | "splitw" | "killp" | "killw" | "selectw" | "selectp" | "lsw" | "lsp" | "ls" | "capturep" | "showw" | "show" | "set" | "bind" | "unbind" | "source" | "run" | "if"
+            | "run-shell" | "if-shell" | "wait-for" | "wait" | "pipe-pane" | "pipep" | "set-hook" | "show-hooks" | "resize-window" | "resizew" | "kill-session" | "send-prefix" | "display-menu" | "menu"
+            | "set-option" | "set-window-option" | "setw" | "bind-key" | "unbind-key" | "source-file" | "kill-server" | "detach-client" | "detach")
+}
 
 fn resolve(name: &str) -> &str {
     COMMANDS.iter().find(|(full, alias, _)| *full == name || *alias == name).map(|(full, _, _)| *full).unwrap_or(name)
@@ -299,24 +319,22 @@ fn run_words(app: &mut App, words: &[String]) {
             // The pane this came from decides the machine and folder — read before the new window.
             let from = input::focused_agent(app);
             let last_before = app.last_tab.clone();
+            let was_id = app.tab().id.clone();
+            let _ = was;
             app.new_tab();
             if let Some(name) = opt(words, "-n") { app.rename_tab(&name) }
             // -d: made, not gone to.
             if flag(words, "-d") {
-                let id = app.tabs[was.min(app.tabs.len() - 1)].id.clone();
-                if let Some(i) = app.tabs.iter().position(|t| t.id == id) { app.select_tab(i) }
-                // Made, not visited: the last window stays what it was before.
-                app.last_tab = last_before;
-                return;
+                // Made, not visited: its shell starts there, and you stay where you were.
+                app.return_to = Some((was_id, last_before));
             }
-            // -P: the harness list in it, instead of a shell.
-            if flag(words, "-P") { input::launch(app, "", Filter::All); return }
+            if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
             input::new_shell_from(app, from, Placement::Auto(None), cwd, command);
         }
         "split-window" => {
             let dir = if flag(words, "-h") { Dir::Horizontal } else { Dir::Vertical };
-            // A shell, as tmux gives; `split-window -P` (or an empty window) picks a harness instead.
-            if flag(words, "-P") { input::split_pick(app, dir); return }
+            // A shell, as tmux gives. -P prints the new pane (-F its format) once it is up.
+            if flag(words, "-P") { app.print_new = Some(opt(words, "-F").unwrap_or_else(|| "#{session_name}:#{window_index}.#{pane_index}".into())) }
             let cwd = opt(words, "-c").map(|c| expand(app, &c)).filter(|c| !c.is_empty());
             let command = shell_command(words);
             let placement = if app.tab().root.is_none() { Placement::Auto(None) } else { Placement::Split(dir) };
@@ -429,13 +447,22 @@ fn run_words(app: &mut App, words: &[String]) {
         "display-panes" => app.modal = Some(Modal::DisplayPanes { until: std::time::Instant::now() + std::time::Duration::from_millis(app.display_panes_ms) }),
         "copy-mode" => { input::run(app, "copy-mode"); if flag(words, "-u") { if let Some(f) = app.focused() { if let Some(p) = app.panes.get_mut(&f) { let half = p.rows as i32 - 2; p.copy_move(0, -half) } } } }
         "search-backward" | "search-forward" => { if let Some(pane) = app.focused() { app.modal = Some(Modal::Find { pane, query: String::new(), found: None, up: command == "search-backward" }) } }
-        "paste-buffer" => input::paste_buffer(app, 0),
+        "paste-buffer" => {
+            // -b a named buffer, -t the pane.
+            let text = match opt(words, "-b") { Some(b) => app.named_buffers.get(&b).cloned(), None => app.buffers.first().cloned() };
+            let Some(text) = text else { app.say("no buffers", theme::WARN); return };
+            match opt(words, "-t").map(|t| pane_target(app, &t)) {
+                Some(Some((_, p))) => { if let Some(pane) = app.panes.get(&p) { if pane.stream.is_some() { app.send_paste(p, &text) } } }
+                Some(None) => app.say(format!("can't find pane: {}", opt(words, "-t").unwrap_or_default()), theme::WARN),
+                None => { if let Some(f) = app.focused() { app.send_paste(f, &text) } }
+            }
+        }
         "list-buffers" | "choose-buffer" if app.capture.is_some() => {
             let lines = app.buffers.iter().enumerate().map(|(i, b)| format!("buffer{i}: {} bytes: \"{}\"", b.len(), b.lines().next().unwrap_or("").chars().take(50).collect::<String>())).collect();
             app.print("list-buffers", lines)
         }
         "list-buffers" | "choose-buffer" => input::run(app, "choose-buffer"),
-        "delete-buffer" => { if !app.buffers.is_empty() { app.buffers.remove(0); } }
+        "delete-buffer" => { match opt(words, "-b") { Some(b) => { app.named_buffers.remove(&b); } None => { if !app.buffers.is_empty() { app.buffers.remove(0); } } } }
         "choose-tree" => {
             if flag(words, "-s") { input::launch(app, "", Filter::All) }
             else if flag(words, "-m") { input::launch(app, "@", Filter::All) }
@@ -475,8 +502,8 @@ fn run_words(app: &mut App, words: &[String]) {
             // -T copy-mode-vi / copy-mode / root: that table.
             if let Some(t) = opt(words, "-T").and_then(|t| crate::keys::table_named(&t)) {
                 let list = app.keymap.table_mut(t).clone();
-                let lines = list.iter().map(|b| format!("bind-key -T {} {:<8} {}", opt(words, "-T").unwrap_or_default(), crate::keys::name(&b.chord), b.command)).collect();
-                input::picker(app, crate::modal::PickerKind::Output { title: "list-keys".into(), lines }, "list-keys", "");
+                let lines = list.iter().map(|b| format!("bind-key -T {} {:<10} {}", opt(words, "-T").unwrap_or_default(), crate::keys::name(&b.chord), b.command.replace(" ; ", " \\; "))).collect();
+                app.print("list-keys", lines);
             } else if app.capture.is_some() {
                 // From a shell: tmux's own lines, `bind-key [-r] -T prefix KEY command`.
                 let mut lines = Vec::new();
@@ -490,10 +517,15 @@ fn run_words(app: &mut App, words: &[String]) {
             // -F: a format, one line per window or pane.
             let mut lines = match (command, opt(words, "-F")) {
                 ("list-windows", Some(f)) => (0..app.tabs.len()).map(|w| crate::format::spans(app, &f, Some(w), ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect()).collect(),
-                ("list-panes", Some(f)) => {
-                    let w = opt(words, "-t").and_then(|t| window_target(app, &t)).unwrap_or(app.active);
-                    app.tabs[w].panes().into_iter().map(|p| crate::format::spans_for_pane(app, &f, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect()).collect()
+                ("list-panes", f) => {
+                    // -a / -s: every window's panes; -t: that window's; -F: a format per pane.
+                    let windows: Vec<usize> = if flag(words, "-a") || flag(words, "-s") { (0..app.tabs.len()).collect() } else { vec![opt(words, "-t").and_then(|t| window_target(app, &t)).unwrap_or(app.active)] };
+                    let all = windows.len() > 1;
+                    let f = f.unwrap_or_else(|| if all { "#{session_name}:#{window_index}.#{pane_index}: [#{pane_width}x#{pane_height}] #{pane_id}#{?pane_active, (active),}".into() } else { "#{pane_index}: [#{pane_width}x#{pane_height}] #{pane_id}#{?pane_active, (active),}".into() });
+                    windows.into_iter().flat_map(|w| app.tabs[w].panes().into_iter().map(move |p| (w, p))).collect::<Vec<_>>().into_iter()
+                        .map(|(w, p)| crate::format::spans_for_pane(app, &f, w, p, ratatui::style::Style::default()).into_iter().map(|s| s.content.into_owned()).collect()).collect()
                 }
+                ("list-clients", Some(f)) => vec![expand(app, &f)],
                 ("list-sessions", Some(f)) => vec![expand(app, &f)],
                 _ => listing(app, command),
             };
@@ -587,10 +619,11 @@ fn run_words(app: &mut App, words: &[String]) {
         "capture-pane" => {
             // -p prints it; else it becomes a paste buffer. -t names the pane.
             let pane = match opt(words, "-t") { Some(t) => match pane_target(app, &t) { Some((_, p)) => Some(p), None => { app.say(format!("can't find pane: {t}"), theme::WARN); return } }, None => app.focused() };
-            let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.visible_text_full()) else { return };
+            let range = (opt(words, "-S").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MIN) } else { None })), opt(words, "-E").and_then(|v| v.parse::<i32>().ok().or(if v == "-" { Some(i32::MAX) } else { None })));
+            let Some(text) = pane.and_then(|p| app.panes.get(&p)).map(|p| p.text_range(range.0, range.1)) else { return };
             if flag(words, "-p") { app.print("capture-pane", text.lines().map(str::to_string).collect()) } else { app.buffers.insert(0, text) }
         }
-        "has-session" => {}
+        "has-session" => { if let Some(t) = opt(words, "-t") { if unsession(app, &format!("{}:", t.trim_end_matches(':'))).is_none() { app.say(format!("can't find session: {t}"), theme::WARN) } } }
         "list-commands" => { let lines = COMMANDS.iter().map(|(n, a, d)| format!("{n} ({a}) — {d}")).collect(); app.print("list-commands", lines) }
         "set-environment" | "setenv" => { if let (Some(k), Some(v)) = (words.iter().skip(1).find(|w| !w.starts_with('-')), words.last()) { app.env.insert(k.clone(), v.clone()); } }
         "show-environment" | "showenv" => { let lines = app.env.iter().map(|(k, v)| format!("{k}={v}")).collect(); app.print("show-environment", lines) }
@@ -610,9 +643,20 @@ fn run_words(app: &mut App, words: &[String]) {
         "previous-layout" => { let at = (app.tab().layout_at + 3) % 5; app.tab_mut().layout_at = at; app.next_layout() }
         "resize-window" => app.say("resize-window: a window is the terminal's size here", theme::WARN),
         "respawn-window" => input::run(app, "restart"),
-        "set-buffer" => { let text = rest(words); if !text.is_empty() { app.buffers.insert(0, text) } }
+        "set-buffer" => {
+            // set-buffer [-a] [-b name] text
+            let mut text = Vec::new();
+            let mut i = 1;
+            while i < words.len() { match words[i].as_str() { "-b" | "-n" | "-t" => i += 1, "-a" | "-w" => {}, w => text.push(w.to_string()) } i += 1 }
+            let text = text.join(" ");
+            match opt(words, "-b") {
+                Some(b) => { let e = app.named_buffers.entry(b).or_default(); if flag(words, "-a") { e.push_str(&text) } else { *e = text } }
+                None => { if flag(words, "-a") && !app.buffers.is_empty() { app.buffers[0].push_str(&text) } else if !text.is_empty() { app.buffers.insert(0, text) } }
+            }
+        }
         "show-buffer" => {
-            let lines = app.buffers.first().map(|b| b.lines().map(str::to_string).collect()).unwrap_or_default();
+            let text = match opt(words, "-b") { Some(b) => app.named_buffers.get(&b).cloned(), None => app.buffers.first().cloned() };
+            let lines = text.map(|b| b.lines().map(str::to_string).collect()).unwrap_or_default();
             app.print("show-buffer", lines);
         }
         "respawn-pane" => input::run(app, "restart"),
