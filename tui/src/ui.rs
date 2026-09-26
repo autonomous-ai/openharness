@@ -695,8 +695,9 @@ fn fzf(buf: &mut Buffer, body: Rect, picker: &mut Picker, kind: &PickerKind, _: 
     // --info: default (its own line), inline (after the query), inline-right (right of the
     // prompt, the rule on its own line), right (its own line, the count at the right), hidden.
     let mode = o.info_mode.as_str();
-    // Hidden keeps its rule on a line of its own too (fzf 0.67), unless --no-separator.
-    let info_own_line = matches!(mode, "default" | "right" | "inline-right") || (mode == "hidden" && o.separator);
+    // (fzf's noSeparatorLine: inline has none; hidden and inline-right keep the rule on a line of
+    // its own unless --no-separator.)
+    let info_own_line = !no_separator_line();
     let (prompt_y, info_y) = if prompt_top { (area.y, if info_own_line { area.y + 1 } else { area.y }) } else { (bottom - 1, if info_own_line { bottom.saturating_sub(2) } else { bottom - 1 }) };
     // Rows come first in a short window, as in fzf: the key hints go before any row does.
     let header = if area.height >= 6 { header_line(picker, kind, width.saturating_sub(1)) } else { None };
