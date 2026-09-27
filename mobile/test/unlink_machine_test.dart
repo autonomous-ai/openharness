@@ -19,6 +19,14 @@ class _Links implements PeerLinkClient {
   }) async => const CliLinkConnectResult(error: 'not used');
 
   @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+  }) async => const CliLinkConnectResult(error: 'not used');
+
+  @override
   Future<CliLinkListResult> list() async =>
       const CliLinkListResult(machines: []);
 

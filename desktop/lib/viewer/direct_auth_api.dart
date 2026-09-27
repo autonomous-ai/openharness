@@ -78,13 +78,39 @@ class DirectAuthApi {
     final data = unwrapApiResponse(
       await _dio.post(
         '/api/auth/authorize-native',
-        data: {'redirectUri': redirectUri, 'autonomousEnv': config.autonomousEnv},
+        data: {
+          'redirectUri': redirectUri,
+          'autonomousEnv': config.autonomousEnv,
+        },
       ),
     );
     final url = data is Map ? data['authorizeUrl'] : null;
     final tx = data is Map ? data['tx'] : null;
     if (url is! String || url.isEmpty || tx is! String || tx.isEmpty) {
-      throw const DirectAuthException('The server did not return a sign-in page.');
+      throw const DirectAuthException(
+        'The server did not return a sign-in page.',
+      );
+    }
+    return (authorizeUrl: url, tx: tx);
+  }
+
+  Future<({String authorizeUrl, String tx})> authorizeWeb(String origin) async {
+    final data = unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/authorize',
+        data: {
+          'origin': origin,
+          'next': '/',
+          'autonomousEnv': config.autonomousEnv,
+        },
+      ),
+    );
+    final url = data is Map ? data['authorizeUrl'] : null;
+    final tx = data is Map ? data['tx'] : null;
+    if (url is! String || url.isEmpty || tx is! String || tx.isEmpty) {
+      throw const DirectAuthException(
+        'The server did not return a sign-in page.',
+      );
     }
     return (authorizeUrl: url, tx: tx);
   }

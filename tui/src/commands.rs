@@ -62,7 +62,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("show-buffer", "showb", "Print a buffer (-b name)"),
     ("respawn-pane", "respawnp", "Restart the harness in this pane"),
     ("suspend-client", "suspendc", "Suspend (C-z); fg brings it back"),
-    ("tim", "tim", "tim, the creature in the status line: how it is (set -g @tim off hides it)"),
+    ("daemon", "tim", "Your daemon: key y|n|g|s, detail, talk <words>, zoo, hatch, card, consent, nap, quiet [on|off] (C-b Z)"),
     ("display-popup", "popup", "A shell (or a command: display-popup -E lazygit) floating over the window"),
     ("list-commands", "lscm", "Every command"),
     ("display-menu", "menu", "A menu: display-menu -T title name key command …"),
@@ -1176,8 +1176,8 @@ fn run_words(app: &mut App, words: &[String]) {
 /// hn keeps outside the store — the prefix, the mouse, tim, a window's synchronize-panes …
 fn after_set(app: &mut App, name: &str, now: Option<String>, global: bool, tab: Option<usize>) {
     let name = name.to_string();
-    // tim: `set -g @tim off` hides the creature (kept), `on` brings it back.
-    if name == "@tim" { app.tim.set_off(matches!(now.as_deref(), Some("off" | "0" | "no"))); return }
+    // `set -g @tim off`, from before the daemons: kept as Quiet (daemon/).
+    if name == "@tim" { crate::daemon::hooks::tim_option(app, now.as_deref()); return }
     // alerts_reset_all: every window's silence timer starts again.
     if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
     if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
@@ -3152,7 +3152,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             };
             input::popup(app, (x, y, w, h), !flag(words, "-B") && look.lines != "none", cwd, command, title, flag(words, "-E"), look);
         }
-        "tim" => { let l = crate::tim::line(app); app.say(l, theme::WARN) }
+        "daemon" | "tim" => crate::daemon::hooks::command(app, words),
         // run-shell runs as a job (shell_job); nothing to run gets here.
         "run-shell" | "run" => {}
         "send-prefix" => {

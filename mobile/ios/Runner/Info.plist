@@ -42,7 +42,7 @@
 	     process and grants nothing, so NSPhotoLibraryUsageDescription would never
 	     be shown and is deliberately absent. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Take a photo to send to an agent in a terminal.</string>
+	<string>Scan the code on your computer to connect, or take a photo to send to an agent.</string>
 	<!-- Voice input, what tapping a terminal opens. Asked for on the first tap,
 	     not at launch. The microphone alone: the recording is transcribed by
 	     the Harness backend (`/api/voice/stt`, the dial's own path), not by the

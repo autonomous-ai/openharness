@@ -34,6 +34,7 @@ import { warmStunUrls } from './stunSelect.js'
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
+import { admitRelayedPairFrame, isPairFrameType } from './e2ee/applicationFrames.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
 const LINGER_MS = 30_000
@@ -569,6 +570,8 @@ export class RemoteRelayPool {
         // The relay cannot inject response bytes/headers into a local browser in plaintext.
         if (typeof frame.type === 'string' && VIEWER_UP_TYPES.has(frame.type)
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
+        // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
+        if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
         const plain = crypto.unwrapIncoming(frame)
         if (!plain) return
         const type = typeof plain.type === 'string' ? plain.type : ''

@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import '../core/wire_counter.dart';
+
 const terminalLocalVersion = 1;
 const terminalLocalHeaderBytes = 12;
 const terminalLocalMaxPayloadBytes = 512 * 1024;
@@ -115,7 +117,7 @@ String _uuidString(Uint8List bytes) {
 
 Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
   final id = _uuidBytes(frame.streamId);
-  if (id == null || frame.seq < 0) return null;
+  if (id == null || frame.seq < 0 || frame.seq > maxSafeInteger) return null;
   if ((frame.kind == TerminalBinaryKind.input ||
           frame.kind == TerminalBinaryKind.sync ||
           frame.kind == TerminalBinaryKind.paste ||
@@ -129,8 +131,8 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
   }
   final metaBytes = frame.kind == TerminalBinaryKind.keyframe ? 28 : 24;
   final output = Uint8List(metaBytes + frame.bytes.length)..setRange(0, 16, id);
-  final view = ByteData.sublistView(output)
-    ..setUint64(16, frame.seq, Endian.big);
+  final view = ByteData.sublistView(output);
+  writeWireCounter(view, 16, frame.seq);
   if (frame.kind == TerminalBinaryKind.keyframe) {
     final cols = frame.cols;
     final rows = frame.rows;
@@ -169,10 +171,12 @@ TerminalBinaryFrame? decodeTerminalPlain(
     return null;
   }
   final view = ByteData.sublistView(plaintext);
+  final seq = readWireCounter(view, 16);
+  if (seq == null) return null;
   return TerminalBinaryFrame(
     kind: kind,
     streamId: _uuidString(Uint8List.sublistView(plaintext, 0, 16)),
-    seq: view.getUint64(16, Endian.big),
+    seq: seq,
     bytes: Uint8List.fromList(plaintext.sublist(metaBytes)),
     compressed: (flags & _flagZlib) != 0,
     cols: kind == TerminalBinaryKind.keyframe

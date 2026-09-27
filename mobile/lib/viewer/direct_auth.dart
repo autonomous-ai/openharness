@@ -36,7 +36,20 @@ class DirectAuth implements AccessTokenSource {
     issuer: issuer,
   );
 
-  Future<void> signOut() => session.clear();
+  /// A session Harness issued itself is ended at the backend too, so its
+  /// refresh token is dead even if a copy of this phone's storage turns up.
+  /// Only briefly waited on: signing out never hangs on the network.
+  Future<void> signOut() async {
+    if (await session.issuer() == SessionIssuer.harness) {
+      final refreshToken = await session.refreshToken();
+      if (refreshToken != null && refreshToken.isNotEmpty) {
+        try {
+          await api.revoke(refreshToken).timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      }
+    }
+    await session.clear();
+  }
 
   @override
   Future<String> accessToken({bool force = false, String? failedToken}) async {
@@ -77,7 +90,7 @@ class DirectAuth implements AccessTokenSource {
       // A refresh token only renews where it was issued.
       final tokens = switch (await session.issuer()) {
         SessionIssuer.emailCode => await emailCodes.refresh(refreshToken),
-        SessionIssuer.sso => await api.refresh(
+        SessionIssuer.sso || SessionIssuer.harness => await api.refresh(
           refreshToken,
           autonomousEnv: autonomousEnv,
         ),

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show OverflowBoxFit;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/notify/agent_unread.dart';
@@ -13,7 +12,6 @@ import 'voice_input_controller.dart';
 import 'voice_mic_button.dart';
 import 'voice_mic_face.dart';
 import 'voice_mic_fab.dart';
-import 'voice_status_pill.dart';
 
 /// The terminal's floating controls, stacked in its bottom-right corner:
 /// the mic, then Search.
@@ -47,9 +45,13 @@ class TerminalActionColumn extends StatefulWidget {
     required this.onSearch,
     this.unread,
     this.searchOnly = false,
+    this.working = false,
   });
 
   final VoiceInputController voice;
+
+  /// The agent is working: the mic wears a ring — see `VoiceMicCore.working`.
+  final bool working;
 
   /// Agents that finished while you were on this one. Search is where they are
   /// reached from, so it wears their count — the dial's bell pill. Null draws
@@ -78,9 +80,13 @@ class TerminalActionColumn extends StatefulWidget {
   /// How far the column sits from the terminal's right and bottom edges.
   static const double inset = VoiceMicFab.inset;
 
-  /// How far the column sits above the terminal's bottom edge — higher than
-  /// [inset], so Search clears the agent's own status line under it.
-  static const double bottomInset = 172;
+  /// How far the orb's slot sits above the foot of the page. Low and centred, where Siri's orb
+  /// stands over the dock — below the agent's prompt rather than on it — and the terminal runs full
+  /// screen under it.
+  ///
+  /// Measured off Siri: its orb's centre stands about 76pt above the foot of an iPhone 14, so
+  /// this slot's foot sits half the slot below that.
+  static const double orbBottom = 76 - VoiceMicButton.extent / 2;
 
   /// How far Search sits from the terminal's TOP edge while the keyboard is up
   /// — see [searchOnly].
@@ -92,30 +98,6 @@ class TerminalActionColumn extends StatefulWidget {
   /// which is the opposite end of the pane from the prompt being typed into.
   /// That is the whole reason it moves rather than staying where it was.
   static const double topInset = TerminalHeader.height + 8;
-
-  /// The DRAWN gap between one circle and the next, the same all the way down.
-  ///
-  /// ⚠️ No smaller than the mic's overhang plus a button's, less the slack
-  /// between the mic's slot and its drawn face — any closer and the mic's
-  /// target would swallow the top of Search's.
-  static const double _gap = 22;
-
-  /// The mic's slot is larger than its drawn circle, so the gap under the slot
-  /// is [_gap] less that slack.
-  static const double _underMic =
-      _gap - (VoiceMicButton.extent - VoiceMicCore.diameter) / 2;
-
-  /// How far the capsule's right end sits in from the mic's slot: the slack
-  /// between the slot and the circle, so the circle closes the capsule exactly.
-  static const double _capsuleInset =
-      (VoiceMicButton.extent - VoiceMicCore.diameter) / 2;
-
-  /// The capsule's widest, however wide the phone: a notice is easier to read
-  /// in two lines of a sensible length than in one line across a tablet.
-  static const double _capsuleMaxWidth = 360;
-
-  /// What the capsule leaves clear at the terminal's left edge.
-  static const double _capsuleLeftMargin = 16;
 
   @override
   State<TerminalActionColumn> createState() => _TerminalActionColumnState();
@@ -143,86 +125,34 @@ class _TerminalActionColumnState extends State<TerminalActionColumn> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    // One backdrop read for the buttons' blurs — see [FloatingGlass].
-    return BackdropGroup(child: _column(context, widget.session));
+    return _column(context, widget.session);
   }
 
   Widget _column(BuildContext context, TerminalSession? session) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (widget.searchOnly)
-          const SizedBox.shrink()
-        else if (session != null)
-          _capsule(context, session)
-        else
-          // Still attaching: the mic in its place, dimmed and dead.
-          const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null),
-        if (!widget.searchOnly)
-          const SizedBox(height: TerminalActionColumn._underMic),
-        _centred(
-          _withUnread(
-            TerminalRoundAction(
-              key: const ValueKey('terminal-search'),
-              icon: LucideIcons.search300,
-              label: 'Search harnesses and machines',
-              onTap: widget.onSearch,
-            ),
+    // ⚠️ **Search floats here only while the keyboard is up.** With it down, Find is a swipe right
+    // or a tap on the agent's name; with the keyboard up, Find rides up here, top right.
+    if (widget.searchOnly) {
+      return _centred(
+        _withUnread(
+          TerminalRoundAction(
+            key: const ValueKey('terminal-search'),
+            icon: LucideIcons.search300,
+            label: 'Find an agent',
+            onTap: widget.onSearch,
           ),
         ),
-      ],
-    );
-  }
-
-  /// The mic, with the capsule body under it reaching out to the left.
-  ///
-  /// ⚠️ **Held at the mic's height.** A notice that wraps makes the body
-  /// taller than the mic's slot, and a row that grew with it would lift the mic
-  /// — the one control the thumb is on — every time a sentence ran long. The
-  /// body overflows the row evenly above and below instead.
-  Widget _capsule(BuildContext context, TerminalSession session) {
-    final maxWidth =
-        (MediaQuery.sizeOf(context).width -
-                TerminalActionColumn.inset -
-                TerminalActionColumn._capsuleInset -
-                TerminalActionColumn._capsuleLeftMargin)
-            .clamp(
-              VoiceMicCore.diameter,
-              TerminalActionColumn._capsuleMaxWidth,
-            );
-    return SizedBox(
-      height: VoiceMicButton.extent,
-      child: Stack(
-        alignment: Alignment.centerRight,
-        clipBehavior: Clip.none,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(
-              right: TerminalActionColumn._capsuleInset,
-            ),
-            child: OverflowBox(
-              fit: OverflowBoxFit.deferToChild,
-              maxHeight: double.infinity,
-              alignment: Alignment.centerRight,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxWidth),
-                child: VoiceStatusPill(
-                  voice: widget.voice,
-                  slipped: _slipped,
-                  micClearance: VoiceMicCore.diameter,
-                ),
-              ),
-            ),
-          ),
-          // Last, so it paints over the body's end and takes the taps there.
-          VoiceMicFab(
-            voice: widget.voice,
-            session: session,
-            onSlipChanged: _onSlipChanged,
-          ),
-        ],
-      ),
+      );
+    }
+    // Still attaching: the mic in its place, dimmed and dead.
+    if (session == null) {
+      return const VoiceMicButton(face: VoiceMicFace.talk, onPressed: null);
+    }
+    // The mic alone: what it is doing is said beside it — see `voice_bar_line.dart`.
+    return VoiceMicFab(
+      voice: widget.voice,
+      session: session,
+      onSlipChanged: _onSlipChanged,
+      working: widget.working,
     );
   }
 

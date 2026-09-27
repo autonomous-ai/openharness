@@ -20,17 +20,21 @@ expect() { # expect <what> <text> [timeout-ms]
   done
   echo "✓ $1"
 }
-cleanup() { tmux_ kill-server 2>/dev/null || true; kill "$mock" 2>/dev/null || true; rm -rf "$home"; }
+cleanup() { tmux_ kill-server 2>/dev/null || true; kill "$mock" ${mock_off:-} ${mock_out:-} 2>/dev/null || true; rm -rf "$home"; }
 trap cleanup EXIT
+# E2E_SNAPSHOTS=<dir>: the daemons' screens, as capture-pane printed them, kept there.
+snap() { [ -n "${E2E_SNAPSHOTS:-}" ] && screen > "$E2E_SNAPSHOTS/$1.txt"; return 0; }
 
-node "$here/mock-daemon.mjs" "$port" >/dev/null &
+# harnessd's Unix socket is in ADAPTER_DATA_DIR (the scratch home here): the mock serves it beside the
+# port, and hn connects over it — the pair brain takes keys, talk and presence only there.
+ADAPTER_DATA_DIR="$home" node "$here/mock-daemon.mjs" "$port" >/dev/null &
 mock=$!
 sleep 0.5
 # Its own client socket, named: the test's shell calls must never reach a client of yours
 # (an unnamed hn takes "default", which is where `hn <command>` goes).
 client="e2e-$$"
 # HN_DESKTOP=off: no desktop app here, so hn is the window the dial talks to.
-tmux_ new-session -d -s t -x 120 -y 32 "EDITOR=emacs VISUAL= HN_SOCKET_NAME=$client HOME=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
+tmux_ new-session -d -s t -x 120 -y 32 "EDITOR=emacs VISUAL= HN_SOCKET_NAME=$client HOME=$home ADAPTER_DATA_DIR=$home PORT=$port HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
 # The mock's dial: what hn told it (dial <js expression over d>), and a frame to push at hn.
 dial() { curl -s "http://127.0.0.1:$port/test/dial" | node -e "const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).data; console.log($1)"; }
 push() { curl -s -X POST --data "$1" "http://127.0.0.1:$port/test/dial" >/dev/null; }
@@ -188,6 +192,178 @@ tmux_ send-keys -t t C-b '&'
 expect "C-b & asks first" "(y/n)"
 tmux_ send-keys -t t y
 wait_eq "C-b & kills the window's shell" $((before + 1)) dial "(d.deleted || []).length"
+# ── the daemons (daemons/README.md; tui/docs/daemons.md) ──
+# The mock's zoo has the first egg waiting (MOCK_ZOO=egg): the status line shows it.
+wait_eq "#{daemon}: the waiting egg in the status cell (ten cells)" '  \_O_/   ' hn display -p '#{daemon}'
+expect "the egg in the status line" '\_O_/   '
+wait_eq "prefix Z enters the daemon table (a key tmux leaves unbound)" 1 sh -c "HOME=$home $bin -L $client list-keys -T prefix Z | grep -c 'switch-client -T daemon'"
+tmux_ send-keys -t t C-b Z
+expect "C-b Z: the daemon's keys" "Hatch an egg"
+snap table
+tmux_ send-keys -t t h
+expect "h: the hatch, full screen" "─ hatch ─"
+# tim is drawn filled: its 0.1 plate, at the reveal size (56 columns) since 120 x 32 has room for all of it.
+expect "the hatchling as a silhouette first (the reveal plate, every glyph a #)" "###################"
+snap hatch-silhouette
+expect "then the plate itself, its idle loop running" "##########%%%%"
+snap hatch-plate
+expect "its name as a banner" "| |_  (_)  _ __"
+expect "fork() returned 0." "fork() returned 0."
+snap hatch-fork
+expect "then its card, with the server's serial" "tim 0.1  #0042"
+snap hatch-card
+tmux_ send-keys -t t Space
+expect "then what it sees, before it watches anything" "What tim sees"
+snap consent
+tmux_ send-keys -t t y
+wait_eq "y: zoo.consent { watching: true }" "true" dial "d.zooOps.filter(o => o.op === 'zoo.consent').map(o => o.watching).join()"
+wait_eq "tim is paired, in the status line" "tim" hn display -p '#{daemon_name}'
+wait_eq "#{daemon}: tim's face in the status cell (its one-line sprite)" '  (o o)   ' hn display -p '#{daemon}'
+expect "tim in the status line, once its reply has gone" "(o o)" 7000
+snap status-tim
+wait_eq "presence over the socket (daemon_presence, trusted)" "true" dial "d.daemon.some(f => f.type === 'daemon_presence' && f.trusted)"
+# A line from the pair brain, keys first; its detail is on screen before a key counts.
+push "{\"type\":\"daemon_say\",\"payload\":{\"id\":\"q1\",\"about\":{\"machineId\":\"mock0000000000000000000000000001\",\"agentId\":\"$codex\"},\"mood\":\"ask\",\"line\":\"[y/n/g] codex@mock-local Bash: npm test\",\"actions\":[{\"key\":\"y\",\"label\":\"Yes\",\"choice\":\"Yes\"},{\"key\":\"n\",\"label\":\"No\",\"choice\":\"No\"},{\"key\":\"g\",\"label\":\"open\",\"choice\":\"g\"}],\"ttlMs\":30000,\"detail\":\"Bash command\\n\\n  npm test\\n  Run the unit tests\"}}"
+expect "a say, keys first, in the message line" "[y/n/g] codex@mock-local Bash: npm test"
+snap say
+tmux_ send-keys -t t C-b Z y
+expect "y first shows exactly what it answers" "exactly what a key does"
+expect "the whole dialog, and the keys named" "y Yes · n No · g open"
+snap detail
+wait_eq "daemon_shown once the line and its detail were drawn" "true" dial "d.daemon.some(f => f.type === 'daemon_shown' && f.id === 'q1' && f.trusted)"
+sleep 0.5
+tmux_ send-keys -t t y
+wait_eq "y, armed: daemon_act { id, choice }" "q1 Yes" dial "d.acts.map(a => a.id + ' ' + a.choice).join()"
+screen | grep -qF "npm test" && fail "the answered line did not go"
+echo "✓ the answered line goes (daemon_unsay)"
+# Talk: words to the pair harness, its answer after its nick.
+tmux_ send-keys -t t C-b Z t
+expect "t: the talk prompt" "(talk)"
+tmux_ send-keys -t t "hello tim" Enter
+wait_eq "daemon_talk over the socket" "hello tim" dial "d.daemon.filter(f => f.type === 'daemon_talk').map(f => f.text).join()"
+expect "the pair's words, after its nick" "<tim> heard you: hello tim"
+# The brief on return: at most five items, the line first.
+push '{"type":"daemon_brief","payload":{"desk":"local","line":"reattached. 1 done.","items":[{"id":"b1","kind":"done","machineId":"mock0000000000000000000000000001","line":"Mock Claude: all 42 tests pass"}]}}'
+expect "the brief on return" "reattached. 1 done."
+tmux_ send-keys -t t C-b Z Escape
+sleep 0.3
+screen | grep -qF "reattached. 1 done." && fail "C-b Z Escape left the brief"
+echo "✓ C-b Z Escape dismisses it"
+# The same question id again replaces its line in place (ids no longer move with timers or cursors).
+say() { push "{\"type\":\"daemon_say\",\"payload\":{\"id\":\"q2\",\"about\":{\"machineId\":\"mock0000000000000000000000000001\",\"agentId\":\"$codex\"},\"mood\":\"ask\",\"line\":\"[n/g] codex@mock-local $1\",\"actions\":[{\"key\":\"n\",\"label\":\"No\",\"choice\":\"No\"},{\"key\":\"g\",\"label\":\"open\",\"choice\":\"g\"}],\"ttlMs\":30000}}"; }
+say "Edit src/app.ts (1)"
+expect "a keyed line" "codex@mock-local Edit src/app.ts (1)"
+say "Edit src/app.ts (2)"
+expect "the same id replaces it in place" "codex@mock-local Edit src/app.ts (2)"
+# daemon_state, pushed unasked: a need across the fleet makes the face need…
+push '{"type":"daemon_state","payload":{"pair":"tim","needs":[{"machineId":"mock0000000000000000000000000002","agentId":"x","requestId":"r1","question":"Bash: make"}],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+wait_eq "daemon_state pushed: its needs make the face need" "need" hn display -p '#{daemon_mood}'
+# …and the off result (pair: null) takes the brain's lines with it, and has the zoo read again.
+reads=$(dial "d.zooReads")
+push '{"type":"daemon_state","payload":{"pair":null,"needs":[],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+wait_eq "pair: null reads the zoo again" 1 dial "d.zooReads > $reads ? 1 : 0"
+waited=0; while screen | grep -qF "Edit src/app.ts (2)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 3000 ] && fail "pair: null left the brain's line up"; done
+echo "✓ pair: null takes the brain's line down"
+wait_eq "and the face is itself again" "idle" hn display -p '#{daemon_mood}'
+# The server's switch goes off: the next read (here, after the off result) is a 404, and hn is as before daemons.
+curl -s -X POST "http://127.0.0.1:$port/test/zoo-mode?mode=off" >/dev/null
+push '{"type":"daemon_state","payload":{"pair":"tim","needs":[],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+push '{"type":"daemon_state","payload":{"pair":null,"needs":[],"working":0,"failing":[],"machines":[],"asks":[],"acted":[],"autonomy":"watch","confirms":[]}}'
+wait_eq "switched off: no status cell" "" hn display -p '#{daemon}'
+wait_eq "switched off: no prefix Z" 0 sh -c "HOME=$home $bin -L $client list-keys | grep -c 'switch-client -T daemon' || true"
+# …and on again: zoo_changed asks, and it all comes back.
+curl -s -X POST "http://127.0.0.1:$port/test/zoo-mode?mode=egg" >/dev/null
+push '{"type":"zoo_changed","payload":{"revision":999}}'
+wait_eq "on again after zoo_changed" "tim" hn display -p '#{daemon_name}'
+wait_eq "prefix Z back" 1 sh -c "HOME=$home $bin -L $client list-keys -T prefix Z | grep -c 'switch-client -T daemon'"
+# The zoo: the box back and what's next.
+tmux_ send-keys -t t C-b Z z
+expect "z: the zoo's box back (drop 1 is init; unix and tty are on hold, shown nowhere)" "zoo: drop 1 init  1/9"
+expect "an empty numbered slot" "[ ? ]"
+expect "tim's portrait plate over the zoo" "#####%"
+snap zoo
+screen | grep -qiF "unix" && fail "the zoo shows a drop on hold"
+echo "✓ no drop on hold in the zoo"
+tmux_ send-keys -t t Escape
+out=$(hn zoo)
+echo "$out" | grep -qF "zoo: drop 1 init  1/9" || fail "hn zoo from a shell: $out"
+echo "$out" | grep -qF ";x###%x," || fail "hn zoo: tim's portrait plate: $out"
+echo "✓ hn zoo from a shell, tim's portrait plate at its head"
+out=$(hn card)
+echo "$out" | grep -qF "| #01/09  DROP 1: INIT            COMMON |" || fail "hn card: $out"
+echo "✓ hn card prints the card"
+# A filled daemon's card is its portrait plate: byte for byte what daemons/tools/card.mjs draws.
+out=$(hn card tim --version 2.0)
+hatched=$(curl -s "http://127.0.0.1:$port/api/zoo" | node -e "const v = JSON.parse(require('fs').readFileSync(0, 'utf8')); console.log((v.data ?? v).zoo.daemons.find(d => d.id === 'tim').hatchedAt.slice(0, 10))")
+want=$(node --input-type=module -e "
+import { readFileSync } from 'node:fs'
+import { cardLines } from '$here/../../daemons/tools/card.mjs'
+const roster = JSON.parse(readFileSync('$here/../../daemons/roster.json', 'utf8'))
+const plates = JSON.parse(readFileSync('$here/../../daemons/plates.json', 'utf8'))
+const tim = roster.daemons.find(d => d.id === 'tim')
+const plate = plates.daemons.tim.portrait['2.0'].idle[0].split('\\n')
+console.log(cardLines(roster, tim, { version: '2.0', plate, serial: 42, hatched: '$hatched', egg: 'first' }).join('\\n'))")
+[ "$out" = "$want" ] || fail "hn card tim --version 2.0 is not card.mjs's card:
+$out
+--- card.mjs ---
+$want"
+[ -n "${E2E_SNAPSHOTS:-}" ] && printf '%s\n' "$out" > "$E2E_SNAPSHOTS/card-tim-2.0.txt"
+echo "✓ hn card tim --version 2.0: the portrait plate card, as card.mjs draws it"
+out=$(hn card --version 9.9 2>&1 || true)
+echo "$out" | grep -qF 'no version "9.9"' || fail "hn card --version 9.9: $out"
+out=$(hn card tmux 2>&1 || true)
+echo "$out" | grep -qF "no daemon is called tmux" || fail "hn card tmux: a daemon on hold is shown: $out"
+echo "✓ hn card: a version it knows; a daemon on hold is not one it knows"
+hn card --svg | grep -qF "<svg" || fail "hn card --svg"
+echo "✓ hn card --svg"
+# Quiet: no line nobody asked for.
+hn set -g @daemon-quiet on
+push "{\"type\":\"daemon_say\",\"payload\":{\"id\":\"f1\",\"about\":{\"machineId\":\"mock0000000000000000000000000002\",\"agentId\":\"x\"},\"mood\":\"fail\",\"line\":\"remote failed: tests\",\"actions\":[],\"ttlMs\":5200}}"
+tmux_ send-keys -t t Enter
+sleep 0.6
+screen | grep -qF "remote failed" && fail "@daemon-quiet on still spoke"
+echo "✓ set -g @daemon-quiet on: silent"
+hn set -g @daemon-quiet off
+push "{\"type\":\"daemon_say\",\"payload\":{\"id\":\"f2\",\"about\":{\"machineId\":\"mock0000000000000000000000000002\",\"agentId\":\"x\"},\"mood\":\"fail\",\"line\":\"remote failed again: tests\",\"actions\":[],\"ttlMs\":5200}}"
+sleep 0.2
+tmux_ send-keys -t t Enter
+expect "a line nobody asked for waits for a pause (Enter), then speaks" "remote failed again: tests"
+
+# The daemons off (the server's switch: GET /api/zoo answers 404): nothing of them at all.
+port_off=$((port + 1))
+MOCK_ZOO=off node "$here/mock-daemon.mjs" "$port_off" >/dev/null &
+mock_off=$!
+home_off="$home/off"; mkdir -p "$home_off"
+sleep 0.5
+tmux_ new-session -d -s o -x 120 -y 32 "HN_SOCKET_NAME=$client-off HOME=$home_off PORT=$port_off HARNESS_TUI_DESK=off HARNESS_TUI_NOTIFY=off HN_DESKTOP=off $bin"
+waited=0; until tmux_ capture-pane -p -t o | grep -qF "Mock terminal (mock)"; do sleep 0.05; waited=$((waited + 50)); [ "$waited" -ge 5000 ] && fail "the off client started no shell"; done
+sleep 0.8
+[ -z "$(HOME=$home_off $bin -L $client-off display -p '#{daemon}')" ] || fail "#{daemon} with the daemons off"
+tmux_ capture-pane -p -t o | tail -1 | grep -qF '\_O_/' && fail "a status cell with the daemons off"
+[ "$(HOME=$home_off $bin -L $client-off list-keys | grep -c 'switch-client -T daemon')" = 0 ] || fail "prefix Z bound with the daemons off"
+off=$(curl -s "http://127.0.0.1:$port_off/test/dial" | node -e "const d = JSON.parse(require('fs').readFileSync(0, 'utf8')).data; console.log(d.daemon.length + d.zooOps.length)")
+[ "$off" = 0 ] || fail "daemon_* frames or zoo ops with the daemons off ($off)"
+echo "✓ the daemons off: no cell, no key table, no frames, no habits"
+tmux_ kill-session -t o
+out=$(HOME=$home_off "$bin" --port "$port_off" zoo 2>&1 || true)
+echo "$out" | grep -qF "the daemons are off here" || fail "hn zoo with the daemons off: $out"
+echo "✓ hn zoo with the daemons off says so"
+# Signed out: the nest, and how to hatch.
+port_out=$((port + 2))
+MOCK_ZOO=signedout node "$here/mock-daemon.mjs" "$port_out" >/dev/null &
+mock_out=$!
+sleep 0.5
+out=$(HOME=$home_off "$bin" --port "$port_out" zoo)
+echo "$out" | grep -qF "sign in to hatch" || fail "hn zoo signed out: $out"
+echo "✓ signed out: the nest, and sign in to hatch"
+kill "$mock_out"; wait "$mock_out" 2>/dev/null || true
+MOCK_ZOO=disabled node "$here/mock-daemon.mjs" "$port_out" >/dev/null &
+mock_out=$!
+sleep 0.5
+out=$(HOME=$home_off "$bin" --port "$port_out" tim 2>&1 || true)
+echo "$out" | grep -qF "the daemons are off here" || fail "hn tim with { enabled: false }: $out"
+echo "✓ { enabled: false } is off too"
+
 tmux_ resize-window -t t -x 30 -y 8
 sleep 0.3
 tmux_ resize-window -t t -x 120 -y 32

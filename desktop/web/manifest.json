@@ -1,0 +1,9 @@
+{
+  "name": "Harness",
+  "short_name": "Harness",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "description": "Your machines, agents, and workspace in the browser."
+}

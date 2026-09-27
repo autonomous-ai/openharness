@@ -1,6 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/services.dart';
+
+import '../core/runtime_platform.dart';
 
 /// Flutter's own `Clipboard` (package:flutter/services.dart) only ever exposes `text/plain` — see
 /// `widgets/terminal_panel.dart`'s `_paste()`. Reading a real IMAGE off the clipboard (a
@@ -22,7 +22,7 @@ class NativeClipboard {
   /// clipboard genuinely holds no image, so call sites can use one check to fall through to
   /// today's text-paste behavior either way.
   static Future<Uint8List?> readImagePng() async {
-    if (!Platform.isMacOS && !Platform.isLinux) return null;
+    if (!RuntimePlatform.isMacOS && !RuntimePlatform.isLinux) return null;
     try {
       final bytes = await _channel.invokeMethod<Uint8List>('readImagePng');
       return bytes;
@@ -43,7 +43,7 @@ class NativeClipboard {
   /// native side could not decode/write the bytes — callers should treat that as "could not do
   /// the local shortcut" rather than surfacing a crash.
   static Future<bool> writeImagePng(Uint8List pngBytes) async {
-    if (!Platform.isMacOS && !Platform.isLinux) return false;
+    if (!RuntimePlatform.isMacOS && !RuntimePlatform.isLinux) return false;
     try {
       final wrote = await _channel.invokeMethod<bool>(
         'writeImagePng',

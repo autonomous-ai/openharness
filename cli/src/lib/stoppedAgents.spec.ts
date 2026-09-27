@@ -47,9 +47,24 @@ describe('stopped harness persistence', () => {
     expect(store.patch(saved.agentId, { cwd: '/tmp/work-repaired' })).toBe(true)
     const after = store.get(saved.agentId)!
     expect(after).toEqual({ ...before, cwd: '/tmp/work-repaired' })
-    expect(after.updatedAt).toBe(before.updatedAt)
+    expect(after.touchedAt).toBe(before.touchedAt)
     expect(after.defaultName).toBe('harness Desktop')
     expect(store.patch('never-saved', { cwd: '/tmp' })).toBe(false)
+  })
+
+  // The global "last used" order must not forget an agent because it was paused: the archive keeps
+  // the stamp, the store reads it back, and the resumed row carries it into the live registry.
+  it('keeps when an app last opened the agent through a stop and a resume', async () => {
+    const { registry, StoppedAgentStore, saved, store } = await fixture()
+    const opened = registry.markOpened(saved.agentId)!.lastOpenedAt!
+    expect(opened).toBeGreaterThan(0)
+    store.save({ ...registry.byAgent(saved.agentId)!, sessionId: saved.sessionId })
+    registry.removeAgent(saved.agentId)
+    const archived = new StoppedAgentStore(join(directory, 'stopped-agents')).get(saved.agentId)!
+    expect(archived.lastOpenedAt).toBe(opened)
+    const resumed = registry.resumePendingAgent(archived, [{ backend: 'tmux', paneId: '%77' }])!
+    expect(resumed.lastOpenedAt).toBe(opened)
+    expect(registry.byAgent(saved.agentId)?.lastOpenedAt).toBe(opened)
   })
 
   it('hides a running identity or conversation, without discarding its archive', async () => {

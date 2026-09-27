@@ -19,14 +19,17 @@ import 'usage_page.dart';
 /// one worth a glance from a list of rows: the account closest to running out is
 /// the one that will stop the work. A dash when nothing has been read yet,
 /// never a zero — `0% used` is a measurement, and this has none.
-Widget buildUsageSettingsRow(BuildContext context, AppNotifier notifier) =>
-    ValueListenableBuilder<String?>(
-      valueListenable: lastUsageSummary,
-      builder: (context, summary, _) => SettingsRow(
-        title: 'Usage',
-        value: summary ?? '—',
-        onTap: () => Navigator.of(
-          context,
-        ).push(phoneRoute((_) => UsagePage(notifier: notifier))),
-      ),
-    );
+Widget buildUsageSettingsRow(
+  BuildContext context,
+  AppNotifier notifier,
+) => ValueListenableBuilder<String?>(
+  valueListenable: lastUsageSummary,
+  builder: (context, summary, _) => SettingsRow(
+    title: 'Usage',
+    // Nothing until something has been read: a dash was a dead word on the row.
+    value: summary,
+    onTap: () =>
+        Navigator.of(context)
+            .push(phoneRoute((_) => UsagePage(notifier: notifier))),
+  ),
+);

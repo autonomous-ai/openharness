@@ -60,6 +60,14 @@ export type AgentFrame = {
   launch: NonNullable<RegisteredSession['launch']>
   createdAt: string
   updatedAt: string
+  /**
+   * When any app last opened this agent (`agent_update {opened: true}`), stamped by this daemon's
+   * clock (registry.ts, `markOpened`). ALWAYS present: null means nobody has opened it yet, while an
+   * absent key means a daemon too old to keep the stamp — the distinction a client needs to tell "never
+   * opened" from "cannot say". A client's "last used" is the later of this and `updatedAt`, so every
+   * app orders the same agents the same way.
+   */
+  lastOpenedAt: string | null
   /** Cached usage from this conversation's owning machine; null means unreported, never zero. */
   tokenUsage: AgentTokenUsage | null
   outputStats: (AgentOutputStats & { updatedAt: string }) | null
@@ -133,7 +141,7 @@ export interface AgentFrameContext {
  * When the conversation last moved, in epoch ms: dated work in the transcript, else the last time the engine
  * reported in (a hook, or a session bind — the agent's creation at the latest).
  *
- * ⚠️ Never the registry's `updatedAt`. That is bookkeeping: discovery rewrites it on every pass
+ * ⚠️ Never the registry row's `touchedAt`. That is bookkeeping: discovery rewrites it on every pass
  * (`updateRuntimes`), so falling back to it stamped every agent without a readable transcript "now"
  * — and a client sorting by recency put exactly those agents above the ones just used. File mtime is
  * bookkeeping too: an idle transcript can be rewritten without a new conversation event.
@@ -159,7 +167,9 @@ function frameTitle(s: RegisteredSession): string | null {
 
 /**
  * One agent as every client consumes it. `updatedAt` is {@link lastActivityAt}, so a client sorting by
- * recency follows the conversation rather than the daemon's housekeeping.
+ * recency follows the conversation rather than the daemon's housekeeping; `lastOpenedAt` is the other
+ * half of "last used" — when a person last opened it, from any app — and a client sorts by the later
+ * of the two.
  */
 export async function agentFrame(
   s: RegisteredSession,
@@ -175,6 +185,9 @@ export async function agentFrame(
     launch: s.launch ?? { state: 'ready' },
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(await lastActivityAt(s)).toISOString(),
+    // Null, never omitted, for the reason the module doc gives: a push without the key would erase
+    // the open an earlier frame had reported.
+    lastOpenedAt: s.lastOpenedAt ? new Date(s.lastOpenedAt).toISOString() : null,
     tokenUsage: tokenUsage?.totalTokens != null
       ? { totalTokens: tokenUsage.totalTokens, updatedAt: tokenUsage.updatedAt } : null,
     outputStats: tokenUsage?.output ? { ...tokenUsage.output, updatedAt: tokenUsage.updatedAt } : null,

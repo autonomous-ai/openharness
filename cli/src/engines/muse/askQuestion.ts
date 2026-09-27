@@ -17,7 +17,8 @@
  * "read the last box" approach would report the hovered option as if the user had picked it.
  */
 
-import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import type { FoundDialog, PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 const ROW_RE = /^\s*[›>]?\s*(\d+)[.)]\s+(.+?)\s*$/
 /**
@@ -50,6 +51,11 @@ function labelOf(rest: string): string {
 }
 
 export function parseMuseQuestionPane(capture: string): PaneView {
+  return locateMuseQuestion(capture)?.view ?? null
+}
+
+/** `parseMuseQuestionPane`, with the footer it anchored on. */
+export function locateMuseQuestion(capture: string): FoundDialog | null {
   const lines = stripAnsi(capture).split('\n')
   // Anchor on the LAST footer: an answered dialog stays in the scrollback above the live one.
   let footer = -1
@@ -58,9 +64,11 @@ export function parseMuseQuestionPane(capture: string): PaneView {
   }
   if (footer < 0) return null
 
+  // Nothing above an earlier dialog's end is this dialog's: not its rows, not its question.
+  const floor = earlierDialogEnd(lines, footer, 52)
   const rows: QuestionRow[] = []
   let top = footer
-  for (let i = footer - 1; i >= 0 && footer - i < 40; i--) {
+  for (let i = footer - 1; i > floor && footer - i < 40; i--) {
     const m = ROW_RE.exec(lines[i])
     if (m) {
       const label = labelOf(m[2])
@@ -74,7 +82,7 @@ export function parseMuseQuestionPane(capture: string): PaneView {
 
   // The question is the last non-empty line above the rows that is not part of the preview box.
   let question = ''
-  for (let i = top - 1; i >= 0 && top - i < 12; i--) {
+  for (let i = top - 1; i > floor && top - i < 12; i--) {
     const line = lines[i].trim()
     if (!line) continue
     if (/^[┌│└├─╭╰]/.test(line) || /^\W*Preview\b/i.test(line)) continue
@@ -85,5 +93,5 @@ export function parseMuseQuestionPane(capture: string): PaneView {
 
   // muse's dialog is single-select: one Enter commits the highlighted row. `typeRow` stays null — the
   // only free-text path is "None of the above", which is dropped above for lack of an input on the device.
-  return { kind: 'question', question, rows, multi: false, typeRow: null }
+  return { view: { kind: 'question', question, rows, multi: false, typeRow: null }, at: footer }
 }

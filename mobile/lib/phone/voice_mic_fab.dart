@@ -31,10 +31,14 @@ class VoiceMicFab extends StatefulWidget {
     required this.voice,
     required this.session,
     this.onSlipChanged,
+    this.working = false,
   });
 
   final VoiceInputController voice;
   final TerminalSession session;
+
+  /// The agent is working — see [VoiceMicCore.working].
+  final bool working;
 
   /// The thumb crossed in or out of the button mid-hold, in
   /// [VoiceMicMode.holdToTalk]. Unused in the tap mode, which has no hold.
@@ -149,6 +153,11 @@ class _VoiceMicFabState extends State<VoiceMicFab>
       onHoldStart: action.onHoldStart,
       onHoldFinish: action.onHoldFinish,
       onSlipChanged: widget.onSlipChanged,
+      working: widget.working,
+      level: voice.level,
+      onSwipeDown: voice.status == VoiceInputStatus.listening
+          ? voice.clear
+          : null,
     );
   }
 }

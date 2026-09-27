@@ -2,7 +2,7 @@
 //!
 //!   hn list-harnesses (lsh)                every harness on every machine
 //!   hn send-message -t <harness> <text>    a message to a harness (a turn, as if typed and sent)
-//!   hn tim                                 tim, the creature
+//!   hn zoo | card | hatch | talk | lessons  your daemons (daemon/shell.rs)
 //!
 //! (`hn ls` and `hn send` are tmux's: list-sessions and send-keys.)
 //!
@@ -99,7 +99,8 @@ pub async fn run(args: &[String], explicit_port: Option<u16>, socket: Option<&st
             else if cmd == "send-message" { Some(send(port, &args[1..]).await) }
             else { eprintln!("no server running"); Some(1) }
         }
-        "tim" => { println!("{}", crate::tim::cli_line()); Some(0) }
+        // The daemons from a shell: hn zoo, card, hatch, talk, lessons, tim (daemon/shell.rs).
+        "zoo" | "card" | "hatch" | "talk" | "lessons" | "tim" | "daemon" if crate::daemon::shell::takes(args) => crate::daemon::shell::run(args, port, socket.as_deref(), name.as_deref()).await,
         // attach / a: the client itself, as `tmux attach` is.
         "attach" | "attach-session" | "a" | "at" => None,
         // new-session: a client here, as `tmux new` from a shell is — unless it is -d (a session

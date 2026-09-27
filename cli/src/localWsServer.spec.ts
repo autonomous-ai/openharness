@@ -19,10 +19,12 @@ class FakeBackend implements LocalWsBackend {
   binaries: TerminalBinaryClear[] = []
   unregisters: string[] = []
   focuses: Array<[string, string | null]> = []
+  tools: string[] = []
 
-  registerLocalClient(connId: string, sink: LocalClientSink): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean } = {}): boolean {
     this.connId = connId
     this.sink = sink
+    if (opts.tool) this.tools.push(connId)
     return true
   }
   async unregisterLocalClient(connId: string): Promise<void> {
@@ -454,6 +456,121 @@ describe('local CLI WebSocket', () => {
     await vi.waitFor(() => expect(states).toEqual(['remote-agent']))
     expect(backend.focuses).toEqual([])
     ws.close()
+  })
+
+  /** The daemon's Unix socket beside the TCP port: the pair brain's frames are taken only over the socket. */
+  async function unixWorld(backend: FakeBackend, extra: Partial<LocalWsServerOptions> = {}) {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const unix = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, socketPath)
+    const tcp = await start(backend, { localSocketServer: unix.server, ...extra })
+    const open = async (url: string, select: Record<string, unknown>): Promise<WebSocket> => {
+      const ws = new WebSocket(url)
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { localProtocolVersion: 1, ...select } }))
+      await connected
+      return ws
+    }
+    const cleanup = async (): Promise<void> => {
+      await local?.close()
+      local = null
+      await unix.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+    return { unix: `ws+unix://${socketPath}:/api/local-ws`, tcp, open, cleanup }
+  }
+
+  it('takes the pair brain\'s frames only over its own socket, and keys, talk and confirmations only from a window', async () => {
+    const backend = new FakeBackend()
+    const relayed: Frame[] = []
+    const relayPool = {
+      acquire: async (_machineId: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'other-machine', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') },
+      invalidate: () => {},
+    }
+    const got: Array<[string, Record<string, unknown>]> = []
+    const presence: Array<{ payload: Record<string, unknown>; ui: boolean }> = []
+    const w = await unixWorld(backend, {
+      autonomousEnv: 'test',
+      relayPool: relayPool as unknown as NonNullable<Parameters<typeof attachLocalWsServer>[1]['relayPool']>,
+      onDaemonAct: (_connId, payload, reply) => { got.push(['act', payload]); reply({ type: 'daemon_act_result', payload: { requestId: payload.requestId, ok: true } }) },
+      onDaemonTalk: (_connId, payload, reply) => { got.push(['talk', payload]); reply({ type: 'daemon_talk_result', payload: { requestId: payload.requestId, ok: true } }) },
+      onDaemonConfirm: (_connId, payload, reply) => { got.push(['confirm', payload]); reply({ type: 'daemon_confirm_result', payload: { requestId: payload.requestId, ok: true } }) },
+      onDaemonShown: (_connId, payload) => { got.push(['shown', payload]) },
+      onDaemonPresence: (_connId, payload, meta) => { presence.push({ payload, ui: meta.ui }) },
+    })
+    try {
+      // A window on this machine, over the socket: every one of them reaches the brain.
+      const ws = await w.open(w.unix, { machineId })
+      ws.send(JSON.stringify({ type: 'daemon_presence', payload: { active: true, awayMs: 0 } }))
+      ws.send(JSON.stringify({ type: 'daemon_shown', payload: { id: 'need:x' } }))
+      let result = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r1', id: 'need:x', choice: 'n' } }))
+      expect(await result).toEqual({ type: 'daemon_act_result', payload: { requestId: 'r1', ok: true } })
+      result = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'daemon_talk', payload: { requestId: 't1', text: 'what needs me?' } }))
+      expect(await result).toEqual({ type: 'daemon_talk_result', payload: { requestId: 't1', ok: true } })
+      result = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'daemon_confirm', payload: { requestId: 'c1', kind: 'autonomy', nonce: 'n1', accept: true } }))
+      expect(await result).toEqual({ type: 'daemon_confirm_result', payload: { requestId: 'c1', ok: true } })
+      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm'])
+      expect(presence).toEqual([{ payload: { active: true, awayMs: 0 }, ui: true }])
+      ws.close()
+
+      // Over TCP — any user's process can reach it — none of them, and nothing is passed on.
+      const tcp = await w.open(w.tcp, { machineId })
+      tcp.send(JSON.stringify({ type: 'daemon_presence', payload: { active: false } }))
+      tcp.send(JSON.stringify({ type: 'daemon_shown', payload: { id: 'need:x' } }))
+      result = onceMessage(tcp)
+      tcp.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r2', id: 'need:x', choice: 'y' } }))
+      expect(await result).toMatchObject({ type: 'daemon_act_result', payload: { requestId: 'r2', id: 'need:x', ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
+      result = onceMessage(tcp)
+      tcp.send(JSON.stringify({ type: 'daemon_confirm', payload: { requestId: 'c2', kind: 'rules', nonce: 'n2' } }))
+      expect(await result).toMatchObject({ type: 'daemon_confirm_result', payload: { requestId: 'c2', kind: 'rules', nonce: 'n2', ok: false, error: 'LOCAL_SOCKET_REQUIRED' } })
+      tcp.close()
+
+      // A tool (`harness pair`, the MCP server) is not a window, even over the socket.
+      const tool = await w.open(w.unix, { machineId, tool: true })
+      result = onceMessage(tool)
+      tool.send(JSON.stringify({ type: 'daemon_talk', payload: { requestId: 't3', text: 'hi' } }))
+      expect(await result).toMatchObject({ type: 'daemon_talk_result', payload: { requestId: 't3', ok: false, error: 'UI_ONLY' } })
+      tool.close()
+
+      // A relayed machine's socket: its presence is a fact about this desk; a key on it is not a window's.
+      const relay = await w.open(w.unix, { machineId: 'other-machine' })
+      relay.send(JSON.stringify({ type: 'daemon_presence', payload: { active: true } }))
+      result = onceMessage(relay)
+      relay.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r4', id: 'need:x', choice: 'y' } }))
+      expect(await result).toMatchObject({ type: 'daemon_act_result', payload: { requestId: 'r4', ok: false, error: 'UI_ONLY' } })
+      relay.close()
+
+      expect(got.map(([kind]) => kind)).toEqual(['shown', 'act', 'talk', 'confirm'])
+      expect(presence.map((p) => p.ui)).toEqual([true, false])
+      // Neither this daemon's dispatcher (whose send() uploads) nor the relayed machine ever saw one.
+      expect(backend.frames).toEqual([])
+      expect(relayed).toEqual([])
+    } finally {
+      await w.cleanup()
+    }
+  })
+
+  it('answers daemon_act UNSUPPORTED when there is no pair brain, rather than passing it on', async () => {
+    const backend = new FakeBackend()
+    const w = await unixWorld(backend)
+    try {
+      const ws = await w.open(w.unix, { machineId })
+      const result = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'daemon_act', payload: { requestId: 'r1', id: 'need:x', choice: 'y' } }))
+      expect(await result).toEqual({ type: 'daemon_act_result', payload: { requestId: 'r1', id: 'need:x', ok: false, error: 'UNSUPPORTED' } })
+      expect(backend.frames).toEqual([])
+      ws.close()
+    } finally {
+      await w.cleanup()
+    }
   })
 
   it('carries the window\'s answer about a spoken task, and keeps it off the wire', async () => {

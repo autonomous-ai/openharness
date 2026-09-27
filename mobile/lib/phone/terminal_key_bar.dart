@@ -9,6 +9,7 @@ import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 
 import 'phone_sheet.dart';
+import 'tty.dart';
 
 /// The keys a phone keyboard does not have, in a strip above the one it does.
 ///
@@ -60,9 +61,17 @@ class TerminalKeyBar extends StatefulWidget {
     this.onTakePhoto,
     this.questionOpen = false,
     this.hints = const [],
+    this.ctrlArmed,
+    this.onArmCtrl,
   });
 
   final Terminal terminal;
+
+  /// `ctrl` as the SESSION holds it, so an armed `ctrl` is spent by the next letter typed on the
+  /// phone's own keyboard too (`TerminalSession.armControl`), not only by this row's keys. Null
+  /// keeps the modifier on the row alone.
+  final bool? ctrlArmed;
+  final ValueChanged<bool>? onArmCtrl;
 
   /// An agent's question dialog is on the pane: `/` gives its slot to `⏎` —
   /// see the class docblock.
@@ -157,7 +166,22 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   bool _ctrl = false;
   bool _shift = false;
 
-  void _toggleCtrl() => setState(() => _ctrl = !_ctrl);
+  bool get _ctrlLit => widget.ctrlArmed ?? _ctrl;
+
+  void _toggleCtrl() {
+    if (widget.onArmCtrl case final arm?) {
+      arm(!_ctrlLit);
+      return;
+    }
+    setState(() => _ctrl = !_ctrl);
+  }
+
+  /// Puts both modifiers down — the session's `ctrl` too.
+  void _disarm() {
+    if (_ctrlLit) widget.onArmCtrl?.call(false);
+    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
+  }
+
   void _toggleShift() => setState(() => _shift = !_shift);
 
   /// Sends [key] with whatever is armed, and puts the modifiers down.
@@ -166,9 +190,10 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   /// the bar takes, so an armed modifier can never survive a keystroke and land
   /// on the one after it.
   void _sendKey(TerminalKey key, {bool edits = false}) {
-    widget.terminal.keyInput(key, ctrl: _ctrl, shift: _shift);
+    final ctrl = _ctrlLit, shift = _shift;
+    _disarm();
+    widget.terminal.keyInput(key, ctrl: ctrl, shift: shift);
     if (edits) widget.onPromptEdited?.call();
-    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
   }
 
   /// Presses the chord a hint named, as the pane printed it — nothing else:
@@ -182,9 +207,9 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   /// between a question and the prompt, and the buffer still holds words typed
   /// into the one just left.
   void _sendHint(KeyHint hint) {
+    _disarm();
     hint.chord.send(widget.terminal);
     widget.onPromptEdited?.call();
-    if (_ctrl || _shift) setState(() => _ctrl = _shift = false);
   }
 
   @override
@@ -194,6 +219,15 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     // history, move through a menu.
     final keys = <Widget>[
       _key(label: 'esc', onTap: () => _sendKey(TerminalKey.escape)),
+      // The other key a terminal person reaches for without looking: stop, now.
+      _key(
+        label: '^C',
+        semanticLabel: 'Control C',
+        onTap: () {
+          _disarm();
+          widget.terminal.keyInput(TerminalKey.keyC, ctrl: true);
+        },
+      ),
       // Completes a path or a command, and moves through Claude Code's menus.
       _key(label: 'tab', onTap: () => _sendKey(TerminalKey.tab, edits: true)),
       // ⚠️ **The two modifiers stand together, before the keys they modify.**
@@ -202,25 +236,32 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       // for in sequence (`ctrl` then an arrow) crossed the whole strip. Side by
       // side and to the LEFT of the arrows, the row reads in the order it is
       // pressed.
-      _key(label: 'shift', armed: _shift, onTap: _toggleShift),
-      _key(label: 'ctrl', armed: _ctrl, onTap: _toggleCtrl),
+      // The keyboard's own mark, so it fits a key at the size of the others.
       _key(
-        icon: LucideIcons.arrowLeft300,
+        label: '⇧',
+        semanticLabel: 'shift',
+        armed: _shift,
+        onTap: _toggleShift,
+      ),
+      // `ctrl` in words: `⌃` reads as an up arrow beside the arrows.
+      _key(label: 'ctrl', armed: _ctrlLit, onTap: _toggleCtrl),
+      _key(
+        label: '←',
         semanticLabel: 'Left',
         onTap: () => _sendKey(TerminalKey.arrowLeft),
       ),
       _key(
-        icon: LucideIcons.arrowUp300,
+        label: '↑',
         semanticLabel: 'Up',
         onTap: () => _sendKey(TerminalKey.arrowUp),
       ),
       _key(
-        icon: LucideIcons.arrowDown300,
+        label: '↓',
         semanticLabel: 'Down',
         onTap: () => _sendKey(TerminalKey.arrowDown),
       ),
       _key(
-        icon: LucideIcons.arrowRight300,
+        label: '→',
         semanticLabel: 'Right',
         onTap: () => _sendKey(TerminalKey.arrowRight),
       ),
@@ -228,7 +269,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       // after the arrows, which is the order a dialog is answered in.
       if (widget.questionOpen)
         _key(
-          icon: LucideIcons.cornerDownLeft300,
+          label: '⏎',
           semanticLabel: 'Enter',
           // Sent as the key, not as text: the keyboard's buffer holds nothing
           // a dialog cares about, and Return is `\r` to every TUI here.
@@ -244,14 +285,14 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     final apart = <Widget>[
       if (_canSendImage)
         _key(
-          icon: LucideIcons.image300,
+          label: 'img',
           semanticLabel: 'Send image',
           onTap: () => _sendImage(context),
         ),
       // The way back to a full screen of output, which on a phone is the only
       // way to read one.
       _key(
-        icon: LucideIcons.chevronDown300,
+        label: '▾',
         semanticLabel: 'Hide keyboard',
         alwaysEnabled: true,
         onTap: widget.onDismissKeyboard,
@@ -265,11 +306,11 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       // would leave with it on the first `esc`.
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: AppPalette.panelBg,
-          border: Border(top: BorderSide(color: AppGlass.hair)),
+          color: Tty.of(context).ground,
+          border: Border(top: BorderSide(color: Tty.of(context).dim)),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(6),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           // Held out of the app-wide text scale like the composer's own type:
           // at a large scale the keys stop fitting the row.
           child: MediaQuery.withNoTextScaling(
@@ -510,13 +551,18 @@ class _KeyCapState extends State<_KeyCap> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final lit = (_down || widget.armed) && widget.live;
+    final tty = Tty.of(context);
     final hint = widget.hint;
-    final foreground = lit
-        ? AppPalette.accentOnSurface
+    // A terminal's keys: plain words and the font's own arrows, no caps. Armed (ctrl, shift) is
+    // reverse video, as a terminal marks a mode; pressed is fzf's selection ground, on the way
+    // down — no fade.
+    final armed = widget.armed && widget.live;
+    final pressed = _down && widget.live;
+    final foreground = armed
+        ? tty.ground
         : widget.live
-        ? AppPalette.textPrimary
-        : AppPalette.textFaint;
+        ? tty.text
+        : tty.dim;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       // ⚠️ The tap still fires from `onTap`, not from these: a finger that
@@ -526,41 +572,25 @@ class _KeyCapState extends State<_KeyCap> {
       onTapUp: (_) => _set(false),
       onTapCancel: () => _set(false),
       onTap: widget.onTap,
-      child: AnimatedContainer(
-        // Quick enough to read as the key answering the finger rather than
-        // fading after it.
-        duration: const Duration(milliseconds: 90),
-        curve: Curves.easeOut,
-        height: 34,
+      child: Container(
+        height: 40,
         alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: lit
-              ? AppPalette.accent.withValues(alpha: 0.24)
-              : AppGlass.surfaceFill,
-          borderRadius: BorderRadius.circular(7),
-          border: Border.all(
-            color: lit ? AppPalette.accentOnSurface : AppGlass.lift,
-          ),
-        ),
+        color: armed
+            ? tty.text
+            : pressed
+            ? tty.selected
+            : Colors.transparent,
         child: hint != null
-            ? _hintFace(hint, foreground: foreground, lit: lit)
-            : widget.icon != null
-            ? Icon(widget.icon, size: 16, color: foreground)
-            // Shrinks rather than clips: ten keys share a phone's width, and
-            // `clear` is the widest word among them.
+            ? _hintFace(hint, foreground: foreground, lit: armed || pressed)
+            // Shrinks rather than clips: ten keys share a phone's width.
             : Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 2),
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
-                    widget.label!,
+                    widget.label ?? '',
                     maxLines: 1,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1,
-                      color: foreground,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: tty.style(color: foreground),
                   ),
                 ),
               ),

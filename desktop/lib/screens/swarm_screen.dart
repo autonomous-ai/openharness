@@ -1,16 +1,16 @@
 import 'dart:math' as math;
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
 
 import 'package:file_selector/file_selector.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show kIsWeb, listEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../core/runtime_platform.dart';
 import '../analytics/analytics.dart';
 import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
@@ -53,23 +53,25 @@ import '../state/workspace_status.dart';
 import '../state/workspace_pull_request.dart';
 import '../state/terminal_pane.dart';
 import '../widgets/transient_menus.dart';
+import '../widgets/add_phone_dialog.dart';
 import '../widgets/layout_palette.dart';
 import '../widgets/move_pane_palette.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/status_line.dart';
 import '../widgets/workspace_status_line.dart';
 import '../widgets/workspace_bar_control.dart';
+import '../widgets/web_download_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../store/store_mark.dart';
 import '../store/store_screen.dart';
 import '../widgets/harness_start_page.dart';
-import '../widgets/machines_panel.dart';
 import '../widgets/harness_session_manager.dart';
 import '../widgets/onboarding_card.dart';
 import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
 import '../widgets/rename_agent_dialog.dart';
 import '../widgets/delete_agent_dialog.dart';
+import '../widgets/take_over_dialog.dart';
 import '../widgets/fork_agent_dialog.dart';
 import '../widgets/restart_agent_action.dart';
 import '../widgets/new_agent_dialog.dart';
@@ -154,7 +156,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// tab closes nothing. Null between presses.
   String? _middleDownTab;
   late final bool _native =
-      widget.nativeTabs ?? (Platform.isMacOS && !kUnderTest);
+      widget.nativeTabs ?? (RuntimePlatform.isMacOS && !kUnderTest);
   late final SwarmProjectStore _projects =
       widget.projectStore ??
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);
@@ -162,7 +164,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Swarm shell');
   final _focusedModelController = GridModelPickerController();
-  MachinesPanelHandle? _machinesPanel;
   OverlayEntry? _modelsOverlay;
   VoidCallback? _unregisterModels;
   OverlayEntry? _harnessesOverlay;
@@ -405,7 +406,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.removeListener(_syncToolbarNotices);
     _toolbarNotices.removeListener(_toolbarNoticesChanged);
     _toolbarNotices.dispose();
-    _machinesPanel?.close(restoreFocus: false);
+    _dismissMachinePrompt();
     _unregisterModels?.call();
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
@@ -507,8 +508,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   bool get _modelsVisible =>
       _modelsOverlay != null || _search?.isModelMode == true;
-  bool get _machinesVisible =>
-      _machinesPanel != null || _search?.isMachineMode == true;
+  bool get _machinesVisible => _search?.isMachineMode == true;
   bool get _harnessesVisible =>
       _harnessesOverlay != null || _search?.scopePrefix.isEmpty == true;
 
@@ -516,7 +516,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       mounted && _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen;
 
   void _runShortcut(String id) {
-    _machinesPanel?.close(restoreFocus: false);
     _closeModelsControls(restoreFocus: false);
     _closeHarnessControls(restoreFocus: false);
     if (id != 'navigation.command_bar') _closeCommandBar();
@@ -547,6 +546,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         id != 'models.list' &&
         id != 'machines.list' &&
         id != 'machine.link' &&
+        id != 'machines.connections' &&
         id != 'navigation.needs_input' &&
         id != 'swarm.new' &&
         id != 'agent.add' &&
@@ -719,7 +719,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _onboardingChanged() {
     if (!mounted) return;
-    _machinesPanel?.rebuild();
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
     if (_native) _syncNative();
@@ -902,7 +901,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _paletteChanged() {
-    _machinesPanel?.rebuild();
     _modelsOverlay?.markNeedsBuild();
     _harnessesOverlay?.markNeedsBuild();
     _searchOverlay?.markNeedsBuild();
@@ -1266,7 +1264,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (call.method == 'machineControls') {
-      unawaited(_showMachinesControls());
+      unawaited(_openMachines());
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -1276,7 +1274,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     if (call.method == 'linkMachine') {
-      unawaited(_showMachinesControls());
+      unawaited(_openMachines());
       await WidgetsBinding.instance.endOfFrame;
       return;
     }
@@ -1525,6 +1523,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         unawaited(_notifications());
       case 'settings':
         await _settings();
+      case 'addPhone':
+        await _addPhone();
       case 'customize':
         await _customize();
     }
@@ -1719,6 +1719,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ),
   );
 
+  /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
+  /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
+  Future<void> _addPhone() =>
+      _dialog(() => showAddPhoneDialog(context, app, keymap: _keymap));
+
   /// Settings, by section, as rows of the box: `> usage` goes straight to
   /// Settings ▸ Usage. A palette that finds a setting by name is how an editor
   /// makes a settings screen nobody has to navigate.
@@ -1733,65 +1738,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       await open();
     } else {
       await _dialog(open);
-    }
-  }
-
-  Future<void> _showMachinesControls({String? initialMachineId}) async {
-    if (_machinesPanel case final panel?) {
-      panel.close();
-      return;
-    }
-    if (!_shortcutsEnabled || _newHarness?.requestDismiss() == false) return;
-    _closeNewHarness(restoreFocus: false);
-    _closeSearch(restoreFocus: false);
-    _closeCommandBar(restoreFocus: false);
-    dismissTransientMenus();
-    _preparePaneFocus();
-    _onboarding.acknowledge(OnboardingStep.machines);
-    final panel = openMachinesPanel(
-      context,
-      app,
-      keymap: _keymap,
-      initialMachineId: initialMachineId,
-      onboarding: _onboarding,
-      toolbarHeight: _native ? 0 : _tabBarHeight,
-    );
-    _machinesPanel = panel;
-    _syncToolbarNotices();
-    if (_native) _syncNative();
-    setState(() {});
-    final destination = await panel.closed;
-    if (!mounted || !identical(_machinesPanel, panel)) return;
-    _machinesPanel = null;
-    _syncToolbarNotices();
-    if (_native) _syncNative();
-    setState(() {});
-    // Let the removed panel release its focus before opening work.
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
-    final machine = destination == null ? null : app.stateOf(destination);
-    if (machine != null) {
-      if (machine.agents.isEmpty && !machine.machine.isShared) {
-        await _newAgent(
-          machineId: destination,
-          placement: HarnessPlacement.currentTab,
-        );
-      } else {
-        _openSearch(
-          adding: true,
-          query: '@',
-          placement: HarnessPlacement.currentTab,
-        );
-        final machineRow = _search?.rows
-            .where((row) => row.isMachine && row.machineId == destination)
-            .firstOrNull;
-        if (machineRow != null) _search!.submit(machineRow);
-      }
-    } else if (panel.restoreFocus && _shortcutsEnabled) {
-      _shellFocus.requestFocus();
-      final pane = app.focusedPane;
-      if (pane != null) app.focusPane(pane.id, reveal: true);
-      await _ensureEmptyEntry();
     }
   }
 
@@ -1879,7 +1825,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ? null
         : machine?.projectOf(agent);
     if (id == null) {
-      await _showMachinesControls();
+      await _openMachines();
       return;
     }
     await Future.wait([app.agentPreference.load(), app.projectHistory.load()]);
@@ -2399,7 +2345,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               app.machineStates.values.firstOrNull
         : app.stateOf(focused.machineId);
     if (machine == null) {
-      await _showMachinesControls();
+      await _openMachines();
       return;
     }
     final machineId = machine.machine.machineId;
@@ -2487,6 +2433,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String target, {
     PaneSplitRequest? split,
     HarnessPlacement? placement,
+    TakeOver? takeOver,
   }) async {
     final command = selected.destination.commandId;
     if (command != null) {
@@ -2519,8 +2466,40 @@ class _SwarmScreenState extends State<SwarmScreen> {
         projects: _projects.projects,
         split: split,
         placement: placement,
+        takeOver: takeOver,
       );
     } on SwarmResumeFailure catch (failure) {
+      // Open in a terminal: ask whether to move it here — and, mid-turn,
+      // whether to wait for the turn or stop it. Asked again when a turn
+      // started between the question and the answer.
+      final ask =
+          failure.canTakeOver &&
+          (takeOver == null || (takeOver == TakeOver.idle && failure.busy));
+      if (ask && failure.destination.external != null) {
+        TakeOver? choice;
+        await _dialog(() async {
+          choice = await askTakeOver(
+            context,
+            title: failure.destination.title,
+            engine: failure.destination.external!.engine,
+            busy: failure.busy,
+            machine: failure.destination.machineLabel.isEmpty
+                ? null
+                : failure.destination.machineLabel,
+            keymap: _keymap,
+          );
+        });
+        if (choice case final choice? when mounted) {
+          await _activateSearch(
+            selected,
+            target,
+            split: split,
+            placement: placement,
+            takeOver: choice,
+          );
+        }
+        return;
+      }
       _showResumeFailure(failure, target: target, placement: placement);
       return;
     }
@@ -3081,6 +3060,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _search!.removeListener(_syncSearch);
     _search!.dispose();
     _search = null;
+    _dismissMachinePrompt();
     _modelSelectionTarget = null;
     _modelSearchVisible = false;
     app.modelManager.setPanelVisible(false);
@@ -3621,12 +3601,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _linkDialogMachineId = machine.machine.machineId;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (mounted) {
-        await _showMachinesControls(
-          initialMachineId: machine.machine.machineId,
-        );
+        await _openMachines(initialMachineId: machine.machine.machineId);
       }
-      _linkDialogMachineId = null;
+      // Keep the prompt's identity until the picker closes. Otherwise Escape
+      // would immediately reopen it on the next workspace update.
+      if (_search?.isMachineMode != true) _linkDialogMachineId = null;
     });
+  }
+
+  void _dismissMachinePrompt() {
+    final id = _linkDialogMachineId;
+    _linkDialogMachineId = null;
+    if (id != null && app.stateOf(id)?.needsLink == true) {
+      app.dismissLinkPrompt(id);
+    }
   }
 
   // Keyboard actions and search commands execute the same callbacks.
@@ -3706,6 +3694,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
     'app.customize': () => unawaited(_customize()),
+    'app.add_phone': () => unawaited(_addPhone()),
     'app.store': _openStore,
     'agent.add': _addAgent,
     if (kDebugSurfaceEnabled) 'app.onboarding_review': _newTab,
@@ -3719,13 +3708,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
     // `agent.restart` and `agent.clone` come from `_actionHandlers` above:
     // both carry a ShortcutAction, so the loop already binds them.
-    'machine.link': _showMachinesControls,
+    'machine.link': _openMachines,
     'machines.manage': _manageMachines,
     'machines.list': _openMachines,
     'models.list': _togglePaneModels,
     'harnesses.list': _toggleSessions,
     'harnesses.manage': _toggleHarnessControls,
-    'machines.connections': _showMachinesControls,
+    'machines.connections': _openMachines,
     'models.manage': _toggleModelsControls,
     'project.add': _addProject,
     'keyboard.open_config': () => openKeyboardConfig(context),
@@ -3768,7 +3757,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (id == 'keyboard.quick_start' ||
         id == 'keyboard.practice' ||
-        id == 'app.onboarding_review') {
+        id == 'app.onboarding_review' ||
+        // A viewer has no daemon of its own to pair a phone with.
+        id == 'app.add_phone') {
       return app.viewer == null;
     }
     if (id == 'agent.rename' ||
@@ -4519,7 +4510,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
           '${index + 1}:${names[app.swarms[index].id]}',
       ];
       final toolHeight = workspaceBarControlHeight(context);
-      final contentWidth = math.max(0.0, constraints.maxWidth - cell.width * 7);
+      final downloadWidth = kIsWeb
+          ? WebDownloadButton.widthOf(context) + cell.width
+          : 0.0;
+      final contentWidth = math.max(
+        0.0,
+        constraints.maxWidth - cell.width * 7 - downloadWidth,
+      );
       final tabBudget = contentWidth * .45;
       _tabWidths = [
         for (final label in labels)
@@ -4714,6 +4711,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     ),
                   ),
                 ),
+              ],
+              if (kIsWeb) ...[
+                SizedBox(width: cell.width),
+                const WebDownloadButton(),
               ],
               SizedBox(width: cell.width),
             ],

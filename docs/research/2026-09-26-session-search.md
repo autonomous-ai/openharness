@@ -296,12 +296,31 @@ Enter opens one as a harness resuming it (`lib/sessionSearch/external.ts`).
   about 210 of 1,227 files, plus a session any Harness agent already has is skipped.
 - **Shown only when a search matches one**, marked `not in Harness`, and previewed like any session.
 - **Open elsewhere** is known exactly. A running Claude Code keeps `~/.claude/sessions/<pid>.json`
-  naming its session, and a running Codex holds its rollout open (`lsof`). ⌘P will not open one
-  that is still open, and the daemon checks again before it resumes.
+  naming its session, and a running Codex holds its rollout open (`lsof`). The process's terminal
+  (`ps -o tty`) tells a terminal from an app: the engines' apps have none. One open in an app
+  cannot be opened here and is not offered on the welcome page.
+- **Taking one over from a terminal.** Most people's sessions are open in a terminal before they
+  meet Harness, so those can be moved. Opening one asks first:
+  - **Idle** (between turns): *Move Here* stops the terminal's process and resumes the session in
+    Harness. Nothing is lost: every finished turn is already on disk.
+  - **Mid-turn**: *Wait* opens the harness pane at once. The pane says it is waiting, the daemon
+    stops the terminal's process when the turn ends, and the pane then resumes it. Ctrl-C in the
+    pane, or closing it, leaves the session where it was. *Take Over Now* stops the turn and
+    resumes with a first message of `continue`.
+  - **Mid-turn is read the same way:** Claude Code's record says `idle` between turns. A Codex
+    rollout's last `task_started`, `task_complete` or `turn_aborted` event says where its turn
+    stands.
+  - **Stopping** is SIGTERM, then SIGKILL after five seconds. Tested on the real TUIs: both quit
+    cleanly and restore the terminal, except that Codex leaves its cursor hidden, so the daemon
+    writes the show-cursor sequence to that terminal.
+  - The daemon stops the process last, once nothing else can refuse the launch. It never stops an
+    app's.
 - **Resuming** is `agent_create` with `resumeSessionId`: a new pane runs `claude --resume <id>` or
   `codex resume <id>` in the session's own folder, named after its title. It is refused if the
-  session is open elsewhere, is already a harness, or its folder is gone (Codex app threads live in
-  folders people tidy away).
+  session is already a harness, or its folder is gone (Codex app threads live in folders people
+  tidy away). An open one is refused with `SESSION_OPEN_IN_TERMINAL` or
+  `SESSION_BUSY_IN_TERMINAL` until `takeOver` (`idle`, `now` or `wait`) says how to take it over,
+  or with `SESSION_OPEN_ELSEWHERE` when an app has it.
 - ChatGPT conversations and Codex cloud tasks are not on disk, so they cannot be found.
 - **The welcome page lists them too.** An empty tab shows up to nine rows beside its shortcuts,
   numbered like the terminal client's home: the harnesses you were just with and these
@@ -314,6 +333,16 @@ Checked on one machine's real folders through a sandboxed daemon: the Codex app'
 terminal sessions were found by what was said in them. A session open in a terminal was refused.
 Stand-in engines confirmed the resume launch (`codex resume <id>`, `claude --resume <id>`, each in
 its session's folder); no real conversation was touched.
+
+Take-over was checked the same way against made-up sessions, held by stand-in processes in their
+own terminals:
+- Opened without a choice, a busy Codex session was refused as busy and an idle Claude one as
+  open, and both processes were left alone.
+- *Move Here* stopped the Claude one and resumed it.
+- *Wait* opened a pane saying it was waiting. When `task_complete` was appended to the rollout,
+  the daemon stopped the Codex process within two seconds and the pane resumed it.
+- *Take Over Now* resumed with `continue`.
+- Each terminal got its cursor back.
 
 ## Protocol
 

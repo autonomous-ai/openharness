@@ -9,6 +9,7 @@ import 'package:harness/widgets/workspace_welcome.dart';
 
 import 'keymap_host_test.dart' show key;
 import 'session_content_search_test.dart' show SearchConnection;
+import 'session_search_rendering_test.dart' show TailConnection;
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show createApp;
 
@@ -19,6 +20,7 @@ Map<String, dynamic> _external(
   String title,
   Duration ago, {
   bool open = false,
+  String? openIn,
 }) => {
   'agentId': '',
   'sessionId': id,
@@ -33,6 +35,7 @@ Map<String, dynamic> _external(
     'cwd': '/work/$id',
     'origin': 'codex-app',
     'open': open,
+    'openIn': ?openIn,
   },
 };
 
@@ -202,6 +205,89 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 100));
       expect(app.panes.map((pane) => pane.agentId), ['a2']);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'one open in a terminal is offered, and opening it asks how to move it here',
+    (tester) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final connection = TailConnection(
+        {
+          '': [
+            _external(
+              'e-busy',
+              'Investigate Harness crash',
+              const Duration(minutes: 1),
+              open: true,
+              openIn: 'terminal',
+            ),
+            _external(
+              'e-app',
+              'In the Codex app',
+              const Duration(minutes: 2),
+              open: true,
+              openIn: 'app',
+            ),
+          ],
+        },
+        tail: (_) => {'rows': [], 'hasMore': false, 'total': 0},
+        create: (payload) => payload['takeOver'] == null
+            ? {
+                'creationId': payload['creationId'],
+                'state': 'failed',
+                'failure': {
+                  'code': 'SESSION_BUSY_IN_TERMINAL',
+                  'detail': 'Codex is working on it in a terminal.',
+                },
+              }
+            : {
+                'creationId': payload['creationId'],
+                'state': 'created',
+                'agent': {
+                  'id': 'moved',
+                  'name': 'Investigate Harness crash',
+                  'engine': 'codex',
+                },
+              },
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      await mount(tester, app);
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('Investigate Harness crash'), findsOneWidget);
+      expect(find.text('In the Codex app'), findsNothing);
+
+      await key(tester, LogicalKeyboardKey.digit1);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        connection.creates.single,
+        containsPair('resumeSessionId', 'e-busy'),
+      );
+      expect(connection.creates.single.containsKey('takeOver'), isFalse);
+      expect(
+        find.text('Codex is working on it in a terminal.'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('take-over-wait')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('take-over-now')));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(connection.creates, hasLength(2));
+      expect(connection.creates.last, containsPair('takeOver', 'now'));
+      expect(
+        connection.creates.last,
+        containsPair('resumeSessionId', 'e-busy'),
+      );
+      expect(find.byKey(const Key('take-over-now')), findsNothing);
+      expect(app.panes.map((pane) => pane.agentId), ['moved']);
       await tester.pumpWidget(const SizedBox());
     },
   );

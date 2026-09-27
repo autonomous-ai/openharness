@@ -93,10 +93,25 @@ its consumer is now the `harness` installer rather than this app.
 
 ## Architecture
 
-### The app talks only to the local `harness` CLI
+### One Flutter UI, native and browser transports
 
-This is the single most important thing to know. The desktop app **never** dials the cloud backend or
-holds an SSO token:
+`flutter build web` builds the same `lib/main.dart` and workspace as desktop.
+Do not fork screens or create a second frontend. `kViewerMode` is true on the web:
+the browser owns its OAuth session, peer links, and end-to-end relay encryption.
+`viewer/browser_login.dart` validates the same-tab callback against the backend's
+PKCE transaction; conditional adapters handle storage and native-only services.
+`platform_auth_web.dart` serializes shared login/refresh/logout with Web Locks
+and reloads other tabs when the account changes. Auth and E2EE keys persist in
+origin-local storage; only the OAuth transaction is in session storage.
+Private shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying
+the owner and permitting only observation. Anonymous public pages are not included.
+See [README.md](README.md#web-development) for origin setup, browser storage
+lifetime, capability limits, and Chrome checks. Browser tests must set
+`--dart-define=HARNESS_TEST=true` so no production pollers or analytics run.
+
+### Native desktop talks to the local `harness` CLI
+
+The native desktop target uses the CLI for cloud access and SSO tokens:
 
 - **Auth** lives in the CLI. `lib/auth/cli_login.dart` shells out to `harness auth status --json` and
   drives `harness login --json` (NDJSON event stream); `cli_link.dart` wraps `harness link create/import/list`.
@@ -137,7 +152,7 @@ holds an SSO token:
   socket file exists, so a daemon restart does not strand the app on TCP. Windows and paths over 96
   bytes have no socket. The CLI, engine hooks and the dashboard stay on TCP. Under `flutter test`
   `LocalDaemonTransport.detect` finds no socket, so tests never reach a real daemon.
-- The **only** direct-to-backend path is `LocalManualFixture` (`lib/main_local_manual.dart`), a
+- Besides viewer builds, a direct-to-backend test path is `LocalManualFixture` (`lib/main_local_manual.dart`), a
   compile-time-gated dev entrypoint fed by `scripts/start-terminal-local-manual.sh`. It fails closed
   unless every `--dart-define` is present.
 

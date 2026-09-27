@@ -59,7 +59,7 @@ class FakeStream implements TerminalStreamHandle {
 function session(engine: string = 'codex', agentId = 'agent-1'): RegisteredSession {
   return {
     agentId, sessionId: `session-${agentId}`, engine, active: true,
-    registeredAt: Date.now(), updatedAt: Date.now(), runtimes: [{ backend: 'tmux', paneId: '%1' }],
+    registeredAt: Date.now(), touchedAt: Date.now(), runtimes: [{ backend: 'tmux', paneId: '%1' }],
     primaryRuntimeKey: 'tmux:default:%1',
   } as unknown as RegisteredSession
 }

@@ -16,7 +16,7 @@ function session(): RegisteredSession {
     projectDir: 'work', cwd: '/work', runtimes: [tmux, herdr], primaryRuntimeKey: terminalRouteKey(tmux), tmuxPane: '%1',
     source: null, title: null, model: null, cliVersion: null,
     processIdentity: { pid: 42, executable: 'claude', startMarker: 'Sat Aug 15 10:00:00 2026' },
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 

@@ -48,6 +48,7 @@ class MainFlutterWindow: NSWindow {
     installViewMenuItems()
     installHelpMenuItems()
     takeOverAboutItem()
+    HarnessAppMenu.arrange()
 
     super.awakeFromNib()
   }
@@ -85,7 +86,8 @@ class MainFlutterWindow: NSWindow {
     NSApp.orderFrontStandardAboutPanel(options: [.version: ""])
   }
 
-  /// Puts the app's own commands in the application menu, below Show All.
+  /// Puts Check for Updates… in the application menu; [HarnessAppMenu.arrange]
+  /// gives it its place. Keyboard Shortcuts… and Flash Firmware… live in Help.
   ///
   /// Added here rather than in MainMenu.xib so the whole menu bar keeps coming
   /// from the nib — declaring it in Dart with PlatformMenuBar would replace the
@@ -95,24 +97,7 @@ class MainFlutterWindow: NSWindow {
     guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
     // awakeFromNib can run more than once if the nib is reloaded; a second
     // pass must not stack duplicate rows onto the menu.
-    guard appMenu.indexOfItem(withTag: flashMenuItemTag) == -1 else { return }
-
-    // Inserted at one index in order, so the list reads top to bottom.
-    let at = insertionIndex(in: appMenu)
-    // A shortcut sheet nobody can find is a sheet nobody reads. This row is
-    // the way in with a mouse, and — because AppKit prints the key equivalent
-    // beside it — the way people learn ⌘/ in the first place.
-    appMenu.insertItem(
-      menuItem(
-        title: "Keyboard Shortcuts…",
-        action: #selector(showShortcuts(_:)),
-        symbol: "keyboard",
-        tag: shortcutsMenuItemTag,
-        keyEquivalent: "/"
-      ),
-      at: at
-    )
-    appMenu.insertItem(NSMenuItem.separator(), at: at + 1)
+    guard appMenu.indexOfItem(withTag: updateMenuItemTag) == -1 else { return }
     appMenu.insertItem(
       menuItem(
         title: "Check for Updates…",
@@ -120,40 +105,38 @@ class MainFlutterWindow: NSWindow {
         symbol: "arrow.triangle.2.circlepath",
         tag: updateMenuItemTag
       ),
-      at: at + 2
+      at: insertionIndex(in: appMenu)
     )
-    appMenu.insertItem(
-      menuItem(
-        title: "Flash Firmware…",
-        action: #selector(flashFirmware(_:)),
-        symbol: "bolt.circle",
-        tag: flashMenuItemTag
-      ),
-      at: at + 3
-    )
-
   }
 
-  /// Help ▸ Export Logs… — the bug-report zip, from a menu every build has.
-  /// Settings ▸ Debug carries the same action but is hidden in a shipped app,
-  /// and the person whose dial got stuck is running a shipped app.
+  /// Help: learning Harness first — Quick Start, Keyboard Practice, and the
+  /// shortcut sheet — then the two things support asks for.
+  ///
+  /// Keyboard Shortcuts… ⌘/ sits where people look for it in every Mac app,
+  /// and AppKit prints ⌘/ beside it, which is how people learn the chord.
+  /// Export Logs… is the bug-report zip, from a menu every build has (Settings
+  /// ▸ Debug carries the same action but is hidden in a shipped app, and the
+  /// person whose dial got stuck is running a shipped app). Flash Firmware…
+  /// is that dial's, and is here for the same reason.
   private func installHelpMenuItems() {
     guard let helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu else { return }
     guard helpMenu.indexOfItem(withTag: exportLogsMenuItemTag) == -1 else { return }
-    helpMenu.insertItem(
+    let items: [NSMenuItem] = [
+      menuItem(title: "Quick Start", action: #selector(quickStart(_:)), symbol: "terminal", tag: 7310),
+      menuItem(title: "Keyboard Practice", action: #selector(keyboardPractice(_:)), symbol: "keyboard", tag: 7311),
       menuItem(
-        title: "Export Logs…",
-        action: #selector(exportLogs(_:)),
-        symbol: "doc.zipper",
-        tag: exportLogsMenuItemTag
+        title: "Keyboard Shortcuts…",
+        action: #selector(showShortcuts(_:)),
+        symbol: "command",
+        tag: shortcutsMenuItemTag,
+        keyEquivalent: "/"
       ),
-      at: 0
-    )
-    helpMenu.insertItem(NSMenuItem.separator(), at: 1)
-    helpMenu.insertItem(menuItem(title: "Quick Start", action: #selector(quickStart(_:)),
-      symbol: "terminal", tag: 7310), at: 0)
-    helpMenu.insertItem(menuItem(title: "Keyboard Practice", action: #selector(keyboardPractice(_:)),
-      symbol: "keyboard", tag: 7311), at: 1)
+      NSMenuItem.separator(),
+      menuItem(title: "Export Logs…", action: #selector(exportLogs(_:)), symbol: "doc.zipper", tag: exportLogsMenuItemTag),
+      menuItem(title: "Flash Firmware…", action: #selector(flashFirmware(_:)), symbol: "bolt.circle", tag: flashMenuItemTag),
+      NSMenuItem.separator(),
+    ]
+    for (index, item) in items.enumerated() { helpMenu.insertItem(item, at: index) }
   }
 
   /// The Safari/Chrome/Terminal.app "Font" convention, in the SAME menu and the SAME order those
@@ -386,5 +369,60 @@ class MainFlutterWindow: NSWindow {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     return pasteboard.setData(data, forType: .png)
+  }
+}
+
+/// The Harness menu, in the order people act on it: what they came to do first,
+/// then keeping it current, and About — which holds nothing to act on — last of
+/// those; then the system's own rows.
+///
+/// ```
+/// Add Phone…
+/// Customize Harness
+/// Settings…            ⌘,
+/// ──────────
+/// Check for Updates…
+/// About Harness
+/// ──────────
+/// Services ›
+/// ──────────
+/// Hide Harness         ⌘H
+/// Hide Others         ⌥⌘H
+/// Show All
+/// ──────────
+/// Quit Harness         ⌘Q
+/// ```
+///
+/// Two places add to this menu — this window (Check for Updates) and the title
+/// bar (Settings, Customize, Add Phone) — in an order AppKit decides, so each
+/// calls this once it is done, and it rebuilds the whole menu from what is
+/// there. Rows are found by what they do, not where they are; anything it does
+/// not know keeps a place above Quit.
+enum HarnessAppMenu {
+  static func arrange() {
+    guard let menu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
+    var rows = menu.items.filter { !$0.isSeparatorItem }
+    func take(_ matches: (NSMenuItem) -> Bool) -> NSMenuItem? {
+      guard let index = rows.firstIndex(where: matches) else { return nil }
+      return rows.remove(at: index)
+    }
+    func named(_ action: String) -> (NSMenuItem) -> Bool {
+      { $0.representedObject as? String == action }
+    }
+    func doing(_ selectors: String...) -> (NSMenuItem) -> Bool {
+      { item in item.action.map { selectors.contains(NSStringFromSelector($0)) } ?? false }
+    }
+    let quit = take(doing("terminate:"))
+    let groups: [[NSMenuItem?]] = [
+      [take(named("addPhone")), take(named("customize")), take { $0.keyEquivalent == "," }],
+      [take { $0.tag == 7301 }, take(doing("showAbout:", "orderFrontStandardAboutPanel:"))],
+      [take { $0.submenu != nil && $0.submenu === NSApp.servicesMenu } ?? take { $0.title == "Services" }],
+      [take(doing("hide:")), take(doing("hideOtherApplications:")), take(doing("unhideAllApplications:"))],
+    ] + [rows.map { Optional($0) }, [quit]]
+    menu.removeAllItems()
+    for group in groups.map({ $0.compactMap { $0 } }) where !group.isEmpty {
+      if menu.numberOfItems > 0 { menu.addItem(.separator()) }
+      for item in group { menu.addItem(item) }
+    }
   }
 }

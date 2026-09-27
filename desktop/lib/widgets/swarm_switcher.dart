@@ -986,8 +986,12 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                               ? 'No matching projects'
                               : search.isMachineMode
                               ? 'No matching machines'
-                              : search.adding && search.query.isEmpty
+                              : search.adding &&
+                                    search.query.isEmpty &&
+                                    search.capacity <= 0
                               ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
+                              : search.adding && search.query.isEmpty
+                              ? 'No harnesses yet. Start an agent or choose @ machines to connect a machine.'
                               : search.adding
                               ? 'No matching harnesses'
                               : 'No matching results',
@@ -1360,7 +1364,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   '${modelAction == null ? '' : ', $modelAction'}'
                   '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
                   '${row.shortcut == null ? '' : ', Shortcut ${row.shortcut}'}'
-                  '${widget.activityAge == null ? '' : ', Last active ${widget.activityAge} ago'}',
+                  '${widget.activityAge == null ? '' : ', Last used ${widget.activityAge} ago'}',
         excludeSemantics: true,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

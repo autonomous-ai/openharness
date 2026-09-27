@@ -21,6 +21,8 @@ process.env.ADAPTER_RUNTIME_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-runti
 // discover, refresh, or replace the developer's real Harness account session.
 process.env.HARNESS_AUTH_DIR = join(process.env.ADAPTER_DATA_DIR, 'auth')
 process.env.DSH_DIR = join(process.env.ADAPTER_DATA_DIR, 'dsh')
+// The lessons folder defaults to ~/.harness/lessons: a spec must never write a lesson there.
+process.env.HARNESS_LESSONS_DIR = join(process.env.ADAPTER_DATA_DIR, 'lessons')
 // The Store catalog is fetched from GitHub by dsh_list; a test must never depend on what that branch
 // holds today (a published catalog turned a fixture registry of two into the live shelf of 23).
 // Loopback port 9 refuses at once, so the live catalog falls back to the registry each test stubs.

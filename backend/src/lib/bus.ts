@@ -668,6 +668,20 @@ export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) =
   return addSub(deskChannel(userId), cb as Cb)
 }
 
+// Per-USER zoo invalidation: the account's daemons or eggs changed (routes/zoo.ts). The same path as
+// the desk and a separate channel, so a desk change never re-fetches the zoo and the other way round.
+export interface ZooChangedMsg { revision: number }
+
+const zooChannel = (userId: string): string => `zoo:${userId}`
+
+export function publishZooChanged(userId: string, msg: ZooChangedMsg): Promise<number> {
+  return safePublish(zooChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeZooChanged(userId: string, cb: (msg: ZooChangedMsg) => void): Promise<() => void> {
+  return addSub(zooChannel(userId), cb as Cb)
+}
+
 export interface DeviceE2eePairMsg {
   kind: 'pending' | 'cleared'
   machineId: string

@@ -8,7 +8,7 @@ import 'swarm_navigation.dart';
 enum SessionFilter { all, needsInput, running, paused }
 
 enum SessionSort {
-  recent('Recently active'),
+  recent('Recently used'),
   name('Name'),
   machine('Machine'),
   project('Project');
@@ -56,7 +56,10 @@ class HarnessSession {
   final bool open, working;
   final PendingQuestion? question;
   bool get needsInput => question != null && !agent.isStopped;
-  DateTime? get lastActiveAt => agent.lastActivityAt;
+
+  /// Activity or a person opening it in any client, whichever is later — see
+  /// [Agent.lastUsedAt]. What every harness list sorts by and shows.
+  DateTime? get lastUsedAt => agent.lastUsedAt;
   String get machineId => machine.machine.machineId;
   String get id => agentDestinationId(machineId, agent.id);
   AgentProject? get project => machine.projectOf(agent);
@@ -178,7 +181,7 @@ List<HarnessSession> visibleHarnessSessions(
   final ranks = {for (var i = 0; i < recent.length; i++) recent[i]: i};
   result.sort((a, b) {
     final comparison = switch (sort) {
-      SessionSort.recent => _byActivity(a, b, ranks, recent.length),
+      SessionSort.recent => _byLastUse(a, b, ranks, recent.length),
       SessionSort.name => compareNatural(
         a.agent.displayName.toLowerCase(),
         b.agent.displayName.toLowerCase(),
@@ -202,17 +205,19 @@ List<HarnessSession> visibleHarnessSessions(
   return result;
 }
 
-int _byActivity(
+/// Most recently used first — the same global order as Open Harness — then
+/// this window's own visit order for ties and harnesses with no time at all.
+int _byLastUse(
   HarnessSession a,
   HarnessSession b,
   Map<String, int> ranks,
   int fallback,
 ) {
-  final activity = (b.lastActiveAt?.millisecondsSinceEpoch ?? 0).compareTo(
-    a.lastActiveAt?.millisecondsSinceEpoch ?? 0,
+  final used = (b.lastUsedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+    a.lastUsedAt?.millisecondsSinceEpoch ?? 0,
   );
-  return activity != 0
-      ? activity
+  return used != 0
+      ? used
       : (ranks[a.id] ?? fallback).compareTo(ranks[b.id] ?? fallback);
 }
 

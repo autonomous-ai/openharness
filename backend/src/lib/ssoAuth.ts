@@ -10,6 +10,7 @@ import {
   type AutonomousEnvironment,
 } from './autonomousEnvironment.js'
 import { createSsoProfileCache, type SharedProfileStore } from './ssoProfileCache.js'
+import { isHarnessAccessToken } from './harnessTokenFormat.js'
 
 /** Internal identity attached to authenticated backend requests and user WebSockets. */
 export interface AuthUser {
@@ -17,6 +18,8 @@ export interface AuthUser {
   email: string
   role: string
   autonomousEnv: AutonomousEnvironment
+  /** Set when the token is one Harness issued itself (lib/harnessSession.ts), not an Autonomous one. */
+  harnessSessionId?: string
 }
 
 export interface SsoProfile {
@@ -164,6 +167,9 @@ function accessTokenMetadata(token: string): { name?: string; roles?: string[] }
 
 /** Validate the token, mirror the external identity, then return the app's internal user identity. */
 /**
+ * @param allowHarnessSession Accept a Harness-issued token (lib/harnessSession.ts). FALSE where the
+ *   caller connects AS a machine — a phone's session is a viewer's, never a daemon's.
+ *
  * @param enforceEnv Gate the caller on the account plane their user row is stamped with. TRUE for the
  *   web, which can be pointed at either plane and must not let the two identities cross.
  *
@@ -179,8 +185,16 @@ function accessTokenMetadata(token: string): { name?: string; roles?: string[] }
 export async function authenticateAccessToken(
   token: string,
   autonomousEnv: AutonomousEnvironment = 'prod',
-  { enforceEnv = true }: { enforceEnv?: boolean } = {},
+  { enforceEnv = true, allowHarnessSession = true }: { enforceEnv?: boolean; allowHarnessSession?: boolean } = {},
 ): Promise<AuthUser> {
+  // A sign-in Harness issued itself — a phone signed in by scanning a computer's QR. It names its
+  // user outright, so there is no account plane to choose and nothing to ask the account service.
+  // Loaded on first use: that module holds Redis, which connects on import (see the store above).
+  if (isHarnessAccessToken(token)) {
+    if (!allowHarnessSession) throw new SsoAuthError('This connection needs an Autonomous sign-in', 'INVALID_TOKEN')
+    const { authenticateHarnessAccessToken } = await import('./harnessSession.js')
+    return authenticateHarnessAccessToken(token)
+  }
   const profile = await profileCache.resolve(token, autonomousEnv, () => fetchSsoProfile(token, autonomousEnv))
   const metadata = accessTokenMetadata(token)
   const email = normalizeUserEmail(profile.email)

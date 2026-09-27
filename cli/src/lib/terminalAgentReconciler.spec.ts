@@ -18,7 +18,7 @@ function session(runtimes: TerminalRuntimeRef[] = [tmux]): RegisteredSession {
     transcriptPath: null, projectDir: 'work', cwd: '/work', runtimes,
     primaryRuntimeKey: terminalRouteKey(runtimes[0]), tmuxPane: runtimes.find((runtime) => runtime.backend === 'tmux')?.paneId ?? '',
     source: null, title: null, model: null, cliVersion: null, processIdentity: identity,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 

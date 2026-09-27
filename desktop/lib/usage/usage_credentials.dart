@@ -15,6 +15,8 @@ import 'dart:io';
 
 import 'package:cryptography/dart.dart';
 
+import '../core/runtime_platform.dart';
+
 /// A token, and when it stops working.
 class UsageToken {
   const UsageToken({required this.accessToken, this.expiresAt});
@@ -48,8 +50,8 @@ class UsageCredentials {
   /// Overridden by tests so nothing shells out to the real `security`.
   final Future<ProcessResult> Function(String, List<String>)? runProcess;
 
-  String? get _home => home ?? Platform.environment['HOME'];
-  Map<String, String> get _env => environment ?? Platform.environment;
+  String? get _home => home ?? RuntimePlatform.environment['HOME'];
+  Map<String, String> get _env => environment ?? RuntimePlatform.environment;
 
   /// The Keychain SERVICE Claude Code writes its OAuth token under — its own rule, read off
   /// Claude Code 2.1.272: `Claude Code-credentials`, plus `-<sha256(configDir)[0..8]>` when
@@ -165,7 +167,7 @@ class UsageCredentials {
   String? _readFile(String relative) {
     final home = _home;
     if (home == null) return null;
-    final file = File('$home${Platform.pathSeparator}$relative');
+    final file = File('$home${RuntimePlatform.pathSeparator}$relative');
     if (!file.existsSync()) return null;
     try {
       return file.readAsStringSync();
@@ -182,7 +184,7 @@ class UsageCredentials {
   /// generic password and this is one read on a timer — a native channel would
   /// be a second thing to keep in step across two platforms for it.
   Future<String?> _readKeychain() async {
-    if (!Platform.isMacOS && runProcess == null) return null;
+    if (!RuntimePlatform.isMacOS && runProcess == null) return null;
     final run = runProcess ?? Process.run;
     final env = _env;
     try {

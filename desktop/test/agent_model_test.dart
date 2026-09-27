@@ -140,6 +140,7 @@ void main() {
   });
   _dshTests();
   _cloneTests();
+  _lastUsedTests();
   test('uses explicit terminal availability from a new CLI', () {
     final dormantPane = Agent.fromJson({
       'id': 'agent-1',
@@ -450,6 +451,86 @@ void _cloneTests() {
       expect(
         parse({'resumeMode': 'conversation', 'sessionId': 'abc'})
             .resumesFreshConversation,
+        isFalse,
+      );
+    });
+  });
+}
+
+/// `lastOpenedAt` and the "last used" order built on it.
+void _lastUsedTests() {
+  group('last used', () {
+    final active = DateTime.utc(2026, 9, 26, 10);
+    final opened = DateTime.utc(2026, 9, 26, 12);
+
+    test('reads lastOpenedAt, and a daemon that sends null or nothing', () {
+      final parsed = Agent.fromJson({
+        'id': 'a',
+        'updatedAt': active.toIso8601String(),
+        'lastOpenedAt': opened.toIso8601String(),
+      });
+      expect(parsed.lastActivityAt, active);
+      expect(parsed.lastOpenedAt, opened);
+      expect(parsed.copyWith(name: 'Renamed').lastOpenedAt, opened);
+      expect(
+        Agent.fromJson({'id': 'a', 'lastOpenedAt': null}).lastOpenedAt,
+        isNull,
+      );
+      // An older daemon: the field is absent altogether.
+      expect(Agent.fromJson({'id': 'a'}).lastOpenedAt, isNull);
+      expect(
+        Agent.fromJson({'id': 'a', 'lastOpenedAt': 'not a time'}).lastOpenedAt,
+        isNull,
+      );
+      expect(
+        Agent.fromJson({'id': 'a', 'lastOpenedAt': 42}).lastOpenedAt,
+        isNull,
+      );
+    });
+
+    test('lastUsedAt is the later of activity and the last open', () {
+      Agent agent({DateTime? activity, DateTime? open}) => Agent(
+        id: 'a',
+        name: 'a',
+        lastActivityAt: activity,
+        lastOpenedAt: open,
+      );
+      expect(agent().lastUsedAt, isNull);
+      expect(agent(activity: active).lastUsedAt, active);
+      expect(agent(open: opened).lastUsedAt, opened);
+      expect(agent(activity: active, open: opened).lastUsedAt, opened);
+      expect(agent(activity: opened, open: active).lastUsedAt, opened);
+      expect(
+        agent(activity: active).copyWith(lastOpenedAt: opened).lastUsedAt,
+        opened,
+      );
+    });
+
+    test('a push that only moves lastOpenedAt is a change to the roster', () {
+      final raw = {
+        'id': 'a',
+        'name': 'Work',
+        'updatedAt': active.toIso8601String(),
+      };
+      final agent = Agent.fromJson(raw);
+      expect(AppNotifier.agentsEqual([agent], [Agent.fromJson(raw)]), isTrue);
+      final touched = Agent.fromJson({
+        ...raw,
+        'lastOpenedAt': opened.toIso8601String(),
+      });
+      expect(AppNotifier.agentsEqual([agent], [touched]), isFalse);
+      expect(
+        AppNotifier.agentsEqual(
+          [touched],
+          [
+            Agent.fromJson({
+              ...raw,
+              'lastOpenedAt': opened
+                  .add(const Duration(seconds: 1))
+                  .toIso8601String(),
+            }),
+          ],
+        ),
         isFalse,
       );
     });

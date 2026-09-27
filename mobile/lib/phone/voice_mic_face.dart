@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'floating_glass.dart';
+import 'tty.dart';
 import 'voice_mic_mode.dart';
 
 /// What the mic says it will do when tapped.
@@ -16,8 +19,9 @@ enum VoiceMicFace {
   /// The microphone is opening: tap to call it off.
   starting,
 
-  /// Recording: tap, and what was said is sent. The waveform in the capsule
-  /// beside it is what shows it listening — see `voice_take_meter.dart`.
+  /// Recording: tap, and what was said is sent. Its bars move with the voice —
+  /// what ChatGPT's dictation and Siri do while they listen — and a swipe down
+  /// throws the take away.
   listening,
 
   /// Transcribing: nothing to tap until the words are back.
@@ -69,28 +73,29 @@ enum _Fill {
 
 _Fill _fillFor(VoiceMicFace face, {required bool dead}) {
   if (dead) return _Fill.glass;
+  // ⚠️ **Flat at rest; filled only while it records.** Over a terminal the mic is a quiet outline
+  // in the terminal's own colours — a lit circle sitting on the agent's prompt all day was the
+  // loudest thing on the screen. It fills (the terminal's red, a recording light) while a take is
+  // live, and that is the one moment it should be loud.
   return switch (face) {
     VoiceMicFace.cancelling => _Fill.warn,
-    VoiceMicFace.busy || VoiceMicFace.off => _Fill.glass,
+    VoiceMicFace.listening || VoiceMicFace.starting => _Fill.accent,
+    VoiceMicFace.busy ||
+    VoiceMicFace.off ||
     VoiceMicFace.talk ||
-    VoiceMicFace.starting ||
-    VoiceMicFace.listening ||
     VoiceMicFace.sending ||
     VoiceMicFace.sent ||
-    VoiceMicFace.retry => _Fill.accent,
+    VoiceMicFace.retry => _Fill.glass,
   };
 }
 
 /// The glyph for what a press will do.
-enum _Glyph { mic, micOff, send, cancel, check, dots }
+enum _Glyph { mic, micOff, send, cancel, check, dots, bars }
 
 _Glyph _glyphFor(VoiceMicFace face) => switch (face) {
   VoiceMicFace.talk || VoiceMicFace.starting => _Glyph.mic,
-  // ⚠️ The arrow only in the tap mode, where the next tap IS the send — the
-  // fill no longer says so, because the mic is filled at rest too. In
-  // hold-to-talk the arrow would be a lie: nothing is sent by pressing, it is
-  // sent by letting go, and the thumb never leaves the button to press again.
-  VoiceMicFace.listening => micHoldsToTalk ? _Glyph.mic : _Glyph.send,
+  // Live bars, not an arrow: a still `↑` read as "send", not as "listening".
+  VoiceMicFace.listening => _Glyph.bars,
   VoiceMicFace.busy => _Glyph.dots,
   VoiceMicFace.sending || VoiceMicFace.retry => _Glyph.send,
   VoiceMicFace.sent => _Glyph.check,
@@ -108,16 +113,30 @@ bool _spins(VoiceMicFace face) =>
 /// The round, filled part of the mic: its colour, its glow, and the glyph for
 /// what a press will do.
 class VoiceMicCore extends StatelessWidget {
-  const VoiceMicCore({super.key, required this.face, required this.dead});
+  const VoiceMicCore({
+    super.key,
+    required this.face,
+    required this.dead,
+    this.working = false,
+    this.level,
+  });
 
-  /// The visible circle's diameter — and the voice capsule's height, so the
-  /// circle closes the capsule's right end. See `voice_status_pill.dart`.
-  static const double diameter = 52;
+  /// The microphone's level, 0–1, which the bars follow while it listens. Null draws them idling.
+  final ValueListenable<double>? level;
+
+  /// The visible circle's diameter: Siri's orb, near enough. Centred at the foot of Focus it is
+  /// the one control on the screen, the way a camera's shutter is — and it is held through a
+  /// whole sentence, so it is sized for a thumb, not a fingertip.
+  static const double diameter = 72;
 
   final VoiceMicFace face;
 
   /// Drawn as a button that cannot be pressed: frosted, not filled.
   final bool dead;
+
+  /// The agent is working: the rim is a 2pt ring in the text's faint ink rather than a hairline —
+  /// at the thumb, whose turn it is.
+  final bool working;
 
   static const Duration _morph = Duration(milliseconds: 300);
 
@@ -125,7 +144,8 @@ class VoiceMicCore extends StatelessWidget {
   Widget build(BuildContext context) {
     final motion = !MediaQuery.disableAnimationsOf(context);
     final fill = _fillFor(face, dead: dead);
-    final ink = _inkFor(fill);
+    final tty = Tty.of(context);
+    final ink = _inkFor(fill, tty);
     final glyph = _glyphFor(face);
     return FloatingGlass(
       child: AnimatedContainer(
@@ -133,7 +153,7 @@ class VoiceMicCore extends StatelessWidget {
         curve: Curves.easeOutCubic,
         width: diameter,
         height: diameter,
-        decoration: _decoration(fill),
+        decoration: _decoration(fill, tty),
         child: Stack(
           alignment: Alignment.center,
           clipBehavior: Clip.none,
@@ -142,9 +162,7 @@ class VoiceMicCore extends StatelessWidget {
               duration: const Duration(milliseconds: 200),
               opacity: _spins(face) ? 1 : 0,
               child: _BusyArc(
-                color: fill == _Fill.accent
-                    ? Colors.white.withValues(alpha: 0.9)
-                    : AppPalette.accentOnSurface,
+                color: fill == _Fill.accent ? tty.theme.brightWhite : tty.text,
                 spin: motion && _spins(face),
               ),
             ),
@@ -160,6 +178,7 @@ class VoiceMicCore extends StatelessWidget {
                   ink,
                   bob: motion && face == VoiceMicFace.sending,
                   motion: motion,
+                  level: level,
                 ),
               ),
             ),
@@ -175,17 +194,10 @@ class VoiceMicCore extends StatelessWidget {
     );
   }
 
-  Color _inkFor(_Fill fill) => switch (fill) {
-    _Fill.accent => Colors.white,
-    // White on the dark theme's bright amber is 2:1; dark ink there, white on
-    // the light theme's deep one.
-    _Fill.warn => AppTheme.pick(Colors.white, const Color(0xFF241800)),
-    _Fill.glass =>
-      face == VoiceMicFace.off
-          ? AppPalette.textFaint
-          : face == VoiceMicFace.busy
-          ? AppPalette.accentOnSurface
-          : AppPalette.textPrimary,
+  Color _inkFor(_Fill fill, Tty tty) => switch (fill) {
+    _Fill.accent => tty.theme.black,
+    _Fill.warn => tty.theme.black,
+    _Fill.glass => face == VoiceMicFace.off ? tty.dim : tty.text,
   };
 
   /// ⚠️ **Two different shadows for two different jobs, and the frosted one
@@ -193,37 +205,23 @@ class VoiceMicCore extends StatelessWidget {
   /// casts a plain drop shadow instead: it floats over streaming output rather
   /// than over a surface, and without one its edge disappears against every
   /// dark line it happens to sit on.
-  BoxDecoration _decoration(_Fill fill) {
+  /// Flat, the terminal's way: no gradient, no glow, no shadow — see [_fillFor].
+  BoxDecoration _decoration(_Fill fill, Tty tty) {
     if (fill == _Fill.glass) {
       return BoxDecoration(
         shape: BoxShape.circle,
-        color: floatingButtonFill,
-        border: Border.all(color: floatingButtonRim),
-        // ⚠️ Kept light: a box shadow paints under the WHOLE circle, and the
-        // fill is not opaque — a heavy one showed through as a dark disc.
-        boxShadow: floatingButtonShadow,
+        // The terminal's own ground, near-opaque, so the glyph reads over any line of output.
+        color: tty.ground,
+        border: working
+            ? Border.all(color: tty.faint, width: 2)
+            : Border.all(color: tty.dim, width: 1.5),
       );
     }
-    final tint = fill == _Fill.warn ? AppPalette.warn : AppPalette.accent;
+    // Recording, the face is the send button: green, the colour of go. Red stays on the bar's
+    // `●` and its clock, where it means "recording" and nothing else.
     return BoxDecoration(
       shape: BoxShape.circle,
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color.lerp(tint, Colors.white, 0.18)!, tint],
-      ),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-      boxShadow: [
-        BoxShadow(color: tint.withValues(alpha: 0.4), blurRadius: 12),
-        // The lift, under the glow. The glow does not separate the circle from
-        // the text behind it: it is the same brightness as the accent the
-        // terminal itself uses.
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.35),
-          blurRadius: 10,
-          offset: const Offset(0, 3),
-        ),
-      ],
+      color: fill == _Fill.warn ? tty.yellow : tty.green,
     );
   }
 
@@ -232,8 +230,9 @@ class VoiceMicCore extends StatelessWidget {
     Color ink, {
     required bool bob,
     required bool motion,
+    ValueListenable<double>? level,
   }) {
-    Icon icon(IconData data) => Icon(data, size: 25, color: ink);
+    Icon icon(IconData data) => Icon(data, size: 30, color: ink);
     return switch (glyph) {
       _Glyph.mic => icon(LucideIcons.mic300),
       _Glyph.micOff => icon(LucideIcons.micOff300),
@@ -241,6 +240,7 @@ class VoiceMicCore extends StatelessWidget {
       _Glyph.cancel => icon(LucideIcons.x300),
       _Glyph.check => icon(LucideIcons.check300),
       _Glyph.dots => _Dots(color: ink, animate: motion),
+      _Glyph.bars => _LiveBars(color: ink, level: level, animate: motion),
     };
   }
 
@@ -323,7 +323,7 @@ class _BusyArcState extends State<_BusyArc>
     child: RotationTransition(
       turns: _turn,
       child: CustomPaint(
-        size: const Size.square(44),
+        size: const Size.square(VoiceMicCore.diameter - 14),
         painter: _ArcPainter(widget.color),
       ),
     ),
@@ -439,6 +439,99 @@ class _DotsState extends State<_Dots> with SingleTickerProviderStateMixin {
       ),
     ),
   );
+}
+
+/// Five bars that move with the voice while the mic listens: short at silence, tall when loud,
+/// each on its own phase so they never move as one block. They idle gently when there is no
+/// level to follow, so the mic never looks frozen while it is recording.
+class _LiveBars extends StatefulWidget {
+  const _LiveBars({
+    required this.color,
+    required this.level,
+    required this.animate,
+  });
+
+  final Color color;
+  final ValueListenable<double>? level;
+  final bool animate;
+
+  @override
+  State<_LiveBars> createState() => _LiveBarsState();
+}
+
+class _LiveBarsState extends State<_LiveBars>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _wave = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  );
+
+  /// The level, eased toward what the microphone reports, so the bars glide.
+  double _shown = 0;
+
+  static const _weights = [0.55, 0.85, 1.0, 0.8, 0.5];
+  static const double _bar = 4;
+  static const double _gap = 4;
+  static const double _low = 5;
+  static const double _high = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.animate) unawaited(_wave.repeat());
+  }
+
+  @override
+  void didUpdateWidget(_LiveBars old) {
+    super.didUpdateWidget(old);
+    if (widget.animate && !_wave.isAnimating) unawaited(_wave.repeat());
+    if (!widget.animate) _wave.stop();
+  }
+
+  @override
+  void dispose() {
+    _wave.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: AnimatedBuilder(
+      animation: _wave,
+      builder: (context, _) {
+        final target = (widget.level?.value ?? 0.15).clamp(0.0, 1.0);
+        _shown += (target - _shown) * 0.35;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            for (var i = 0; i < _weights.length; i++) ...[
+              if (i > 0) const SizedBox(width: _gap),
+              Container(
+                width: _bar,
+                height: _heightOf(i),
+                decoration: BoxDecoration(
+                  color: widget.color,
+                  borderRadius: BorderRadius.circular(_bar / 2),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    ),
+  );
+
+  double _heightOf(int i) {
+    // A breath of motion always, more of it the louder the voice.
+    final phase = math.sin(2 * math.pi * (_wave.value + i * 0.18));
+    final swing = 0.18 + 0.82 * _shown;
+    final amount = (_weights[i] * swing * (0.75 + 0.25 * phase)).clamp(
+      0.0,
+      1.0,
+    );
+    return _low + (_high - _low) * amount;
+  }
 }
 
 /// The send arrow, nudging upward while the words are on their way.

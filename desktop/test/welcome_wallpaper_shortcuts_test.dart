@@ -115,8 +115,12 @@ void main() {
     void check(InlineSpan span, TextStyle parent) {
       final style = parent.merge(span.style);
       if (span is TextSpan) {
-        if (span.text?.trim().isNotEmpty == true &&
-            style.fontFamily != 'MaterialIcons') {
+        // Icon glyphs (Material's, and the app's Lucide set) are not type.
+        final icon =
+            style.fontFamily == 'MaterialIcons' ||
+            (style.fontFamily?.startsWith('packages/lucide_icons_flutter/') ??
+                false);
+        if (span.text?.trim().isNotEmpty == true && !icon) {
           expect(style.fontSize, terminalFontStore.size, reason: span.text);
           expect(
             style.fontFamily,

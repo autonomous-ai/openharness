@@ -34,8 +34,8 @@ void main() {
 
     // Not "No machines yet": that tells somebody with three machines to go and
     // set one up.
-    expect(find.text('No machines yet'), findsNothing);
-    expect(find.text("Couldn't load your machines"), findsOneWidget);
+    expect(find.text('No computers yet'), findsNothing);
+    expect(find.text("Couldn't reach your computers"), findsOneWidget);
 
     await tester.tap(find.text('Try again'));
     await tester.pump();

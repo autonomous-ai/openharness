@@ -19,6 +19,7 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
+| `harness pair <verb> [--json]` · `harness pair talk <words…>` · `harness pair mcp` | Your paired daemon's control interface (below): read every harness on every machine; talk to the daemon. |
 | `harness remote-password set\|status\|clear` | This machine's persistent password for machine-to-machine links. |
 | `harness link connect <id> [--name=<label>]` · `harness link list` · `harness link unlink <id>` | Let this machine reach another of yours, terminating E2EE here; list; unlink. |
 | `harness remote` | From a Harness terminal tile: choose another of your machines (linking it on the spot if needed), open a terminal there and move this tile to it. |
@@ -49,6 +50,11 @@ What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
 over the relay.
 
+`question_response` carries the `requestId` of the `commander_question` it answers, and its
+`question_response_result` comes back under that same id, to that client alone (sealed, over the relay):
+`{ ok: true }` once the answer is typed, or `{ error: "STALE_QUESTION", detail }` when the dialog on
+screen is no longer that question — nothing is typed then.
+
 Engines report in over HTTP on the same port: `POST /api/hook/session-start`, `session-end`,
 `turn-start`, `turn-stop`, `tool-start`, authenticated by a per-install token the daemon writes into
 the hook it installs.
@@ -66,3 +72,41 @@ Words may come in any order: `@` marks the machine (id, name, or an unambiguous 
 it), a path looks like a path, the first other word is the agent and a second names a new project.
 `--mode auto|ask|plan|full`, `--name`, `--new [name]` and `--json` are the rest. There is still no
 `harness split`: panes are arranged in the app.
+
+## The daemon's control interface
+
+`harness pair <verb>` is how the paired daemon ([daemons/BRAIN.md](../daemons/BRAIN.md)) reads and
+drives Harness, and how you can too. A pairing code is never one of these verbs, so `harness pair <code>`
+still pairs a browser. Every verb prints the daemon's JSON reply (`--json` for one line) and exits 1 on
+a refusal.
+
+```
+harness pair status                               is pairing on, and with which daemon
+harness pair list_machines                        the machines it can see (others while Harness is open here)
+harness pair list_harnesses [--machine <id>]      every harness: working, waiting, idle, failed, stopped
+harness pair read_harness <agentId> [--machine id] the open question with its options, recaps, asks
+harness pair brief [--since <minutes>]            what happened since then, on every machine
+harness pair talk <words…>                        talk to your daemon: starts or wakes its pair harness
+```
+
+The writes — `answer_question <agentId> <requestId> <choice>`, `send_prompt <agentId> <text…>`,
+`stop_turn`, `start_harness <engine> <folder> [--name n] [-- prompt…]`, `pause_harness`,
+`resume_harness`, and `say <line…>` — belong to the pair harness: they need its per-launch
+`HARNESSD_PAIR_TOKEN` (or `HARNESSD_PAIR_TOKEN_FILE`) and are refused `TOKEN_REQUIRED` without it. Then the
+account's autonomy dial decides: `watch` refuses them, `suggest` turns each into a line that waits for
+your `y`, `act-on-key` lets the daemon drive harnesses it started and batches the rest behind one key.
+Whatever the dial, it never deletes, restarts, forks or bypasses, never types into a terminal or its own
+harness, and never approves a prompt that pushes, forces, deletes, deploys, publishes, drops or merges.
+
+Per machine, `~/.config/harness/pair.jsonc` (or under `$XDG_CONFIG_HOME`; JSON with comments) holds
+`"model": true` to let the daemon ask one small model for better status-line words (off by default),
+and the `rules` it runs while the dial is `act-within-rules`: `{ "harness": "api*", "engine": "claude",
+"project": "~/code/api", "question": "^Approve Bash command: npm test", "choice": "Yes" }`. A rule never
+answers a push/force/delete/deploy/publish/drop/merge prompt, never picks "don't ask again", and approves
+a permission prompt only when it is a read, test, build, formatter or in-project edit. What it did is
+journaled and reported.
+
+`harness pair mcp [--token-file <path>]` serves the same tools as a stdio MCP server named `harnessd`, for
+an engine that speaks MCP. Both speak the loopback `pair` request (`{ verb, …arguments }` →
+`pair_result`) after a `machine_select` with `tool: true`: a tool client is answered like any other but is
+never counted as a person at this computer.

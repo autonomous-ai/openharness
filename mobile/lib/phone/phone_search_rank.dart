@@ -1,4 +1,5 @@
 import 'package:harness_mobile/core/fuzzy_match.dart';
+import 'package:harness_mobile/state/session_content_search.dart';
 import 'package:harness_mobile/state/session_preview.dart';
 
 import 'agent_index.dart' show compareMonitorOrder;
@@ -19,23 +20,70 @@ List<String> phoneSearchTerms(String query) {
 
 /// How well [term] matches [field]: LOWER is better, null does not match.
 ///
-/// The desktop's `swarmFieldMatchScore`, unchanged. The bands, cheapest first:
-/// an exact field, a prefix, a substring anywhere, and last a scattered-letter
-/// subsequence whose cost grows with how far apart the letters landed. A
-/// non-title field takes a flat 64, which is what keeps a name match ahead of
-/// every piece of metadata under it.
-int? phoneFieldMatchScore(String field, String term, {required bool title}) {
+/// The desktop's `swarmFieldMatchScore`, unchanged. Whole words beat fragments: "port" is exact in
+/// "port", a prefix of "port audit", a word of "windows port" and only a fragment of "support".
+/// A non-title field takes a flat 64, which keeps a name match ahead of every piece of metadata.
+///
+/// [strict] is for harness rows — hundreds of names and long folder paths, where loose letters
+/// match nearly anything ("auth" in every `.../autonomous-harness/...`): scattered letters must
+/// start a word and stay close, and two letters count only as initials. Commands, machines,
+/// projects and models are short curated lists that keep any scattered letters.
+int? phoneFieldMatchScore(
+  String field,
+  String term, {
+  required bool title,
+  bool strict = false,
+}) {
   final offset = field.indexOf(term);
-  final spread = offset >= 0 ? 0 : subsequenceSpread(field, term);
-  if (spread == null) return null;
-  return (title ? 0 : 64) +
-      (field == term
-          ? 0
-          : offset == 0
-          ? 8
-          : offset > 0
-          ? 16
-          : 128 + spread);
+  final int score;
+  if (offset == 0) {
+    score = field.length == term.length ? 0 : 8;
+  } else if (offset > 0) {
+    score = wordStartIndexOf(field, term, offset) >= 0 ? 12 : 16;
+  } else {
+    final spread = strict
+        ? wordSubsequenceSpread(field, term)
+        : subsequenceSpread(field, term);
+    if (spread == null) return null;
+    score = 128 + spread;
+  }
+  return (title ? 0 : 64) + score;
+}
+
+/// How well a row matched, coarsest first — the desktop's `SwarmMatchStrength`. Harnesses order
+/// by when their conversation last moved only among equally good matches, so the one named for a word is never buried under
+/// newer ones that mention it in a folder or a recap.
+enum PhoneMatchStrength {
+  /// The whole query is the name.
+  exact,
+
+  /// Every word starts a word of the name or title.
+  name,
+
+  /// A fragment of the name, or a whole word of the project, branch or machine.
+  context,
+
+  /// A fragment of the project, branch, folder or machine.
+  fragment,
+
+  /// Every word in one turn of the conversation — asked, answered, or a file or command it
+  /// touched — as the machine's session index found it.
+  said,
+
+  /// The words appear in the conversation, but not together.
+  content,
+
+  /// Scattered letters of the name or its context: real words anywhere in the conversation are
+  /// better evidence than letters strewn across a name.
+  scattered;
+
+  static PhoneMatchStrength ofScore(int score) => score <= 12
+      ? name
+      : score <= 76
+      ? context
+      : score < 128
+      ? fragment
+      : scattered;
 }
 
 /// The field [term] reaches best on [row] — its score and its index in
@@ -68,6 +116,7 @@ int? phoneFieldMatchScore(String field, String term, {required bool title}) {
       field,
       term,
       title: i < row.titleFieldCount,
+      strict: row.isAgent,
     );
     if (score == null) continue;
     if (best == null || score < best.score) best = (score: score, index: i);
@@ -76,115 +125,139 @@ int? phoneFieldMatchScore(String field, String term, {required bool title}) {
   return best;
 }
 
-/// What a word found only in the conversation costs: more than any metadata
-/// match can, so an agent that IS "llama" stays ahead of one that talked about
-/// it. The desktop's figure.
+/// What a word found only in the conversation costs: more than any metadata match can, so an
+/// agent that IS "llama" stays ahead of one that talked about it. The desktop's figure.
 const _contentScore = 256;
 
-/// The rows [query] reaches, best first — the desktop's `rankSwarmDestinations`.
+typedef _Match = ({
+  PhoneDestination entry,
+  int score,
+  PhoneMatchStrength strength,
+
+  /// How the machine's session index ranked this row among its hits, as a reciprocal rank
+  /// (higher is better), when it found it.
+  double said,
+  int index,
+});
+
+/// The rows [query] reaches, best first — the desktop's `rankSwarmDestinationsByActivity` and
+/// `rankSwarmDestinations`, from main's Cmd-P search (docs/research/2026-09-26-session-search.md).
 ///
-/// A word that matches no field is looked for in the agent's session content —
-/// its recent requests, its latest answer, what it is writing right now — which
-/// is how "llama" finds the agent somebody asked about llama.cpp. Rows that
-/// needed the content rank after every row that matched on the agent itself.
+/// Each word may match a different field, in either order: "mini auth" and "auth mini" both find
+/// Auth on Mac mini. A word no field holds is looked for in the session excerpt the app already
+/// has, at word starts only ("port" does not find every "support"). [contentHits] are what the
+/// machines' session indexes found for this query, by row id: everything ever said in each
+/// session. A hit vouches for every word, so it admits a row the fields alone cannot, and lifts
+/// one that only scattered letters matched.
 ///
-/// ⚠️ **The tie-breaks are the desktop's, in the desktop's order**, with one
-/// deliberate substitution: content, then score, then — only with nothing typed
-/// — the tier below, then how recently the row was OPENED, then [all]'s own
-/// order, and finally the id so two rows can never swap places on a rebuild.
-/// [recent] is the phone's visit history (see [PhoneSearchHistory]).
-///
-/// ⚠️ **The substitution is the last-but-one step: [all]'s order where the
-/// desktop compares names.** The desktop can afford alphabetical there because
-/// by the time it is reached its visit history has already placed almost
-/// everything — it records every pane you focus, over weeks. A phone opened for
-/// the first time has no history at all, so EVERY row fell through to that step
-/// and the box opened on an alphabetical list: `Codex harness 8:16` above the
-/// agent that finished a minute ago. That is not what the desktop looks like,
-/// it is what the desktop's last resort looks like.
-///
-/// [phoneSearchCatalog] hands its agents in [recentAgents] order — waiting on
-/// you, then working, then whose conversation moved last — so deferring to it
-/// puts the phone's best guess where the desktop puts its worst one, and the two
-/// converge on the same list as the history fills.
-///
-/// It is also what keeps the list still. That order is decided when the CATALOG
-/// is built, and the catalog is cached against the shape of the fleet
-/// ([PhoneSearchCatalogCache]) — so a turn event, which moves `lastActiveAt`
-/// every second on a busy machine, does not rebuild it and cannot move a row out
-/// from under a thumb.
+/// ⚠️ **Typed, a list of agents orders by how well each matched, then by when its conversation last
+/// moved** — not by that alone, which buried the harness named `hn` 6th of 166 under newer ones
+/// whose folder paths spell h…n. With nothing typed it is the conversations that moved last first,
+/// and [recent] (this phone's visits) only breaks ties.
 List<PhoneDestination> rankPhoneDestinations(
   List<PhoneDestination> all,
   String query, {
   List<String> recent = const [],
   SessionPreviewStore? previews,
+  bool byActivity = false,
+  Map<String, SessionContentHit>? contentHits,
 }) {
   final needle = query.trim().toLowerCase();
   final terms = phoneSearchTerms(query);
   final recency = {for (var i = 0; i < recent.length; i++) recent[i]: i};
-  final ranked =
-      <({PhoneDestination entry, int score, bool content, int index})>[];
+  final ranked = <_Match>[];
   for (final (index, entry) in all.indexed) {
-    // An exact hit on the name — or on the agent's own title — wins outright,
-    // ahead of every scored row. Typing one in full is the least ambiguous
-    // thing somebody can do.
-    if (entry.fields.take(entry.titleFieldCount).contains(needle)) {
-      ranked.add((entry: entry, score: -1, content: false, index: index));
+    // An exact hit on the name — or on the agent's own title — wins outright.
+    if (needle.isNotEmpty &&
+        entry.fields.take(entry.titleFieldCount).contains(needle)) {
+      ranked.add((
+        entry: entry,
+        score: -1,
+        strength: PhoneMatchStrength.exact,
+        said: 0,
+        index: index,
+      ));
       continue;
     }
+    final hit = terms.isEmpty ? null : contentHits?[entry.id];
+    final hitStrength = hit == null
+        ? null
+        : hit.together
+        ? PhoneMatchStrength.said
+        : PhoneMatchStrength.content;
     var total = 0;
-    var content = false;
+    var strength = PhoneMatchStrength.name;
     String? excerpt;
     for (final term in terms) {
       final best = phoneBestFieldMatch(entry, term);
+      final PhoneMatchStrength termStrength;
+      final int cost;
       if (best == null) {
         excerpt ??= entry.previewKey == null
             ? ''
             : previews?.read(entry.previewKey!)?.searchText ?? '';
-        // Literal only, never the scattered-letter match the fields get: a few
-        // turns of prose contain almost every short run of letters somewhere,
-        // and a fuzzy hit in them would return every agent on the account.
-        if (!excerpt.contains(term)) {
+        if (wordStartIndexOf(excerpt, term) < 0) {
           total = -1;
           break;
         }
-        content = true;
-        total += _contentScore;
-        continue;
+        termStrength = PhoneMatchStrength.content;
+        cost = _contentScore;
+      } else {
+        termStrength = PhoneMatchStrength.ofScore(best.score);
+        cost = best.score;
       }
-      total += best.score;
+      if (termStrength.index > strength.index) strength = termStrength;
+      total += cost;
+    }
+    if (hitStrength != null &&
+        (total < 0 || hitStrength.index < strength.index)) {
+      strength = hitStrength;
+      if (total < 0) total = _contentScore * terms.length;
     }
     if (total >= 0) {
-      ranked.add((entry: entry, score: total, content: content, index: index));
+      ranked.add((
+        entry: entry,
+        score: total,
+        strength: strength,
+        // Reciprocal rank: each machine's index ranks its own hits, and a machine's first is as
+        // good as another's first.
+        said: hit == null ? 0 : 1 / (1 + hit.position),
+        index: index,
+      ));
     }
   }
-  // A group or a command is not something the phone can open, so with nothing
-  // typed it sits under every agent — the desktop's `!hasView` tier.
-  //
-  // ⚠️ **The desktop's third tier, `current`, is deliberately absent.** It
-  // demotes the pane you are looking at, and porting that rule literally
-  // inverted its effect. The desktop's box is always opened with `adding: true`
-  // and so always targets a NEW tab or pane (`swarm_screen.dart`), where nothing
-  // is focused — so `current` almost never fires there, and the agent you came
-  // from ranks near the top: in a live window it sat at rows[2] of 16. A phone's
-  // search is ALWAYS opened from a terminal showing an agent, so the same rule
-  // fired every single time and buried that agent at the bottom.
-  //
-  // Matching the desktop means matching what it does, not what it says. And the
-  // agent you came from is the most recently active one anyway, so the order it
-  // falls into is the one the catalog already wanted.
-  int tier(PhoneDestination e) => !e.isAgent
-      ? 3
-      : recency.containsKey(e.id)
-      ? 0
-      : 1;
+  bool conversation(_Match match) =>
+      match.strength == PhoneMatchStrength.said ||
+      match.strength == PhoneMatchStrength.content;
   ranked.sort((a, b) {
-    if (needle.isEmpty) return _monitorOrder(a, b);
-    var order = (a.content ? 1 : 0).compareTo(b.content ? 1 : 0);
-    if (order == 0) order = a.score.compareTo(b.score);
-    if (order == 0 && needle.isEmpty) {
-      order = tier(a.entry).compareTo(tier(b.entry));
+    // Nothing typed: the conversation that moved last first, then this phone's visits.
+    if (needle.isEmpty) {
+      var order = _lastMovedFirst(a.entry, b.entry);
+      if (order == 0) {
+        order = (recency[a.entry.id] ?? 1 << 20).compareTo(
+          recency[b.entry.id] ?? 1 << 20,
+        );
+      }
+      return order != 0 ? order : _monitorOrder(a, b);
     }
+    if (byActivity) {
+      var order = a.strength.index.compareTo(b.strength.index);
+      // What was said is ranked by the index, which weighs how well it matched against how long
+      // ago; the conversation's last move decides between equal answers.
+      if (order == 0 && conversation(a)) order = b.said.compareTo(a.said);
+      if (order == 0) order = _lastMovedFirst(a.entry, b.entry);
+      if (order == 0) {
+        order = (recency[a.entry.id] ?? 1 << 20).compareTo(
+          recency[b.entry.id] ?? 1 << 20,
+        );
+      }
+      if (order == 0) order = a.score.compareTo(b.score);
+      if (order == 0) order = a.index.compareTo(b.index);
+      return order == 0 ? a.entry.id.compareTo(b.entry.id) : order;
+    }
+    // Commands, machines, projects: names outrank metadata, metadata outranks what was said.
+    var order = (conversation(a) ? 1 : 0).compareTo(conversation(b) ? 1 : 0);
+    if (order == 0) order = a.score.compareTo(b.score);
     if (order == 0) {
       order = (recency[a.entry.id] ?? 999).compareTo(
         recency[b.entry.id] ?? 999,
@@ -196,6 +269,16 @@ List<PhoneDestination> rankPhoneDestinations(
   return [for (final row in ranked) row.entry];
 }
 
+/// The conversation that moved last first — the true time; opening a harness is not work on it. An
+/// agent never dated, and anything that is not an agent, after.
+int _lastMovedFirst(PhoneDestination a, PhoneDestination b) {
+  final left =
+      (a.entry?.agent.updatedAt ?? a.lastAt)?.millisecondsSinceEpoch ?? 0;
+  final right =
+      (b.entry?.agent.updatedAt ?? b.lastAt)?.millisecondsSinceEpoch ?? 0;
+  return right.compareTo(left);
+}
+
 /// With nothing typed, the list the field opens on: the agents in the desktop's Harness Monitor
 /// order ([compareMonitorOrder]), and whatever is not an agent after them in [all]'s order.
 ///
@@ -204,10 +287,7 @@ List<PhoneDestination> rankPhoneDestinations(
 /// on the laptop beside it, and the agent at the top of the desktop's monitor could be halfway down
 /// the phone's. Somebody moving between the two reads the same list on both now. Once a word is
 /// typed the match decides, as it always has.
-int _monitorOrder(
-  ({PhoneDestination entry, int score, bool content, int index}) a,
-  ({PhoneDestination entry, int score, bool content, int index}) b,
-) {
+int _monitorOrder(_Match a, _Match b) {
   final left = a.entry.entry;
   final right = b.entry.entry;
   if (left != null && right != null) return compareMonitorOrder(left, right);

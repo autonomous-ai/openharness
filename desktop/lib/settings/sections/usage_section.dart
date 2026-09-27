@@ -23,6 +23,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/test_run.dart';
@@ -106,18 +107,28 @@ class _UsageSectionState extends State<UsageSection> {
     // walks every transcript under a real `~/.claude`, and a test run must
     // depend on neither the machine it lands on nor whoever was working on it.
     // A test that wants figures injects a controller already holding them.
-    if (!kUnderTest) unawaited(_controller.load());
+    if (!kUnderTest && !kIsWeb) unawaited(_controller.load());
   }
 
   @override
   void dispose() {
-    if (_ownsController) _controller.dispose();
+    if (_ownsController && !kIsWeb) _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    if (kIsWeb) {
+      return SectionScaffold(
+        title: 'Usage',
+        subtitle: 'Activity in this browser. Local transcript usage is available in the desktop app.',
+        child: ListenableBuilder(
+          listenable: _stats,
+          builder: (context, _) => StatsSummaryCards(summary: _stats.summary),
+        ),
+      );
+    }
     return SectionScaffold(
       title: 'Usage',
       subtitle:

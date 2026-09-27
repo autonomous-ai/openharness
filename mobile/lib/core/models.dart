@@ -143,10 +143,28 @@ class Agent {
   /// so it is what tells two such agents apart on a phone.
   final String? title;
 
-  /// When the conversation was last written — the transcript's mtime, which the
-  /// daemon prefers over its own bookkeeping precisely so a client sorting by
-  /// recency follows the work. Null from a daemon too old to send it.
+  /// When the conversation was last active — the latest dated record in its
+  /// transcript, which the daemon prefers over its own bookkeeping precisely so
+  /// a client sorting by recency follows the work. Null from a daemon too old
+  /// to send it.
   final DateTime? updatedAt;
+
+  /// When any app last opened this agent — the phone, a desktop window, on any
+  /// computer. Stamped by the daemon that owns the agent when an app says so
+  /// (`agent_update {opened: true}`), so every app reads the same moment. Null
+  /// when nobody has, or from a daemon too old to keep it.
+  final DateTime? lastOpenedAt;
+
+  /// What every list of agents sorts by: the later of the last activity and the
+  /// last time an app opened it — one order, the same on the phone and on every
+  /// desktop.
+  DateTime? get lastUsedAt {
+    final activity = updatedAt, opened = lastOpenedAt;
+    if (activity == null) return opened;
+    if (opened == null) return activity;
+    return opened.isAfter(activity) ? opened : activity;
+  }
+
   final String? engine;
   final String? engineDisplayName;
   final String? engineIconHint;
@@ -198,6 +216,7 @@ class Agent {
     required this.name,
     this.title,
     this.updatedAt,
+    this.lastOpenedAt,
     this.engine,
     this.engineDisplayName,
     this.engineIconHint,
@@ -255,6 +274,7 @@ class Agent {
       name: j['name'] as String? ?? 'agent',
       title: _safeLabel(j['title']),
       updatedAt: _safeTime(j['updatedAt']),
+      lastOpenedAt: _safeTime(j['lastOpenedAt']),
       engine: _safeEngine(j['engine']),
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
@@ -293,6 +313,7 @@ class Agent {
     name: name ?? this.name,
     title: title,
     updatedAt: updatedAt,
+    lastOpenedAt: lastOpenedAt,
     engine: engine,
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,

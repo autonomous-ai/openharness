@@ -16,6 +16,9 @@ class DirectAuth implements AccessTokenSource {
 
   static const _refreshSkew = Duration(seconds: 60);
 
+  /// Browser adapters release their cross-tab session listener here.
+  void dispose() {}
+
   Future<bool> hasSession() async {
     final revision = _revision;
     await _writes;

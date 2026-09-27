@@ -1,4 +1,6 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart';
+
+import 'runtime_platform.dart';
 
 /// Whether this build is a VIEWER: a window onto the user's machines and nothing more.
 ///
@@ -11,7 +13,8 @@ import 'dart:io';
 /// `--dart-define=HARNESS_VIEWER_MODE=true`, which is how the path is developed and tested on a Mac
 /// against real machines.
 final bool kViewerMode =
+    kIsWeb ||
     const bool.fromEnvironment('HARNESS_VIEWER_MODE') ||
-    Platform.isIOS ||
-    Platform.isAndroid ||
-    Platform.isWindows;
+    RuntimePlatform.isIOS ||
+    RuntimePlatform.isAndroid ||
+    RuntimePlatform.isWindows;

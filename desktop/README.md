@@ -1,9 +1,106 @@
-# Harness Desktop
+# Harness Desktop and Web
 
 Harness Desktop is the native Flutter client for browsing Harness machines and
 interacting with their terminal-backed agents. **macOS is the primary supported and tested
 experience.** Linux builds exist, with feature parity still in progress; Windows support is
 planned and its runner is unexercised. Embedded harness viewers currently require macOS.
+
+The browser target uses this same Flutter package and `lib/main.dart`: workspace,
+tabs, pickers, settings, state, and the patched xterm renderer are shared. Browser
+support is available as a public preview at
+[harness.autonomous.ai](https://harness.autonomous.ai); there is no separate web UI
+to keep in sync.
+
+## Web development
+
+Use Flutter ≥ 3.47 / Dart ≥ 3.13. From `desktop/`:
+
+```bash
+flutter pub get
+flutter run -d chrome --web-port=3000
+flutter build web --release --no-wasm-dry-run --no-web-resources-cdn
+python3 scripts/serve-web.py --port 3000  # optional local release preview
+flutter test --platform=chrome --dart-define=HARNESS_TEST=true \
+  test/web test/browser_login_test.dart test/observer_codec_test.dart \
+  test/wire_counter_test.dart test/password_stretch_test.dart \
+  test/terminal_binary_test.dart test/e2ee/strict_down_test.dart
+```
+
+Deploy `build/web/` at the root of a dedicated HTTPS origin. The host must serve
+`index.html` for `/auth/callback`; `_redirects` and `_headers` cover hosts that
+support those files. For other hosts, configure the equivalent SPA fallback and
+revalidation of unversioned app files. Do not cache OAuth callbacks. The app uses
+JavaScript/CanvasKit; WebAssembly app compilation is not validated yet.
+
+The entry page inlines Flutter's generated bootstrap to start the app without
+an extra loader request. Keep entry pages and release metadata `no-store`.
+Serve static JavaScript, CanvasKit, fonts, and images with ETags and
+`Cache-Control: public, max-age=0, must-revalidate`: browsers reuse unchanged
+bytes while checking for every deployment. Do not use `no-store` for these
+assets or long-lived immutable caching with their unversioned filenames.
+
+The existing backend handles browser OAuth. Local previews on `127.0.0.1`,
+`localhost`, or `[::1]` use its existing loopback authorization endpoint, returning
+to the registered `/callback` path on the preview's own port without a server
+configuration change.
+For a hosted web app, add the exact origin to the backend's `WEB_URL` or
+comma-separated `WEB_ORIGINS`, and register that origin's `/auth/callback` with SSO.
+Any `SSO_REDIRECT_URI` override must point to that same hosted callback. Tests use a
+synthetic authorization service. An alternate backend can be selected with
+`--dart-define=HARNESS_API_URL=https://your-backend.example` on run/build.
+Use `--dart-define=HARNESS_ANALYTICS_DISABLED=true` for isolated previews.
+
+### Production release
+
+The Flutter source remains in this package. The existing website deployment in
+`autonomous-ai/autonomous-code` serves its compiled files under `/harness-web/`,
+with `/` and `/auth/callback` opening the Flutter app. It also serves the desktop
+downloads and installer redirects.
+
+Push a `vX.Y.Z_web` tag on a tested commit to run **Release web bundle**. CI builds
+with Flutter 3.47.2 and publishes the archive, SHA-256, and
+`harness-web-release.json` as GitHub release assets. Copy that manifest into the
+website's `apps/web/harness-web-release.json`, verify the website build, and use
+its existing `scripts/release-web.sh` release procedure. Its build checks the
+archive's checksum before including it in the image; ArgoCD deploys that image.
+For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
+`FLUTTER_BIN` can select an SDK installed outside `PATH`. Output is under
+`build/web-release/` and `build/web-dist/`; the ordinary local preview is separate.
+
+### Browser behavior
+
+- Authenticated access to existing machines uses the shared viewer services and
+  encrypted relay. Link a machine from the browser before controlling it.
+- Existing account-bound sharing invitations open read-only through the observer
+  relay, with the owner's identity verified. Public, anonymous session URLs and
+  published snapshots are the next product layer; they are not implemented here.
+- Login, linked machines, preferences, and cached workspace metadata persist in
+  this origin's local storage across tabs and browser restarts. Only the pending
+  OAuth transaction is tab-local. Browser locks serialize token refresh and
+  machine-key writes; signing out or changing accounts reloads other open tabs.
+  **Sign out** clears authentication while keeping this browser's machine links.
+  Clearing site data removes both; private browsing retains them only for that
+  private session. Existing tab credentials migrate on the next reload.
+- **Download app** sits at the top right of sign-in and workspace screens, opening
+  the existing macOS/Linux download page in a separate tab. Browser sign-in uses
+  a full-page fleet diagram and prominent CTA, sharing the native login actions
+  and their waiting, cancellation, and recovery states.
+- Workspace shortcuts use **Option/Alt** in the browser: Alt-P finds agents,
+  Alt-N starts an agent, Alt-M opens machines, and Alt-T opens a Harness tab.
+  Machine connection commands and link requests use that same `@` picker,
+  with connection and setup forms inside its preview pane.
+  Text editing and terminal
+  Control keys keep their usual behavior. The shared shortcut sheet and welcome
+  hints show the active bindings.
+- Agent processes and files stay on their host machines. Local provisioning,
+  desktop updates, device pairing, local usage ledgers, keyboard config files,
+  native file previews/image clipboard, and embedded native webviews remain
+  desktop capabilities. Remote terminals and streamed image viewers reuse the
+  shared UI. Closing the browser does not stop a running agent.
+
+Keep product changes in the existing shared screens and state. Add platform
+adapters only for browser/native capabilities, following the conditional stores,
+login adapter, and runtime capability checks already in `lib/`.
 
 ## Development
 

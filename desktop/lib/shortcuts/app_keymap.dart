@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 
 import 'app_shortcuts.dart';
@@ -199,7 +200,8 @@ List<ShortcutRow> effectiveShortcutRows(
             .toList();
         return matches.length == 1 &&
             matches.single.keys.length == 1 &&
-            matches.single.keys.single == KeyStroke.parse('cmd+${i + 1}');
+            matches.single.keys.single ==
+                KeyStroke.parse(platformWorkspaceBinding('cmd+${i + 1}'));
       }).every((value) => value);
   final shortcuts = appShortcuts();
   return [
@@ -238,7 +240,7 @@ List<ShortcutRow> effectiveShortcutRows(
       const ShortcutRow(
         label: 'Select tabs 1–9',
         chords: [
-          ['⌘', '1 – 9'],
+          [kIsWeb ? 'Alt' : '⌘', '1 – 9'],
         ],
         group: ShortcutGroup.navigate,
       ),

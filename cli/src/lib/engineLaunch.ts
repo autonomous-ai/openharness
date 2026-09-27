@@ -264,6 +264,13 @@ export interface LaunchCommandOptions {
   harnessNode?: boolean
   /** Workspace entered after interactive-shell startup, not before it. */
   cwd?: string
+  /**
+   * A conversation taken over from the terminal that has it, once its turn ends (`agent_create`
+   * `takeOver: 'wait'`): the pane says it is waiting and starts the engine when that process is
+   * gone — the daemon stops it when the turn ends. Ctrl-C gives up and leaves it where it was.
+   * Ignored without an interactive shell, like `installFirst`: there is no script to wait in.
+   */
+  waitForPid?: { pid: number; name: string }
 }
 
 /**
@@ -435,7 +442,19 @@ export function buildEngineLaunchArgv(
   // SERVER's soft limit, which is launchd's 256 whenever the desktop app started the daemon that
   // started the server, and an engine (Claude Code refuses outright) or an npm install under 256 is
   // the failure the person then reads in the pane. See openFiles.ts.
-  return [interactive.path, ...interactive.args, RAISE_OPEN_FILES_SH + prelude + cwdPrelude + body, 'harness-engine', ...(opts.cwd ? [opts.cwd] : []), ...command]
+  const wait = opts.waitForPid ? waitForPidScript(opts.waitForPid) : ''
+  return [interactive.path, ...interactive.args, RAISE_OPEN_FILES_SH + prelude + cwdPrelude + wait + body, 'harness-engine', ...(opts.cwd ? [opts.cwd] : []), ...command]
+}
+
+/** Waits in the pane for [wait]'s process to end before the engine starts: see `waitForPid`. */
+function waitForPidScript(wait: { pid: number; name: string }): string {
+  const pid = Math.trunc(wait.pid)
+  const name = wait.name.replace(/[^A-Za-z0-9 ._-]/g, '')
+  return `printf '%s\\n' 'Waiting for the ${name} in your terminal to finish its turn.' 'It moves here when the turn ends. Ctrl-C leaves it there.'\n`
+    + `trap 'printf "\\n%s\\n" "It stays in your terminal."; exit 130' INT\n`
+    + `while kill -0 ${pid} 2>/dev/null; do sleep 1; done\n`
+    + `trap - INT\n`
+    + `printf '\\033[H\\033[2J'\n`
 }
 
 /**

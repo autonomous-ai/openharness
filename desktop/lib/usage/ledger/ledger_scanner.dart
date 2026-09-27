@@ -13,6 +13,8 @@ import 'dart:io';
 
 import 'ledger_types.dart';
 
+import '../../core/runtime_platform.dart';
+
 /// One file or database a scan read, and what came out of it.
 ///
 /// [mtimeMs] and [size] together fingerprint the append-mostly JSONL logs.
@@ -111,10 +113,10 @@ abstract class LedgerScanner {
 /// nowhere to look reports [LedgerStatus.unavailable] like any other machine
 /// that has nothing to read.
 String? homeDirectory([Map<String, String>? environment]) {
-  final env = environment ?? Platform.environment;
+  final env = environment ?? RuntimePlatform.environment;
   final home = env['HOME'];
   if (home != null && home.isNotEmpty) return home;
-  if (Platform.isWindows) {
+  if (RuntimePlatform.isWindows) {
     final profile = env['USERPROFILE'];
     if (profile != null && profile.isNotEmpty) return profile;
   }

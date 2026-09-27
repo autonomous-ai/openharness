@@ -403,7 +403,7 @@ class SheetGlyphTile extends StatelessWidget {
         style: phoneBoxMonoStyle(
           size: 14,
           color: AppPalette.textPrimary,
-          weight: FontWeight.w700,
+          weight: FontWeight.w600,
         ).copyWith(height: 1),
       ),
     );

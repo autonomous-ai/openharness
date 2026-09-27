@@ -25,7 +25,9 @@ class GridPictures extends ChangeNotifier {
   /// How many answers [machineId]'s picture has taken so far. A read captures it when it starts, so
   /// that an answer which was already on its way when a push landed cannot overwrite the push.
   int epochOf(String machineId) =>
-      (_generation << 32) | (_epochs[machineId] ?? 0);
+      // JavaScript bitwise operations truncate to 32 bits. Keep account
+      // generations distinct from machine revisions in the browser too.
+      _generation * 4294967296 + (_epochs[machineId] ?? 0);
 
   /// Take [answer] as [machineId]'s picture. With [ifEpoch], only when nothing else has been
   /// adopted for that machine since the caller read [epochOf]. Returns whether it was adopted.

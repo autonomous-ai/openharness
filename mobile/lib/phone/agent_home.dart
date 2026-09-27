@@ -2,22 +2,29 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/logging/startup_trace.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/widgets/empty_state.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_index.dart';
 import 'agent_swipe.dart';
 import 'agent_swipe_list.dart';
 import 'agents_page.dart' show openNewAgent;
+import 'daemon_chip.dart';
 import 'desk_groups.dart';
+import 'link_page.dart';
 import 'machines_tab.dart';
-import 'phone_fab.dart';
+import 'tty_controls.dart';
+import 'tty.dart';
+import 'welcome/connect_computer.dart';
+import 'welcome/pairing_with_code.dart';
+import 'welcome/pick_up_page.dart';
+
+import 'package:harness_mobile/demo/sample_mode.dart';
+
 import 'phone_header.dart';
-import 'phone_search_button.dart';
 import 'phone_status.dart';
 
 /// The phone's home: one agent's terminal, at the ROOT of the stack rather than pushed over a list.
@@ -185,11 +192,16 @@ class _AgentHomeState extends State<AgentHome> {
   /// the machine's agent list, and dropping the request then would leave the screen on the old one.
   ({String machineId, String agentId})? _requestedAgent;
 
+  /// The welcome ([PickUpPage]) in place of a guessed session: set when this phone has nothing to
+  /// remember, or a computer was just linked; spent the moment a session is picked.
+  bool _welcome = false;
+
   void _onAgentRequested() {
     final requested = widget.openAgent?.value;
     // Null is the shell resetting before it writes, not a request.
     if (requested == null) return;
     setState(() {
+      _welcome = false;
       _requestedAgent = requested;
       // A choice made by hand supersedes a jump still pending for a machine.
       _awaitingMachine = null;
@@ -203,7 +215,12 @@ class _AgentHomeState extends State<AgentHome> {
     // Null is the notifier at rest, not a request to stop waiting for anything — a jump already
     // pending stands.
     if (requested == null || requested == _awaitingMachine) return;
-    setState(() => _awaitingMachine = requested);
+    // A computer just linked: its sessions, and every other, to pick from — not one of them opened
+    // for you.
+    setState(() {
+      _awaitingMachine = requested;
+      _welcome = true;
+    });
   }
 
   Future<void> _readLast() async {
@@ -226,6 +243,15 @@ class _AgentHomeState extends State<AgentHome> {
       // the screen gave up waiting and opened an agent on its own. Taking the record then would move
       // somebody off a terminal they are already looking at, seconds after it opened.
       if (last != null && _neighboursFor == null) _showing = last;
+      // Nothing remembered on this phone, not even a tab: open on the sessions to pick from, not a
+      // guessed one. A phone that remembers its tab has been used here before, and gets that tab's
+      // first agent as it always has ([_firstOfLastTab]).
+      if (last == null &&
+          tabId == null &&
+          _neighboursFor == null &&
+          _requestedAgent == null) {
+        _welcome = true;
+      }
     });
     _restoreDeadline = Timer(_restoreTimeout, () {
       if (!mounted) return;
@@ -607,6 +633,19 @@ class _AgentHomeState extends State<AgentHome> {
     listenable: widget.notifier,
     builder: (context, _) {
       AppTheme.watch(context);
+      // Signed in from a scanned "Add phone" QR: once its computer is here and locked, pair with
+      // the QR's code — no password. See `welcome/connect_code.dart`.
+      if (widget.notifier.pendingPairing case final pending?) {
+        final machine = widget.notifier.machineStates[pending.machineId];
+        if (machine != null && machine.needsLink) {
+          return PairingWithCode(
+            key: ValueKey('pairing-${pending.machineId}'),
+            notifier: widget.notifier,
+            machineId: pending.machineId,
+            code: pending.code,
+          );
+        }
+      }
       final entries = visibleAgents(agentIndex(widget.notifier));
       _openNewAgentIfUnlockedMachineIsEmpty(entries);
       _dropPagerIfShownAgentWasDeleted(entries);
@@ -637,12 +676,41 @@ class _AgentHomeState extends State<AgentHome> {
         // The Machines TAB itself is untouched and still reachable by every other route; this just
         // borrows its body rather than growing a second, drifting copy of the same list.
         if (!_anyMachineReady()) {
+          // No computer at all: how to set one up, watching for it to appear. One that is there
+          // but locked or asleep: the machines list, with its password form.
+          if (widget.notifier.machines.isEmpty &&
+              !widget.notifier.machinesLoading) {
+            return ConnectComputerPage(
+              notifier: widget.notifier,
+              onTrySample: openSampleMode,
+            );
+          }
+          // The one computer there is, awake and waiting for its phone password: the unlock
+          // itself, not a list of one to tap through — the moment setup pays off.
+          final only = widget.notifier.machineStates.values
+              .where(
+                (state) => state.machine.authMode == MachineAuthMode.remote,
+              )
+              .toList();
+          if (only.length == 1 &&
+              only.single.needsLink &&
+              only.single.nodeOnline != false) {
+            return LinkPage(
+              notifier: widget.notifier,
+              machineId: only.single.machine.machineId,
+              embedded: true,
+            );
+          }
           return MachinesTab(notifier: widget.notifier);
         }
         _openNewAgentAfterLastOneWent();
         return _AgentHomeEmpty(notifier: widget.notifier);
       }
-      var chosen = (machineId: target.machineId, agentId: target.agent.id);
+      // Nothing remembered, nothing picked: the sessions, each a tap from its terminal.
+      if (_welcome && _neighboursFor == null && _requestedAgent == null) {
+        return PickUpPage(notifier: widget.notifier);
+      }
+      final chosen = (machineId: target.machineId, agentId: target.agent.id);
       // ⚠️ **A swipe stays inside one tab, and this is where that happens.** The
       // account's tabs are the desk's (`state/phone_desk.dart`); [deskGroups]
       // fills each one with the agents of it this phone can reach, and the tab
@@ -672,52 +740,6 @@ class _AgentHomeState extends State<AgentHome> {
       final group = isUntabbed(widget.notifier, here)
           ? untabbedGroup(onScreen ?? target)
           : activeDeskGroup(widget.notifier, groups, here);
-      // ⚠️ **The swipe list is a snapshot, so it is retaken when the SET of agents changes.** It is
-      // taken as the pager opens, and on launch that is as soon as one machine answers — a second
-      // machine's agents arriving a moment later never reached it, and a pager built around one
-      // agent has no neighbours: nothing to swipe to until the app was restarted. Order changes do
-      // not count (see [_neighbours] for why they must not), only agents joining or leaving.
-      //
-      // ⚠️ The set is the TAB's now, so a tab changing on another computer
-      // retakes it too — an agent added to this tab in a window is one swipe
-      // away here a moment later, and one closed there stops being reachable.
-      //
-      // Retaken around the agent ON SCREEN, not the one the pager opened on — the person stays
-      // where they are, now with every agent of the tab beside them.
-      final snapshot = _neighbours;
-      if (snapshot != null &&
-          // ⚠️ **Not while the agent on screen is mid-verification.** Its tab's entries are the
-          // openable ones, so an agent whose pane is still being looked at is missing from them —
-          // the sets differ for that alone, and the retake would rebuild the pager around a list
-          // that no longer holds the agent it is showing, landing it on the list's first page.
-          _pendingEntryFor(entries, chosen) == null &&
-          // ⚠️ **Only while the pager is STAYING where it is.** `target` is the
-          // agent the pager opened on for as long as that agent is openable, so
-          // anything else means the screen is being moved on purpose — a tab
-          // tapped on the strip, an agent picked in search, a machine just
-          // unlocked. The set of agents differs from the snapshot then by
-          // definition (it is another tab's), and holding onto the agent on
-          // screen below would quietly undo the move: the tab would light for
-          // a frame and the terminal would stay where it was.
-          _neighboursFor == chosen &&
-          !_sameAgents(snapshot, group.entries)) {
-        final retaken = AgentSwipeList(group.entries);
-        // ⚠️ **Handed to the pager already up, not a new pager.** A new list used to mean a new
-        // key: the pager and every page in it disposed and built again, the terminal on screen
-        // included. On a cold start that happened on EVERY launch — the pager opens on last run's
-        // agents before the desk has answered, and the tabs arriving a second or two later cut its
-        // list down to one tab's — so the header and the skeleton loaded, then jerked and loaded
-        // again. The pager takes the list in place, keeping the page on screen (see
-        // `AgentSwipeHost`'s `didUpdateWidget`); a new pager is built only for a list it cannot.
-        if (onScreen != null && _pagerTakesInPlace(snapshot, retaken, here)) {
-          _neighbours = retaken;
-        } else {
-          chosen = here;
-          _neighboursFor = null;
-          _neighbours = null;
-          _pagerGeneration++;
-        }
-      }
       // What the phone is in, recorded for the paths that cannot derive it: an
       // agent created here joins this tab (`PhoneDesk.adopt`).
       widget.notifier.noteDeskTab(group.id);
@@ -773,43 +795,19 @@ class _AgentHomeState extends State<AgentHome> {
         notifier: widget.notifier,
         machineId: opened.machineId,
         agentId: opened.agentId,
-        // The tab's agents, so a swipe walks the tab and stops at its ends —
-        // see the note above [groups].
-        neighbours: _neighbours,
+        // ⚠️ **No neighbours: Focus holds ONE agent, and there is no sideways swipe.** The person
+        // moves with Find, the sheet the handle at the foot of the terminal brings up (see
+        // `docs/plans/2026-09-26-001-mobile-zero-questions.md`). A swipe was hidden — nothing said
+        // it was there or what came next — and it fired by accident while scrolling or typing.
+        // [_neighbours] is still taken for the tab, but only to pick where to land when the agent
+        // on screen is deleted.
+        neighbours: null,
         // Told where it has swiped to, so [_showing] follows the pager rather than the pager being
         // dragged back to where this screen last put it.
         onAgentChanged: _onAgentChanged,
       );
     },
   );
-
-  /// Whether [snapshot] holds exactly the openable agents in [entries], in any order.
-  static bool _sameAgents(AgentSwipeList snapshot, List<AgentEntry> entries) {
-    Set<String> keys(Iterable<AgentEntry> list) => {
-      for (final entry in list)
-        if (entry.agent.terminalAvailable)
-          '${entry.machineId}/${entry.agent.id}',
-    };
-    final before = keys(snapshot.entries);
-    final now = keys(entries);
-    return before.length == now.length && before.containsAll(now);
-  }
-
-  /// Whether the pager already up can take [retaken] in place — keep the page on screen, [here], and
-  /// change only the agents beside it — rather than be rebuilt.
-  ///
-  /// It can while the agent on screen is still in the list and the list pages the same way: a pager
-  /// that does not wrap (one agent) numbers its pages differently, so a change of shape needs a
-  /// pager of its own. The pager applies the same test and leaves alone a list that fails it — see
-  /// `AgentSwipeHost`'s `didUpdateWidget`.
-  static bool _pagerTakesInPlace(
-    AgentSwipeList snapshot,
-    AgentSwipeList retaken,
-    ({String machineId, String agentId}) here,
-  ) =>
-      snapshot.wraps &&
-      retaken.wraps &&
-      retaken.indexOf(here.machineId, here.agentId) != null;
 
   /// Bumped whenever the pager is thrown away and rebuilt, and part of its key.
   int _pagerGeneration = 0;
@@ -1081,35 +1079,52 @@ class _AgentHomeEmpty extends StatelessWidget {
     // test and this one. Falling back to the machines screen keeps the two in step rather than
     // drawing a `+` that cannot fire.
     if (ready.isEmpty) return MachinesTab(notifier: notifier);
+    final tty = Tty.of(context);
+    final machine = ready.first.machine;
+    // A computer, and nothing running on it: say so in a line, and the one thing to do — start one.
     return Scaffold(
-      backgroundColor: AppPalette.windowBg,
-      floatingActionButton: PhoneFab(
-        icon: LucideIcons.plus300,
-        tooltip: 'New Harness',
-        // The first machine that can host one. Which machine is the form's first question, and it
-        // is changed there.
-        onPressed: () =>
-            openNewAgent(context, notifier, ready.first.machine.machineId),
-      ),
+      backgroundColor: tty.ground,
       body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            PhoneHeader(
-              large: true,
-              title: 'Harnesses',
-              trailing: [PhoneSearchButton(notifier: notifier)],
-            ),
-            const Expanded(
-              child: EmptyState(
-                icon: LucideIcons.squareTerminal300,
-                title: 'No harnesses yet',
-                message:
-                    'Tap + to start one, or launch a harness from Harness on a '
-                    'machine and it will appear here.',
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(Tty.origin, 16, Tty.origin, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // The machine, and the paired daemon at the line's right end —
+              // where a terminal's title carries it. See `daemon_chip.dart`.
+              Row(
+                children: [
+                  Expanded(
+                    child: TtyText(
+                      machine.displayName,
+                      size: TtySize.meta,
+                      color: tty.green,
+                    ),
+                  ),
+                  const DaemonChip(margin: EdgeInsets.only(left: 12)),
+                ],
               ),
-            ),
-          ],
+              const Spacer(),
+              TtyText(
+                'Nothing running yet.',
+                size: 24,
+                weight: FontWeight.w600,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Start a harness — an agent on a project on your computer — and '
+                'watch it work from here. Swipe right any time to find one '
+                'started elsewhere.',
+                style: tty.style(size: TtySize.row, color: tty.faint),
+              ),
+              const Spacer(),
+              TtyPrimaryButton(
+                label: 'Start a harness',
+                onPressed: () =>
+                    openNewAgent(context, notifier, machine.machineId),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -10,7 +10,7 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'
     sessionId: 's1', engine, launcherId: 'h1', agentId: 'h1', boundAt: 0, transcriptPath: '/tmp/s1.jsonl', projectDir: 'tmp', cwd: '/tmp',
     tmuxPane: '%1', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 

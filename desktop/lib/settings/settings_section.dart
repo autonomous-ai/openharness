@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../logging/debug_surface.dart';
@@ -61,7 +62,8 @@ List<SettingsGroup> get settingsGroups =>
 @visibleForTesting
 List<SettingsGroup> settingsGroupsFor({required bool debugSurface}) {
   bool visible(SettingsSection section) =>
-      debugSurface || !_kDeveloperSections.contains(section);
+      (!kIsWeb || section != SettingsSection.devices) &&
+      (debugSurface || !_kDeveloperSections.contains(section));
   return [
     for (final group in _kSettingsGroups)
       if (group.sections.any(visible))

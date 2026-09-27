@@ -126,6 +126,24 @@ export function setVoiceRouterSessions(sessions: Array<{ engine: string }>): voi
   ensureRouterConfigured(next)
 }
 
+/**
+ * One small prompt for the pair brain (pair/triage.ts), on the same warm router worker and model the voice
+ * router classifies with — Haiku for Claude. The caller owns the budget. Null when this machine runs no
+ * engine the router can use; the brain then speaks from its templates.
+ */
+export async function runPairOneShot(
+  prompt: string,
+  opts: { timeoutMs: number; signal?: AbortSignal },
+  sessions: Array<{ engine: string }>,
+): Promise<string | null> {
+  const engine = chooseRouterEngine(sessions) ?? routerEngine
+  if (!engine) return null
+  const options = { prompt, model: routerModelFor(engine), effort: 'low' as const, cwd: ensureRouteScratch(), signal: opts.signal, timeoutMs: opts.timeoutMs }
+  if (engine === 'grok') return (await runGrokOneShot(options)).text ?? ''
+  ensureRouterConfigured(engine)
+  return (await runRouterOneShot(engine, options)).text ?? ''
+}
+
 /** Warm (device connected) / unwarm the router worker — wired to commander presence in cli.ts. */
 export function setVoiceRouterDeviceConnected(connected: boolean): void {
   // Config must be set before the pool spawns a warm worker. With no usable engine there is nothing to

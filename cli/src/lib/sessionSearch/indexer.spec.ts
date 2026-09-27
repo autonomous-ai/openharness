@@ -26,7 +26,7 @@ function setup(initial: string, agents?: () => string[]) {
   const path = join(dir, 's1.jsonl')
   writeFileSync(path, initial)
   const store = SessionSearchStore.open(':memory:')!
-  let sources: SearchSource[] = [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Dial firmware · harness', updatedAt: 1 }]
+  let sources: SearchSource[] = [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Dial firmware · harness', changedAt: 1 }]
   const index = new SessionSearchIndex({ store, sources: () => sources, agents, touchDelayMs: 5 })
   cleanups.push(() => { index.stop(); store.close() })
   const found = (query: string) => index.search(query).hits.map((hit) => hit.sessionId)
@@ -77,7 +77,7 @@ describe('SessionSearchIndex', () => {
     expect(store.session('s1')!.size).toBe(store.session('s1')!.resumeOffset)
     write.mockRestore()
 
-    const resumed = new SessionSearchIndex({ store, sources: () => [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: store.session('s1')!.path, header: 'Dial firmware · harness', updatedAt: 1 }] })
+    const resumed = new SessionSearchIndex({ store, sources: () => [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: store.session('s1')!.path, header: 'Dial firmware · harness', changedAt: 1 }] })
     cleanups.push(() => resumed.stop())
     resumed.sweep()
     await vi.waitFor(() => { expect((resumed as unknown as { running: boolean }).running).toBe(false) })
@@ -109,10 +109,10 @@ describe('SessionSearchIndex', () => {
     const untitledFile = join(dir, 'e2.jsonl')
     writeFileSync(untitledFile, prompt('compare retention\nby cohort please', 0) + answer('Day-7 is 35%.', 1))
     const store = SessionSearchStore.open(':memory:')!
-    const open = new Set(['e1'])
+    const open = new Map([['e1', 'terminal' as const]])
     let sources: SearchSource[] = [
-      { agentId: '', sessionId: 'e1', engine: 'claude', transcriptPath: claudeFile, header: '', updatedAt: 2, external: { cwd: '/work/dial', origin: 'terminal', title: '' } },
-      { agentId: '', sessionId: 'e2', engine: 'claude', transcriptPath: untitledFile, header: '', updatedAt: 1, external: { cwd: '/work/cohorts', origin: 'claude-app', title: '' } },
+      { agentId: '', sessionId: 'e1', engine: 'claude', transcriptPath: claudeFile, header: '', changedAt: 2, external: { cwd: '/work/dial', origin: 'terminal', title: '' } },
+      { agentId: '', sessionId: 'e2', engine: 'claude', transcriptPath: untitledFile, header: '', changedAt: 1, external: { cwd: '/work/cohorts', origin: 'claude-app', title: '' } },
     ]
     const index = new SessionSearchIndex({
       store, sources: () => sources, agents: () => [],
@@ -129,10 +129,10 @@ describe('SessionSearchIndex', () => {
     expect(store.session('e2')?.title).toBe('compare retention by cohort please')
     // Found by its title, marked as not Harness's, and as open elsewhere.
     const hit = index.search('dial fix').hits[0]
-    expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true } })
+    expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' } })
     expect(index.search('cohort').hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
     const tail = await index.tail('e1')
-    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true })
+    expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' })
 
     // Its file gone, it leaves the index at the next sweep.
     sources = sources.filter((source) => source.sessionId !== 'e2')
@@ -153,14 +153,14 @@ describe('SessionSearchIndex', () => {
   it('updates the name without rereading the transcript, and forgets sessions of deleted agents', async () => {
     const { store, found, settle, setSources, path } = setup(prompt('flash it', 0))
     await settle()
-    setSources([{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Keyboard firmware', updatedAt: 2 }])
+    setSources([{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Keyboard firmware', changedAt: 2 }])
     await settle()
     expect(found('keyboard')).toEqual(['s1'])
     expect(found('dial')).toEqual([])
     expect(store.session('s1')!.turns).toBe(1)
 
     // An agent's earlier session (before a /clear) stays while the agent does…
-    setSources([{ agentId: 'agent-1', sessionId: 's2', engine: 'terminal', transcriptPath: null, header: 'Keyboard firmware', updatedAt: 3 }])
+    setSources([{ agentId: 'agent-1', sessionId: 's2', engine: 'terminal', transcriptPath: null, header: 'Keyboard firmware', changedAt: 3 }])
     await settle()
     expect(found('flash')).toEqual(['s1'])
     // …and goes with it.
@@ -189,7 +189,7 @@ describe('SessionSearchIndex', () => {
     ]
     let source: SearchSource = {
       agentId: 'agent-oc', sessionId: 'ses_1', engine: 'opencode', transcriptPath: null, header: 'OpenCode harness',
-      updatedAt: 100, readHistory: async () => { reads++; return history },
+      changedAt: 100, readHistory: async () => { reads++; return history },
     }
     const index = new SessionSearchIndex({ store, sources: () => [source], touchDelayMs: 5 })
     cleanups.push(() => { index.stop(); store.close() })
@@ -225,7 +225,7 @@ describe('SessionSearchIndex', () => {
     // A turn whose event was lost (the daemon restarted first): its activity stamp moved, so the
     // next sweep reads it, and dates it by that stamp.
     history = [...history, { type: 'user_message', payload: { content: 'archive the old builds' } }]
-    source = { ...source, updatedAt: 5_000 }
+    source = { ...source, changedAt: 5_000 }
     const restarted = new SessionSearchIndex({ store, sources: () => [source] })
     cleanups.push(() => restarted.stop())
     restarted.sweep()

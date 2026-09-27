@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs'
+import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -7,6 +7,7 @@ import {
   parseEngineQuestionPane,
   parseQuestionPane,
   QuestionWatcher,
+  questionRequestId,
   shapeQuestions,
   type QuestionView,
   type ReviewView,
@@ -176,72 +177,200 @@ function machine(captures: string[], engine?: string): Machine {
 
 const CLOSED = '❯ \n  ⏸ plan mode on (shift+tab to cycle)'
 
+/** The requestId the watcher announces this capture under — what a client echoes back with its answer. */
+const idOf = (capture: string, engine: Parameters<typeof parseEngineQuestionPane>[0] = 'claude'): string =>
+  questionRequestId('s1', asQuestion(parseEngineQuestionPane(engine, capture)))
+
 describe('AskQuestionController.answer', () => {
   it('presses the option digit for a single-select answer', async () => {
     const h = machine([fixture('single'), CLOSED])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which drink would you like?': 'Coffee' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { 'Which drink would you like?': 'Coffee' } })
+    expect(r).toEqual({ ok: true })
     expect(h.keys).toEqual(['2'])
   })
 
   it('types a voice/free-text answer into the "Type something." row and submits it', async () => {
     const h = machine([fixture('single'), CLOSED])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which drink would you like?': 'nuoc mia' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { 'Which drink would you like?': 'nuoc mia' } })
+    expect(r.ok).toBe(true)
     expect(h.keys).toEqual(['3', 'Enter'])
     expect(h.texts).toEqual(['nuoc mia'])
   })
 
   it('toggles each selected checkbox then Tabs on, and submits from the review screen', async () => {
     const h = machine([fixture('multi'), fixture('review')])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which toppings do you want?': 'Cheese, Basil' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('multi')), sessionId: 's1', answers: { 'Which toppings do you want?': 'Cheese, Basil' } })
+    expect(r.ok).toBe(true)
     expect(h.keys).toEqual(['1', '3', 'Tab', '1'])
   })
 
-  it('answers each question of a multi-question dialog positionally when the text does not match', async () => {
+  it('fills a multi-question form in order when the answers name each question', async () => {
     const h = machine([fixture('tabs'), fixture('single'), CLOSED])
-    const ok = await h.controller.answer({
-      requestId: 'r1',
+    const r = await h.controller.answer({
+      requestId: idOf(fixture('tabs')),
+      sessionId: 's1',
+      answers: { 'Which colors do you like?': 'Blue', 'Which drink would you like?': 'Tea' },
+    })
+    expect(r.ok).toBe(true)
+    expect(h.keys).toEqual(['2', 'Tab', '1'])
+  })
+
+  it('never types into a later question of the form that the answers do not name', async () => {
+    // Used to be answered POSITIONALLY: the second entry went into whatever question came next, named or
+    // not. The form's next screen is a question this answer was never written for — it stays open for the
+    // watcher to announce, and whoever sees it answers it.
+    const h = machine([fixture('tabs'), fixture('single'), CLOSED])
+    const r = await h.controller.answer({
+      requestId: idOf(fixture('tabs')),
       sessionId: 's1',
       answers: { 'Which colors do you like?': 'Blue', 'Which size do you want?': 'Tea' },
     })
-    expect(ok).toBe(true)
-    expect(h.keys).toEqual(['2', 'Tab', '1'])
+    expect(r.ok).toBe(true)
+    expect(h.keys).toEqual(['2', 'Tab'])
   })
 
   it('leaves a multi-question dialog open on the question the device has not been shown yet', async () => {
     // The device answers ONE question at a time (the watcher pushes them as the pane advances), so the
     // drive loop must stop at the next question instead of guessing an answer for it.
     const h = machine([fixture('tabs'), fixture('single'), CLOSED])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which colors do you like?': 'Blue' } })
-    expect(ok).toBe(true)
+    const r = await h.controller.answer({ requestId: idOf(fixture('tabs')), sessionId: 's1', answers: { 'Which colors do you like?': 'Blue' } })
+    expect(r.ok).toBe(true)
     expect(h.keys).toEqual(['2', 'Tab'])
   })
 
   it('does nothing when the dialog is already gone', async () => {
     const h = machine([CLOSED])
-    expect(await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { q: 'a' } })).toBe(false)
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { q: 'a' } }))
+      .toEqual({ ok: false, error: 'STALE_QUESTION', detail: 'That question is no longer open.' })
     expect(h.keys).toEqual([])
   })
 
   it('gives up instead of hammering keys when the dialog never advances', async () => {
     const h = machine([fixture('single')])
-    const ok = await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Which drink would you like?': 'Tea' } })
-    expect(ok).toBe(false)
+    const r = await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { 'Which drink would you like?': 'Tea' } })
+    expect(r).toMatchObject({ ok: false, error: 'ANSWER_FAILED' })
     expect(h.keys.length).toBeLessThanOrEqual(3)
   })
 
   it('falls back to the remembered session when the device sends no sessionId', async () => {
     const h = machine([fixture('single'), CLOSED])
-    h.controller.remember('r9', 's1')
-    expect(await h.controller.answer({ requestId: 'r9', answers: { 'Which drink would you like?': 'Tea' } })).toBe(true)
+    h.controller.remember(idOf(fixture('single')), 's1')
+    expect((await h.controller.answer({ requestId: idOf(fixture('single')), answers: { 'Which drink would you like?': 'Tea' } })).ok).toBe(true)
     expect(h.keys).toEqual(['1'])
   })
 
   it('drops an answer with no answers map', async () => {
     const h = machine([fixture('single')])
-    expect(await h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: {} })).toBe(false)
+    expect((await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: {} })).ok).toBe(false)
+    expect(h.keys).toEqual([])
+  })
+})
+
+describe('an answer that arrives after its question changed', () => {
+  // The person saw one approval; by the time their "Yes" arrived the agent had moved on to ANOTHER. The
+  // old positional fallback typed that "Yes" into the new prompt — approving a command nobody was shown.
+  const promptA = (): string => permission('claude')
+  const promptB = (): string => permission('claude').replaceAll('curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', 'rm -rf ~/projects')
+  const yesToA = { 'Approve Bash command: curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'Yes' }
+
+  it('the two prompts are different dialogs with different ids', () => {
+    expect(asQuestion(parseQuestionPane(promptB())).question).toBe('Approve Bash command: rm -rf ~/projects')
+    expect(idOf(promptB())).not.toBe(idOf(promptA()))
+  })
+
+  it('types nothing into the new dialog and says the question changed', async () => {
+    const h = machine([promptB(), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(promptA()), sessionId: 's1', answers: yesToA })
+    expect(r).toEqual({ ok: false, error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    expect(h.keys).toEqual([])
+    expect(h.texts).toEqual([])
+  })
+
+  it('still answers when the dialog on screen is the one it was for', async () => {
+    const h = machine([promptA(), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(promptA()), sessionId: 's1', answers: yesToA })
+    expect(r).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('refuses one with no requestId whose text names a different question', async () => {
+    const h = machine([promptB(), CLOSED])
+    const r = await h.controller.answer({ sessionId: 's1', answers: yesToA })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('accepts one with no requestId whose text names the question on screen', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect((await h.controller.answer({ sessionId: 's1', answers: { 'Which drink would you like?': 'Tea' } })).ok).toBe(true)
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('looks again when a repaint blanks the question, instead of calling it stale', async () => {
+    // Mid-repaint the question line can read empty for one capture; its id then matches nothing.
+    const blank = fixture('single').replace('Which drink would you like?', '')
+    const h = machine([blank, fixture('single'), CLOSED])
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { Drink: 'Tea' } })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('types nothing into a dialog whose question never becomes readable', async () => {
+    const h = machine([fixture('single').replace('Which drink would you like?', '')])
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: { Drink: 'Tea' } })).toMatchObject({ ok: false })
+    expect(h.keys).toEqual([])
+  })
+
+  it('never submits a form it finds already on its review screen', async () => {
+    // Every question was answered elsewhere first: pressing Submit would send answers nobody here gave.
+    const h = machine([fixture('review')])
+    const r = await h.controller.answer({ requestId: idOf(fixture('multi')), sessionId: 's1', answers: { 'Which toppings do you want?': 'Cheese' } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+})
+
+describe('positional answers', () => {
+  // An answer keyed by something other than the question's text (a header, an id) is matched by POSITION
+  // — but only to the dialog its requestId names. Anywhere else, position means "whatever is showing".
+  const byHeader = { Drink: 'Tea' }
+
+  it('fill the question their requestId names', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ requestId: idOf(fixture('single')), sessionId: 's1', answers: byHeader })).toEqual({ ok: true })
+    expect(h.keys).toEqual(['1'])
+  })
+
+  it('are refused for a dialog announced under another requestId', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(fixture('multi')), sessionId: 's1', answers: byHeader })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('are refused with no requestId at all', async () => {
+    const h = machine([fixture('single'), CLOSED])
+    expect(await h.controller.answer({ sessionId: 's1', answers: byHeader })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(h.keys).toEqual([])
+  })
+
+  it('stop at the next question of the form — a new question is a new request', async () => {
+    const h = machine([fixture('tabs'), fixture('single'), CLOSED])
+    const r = await h.controller.answer({ requestId: idOf(fixture('tabs')), sessionId: 's1', answers: { Colors: 'Blue', Drink: 'Tea' } })
+    expect(r.ok).toBe(true)
+    expect(h.keys).toEqual(['2', 'Tab'])
+  })
+
+  it('match the id the watcher announced the dialog under', async () => {
+    // The two sides must compute the SAME id, or every answer would be refused as stale.
+    const announced: string[] = []
+    const w = new QuestionWatcher({
+      getSession: () => ({ sessionId: 's1', tmuxPane: '%1', engine: 'claude' } as RegisteredSession),
+      capture: async () => fixture('single'),
+      hasDevice: () => true,
+      onQuestion: (_s, requestId) => { announced.push(requestId) },
+    })
+    await (w as unknown as { tick(id: string): Promise<void> }).tick('s1')
+    expect(announced).toEqual([idOf(fixture('single'))])
   })
 })
 
@@ -637,8 +766,8 @@ describe('answering a permission prompt from the device', () => {
     // Verified on a live claude pane: one digit selects AND submits, so no Enter follows it.
     const h = machine([permission('claude'), CLOSED])
     const answers = { 'Approve Bash command: curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'No' }
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('claude')), sessionId: 's1', answers }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['3'])
     })
   })
@@ -647,8 +776,8 @@ describe('answering a permission prompt from the device', () => {
     // Devin's "No" is row 7 of 7; two unanswerable editor rows are dropped from what the device shows, so
     // the label→digit mapping must survive that filter.
     const h = machine([permission('devin'), CLOSED], 'devin')
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Approve curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'No' } }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('devin'), 'devin'), sessionId: 's1', answers: { 'Approve curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin': 'No' } }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['7'])
     })
   })
@@ -657,8 +786,8 @@ describe('answering a permission prompt from the device', () => {
     // opencode draws BOTH a numbered ask dialog and kilo's horizontal prompt, so the direction travels on
     // the ROW. Keying "2" here would select nothing at all.
     const h = machine([permission('opencode'), CLOSED], 'opencode')
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { 'Access external directory /private/etc': 'Reject' } }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('opencode'), 'opencode'), sessionId: 's1', answers: { 'Access external directory /private/etc': 'Reject' } }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['Right', 'Right', 'Enter'])
     })
   })
@@ -666,8 +795,8 @@ describe('answering a permission prompt from the device', () => {
   it('matches an option the device truncated to its 80-byte buffer', () => {
     const h = machine([permission('codex'), CLOSED], 'codex')
     const truncated = "Yes, and don't ask again for commands that start with `printf 'hi\\n' > /priva"
-    return h.controller.answer({ requestId: 'r1', sessionId: 's1', answers: { "$ printf 'hi\\n' > /private/etc/harness-probe.txt": truncated } }).then((ok) => {
-      expect(ok).toBe(true)
+    return h.controller.answer({ requestId: idOf(permission('codex'), 'codex'), sessionId: 's1', answers: { "$ printf 'hi\\n' > /private/etc/harness-probe.txt": truncated } }).then((r) => {
+      expect(r.ok).toBe(true)
       expect(h.keys).toEqual(['2'])
     })
   })
@@ -693,5 +822,415 @@ describe('QuestionWatcher on a permission prompt', () => {
     // Same prompt still on screen ⇒ announced once, not every 1.5s tick.
     await tick()
     expect(seen).toHaveLength(1)
+  })
+})
+
+// ── the requestId of a dialog that is waiting ────────────────────────────────────────────────────────
+//
+// The id is recomputed on every 1.5s poll (a new id = a new question: the needs-you alert, the sound, the
+// dial push) and again at the moment an answer is typed (a new id = STALE_QUESTION, nothing typed). So it
+// may only change when the QUESTION does — never because a timer ticked, the cursor moved or a box was
+// ticked. Hashing the raw `dialog` broke both halves for every engine that keeps one.
+
+const FIXTURES = join(__dirname, '__fixtures__')
+// SGR and cursor codes, and OSC 8 hyperlinks (grok) — what a person sees is what is left.
+const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g
+const paneOf = (file: string): string => readFileSync(join(FIXTURES, file), 'utf8').replace(ANSI_RE, '')
+const engineOf = (file: string): Parameters<typeof parseEngineQuestionPane>[0] => {
+  const name = /^(?:permission|question)-([a-z]+)/.exec(file)![1]
+  return (['single', 'multi', 'tabs', 'review'].includes(name) ? 'claude' : name) as Parameters<typeof parseEngineQuestionPane>[0]
+}
+const viewIn = (file: string, pane: string): QuestionView => asQuestion(parseEngineQuestionPane(engineOf(file), pane))
+const idIn = (file: string, pane: string): string => questionRequestId('s1', viewIn(file, pane))
+/** main's fingerprint — the words, the options, the arity — which never saw the dialog below its first line. */
+const wordsOf = (view: QuestionView): string => `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+
+/** Every captured dialog that is an open question (review screens have no id). */
+const OPEN = readdirSync(FIXTURES)
+  .filter((file) => /^(permission|question)-.*\.txt$/.test(file))
+  .filter((file) => {
+    const view = parseEngineQuestionPane(engineOf(file), paneOf(file))
+    return view?.kind === 'question' && !view.partial && !!view.question && view.rows.length > 0
+  })
+  .sort()
+
+/** Advance every live timer on the pane by `by`: `(01m30s · ↓ 82 tok)`, `(21s · esc to interrupt)`,
+ *  `( 30.5s · ↓ 63 tok)`, `(1s • esc to interrupt)`, grok's bare `1m33s`, a footer's `(89s)`. */
+const tickTimers = (pane: string, by: number): string =>
+  pane
+    .replace(/\([^()\n]*?(?:\d(?:ms|s|m|h)\b|\dm\d|\d\s*tok|esc to interrupt)[^()\n]*\)|\b\d+m\d+s\b|\b\d+(?:\.\d+)?s\b|\b\d+ tok(?:en)?s?\b/g,
+      (live) => live.replace(/\d+/g, (n) => String(Number(n) + by).padStart(n.length, '0')))
+
+interface CursorStyle { at: RegExp; row: RegExp; off: (line: string) => string; on: (line: string, glyph: string) => string }
+const CURSOR_STYLES: CursorStyle[] = [
+  { // `❯ 1. Yes` over `  2. No`: Claude, Command Code, Codex and Muse (`›`), agy (`>`), Copilot, Hermes.
+    // The last "row" a cursor can sit on in Claude's multi-select is the unnumbered Submit/Next.
+    at: /^(\s*(?:[│┃|]\s*)?)([❯›>])(\s*)(\d+\.\s.*)$/,
+    row: /^(\s*(?:[│┃|]\s*)?)(\s\s)((?:\d+\.\s|(?:Submit|Next)\s*$).*)$/,
+    off: (line) => line.replace(/^(\s*(?:[│┃|]\s*)?)([❯›>])(\s*)(\d+\.\s.*)$/, (_m, a: string, _g, sp: string, rest: string) => `${a} ${sp}${rest}`),
+    on: (line, glyph) => line.replace(/^(\s*(?:[│┃|]\s*)?)(\s\s)(.*)$/, (_m, a: string, _s, rest: string) => `${a}${glyph} ${rest}`),
+  },
+  { // devin: `❭ 1 Xanh` over `· 2 Đỏ` and `·   Other (type your own)`.
+    at: /^(\s*)❭(\s.*)$/,
+    row: /^(\s*)·(\s.*)$/,
+    off: (line) => line.replace(/^(\s*)❭/, '$1·'),
+    on: (line) => line.replace(/^(\s*)·/, '$1❭'),
+  },
+  { // grok's permission radio: `1 (●) Yes, and don't ask again…` over `2 (○) Yes, proceed`.
+    at: /^.*\b\d+ \(●\)/,
+    row: /^.*\b\d+ \(○\)/,
+    off: (line) => line.replace('(●)', '(○)'),
+    on: (line) => line.replace('(○)', '(●)'),
+  },
+]
+
+/** The pane with the cursor moved to each other row of the live dialog, one pane per row. */
+function cursorMoves(pane: string): string[] {
+  const lines = pane.split('\n')
+  for (const style of CURSOR_STYLES) {
+    const cur = lines.findLastIndex((line) => style.at.test(line))
+    if (cur < 0) continue
+    const glyph = /[❯›>❭●]/.exec(lines[cur].replace(/^\s*[│┃|]/, ''))![0]
+    const targets: number[] = []
+    // The rows around the cursor, allowing a description line or a rule between two of them.
+    for (const step of [-1, 1]) {
+      for (let i = cur + step, gap = 0; i >= 0 && i < lines.length && gap <= 2; i += step) {
+        if (style.row.test(lines[i])) { targets.push(i); gap = 0 } else gap++
+      }
+    }
+    return targets.map((t) => {
+      const moved = [...lines]
+      moved[cur] = style.off(lines[cur])
+      moved[t] = style.on(lines[t], glyph)
+      return moved.join('\n')
+    })
+  }
+  return []
+}
+
+/** The live multi-select with each box ticked in turn, then all of them. */
+function boxToggles(pane: string): string[] {
+  const lines = pane.split('\n')
+  const first = lines.findLastIndex((line) => /\b1\.\s+\[ \]|^\s*[□■]\s+1\s/.test(line))
+  if (first < 0) return []
+  // Every option's box; not the free-text row's, which opens an editor rather than ticking a choice.
+  const boxes = lines.map((line, i) => i >= first && /\d\.\s+\[ \]|^\s*□\s/.test(line) && !/type something|type your own/i.test(line) ? i : -1)
+    .filter((i) => i >= 0)
+  const tick = (line: string): string => line.replace('[ ]', '[✔]').replace(/^(\s*)□/, '$1■')
+  const one = boxes.map((b) => lines.map((line, i) => i === b ? tick(line) : line).join('\n'))
+  return [...one, lines.map((line, i) => boxes.includes(i) ? tick(line) : line).join('\n')]
+}
+
+// TUIs that mark the highlighted row by colour alone (the SGR is gone once captured) or lay the rows out
+// side by side: no glyph in the text to move, so nothing a cursor does can reach the id.
+const CURSOR_BY_COLOUR = ['permission-cursor.txt', 'permission-opencode.txt', 'question-grok.txt', 'question-kilo.txt', 'question-opencode.txt', 'question-devin-multi.txt']
+// The captures that paint a live timer — inside the dialog (Hermes, Muse) or around it.
+const TICKING = ['permission-grok.txt', 'permission-hermes.txt', 'permission-muse.txt', 'question-codex.txt', 'question-grok.txt', 'question-hermes.txt', 'question-muse.txt']
+
+describe('a waiting dialog keeps one requestId', () => {
+  it('covers every captured dialog', () => {
+    // A new fixture joins every case below by being in the folder; this only guards the sweep itself.
+    expect(OPEN.length).toBeGreaterThanOrEqual(25)
+    for (const file of TICKING) expect(OPEN).toContain(file)
+  })
+
+  it.each(OPEN)('%s: while its timers tick', (file) => {
+    const pane = paneOf(file)
+    const id = idIn(file, pane)
+    for (const by of [1, 7, 61, 997]) expect(idIn(file, tickTimers(pane, by))).toBe(id)
+  })
+
+  it.each(TICKING)('%s: the timer really is on the pane (the tick test is not vacuous)', (file) => {
+    expect(tickTimers(paneOf(file), 1)).not.toBe(paneOf(file))
+  })
+
+  it.each(['permission-hermes.txt', 'permission-muse.txt', 'question-hermes.txt'])('%s: even though the timer is inside the dialog itself', (file) => {
+    const pane = paneOf(file)
+    expect(viewIn(file, tickTimers(pane, 1)).dialog).not.toBe(viewIn(file, pane).dialog)
+    expect(idIn(file, tickTimers(pane, 1))).toBe(idIn(file, pane))
+  })
+
+  it.each(OPEN)('%s: with the cursor on each row', (file) => {
+    const pane = paneOf(file)
+    const moves = cursorMoves(pane)
+    if (moves.length === 0) { expect(CURSOR_BY_COLOUR).toContain(file); return }
+    const view = viewIn(file, pane)
+    for (const moved of moves) {
+      expect(moved).not.toBe(pane)
+      // The move is a real one: the same dialog, still read as the same question with the same options.
+      expect(wordsOf(viewIn(file, moved))).toBe(wordsOf(view))
+      expect(idIn(file, moved)).toBe(idIn(file, pane))
+      // …and with its timers ticking at the same time.
+      expect(idIn(file, tickTimers(moved, 3))).toBe(idIn(file, pane))
+    }
+  })
+
+  it('moves the cursor through every row of the dialogs whose rows it can see', () => {
+    // Guards the sweep above against quietly moving nothing: each of these is `❯ 1.` over N more rows.
+    expect(cursorMoves(paneOf('permission-claude.txt'))).toHaveLength(2)
+    expect(cursorMoves(paneOf('question-single.txt'))).toHaveLength(3)           // Coffee, Type something, Chat
+    expect(cursorMoves(paneOf('question-multi.txt'))).toHaveLength(5)            // + Submit
+    expect(cursorMoves(paneOf('permission-devin.txt'))).toHaveLength(6)
+    expect(cursorMoves(paneOf('permission-grok.txt'))).toHaveLength(2)
+  })
+
+  it.each(['question-multi.txt', 'question-tabs.txt', 'question-devin-multi.txt'])('%s: with its boxes ticked', (file) => {
+    const pane = paneOf(file)
+    const toggles = boxToggles(pane)
+    expect(toggles.length).toBeGreaterThanOrEqual(4)
+    for (const toggled of toggles) {
+      expect(viewIn(file, toggled).rows.some((row) => row.checked)).toBe(true)
+      expect(idIn(file, toggled)).toBe(idIn(file, pane))
+      for (const moved of cursorMoves(toggled)) expect(idIn(file, moved)).toBe(idIn(file, pane))
+    }
+  })
+
+  it('keeps the raw dialog — timer, cursor and all — for the pair floor, which reads it exactly', () => {
+    const view = viewIn('permission-hermes.txt', paneOf('permission-hermes.txt'))
+    expect(view.dialog).toContain('❯ 1. Allow once')
+    expect(view.dialog).toContain('(01m30s · ↓ 82 tok)')
+  })
+})
+
+describe('two different commands are still two requestIds', () => {
+  // The reason the dialog is in the id at all: a command that wraps is only whole there. What was taken
+  // out of it above must never be enough to make two commands look alike.
+  function variants(file: string, from: string, to: [string, string]): [string, string] {
+    const pane = paneOf(file)
+    expect(pane).toContain(from)
+    return [pane.replace(from, to[0]), pane.replace(from, to[1])]
+  }
+
+  const cases: Array<{ file: string; from: string; to: [string, string] }> = [
+    // Claude titles the prompt by the command's FIRST line; the second is only in the dialog.
+    { file: 'permission-claude.txt', from: '   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin',
+      to: ['   npm test &&\n   git push', '   npm test &&\n   rm -rf ~/work'] },
+    // Codex titles it by the line just above the rows — the LAST line — so the middle one differs.
+    { file: 'permission-codex.txt', from: "  $ printf 'hi\\n' > /private/etc/harness-probe.txt",
+      to: ['  $ npm test &&\n    git status &&\n    git push', '  $ npm test &&\n    rm -rf ~/work &&\n    git push'] },
+    // Hermes titles it by the URL on the second line; the first (`curl -s`) is only in the dialog.
+    { file: 'permission-hermes.txt', from: '│ curl -s ', to: ['│ curl -s ', '│ rm -rf  '] },
+    // Muse: what is being reached, in the body above the command.
+    { file: 'permission-muse.txt', from: 'network: example.com:443 https', to: ['network: example.com:443 https', 'network: evil.example:443 https'] },
+  ]
+
+  it.each(cases)('$file: a different command below its first line', ({ file, from, to }) => {
+    const [a, b] = variants(file, from, to)
+    // main's fingerprint cannot see the difference…
+    expect(wordsOf(viewIn(file, a))).toBe(wordsOf(viewIn(file, b)))
+    // …the id can, with the timers ticking and the cursor anywhere.
+    expect(idIn(file, a)).not.toBe(idIn(file, b))
+    expect(idIn(file, tickTimers(a, 5))).toBe(idIn(file, a))
+    expect(idIn(file, tickTimers(b, 5))).toBe(idIn(file, b))
+    for (const moved of cursorMoves(b)) expect(idIn(file, moved)).not.toBe(idIn(file, a))
+  })
+})
+
+describe('the review\'s simulation: a real QuestionWatcher and AskQuestionController over one pane', () => {
+  // What the dial saw: the question re-announced on every poll, then its answer refused as STALE_QUESTION.
+  function world(engine: string, first: string) {
+    let screen = first
+    const session = { agentId: 'a1', sessionId: 's1', engine, active: true, tmuxPane: '%1' } as unknown as RegisteredSession
+    const announced: string[] = []
+    const watcher = new QuestionWatcher({
+      getSession: () => session,
+      capture: async () => screen,
+      hasDevice: () => true,
+      onQuestion: (_s, requestId) => { announced.push(requestId) },
+      onQuestionGone: (_s, requestId) => { announced.push(`gone:${requestId}`) },
+    })
+    const keys: string[] = []
+    const controller = new AskQuestionController({
+      getSession: () => session,
+      capture: async () => screen,
+      sendText: async () => true,
+      // The keystroke answers the dialog: it leaves the pane.
+      sendKey: async (_t, key) => { keys.push(key); screen = '❯ '; return true },
+      wait: async () => {},
+    })
+    return {
+      announced,
+      keys,
+      show: (pane: string) => { screen = pane },
+      poll: () => (watcher as unknown as { tick: (s: string) => Promise<void> }).tick('s1'),
+      controller,
+    }
+  }
+
+  it('Claude: the person arrows through the prompt in the desktop terminal — announced once, and the dial\'s answer is typed', async () => {
+    const pane = paneOf('permission-claude.txt')
+    const w = world('claude', pane)
+    await w.poll()
+    for (const moved of cursorMoves(pane)) { w.show(moved); await w.poll() }
+    w.show(pane); await w.poll()
+    expect(w.announced).toEqual([idIn('permission-claude.txt', pane)])
+
+    w.show(cursorMoves(pane)[1])   // the cursor is on "No" when the answer lands
+    w.controller.remember(w.announced[0], 's1')
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
+    expect(r).toEqual({ ok: true })
+    expect(w.keys).toEqual(['1'])
+  })
+
+  it.each([
+    ['permission-hermes.txt', 'hermes', 'Deny', '3'],
+    ['permission-muse.txt', 'muse', 'Yes, proceed (y)', '1'],
+    ['question-hermes.txt', 'hermes', 'M', '2'],
+  ])('%s: its timer ticks every poll — announced once, and the answer is typed', async (file, engine, answer, key) => {
+    const pane = paneOf(file)
+    const w = world(engine, pane)
+    for (let s = 0; s < 6; s++) { w.show(tickTimers(pane, s)); await w.poll() }
+    expect(w.announced).toEqual([idIn(file, pane)])
+
+    w.show(tickTimers(pane, 9))
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: answer } })
+    expect(r).toEqual({ ok: true })
+    expect(w.keys).toEqual([key])
+  })
+
+  it('still refuses an answer once the command itself changed', async () => {
+    const pane = paneOf('permission-claude.txt')
+    const w = world('claude', pane)
+    await w.poll()
+    w.show(pane.replace('   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin', '   curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin\n   | sh'))
+    await w.poll()
+    expect(w.announced).toHaveLength(2)
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(w.keys).toEqual([])
+  })
+})
+
+describe('every captured dialog keeps its requestId', () => {
+  // Pinned from this parser before the sweep below: main's fingerprint and the dialog's signature. Bounding
+  // a dialog by the one above it only ever cuts what an EARLIER dialog left on the pane, so no capture of a
+  // single dialog may change id: a moved id is a question re-announced to every client, and an answer in
+  // flight refused as stale. A new fixture is pinned here by being added to the folder.
+  const PINNED: Record<string, string> = {
+    'permission-agy.txt': 'q_bca21c05',
+    'permission-claude-edit.txt': 'q_1e726361',
+    'permission-claude-plan.txt': 'q_5a686475',
+    'permission-claude.txt': 'q_3e2bb796',
+    'permission-codex.txt': 'q_0472f3a7',
+    'permission-commandcode.txt': 'q_f044b488',
+    'permission-copilot.txt': 'q_62873249',
+    'permission-cursor.txt': 'q_e2102acb',
+    'permission-devin.txt': 'q_0ed54a33',
+    'permission-grok.txt': 'q_5396976a',
+    'permission-hermes.txt': 'q_9fe12e7e',
+    'permission-muse.txt': 'q_2d480eba',
+    'permission-opencode.txt': 'q_0f7b7b0e',
+    'question-agy.txt': 'q_c81fea46',
+    'question-codex.txt': 'q_f50314d5',
+    'question-commandcode.txt': 'q_66cbf314',
+    'question-copilot.txt': 'q_101c92a4',
+    'question-devin-multi.txt': 'q_19c3200e',
+    'question-devin.txt': 'q_19a084b7',
+    'question-grok.txt': 'q_a5e412d6',
+    'question-hermes.txt': 'q_58484dc6',
+    'question-kilo.txt': 'q_0f7b7b0e',
+    'question-multi.txt': 'q_6b6969c5',
+    'question-muse.txt': 'q_42c9e375',
+    'question-opencode.txt': 'q_a71204f9',
+    'question-single.txt': 'q_321279c1',
+    'question-tabs.txt': 'q_76723591',
+  }
+  const answered = ['─'.repeat(60), ' Bash command', '', '   npm test', '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel · Tab to amend', '',
+    '⏺ Bash(npm test)', '  ⎿  ok', '']
+
+  it('pins every open fixture', () => {
+    expect(Object.keys(PINNED).sort()).toEqual(OPEN)
+  })
+
+  it.each(OPEN)('%s: alone, and under an answered prompt in scrollback', (file) => {
+    expect(idIn(file, paneOf(file))).toBe(PINNED[file])
+    expect(idIn(file, [...answered, paneOf(file)].join('\n'))).toBe(PINNED[file])
+  })
+
+  it('reads muse\'s approval, not the answered question above it (regression)', () => {
+    const pane = [paneOf('question-muse.txt'), paneOf('permission-muse.txt')].join('\n')
+    expect(viewIn('permission-muse.txt', pane)).toMatchObject({ question: '$ curl -s https://example.com', rows: [{ label: 'Yes, proceed (y)' }, { label: expect.stringMatching(/^Yes, don't ask again/) }, { label: expect.stringMatching(/^No/) }] })
+    expect(idIn('permission-muse.txt', pane)).toBe(PINNED['permission-muse.txt'])
+  })
+
+  it('reads Command Code\'s footer-less question, not the answered question above it (regression)', () => {
+    const pane = [paneOf('question-single.txt'), paneOf('question-commandcode.txt')].join('\n')
+    expect(viewIn('question-commandcode.txt', pane).question).toBe('"Cầu vụ" bạn muốn game gì?')
+    expect(idIn('question-commandcode.txt', pane)).toBe(PINNED['question-commandcode.txt'])
+  })
+})
+
+describe('the dialog read is the LAST one on the pane (regression: an answered dialog above was read instead)', () => {
+  // A pane keeps an answered dialog in its scrollback and paints the live one under it. Every reader must
+  // read the live one, and nothing of it from above the answered one's end: found with the live dialog
+  // under an answered one, muse's approval read as the muse question above it, and Command Code's
+  // footer-less question as the footered question above it — under THAT question's requestId.
+  const ALL = readdirSync(FIXTURES).filter((file) => /^(permission|question)-.*\.txt$/.test(file)).sort()
+  /** What a client is shown, and the id its answer comes back under. */
+  const readIn = (file: string, pane: string) => {
+    const view = parseEngineQuestionPane(engineOf(file), pane)
+    return view?.kind === 'question' && view.question ? { ...view, id: questionRequestId('s1', view) } : view
+  }
+  /**
+   * The capture cut to its own dialog: the fewest last lines that read as the whole capture does, alone and
+   * under unrelated output. The second half keeps the dialog's own top (a rule, a bullet) in the cut: the
+   * dialog a footer dialog carries reads up to it, and without it would read the output above instead.
+   */
+  const ownDialog = (file: string): string => {
+    const lines = paneOf(file).split('\n')
+    const whole = JSON.stringify(readIn(file, paneOf(file)))
+    const output = `${Array(14).fill('  some earlier output').join('\n')}\n`
+    const same = (top: number) => JSON.stringify(readIn(file, lines.slice(top).join('\n'))) === whole
+      && JSON.stringify(readIn(file, output + lines.slice(top).join('\n'))) === whole
+    let top = 0
+    while (top + 1 < lines.length && same(top + 1)) top++
+    return lines.slice(top).join('\n')
+  }
+
+  it('sweeps every captured dialog', () => {
+    expect(ALL.length).toBeGreaterThanOrEqual(29)
+    expect(ALL).toEqual(expect.arrayContaining([...OPEN, 'question-review.txt', 'question-commandcode-review.txt', 'question-opencode-review.txt']))
+  })
+
+  it.each(ALL)('%s: under every other captured dialog, answered, reads as it does alone', (file) => {
+    const alone = readIn(file, paneOf(file))
+    expect(alone).not.toBeNull()
+    const own = ownDialog(file)
+    for (const other of ALL.filter((name) => name !== file)) {
+      // The whole capture under the other's whole capture, and this dialog alone right under the other's.
+      expect({ other, read: readIn(file, [paneOf(other), paneOf(file)].join('\n')) }).toEqual({ other, read: alone })
+      expect({ other, read: readIn(file, [paneOf(other).trimEnd(), own].join('\n')) }).toEqual({ other, read: alone })
+    }
+  })
+})
+
+describe('a bare timer line in the dialog keeps the requestId (regression: `waiting 3s` moved it every tick)', () => {
+  // Found end to end: a status line with no parentheses and no ` · ` sat inside the dialog the id hashes,
+  // so every second was a new question: re-announced, and every answer to it refused as stale.
+  const FILE = 'permission-codex.txt'
+  const ASKED = '  Would you like to run the following command?'
+  const withLine = (line: string): string => {
+    expect(paneOf(FILE)).toContain(ASKED)
+    return paneOf(FILE).replace(ASKED, `  ${line}\n${ASKED}`)
+  }
+
+  it.each([
+    'waiting 3s', 'Waiting… 12s', 'thinking 4s', 'Churned for 4s', '✻ Working... 1m30s', '⠼ Fetch Bitcoin price… 1m33s',
+    'Waiting on answers for the command?          4.2s',
+  ])('%s', (status) => {
+    const pane = withLine(status)
+    expect(viewIn(FILE, pane).dialog).toContain(status)
+    expect(tickTimers(pane, 1)).not.toBe(pane)
+    for (const by of [1, 7, 61, 997]) expect(idIn(FILE, tickTimers(pane, by))).toBe(idIn(FILE, pane))
+  })
+
+  it.each([
+    ['sleep 30s', 'sleep 99s'],
+    ['$ timeout 30s npm test', '$ timeout 99s npm test'],
+    ['Reason: retry after 30s', 'Reason: retry after 99s'],
+    ['npm test && sleep 5s', 'npm test && sleep 500s'],
+    ['Waiting on answers for the command?          4.2s', 'Waiting on answers for another command?          4.2s'],
+  ])('keeps the prompt\'s own words and numbers: %s', (a, b) => {
+    expect(idIn(FILE, withLine(a))).not.toBe(idIn(FILE, withLine(b)))
   })
 })

@@ -34,7 +34,7 @@ function row(overrides: Partial<RegisteredSession> = {}): RegisteredSession {
     cliVersion: null,
     processIdentity: null,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
     ...overrides,

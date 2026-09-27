@@ -36,7 +36,8 @@
  * between "once" and "always" is a policy decision that belongs to the person, not to this parser.
  */
 
-import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import type { FoundDialog, PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 /** `enter confirm` is the stable half of the footer; `⇆ select` is dropped first on a narrow pane. */
 const FOOTER_RE = /enter\s+confirm/i
@@ -80,6 +81,11 @@ export function kiloSelectionKeys(row: QuestionRow): string[] {
 }
 
 export function parseKiloQuestionPane(capture: string): PaneView {
+  return locateKiloQuestion(capture)?.view ?? null
+}
+
+/** `parseKiloQuestionPane`, with the footer it anchored on. */
+export function locateKiloQuestion(capture: string): FoundDialog | null {
   const raw = stripAnsi(capture).split('\n')
   // Anchor on the LAST dialog: a prompt already answered stays in the scrollback above the live one.
   let footer = -1
@@ -87,8 +93,10 @@ export function parseKiloQuestionPane(capture: string): PaneView {
     if (FOOTER_RE.test(raw[i])) { footer = i; break }
   }
   if (footer < 0) return null
+  // The title is this prompt's own: never one from above an earlier dialog's end.
+  const floor = earlierDialogEnd(raw, footer, 40)
   let title = -1
-  for (let i = footer; i >= 0 && footer - i < 40; i--) {
+  for (let i = footer; i > floor && footer - i < 40; i--) {
     if (TITLE_RE.test(raw[i])) { title = i; break }
   }
   if (title < 0) return null
@@ -132,5 +140,5 @@ export function parseKiloQuestionPane(capture: string): PaneView {
     break
   }
 
-  return { kind: 'question', question: question || 'Permission required', rows, multi: false, typeRow: null }
+  return { view: { kind: 'question', question: question || 'Permission required', rows, multi: false, typeRow: null }, at: footer }
 }

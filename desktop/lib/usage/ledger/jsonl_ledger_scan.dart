@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'ledger_scanner.dart';
 import 'ledger_types.dart';
 
+import '../../core/runtime_platform.dart';
+
 /// Shared file lifecycle; each provider retains its own usage parser.
 Future<LedgerScanResult> scanJsonlUsage({
   required LedgerProvider provider,
@@ -29,7 +31,7 @@ Future<LedgerScanResult> scanJsonlUsage({
       // Unused/older roots normally do not exist. Other listing failures must
       // not look like a provider that simply has no logs on this machine.
       if (error.osError?.errorCode != 2 &&
-          !(Platform.isWindows && error.osError?.errorCode == 3)) {
+          !(RuntimePlatform.isWindows && error.osError?.errorCode == 3)) {
         failures.add(error.osError?.message ?? error.message);
       }
     }

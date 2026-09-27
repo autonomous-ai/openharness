@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'
+    show kIsWeb, LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -52,13 +54,18 @@ Future<void> startHarness({
   TerminalTransportPluginFactory? transportPlugins,
 }) async {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Roboto Mono',
+    ], await rootBundle.loadString('assets/fonts/roboto-mono/OFL.txt'));
+  });
   harnessTransportPlugins = transportPlugins;
   // Before anything else can fail. The file sinks come first so CrashLog's own
   // install has somewhere to mirror to — see CrashLog.record.
   installFileLogs();
   CrashLog.install();
   appLog.info('app', 'launched');
-  final keymap = AppKeymap(store: AppKeymap.fileStore());
+  final keymap = AppKeymap(store: kIsWeb ? null : AppKeymap.fileStore());
   // Keyboard configuration has its own file and watchers. It can load beside
   // the appearance, but both must be ready before the window becomes usable.
   await Future.wait([loadPersistedSettings(), keymap.start()]);
@@ -91,6 +98,8 @@ class HarnessApp extends StatelessWidget {
     grid.AppTheme.palette.value = prefs.palette;
     return MaterialApp(
       title: 'Harness',
+      // OAuth callback paths are consumed by the sign-in adapter during boot.
+      initialRoute: '/',
       themeAnimationDuration: Duration.zero,
       // Flutter's DEBUG ribbon stays on a debug build: it is how a locally built
       // app is told apart from the installed release at a glance (owner,

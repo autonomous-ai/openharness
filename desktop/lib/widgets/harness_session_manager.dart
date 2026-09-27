@@ -605,9 +605,10 @@ class _SessionRow extends StatelessWidget {
       'Ready' || 'Paused' || 'Working' || 'Needs input' => null,
       final status => status,
     };
-    final activity = row.lastActiveAt == null
-        ? 'Last activity unavailable'
-        : 'Last active ${harnessActivityAge(row.lastActiveAt, now)} ago';
+    // The time the panel sorts by (Recently used), so the ages read in order.
+    final activity = row.lastUsedAt == null
+        ? 'Last use unknown'
+        : 'Last used ${harnessActivityAge(row.lastUsedAt, now)} ago';
     Widget detail(IconData icon, String text, Color color, {String? tooltip}) =>
         Tooltip(
           message: tooltip ?? text,
@@ -716,16 +717,16 @@ class _SessionRow extends StatelessWidget {
                                             ),
                                           ),
                                         ),
-                                        if (row.lastActiveAt != null)
+                                        if (row.lastUsedAt != null)
                                           Padding(
                                             padding: const EdgeInsets.only(
                                               left: 8,
                                             ),
                                             child: Tooltip(
                                               message:
-                                                  'Last active ${row.lastActiveAt!.toLocal()}',
+                                                  'Last used ${row.lastUsedAt!.toLocal()}',
                                               child: Text(
-                                                '· ${harnessActivityAge(row.lastActiveAt, now)}',
+                                                '· ${harnessActivityAge(row.lastUsedAt, now)}',
                                                 key: ValueKey(
                                                   'session-age:${row.id}',
                                                 ),

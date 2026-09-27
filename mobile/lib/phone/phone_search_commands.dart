@@ -44,6 +44,7 @@ List<PhoneDestination> phoneSearchModes(List<PhoneCommand> commands) => [
   _mode('commands', '>  Commands', 'Run anything by name', '> '),
   _mode('projects', '#  Projects', 'Choose a project, then one of its harnesses', '# '),
   _mode('machines', '@  Machines', 'Choose a machine, then one of its harnesses', '@ '),
+  _mode('models', ':  Models', 'Local models, shared models, subscriptions', ': '),
   for (final command in commands) command.destination,
 ];
 

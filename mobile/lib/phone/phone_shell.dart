@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
@@ -64,15 +62,17 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     final notices = widget.notifier.agentNotices.system;
     notices.opened.addListener(_openNoticedAgent);
-    // Signed in is the first moment a notice could be worth anything, so it is
-    // the moment to ask. The OS keeps the answer; every later ask is a no-op.
-    unawaited(notices.requestPermission());
+    // ⚠️ Not asked here any more. Signed in with nothing on screen, "Harness would like to send you
+    // notifications" is a question with no reason attached. It is asked the first time a harness
+    // is on screen — see `FocusHints.onDone` in `terminal_page.dart`.
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    widget.notifier.agentNotices.system.opened.removeListener(_openNoticedAgent);
+    widget.notifier.agentNotices.system.opened.removeListener(
+      _openNoticedAgent,
+    );
     _linkedMachineId.dispose();
     _openAgentRequest.dispose();
     for (final controller in _heroControllers.values) {

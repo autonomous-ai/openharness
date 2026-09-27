@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'runtime_platform.dart';
 
 /// The machine's name exactly as the OS gives it, or null when it has none.
 ///
@@ -7,7 +7,7 @@ import 'dart:io';
 /// label.
 String? localHostnameOrNull() {
   try {
-    final host = Platform.localHostname.trim();
+    final host = RuntimePlatform.localHostname.trim();
     return host.isEmpty ? null : host;
   } catch (_) {
     return null;

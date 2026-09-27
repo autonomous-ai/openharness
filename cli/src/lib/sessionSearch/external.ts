@@ -184,6 +184,19 @@ async function codexTitles(path: string): Promise<Map<string, string>> {
   return titles
 }
 
+/** Where an open session is: a terminal, which Harness can take it over from, or an app, which it cannot. */
+export type OpenIn = 'terminal' | 'app'
+
+/** The process that has a session open. */
+export interface SessionOwner {
+  pid: number
+  engine: ExternalEngine
+  /** The terminal it runs in (`/dev/ttys003`), or null for an app: an app is never stopped from here. */
+  tty: string | null
+  /** What says whether it is mid-turn: Claude Code's `sessions/<pid>.json`, or Codex's rollout. */
+  record: string
+}
+
 export interface OpenSessionsOptions {
   /** `~/.claude`: running Claude Code processes each keep `sessions/<pid>.json` there. */
   claudeHome: string
@@ -191,74 +204,204 @@ export interface OpenSessionsOptions {
   maxAgeMs?: number
   /** Whether a process is running; tests replace it. */
   alive?: (pid: number) => boolean
-  /** The Codex rollouts open in a running process; tests replace it. */
-  openRollouts?: () => Promise<string[]>
+  /** The Codex rollouts open in a running process, and the process; tests replace it. */
+  openRollouts?: () => Promise<Array<{ pid: number; path: string }>>
+  /** The terminal each process runs in, or null; tests replace it. */
+  ttys?: (pids: number[]) => Promise<Map<number, string | null>>
   now?: () => number
 }
 
+type OpenAnswer = { at: number; owners: Map<string, SessionOwner>; open: Map<string, OpenIn> }
+
 /**
  * Which sessions are open in a running process right now, so Cmd-P does not open one a second time
- * beside a terminal that still has it: both would write the same conversation.
+ * beside a terminal that still has it: both would write the same conversation. One open in a
+ * terminal can be taken over instead (`owner`, `stopSessionOwner`).
  *
  * Claude Code says so itself — each running process keeps `~/.claude/sessions/<pid>.json` naming its
  * session. Codex keeps no such record, but holds its rollout file open while it runs, so the
- * operating system says which are (`lsof`).
+ * operating system says which are (`lsof`). A process with a terminal is one a person runs there;
+ * the engines' apps have none.
  */
 export class OpenSessions {
-  private answer: { at: number; ids: Set<string> } | null = null
-  private asking: Promise<Set<string>> | null = null
+  private answer: OpenAnswer | null = null
+  private asking: Promise<OpenAnswer> | null = null
 
   constructor(private readonly opts: OpenSessionsOptions) {}
 
   /** The last answer, however old; empty before the first. Never waits. */
-  known(): ReadonlySet<string> {
+  known(): ReadonlyMap<string, OpenIn> {
     const now = (this.opts.now ?? Date.now)()
     if (!this.answer || now - this.answer.at > (this.opts.maxAgeMs ?? 5_000)) void this.fresh()
-    return this.answer?.ids ?? new Set()
+    return this.answer?.open ?? new Map()
   }
 
   /** An answer at most `maxAgeMs` old. */
-  fresh(): Promise<Set<string>> {
+  async fresh(): Promise<ReadonlyMap<string, OpenIn>> {
+    return (await this.current()).open
+  }
+
+  /** The process that has [sessionId] open, looked at now rather than taken from a recent answer. */
+  async owner(sessionId: string): Promise<SessionOwner | null> {
+    if (!this.asking) this.answer = null
+    return (await this.current()).owners.get(sessionId) ?? null
+  }
+
+  private current(): Promise<OpenAnswer> {
     const now = (this.opts.now ?? Date.now)()
-    if (this.answer && now - this.answer.at <= (this.opts.maxAgeMs ?? 5_000)) return Promise.resolve(this.answer.ids)
-    this.asking ??= this.read().then((ids) => {
-      this.answer = { at: (this.opts.now ?? Date.now)(), ids }
-      return ids
+    if (this.answer && now - this.answer.at <= (this.opts.maxAgeMs ?? 5_000)) return Promise.resolve(this.answer)
+    this.asking ??= this.read().then((owners) => {
+      const open = new Map([...owners].map(([id, owner]): [string, OpenIn] => [id, owner.tty ? 'terminal' : 'app']))
+      this.answer = { at: (this.opts.now ?? Date.now)(), owners, open }
+      return this.answer
     }).finally(() => { this.asking = null })
     return this.asking
   }
 
-  private async read(): Promise<Set<string>> {
-    const ids = new Set<string>()
+  private async read(): Promise<Map<string, SessionOwner>> {
+    const owners = new Map<string, SessionOwner>()
     const alive = this.opts.alive ?? processAlive
     const dir = join(this.opts.claudeHome, 'sessions')
     for (const file of await entries(dir)) {
       if (!file.isFile() || !file.name.endsWith('.json')) continue
+      const path = join(dir, file.name)
       try {
-        const record = JSON.parse(await readFile(join(dir, file.name), 'utf8')) as { pid?: unknown; sessionId?: unknown }
-        if (typeof record.pid === 'number' && typeof record.sessionId === 'string' && alive(record.pid)) ids.add(record.sessionId)
+        const record = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown; sessionId?: unknown }
+        if (typeof record.pid === 'number' && typeof record.sessionId === 'string' && alive(record.pid)) {
+          owners.set(record.sessionId, { pid: record.pid, engine: 'claude', tty: null, record: path })
+        }
       } catch { /* one being written, or gone */ }
     }
-    for (const path of await (this.opts.openRollouts ?? openCodexRollouts)().catch(() => [])) {
+    for (const { pid, path } of await (this.opts.openRollouts ?? openCodexRollouts)().catch(() => [])) {
       const id = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(path)?.[1]
-      if (id) ids.add(id)
+      if (id) owners.set(id, { pid, engine: 'codex', tty: null, record: path })
     }
-    return ids
+    if (owners.size) {
+      const ttys = await (this.opts.ttys ?? processTtys)([...new Set([...owners.values()].map((owner) => owner.pid))]).catch(() => new Map<number, string | null>())
+      for (const owner of owners.values()) owner.tty = ttys.get(owner.pid) ?? null
+    }
+    return owners
   }
 }
 
-function processAlive(pid: number): boolean {
+/**
+ * Whether [owner] is in the middle of a turn. Claude Code's record says `idle` between turns. A Codex
+ * rollout marks a turn's start (`task_started`) and its end (`task_complete`, or `turn_aborted`), so
+ * the last of those near its end says. A file that cannot say counts as busy: the answer only
+ * decides whether to ask before stopping it.
+ */
+export async function sessionBusy(owner: Pick<SessionOwner, 'engine' | 'record'>): Promise<boolean> {
+  if (owner.engine === 'claude') {
+    try {
+      return (JSON.parse(await readFile(owner.record, 'utf8')) as { status?: unknown }).status !== 'idle'
+    } catch {
+      return false // gone: the process ended with it
+    }
+  }
+  for (const bytes of [256 * 1024, 4 * 1024 * 1024]) {
+    const lines = (await readTail(owner.record, bytes)).split('\n')
+    for (let i = lines.length - 1; i > 0; i--) {
+      const line = lines[i]
+      if (!line.includes('"event_msg"') || !TURN_MARK.test(line)) continue
+      try {
+        const kind = (JSON.parse(line) as { payload?: { type?: unknown } }).payload?.type
+        if (kind === 'task_started') return true
+        if (kind === 'task_complete' || kind === 'turn_aborted') return false
+      } catch { /* the line being written */ }
+    }
+  }
+  return true
+}
+
+const TURN_MARK = /"(task_started|task_complete|turn_aborted)"/
+
+async function readTail(path: string, bytes: number): Promise<string> {
+  const handle = await open(path, 'r').catch(() => null)
+  if (!handle) return ''
+  try {
+    const { size } = await handle.stat()
+    const length = Math.min(size, bytes)
+    const buffer = Buffer.alloc(length)
+    await handle.read(buffer, 0, length, size - length)
+    return buffer.toString('utf8')
+  } finally {
+    await handle.close()
+  }
+}
+
+export interface StopOptions {
+  alive?: (pid: number) => boolean
+  kill?: (pid: number, signal: NodeJS.Signals) => void
+  sleep?: (ms: number) => Promise<void>
+  /** Writes to the owner's terminal; tests replace it. */
+  writeTty?: (tty: string, text: string) => Promise<void>
+}
+
+/**
+ * Stops the terminal process that has a session open, so Harness can resume it: asked to quit
+ * (SIGTERM, which both engines answer by saving and restoring the terminal), then made to after five
+ * seconds. Codex leaves its cursor hidden when told to quit rather than typing its way out, so the
+ * terminal gets it back. Whether the process is gone.
+ */
+export async function stopSessionOwner(owner: Pick<SessionOwner, 'pid' | 'tty'>, opts: StopOptions = {}): Promise<boolean> {
+  const alive = opts.alive ?? processAlive
+  const kill = opts.kill ?? ((pid: number, signal: NodeJS.Signals) => { process.kill(pid, signal) })
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const gone = async (ms: number): Promise<boolean> => {
+    for (let waited = 0; waited < ms; waited += 100) {
+      if (!alive(owner.pid)) return true
+      await sleep(100)
+    }
+    return !alive(owner.pid)
+  }
+  const signal = (name: NodeJS.Signals): void => {
+    try { kill(owner.pid, name) } catch { /* already gone */ }
+  }
+  signal('SIGTERM')
+  if (!await gone(5_000)) {
+    signal('SIGKILL')
+    if (!await gone(2_000)) return false
+  }
+  if (owner.tty) await (opts.writeTty ?? writeTty)(owner.tty, '\x1b[?25h').catch(() => undefined)
+  return true
+}
+
+async function writeTty(tty: string, text: string): Promise<void> {
+  const handle = await open(tty, 'w')
+  try { await handle.write(text) } finally { await handle.close() }
+}
+
+export function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
 }
 
-/** The rollout files Codex processes have open: `lsof` over processes named codex. */
-function openCodexRollouts(): Promise<string[]> {
+/** The rollout files Codex processes have open, and which process: `lsof` over processes named codex. */
+function openCodexRollouts(): Promise<Array<{ pid: number; path: string }>> {
   return new Promise((resolve) => {
-    execFile('lsof', ['-n', '-P', '-Fn', '-c', 'codex', '-c', 'Codex'], { timeout: 3_000, maxBuffer: 8 * 1024 * 1024 }, (_error, stdout) => {
+    execFile('lsof', ['-n', '-P', '-Fpn', '-c', 'codex', '-c', 'Codex'], { timeout: 3_000, maxBuffer: 8 * 1024 * 1024 }, (_error, stdout) => {
       // lsof exits 1 when a name matches no process; what it printed is still the answer.
-      resolve(String(stdout ?? '').split('\n')
-        .filter((line) => line.startsWith('n') && line.includes('rollout-') && line.endsWith('.jsonl'))
-        .map((line) => line.slice(1)))
+      const found: Array<{ pid: number; path: string }> = []
+      let pid = 0
+      for (const line of String(stdout ?? '').split('\n')) {
+        if (line.startsWith('p')) pid = Number(line.slice(1)) || 0
+        else if (pid && line.startsWith('n') && line.includes('rollout-') && line.endsWith('.jsonl')) found.push({ pid, path: line.slice(1) })
+      }
+      resolve(found)
+    })
+  })
+}
+
+/** Each process's terminal (`ps -o tty`): `ttys003` on macOS, `pts/3` on Linux, `??` or `?` for none. */
+function processTtys(pids: number[]): Promise<Map<number, string | null>> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'pid=,tty=', '-p', pids.join(',')], { timeout: 3_000 }, (_error, stdout) => {
+      const ttys = new Map<number, string | null>()
+      for (const line of String(stdout ?? '').split('\n')) {
+        const [pid, tty] = line.trim().split(/\s+/)
+        if (!pid) continue
+        ttys.set(Number(pid), tty && !tty.startsWith('?') ? `/dev/${tty}` : null)
+      }
+      resolve(ttys)
     })
   })
 }

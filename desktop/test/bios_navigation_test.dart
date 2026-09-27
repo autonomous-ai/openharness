@@ -138,6 +138,69 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Open Harness sorts by when the conversation last moved: opening a '
+    'harness does not move it',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      Agent agent(String id, int active, {int? opened}) => Agent(
+        id: id,
+        sessionId: 'session-$id',
+        name: 'Agent $id',
+        engine: 'codex',
+        terminalAvailable: true,
+        lastActivityAt: DateTime.utc(2026, 9, 26, active),
+        lastOpenedAt: opened == null ? null : DateTime.utc(2026, 9, 26, opened),
+      );
+      app.machineStates['m']!.agents = [
+        agent('busy', 11),
+        agent('quiet', 9, opened: 12),
+        agent('idle', 10),
+        // Opened long ago, then busy since: activity is the later of the two.
+        agent('worked', 8, opened: 7),
+      ];
+      final search = SwarmSearchController(
+        app,
+        const [],
+        adding: true,
+        offersCreate: true,
+        activityFirst: true,
+        placement: HarnessPlacement.newTab,
+      );
+      addTearDown(search.dispose);
+      List<String?> order() => [
+        for (final row in search.rows)
+          if (!row.isCreate) row.agentId,
+      ];
+      // The owner: "use conversation last move, not last open — that's the
+      // true timestamp". `quiet`, opened at 12 but quiet since 9, stays put.
+      expect(order(), ['busy', 'idle', 'quiet', 'worked']);
+      expect(
+        search.rows.firstWhere((row) => row.agentId == 'quiet').lastActivityAt,
+        DateTime.utc(2026, 9, 26, 9),
+      );
+
+      // Another client opens `idle`: the daemon's push carries only the new
+      // open stamp, and an open is not work, so nothing moves.
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'idle',
+            'sessionId': 'session-idle',
+            'name': 'Agent idle',
+            'engine': 'codex',
+            'terminal': {'available': true},
+            'updatedAt': '2026-09-26T10:00:00Z',
+            'lastOpenedAt': '2026-09-26T13:00:00Z',
+          },
+        },
+      });
+      expect(order(), ['busy', 'idle', 'quiet', 'worked']);
+    },
+  );
+
   test(
     'activity ordering spans tabs with deterministic ties and missing times',
     () {

@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
+import '../core/runtime_architecture.dart';
+import '../core/runtime_platform.dart';
 import '../core/app_version.dart';
 
 /// Published by `scripts/upload-desktop.sh` (`make upload-desktop`) — see
@@ -39,13 +40,7 @@ const _otaKeyMacOSArm64 = 'desktop-macos-arm64';
 /// `arm64` or `x64` for the CPU this process runs on: which Linux artifact to fetch, and whether the
 /// Apple Silicon macOS build is on offer. An Apple Silicon Mac running this under Rosetta reports x64
 /// and is offered only the Skia build — harmless, since both macOS builds are universal.
-String _currentArchitecture() => switch (Abi.current()) {
-  Abi.linuxArm64 || Abi.macosArm64 || Abi.windowsArm64 => 'arm64',
-  Abi.linuxX64 || Abi.macosX64 || Abi.windowsX64 => 'x64',
-  _ => throw UnsupportedError(
-    'Harness updates do not support ${Abi.current()}',
-  ),
-};
+String _currentArchitecture() => runtimeArchitecture;
 
 String get _metadataUrl => _metadataUrlOverride.isNotEmpty
     ? _metadataUrlOverride
@@ -135,16 +130,16 @@ String _singleQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
 /// `scripts/upload-desktop-linux.sh`), and a running AppImage executes from a temporary FUSE mount,
 /// not from that file — so the file's own path comes from [appImagePath] (tests) or the `APPIMAGE`
 /// environment variable the AppImage runtime sets on launch (production), never from
-/// `Platform.resolvedExecutable`.
+/// `RuntimePlatform.resolvedExecutable`.
 String? currentBundlePath({
   String? executablePath,
   bool? isLinux,
   String? appImagePath,
 }) {
-  if (isLinux ?? Platform.isLinux) {
-    return appImagePath ?? Platform.environment['APPIMAGE'];
+  if (isLinux ?? RuntimePlatform.isLinux) {
+    return appImagePath ?? RuntimePlatform.environment['APPIMAGE'];
   }
-  final resolved = executablePath ?? Platform.resolvedExecutable;
+  final resolved = executablePath ?? RuntimePlatform.resolvedExecutable;
   var dir = File(resolved).parent;
   for (var i = 0; i < 6; i++) {
     if (dir.path.endsWith('.app')) return dir.path;
@@ -156,7 +151,7 @@ String? currentBundlePath({
 }
 
 Future<void> _defaultLaunchDetached(String command) async {
-  await Process.start(Platform.isLinux ? '/bin/bash' : '/bin/zsh', [
+  await Process.start(RuntimePlatform.isLinux ? '/bin/bash' : '/bin/zsh', [
     '-l',
     '-c',
     command,
@@ -188,7 +183,7 @@ class DesktopUpdater {
   /// own self-updater polls on the same order (`cli/src/lib/selfUpdate.ts`).
   static const checkInterval = Duration(minutes: 5);
 
-  bool get canCheck => _enabled && _releaseMode;
+  bool get canCheck => !kIsWeb && _enabled && _releaseMode;
 
   DesktopUpdater({
     this._enabled = true,
@@ -219,7 +214,7 @@ class DesktopUpdater {
        _launchDetached = launchDetached ?? _defaultLaunchDetached,
        _metadataUrlForInstance = metadataUrl ?? _metadataUrl,
        _releaseMode = releaseMode ?? (kReleaseMode || _forceUpdateChecks),
-       _isLinux = isLinux ?? Platform.isLinux,
+       _isLinux = isLinux ?? RuntimePlatform.isLinux,
        _architecture = architecture ?? _currentArchitecture();
 
   /// The manifest entries this build may install, most preferred first — [_newestEntry] takes the

@@ -28,6 +28,8 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  web: ^1.1.1
+  archive: ^4.0.9
   flutter:
     sdk: flutter
   # Natural ordering for numbered agents, projects, and completion candidates.
@@ -49,6 +51,11 @@ dependencies:
   # Pure Dart, so it registers no native plugin and leaves the macOS SPM
   # package list untouched — see CLAUDE.md on what a plugin costs here.
   unorm_dart: ^0.3.2
+  # The QR in Harness ▸ Add Phone… (`widgets/add_phone_dialog.dart`). The bare
+  # encoder, NOT `qr_flutter`: the dialog paints the modules itself in a few
+  # lines, and pure Dart registers no native plugin — see CLAUDE.md on what a
+  # plugin costs here.
+  qr: ^3.0.2
   # Keep the terminal core in-tree until the upstream circular-buffer ownership
   # fix is released. See third_party/xterm/lib/src/core/buffer/buffer.dart.
   xterm:
@@ -102,12 +109,19 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  fonts:
+    - family: Roboto Mono
+      fonts:
+        - asset: assets/fonts/roboto-mono/RobotoMono.ttf
+        - asset: assets/fonts/roboto-mono/RobotoMono-Italic.ttf
+          style: italic
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/fonts/roboto-mono/OFL.txt
     - assets/machines.svg
     - assets/models.svg
     - assets/harnesses.svg

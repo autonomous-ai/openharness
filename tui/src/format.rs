@@ -1154,15 +1154,9 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         }
         // The spinner's frame now, for a format of your own.
         "spinner" => crate::theme::spinner(app.tick).to_string(),
-        // tim's face, for a status-right of your own: "#{tim} %H:%M".
-        // tim's face, in its own colour (a status-right of your own: "#{tim} %H:%M").
-        // tim, in the status line's own colours (a yellow or a green tim can't be read on tmux's
-        // green bar, nor on every theme): bold when it wants you, dim asleep.
-        "tim" => crate::tim::face(app).map(|(f, st)| {
-            let loud = matches!(st.fg, Some(ratatui::style::Color::Red | ratatui::style::Color::LightYellow));
-            let asleep = st.add_modifier.contains(ratatui::style::Modifier::DIM);
-            if loud { format!("#[bold]{f}#[nobold]") } else if asleep { format!("#[dim]{f}#[nodim]") } else { f }
-        }).unwrap_or_default(),
+        // The paired daemon's status cell, in the status line's own colours (daemon/): a status-right
+        // of your own: "#{daemon} %H:%M" (#{tim} is the same). Empty when the daemons are off.
+        "daemon" | "tim" | "daemon_tally" | "daemon_name" | "daemon_mood" => crate::daemon::hooks::format(app, name).unwrap_or_default(),
         "daemon_down" => app.daemon_down.then_some("1").unwrap_or("0").into(),
         // The pane is another window's to type in (this one watches), when it is the only one.
         "pane_watching" => (pane.map(|p| matches!(p.phase, crate::pane::Phase::Watching(_))).unwrap_or(false) && tab.map(|t| t.panes().len() < 2).unwrap_or(false)).then_some("1").unwrap_or("0").into(),

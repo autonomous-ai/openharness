@@ -5,6 +5,8 @@ import 'package:harness_mobile/core/fuzzy_match.dart';
 import 'phone_destination.dart';
 import 'phone_search_rank.dart';
 
+import 'package:harness_mobile/state/session_content_search.dart';
+
 /// Which field earned each query term its score, and whether that field is one
 /// of the row's names.
 typedef PhoneFieldMatch = ({String field, String term, bool title});
@@ -170,7 +172,7 @@ class SearchResultText extends StatelessWidget {
     var offset = 0;
     for (final run in runs) {
       final emphasis = run.matched
-          ? const TextStyle(fontWeight: FontWeight.w700)
+          ? const TextStyle(fontWeight: FontWeight.w600)
           : null;
       if (insertIcon &&
           iconOffset >= offset &&
@@ -206,4 +208,34 @@ class SearchResultText extends StatelessWidget {
       style: style,
     );
   }
+}
+
+/// Where a session index found the words: what was asked reads like a prompt, a command like a
+/// shell line, and the agent's answer plainly — the desktop's `snippetLead`.
+String snippetLead(String field) => switch (field) {
+  'ask' => '> ',
+  'tools' => r'$ ',
+  _ => '',
+};
+
+/// A session index snippet split at its marks, matched words flagged — the desktop's
+/// `snippetRuns`.
+List<PhoneTextRun> snippetRuns(String snippet) {
+  final runs = <PhoneTextRun>[];
+  var rest = snippet;
+  while (rest.isNotEmpty) {
+    final open = rest.indexOf(kSnippetMarkOpen);
+    if (open < 0) {
+      runs.add((text: rest, matched: false));
+      break;
+    }
+    if (open > 0) runs.add((text: rest.substring(0, open), matched: false));
+    final close = rest.indexOf(kSnippetMarkClose, open + 1);
+    final end = close < 0 ? rest.length : close;
+    if (end > open + 1) {
+      runs.add((text: rest.substring(open + 1, end), matched: true));
+    }
+    rest = close < 0 ? '' : rest.substring(close + 1);
+  }
+  return runs;
 }

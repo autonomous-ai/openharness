@@ -53,6 +53,7 @@ class SessionTail {
     required this.fetchedAt,
     this.lastAsk,
     this.openElsewhere = false,
+    this.openIn,
   });
 
   final List<SessionTailRow> rows;
@@ -68,6 +69,9 @@ class SessionTail {
   /// elsewhere, as its machine found when it answered.
   final bool openElsewhere;
 
+  /// Where: `terminal`, which Harness can take it over from, or `app`.
+  final String? openIn;
+
   static SessionTail? fromReply(Map<String, dynamic> reply, DateTime now) {
     final rows = reply['rows'];
     if (rows is! List) return null;
@@ -80,6 +84,12 @@ class SessionTail {
       openElsewhere:
           reply['external'] is Map &&
           (reply['external'] as Map)['open'] == true,
+      openIn: switch (reply['external']) {
+        {'openIn': final String where}
+            when where == 'terminal' || where == 'app' =>
+          where,
+        _ => null,
+      },
     );
   }
 }
@@ -182,6 +192,7 @@ class SessionTails extends ChangeNotifier {
         fetchedAt: page.fetchedAt,
         lastAsk: page.lastAsk,
         openElsewhere: page.openElsewhere,
+        openIn: page.openIn,
       ),
     );
   }
@@ -217,6 +228,7 @@ class SessionTails extends ChangeNotifier {
           fetchedAt: current.fetchedAt,
           lastAsk: current.lastAsk,
           openElsewhere: current.openElsewhere,
+          openIn: current.openIn,
         ),
       );
     } finally {

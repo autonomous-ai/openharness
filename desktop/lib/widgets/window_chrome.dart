@@ -1,14 +1,13 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../core/runtime_platform.dart';
 import '../core/desktop_window.dart';
 import '../shared/theme/app_theme.dart' as grid;
 
 /// How far a full-width strip drawn at the very top of the window has to
 /// start from the left to clear the traffic lights.
-double get trafficLightClearance => Platform.isMacOS ? 78.0 : 0.0;
+double get trafficLightClearance => RuntimePlatform.isMacOS ? 78.0 : 0.0;
 
 /// The traffic lights' own row, as a drag handle.
 ///
@@ -38,11 +37,11 @@ class HarnessTopBar extends StatelessWidget {
 
   /// Zero off macOS: there the native caption bar already holds this space, and
   /// a second strip under it would be a gap with nothing in it.
-  static double get height => Platform.isMacOS ? 32.0 : 0.0;
+  static double get height => RuntimePlatform.isMacOS ? 32.0 : 0.0;
 
   @override
   Widget build(BuildContext context) {
-    if (!Platform.isMacOS) return const SizedBox.shrink();
+    if (!RuntimePlatform.isMacOS) return const SizedBox.shrink();
     grid.AppTheme.watch(context);
     // Drag only. The native tab strip above this bar owns the title-bar
     // double-click and zooms the window itself; DragToMoveArea's own
@@ -116,7 +115,7 @@ class WindowDragStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return DragToMoveArea(
       child: SizedBox(
-        height: Platform.isMacOS ? windowDragBandHeight : 0,
+        height: RuntimePlatform.isMacOS ? windowDragBandHeight : 0,
         width: double.infinity,
       ),
     );

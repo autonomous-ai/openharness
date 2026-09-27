@@ -83,8 +83,9 @@ class WelcomeSessions extends ChangeNotifier {
     final external = <SwarmDestination>[
       for (final hits in answers)
         for (final hit in hits ?? const <SessionContentHit>[])
-          // One a terminal still has is not offered: it cannot be opened here.
-          if (hit.external case final ref? when !ref.open)
+          // One an app still has is not offered: it cannot be opened here.
+          // One a terminal has can be: opening it asks to move it.
+          if (hit.external case final ref? when !ref.open || ref.inTerminal)
             externalSessionDestination(
               hit,
               ref,

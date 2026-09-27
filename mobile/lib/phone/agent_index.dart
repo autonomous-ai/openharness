@@ -43,8 +43,7 @@ class AgentEntry {
   /// of them to the bottom of every list and made them untappable — which,
   /// before the app asked for them at all, was invisible. It is visible now.
   bool get isOpenable =>
-      agent.terminalAvailable ||
-      (agent.isStopped && agent.canPauseAndResume);
+      agent.terminalAvailable || (agent.isStopped && agent.canPauseAndResume);
 
   /// When its conversation last moved: the machine's own [Agent.updatedAt], or
   /// a turn this app saw since ([MachineState.agentActivityAt]) — whichever is
@@ -132,6 +131,9 @@ List<AgentEntry> recentAgents(List<AgentEntry> entries) => _stableSorted(
 /// Then the desktop's tie-breaks: its own focus history (which a phone does not have, so it is
 /// skipped), the name as drawn in natural order, and finally the id so two rows never swap.
 int compareMonitorOrder(AgentEntry a, AgentEntry b) {
+  // When the conversation last MOVED — the true time (the owner: "use conversation last move, not
+  // last open"). Opening a harness on some app is not work on it, and sorting it up for that put a
+  // glance above the harness that actually just did something.
   final activity = (b.agent.updatedAt?.millisecondsSinceEpoch ?? 0).compareTo(
     a.agent.updatedAt?.millisecondsSinceEpoch ?? 0,
   );

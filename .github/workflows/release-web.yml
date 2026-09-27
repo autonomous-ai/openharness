@@ -1,0 +1,49 @@
+name: Release web bundle
+
+on:
+  push:
+    tags: ['v*_web']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: web-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FLUTTER_VERSION: '3.47.2'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          version="${version%_web}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "WEB_VERSION=$version" >> "$GITHUB_ENV"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Build shared Flutter workspace
+        working-directory: desktop
+        run: bash scripts/build-web-release.sh "$WEB_VERSION"
+      - name: Publish bundle and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          printf '%s\n' \
+            'Browser build of the shared desktop Flutter app.' \
+            'The website deployment pins the archive and SHA-256 from harness-web-release.json.' \
+            > "$RUNNER_TEMP/web-release-notes.md"
+          gh release create "$RELEASE_TAG" desktop/build/web-dist/* \
+            --verify-tag --latest=false --title "Harness Web $WEB_VERSION" \
+            --notes-file "$RUNNER_TEMP/web-release-notes.md"

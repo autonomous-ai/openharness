@@ -3,10 +3,27 @@
 //! daemon; this side never sees anything but plaintext frames).
 //!
 //! Requests carry a `requestId` and resolve on `<type>_result` (or `terminal_ready` / `terminal_error`
-//! for `terminal_open`, `route_result` for `route_task`). Everything else the machine pushes — turns,
+//! for `terminal_open`, `route_result` for `route_task`, `daemon_plate` for `daemon_plate_get`). Everything else the machine pushes — turns,
 //! questions, agents appearing — goes to the app as an event, as do binary terminal frames.
 
+// The daemons — the creatures in the status line (daemons/README.md), not harnessd — live under
+// daemon/: the roster and its renderer, the zoo, the face, the pair brain's lines and the hatch.
+pub mod art;
+pub mod brain;
+pub mod card;
+pub mod hatch;
+pub mod hooks;
+pub mod overlay;
+pub mod plates;
+pub mod render;
+pub mod roster;
+pub mod shell;
+pub mod socket;
+pub mod state;
+pub mod zoo;
+
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -51,6 +68,9 @@ pub struct Link {
     /// Bumped per connection so the app can tell a stale link's events from the live one's.
     #[allow(dead_code)]
     pub generation: u64,
+    /// Connected over harnessd's Unix socket (daemon/socket.rs), not its loopback port: only there
+    /// does the pair brain take a key, a talk or presence.
+    pub unix: Arc<AtomicBool>,
 }
 
 impl Link {
@@ -58,17 +78,18 @@ impl Link {
     pub fn spawn(port: u16, machine_id: &str, generation: u64, sink: mpsc::UnboundedSender<Event>) -> Link {
         let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
-        let link = Link { machine_id: machine_id.to_string(), tx, pending: pending.clone(), generation };
+        let unix = Arc::new(AtomicBool::new(false));
+        let link = Link { machine_id: machine_id.to_string(), tx, pending: pending.clone(), generation, unix: unix.clone() };
         let id = machine_id.to_string();
         tokio::spawn(async move {
             let emit = |event: MachineEvent| {
                 let _ = sink.send(Event::Machine { machine_id: id.clone(), generation, event });
             };
-            let url = format!("ws://127.0.0.1:{port}/api/local-ws");
-            let connect = tokio::time::timeout(Duration::from_secs(20), tokio_tungstenite::connect_async(url)).await;
-            let (ws, _) = match connect {
-                Ok(Ok(ok)) => ok,
-                Ok(Err(error)) => { emit(MachineEvent::Failed(RpcError::new("DAEMON_UNREACHABLE", error.to_string()))); return }
+            // harnessd's Unix socket when it is there, else its loopback port (daemon/socket.rs).
+            let connect = tokio::time::timeout(Duration::from_secs(20), socket::connect(port)).await;
+            let ws = match connect {
+                Ok(Ok((ws, over_socket))) => { unix.store(over_socket, Ordering::Relaxed); ws }
+                Ok(Err(error)) => { emit(MachineEvent::Failed(RpcError::new("DAEMON_UNREACHABLE", error))); return }
                 Err(_) => { emit(MachineEvent::Failed(RpcError::new("TIMEOUT", "the daemon did not answer"))); return }
             };
             let (mut write, mut read) = ws.split();
@@ -128,6 +149,7 @@ impl Link {
                                         let mut map = pending.lock().unwrap();
                                         let matches = map.get(request_id).map(|(want, _)| {
                                             ty == format!("{want}_result") || (want == "terminal_open" && (ty == "terminal_ready" || ty == "terminal_error")) || (want == "route_task" && ty == "route_result")
+                                                || (want == "daemon_plate_get" && ty == "daemon_plate")
                                         }).unwrap_or(false);
                                         if matches { map.remove(request_id) } else { None }
                                     };
@@ -152,6 +174,9 @@ impl Link {
         });
         link
     }
+
+    /// Whether this connection is over harnessd's Unix socket.
+    pub fn over_socket(&self) -> bool { self.unix.load(Ordering::Relaxed) }
 
     pub fn send(&self, ty: &str, payload: Value) -> bool {
         self.tx.send(Out::Text(json!({ "type": ty, "payload": payload }).to_string())).is_ok()

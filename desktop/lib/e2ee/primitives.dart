@@ -4,6 +4,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:cryptography/dart.dart';
 
 import 'bytes.dart';
+import '../core/wire_counter.dart';
 
 /// Hashes, HMAC, HKDF and the ChaCha20-Poly1305 AEAD — what core.ts takes from noble, each one held
 /// byte-for-byte against the CLI by test/e2ee/.
@@ -55,7 +56,7 @@ Uint8List hkdfSha256(
 /// core.ts `counterNonce`: the counter as 8 big-endian bytes, then 4 zero bytes.
 Uint8List counterNonce(int counter) {
   final nonce = Uint8List(12);
-  ByteData.sublistView(nonce).setUint64(0, counter);
+  writeWireCounter(ByteData.sublistView(nonce), 0, counter);
   return nonce;
 }
 

@@ -89,6 +89,10 @@ class SheetSearchRow extends StatelessWidget {
     PhoneDestinationKind.project => const SheetGlyphTile('#'),
     PhoneDestinationKind.command => const SheetGlyphTile('>'),
     PhoneDestinationKind.mode => SheetGlyphTile(_modeGlyph(row) ?? '?'),
+    PhoneDestinationKind.external => SheetEngineTile(
+      engine: row.engine,
+      displayName: row.external?.engineLabel,
+    ),
   };
 
   /// A `?` row's own character — the one a tap on it puts in the field.

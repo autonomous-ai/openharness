@@ -1,5 +1,6 @@
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/session_preview.dart';
+import 'package:harness_mobile/state/external_session.dart';
 
 import 'agent_index.dart';
 import 'phone_prompt_context.dart';
@@ -27,6 +28,10 @@ enum PhoneDestinationKind {
 
   /// A `?` row: it rewrites the query in place instead of opening anything.
   mode,
+
+  /// A Claude Code or Codex conversation Harness did not start, found by what was said in it.
+  /// Opening it resumes it as a new harness — see [PhoneDestination.external].
+  external,
 }
 
 /// One row the search can offer, whichever of the catalogs it came from.
@@ -59,6 +64,8 @@ class PhoneDestination {
     this.members = const {},
     this.entry,
     this.machine,
+    this.external,
+    this.lastAt,
     Iterable<String?> searchFields = const [],
     int titleFields = 1,
   }) : fields = [
@@ -136,7 +143,14 @@ class PhoneDestination {
   /// match there outranks any match in a folder, a machine or a recap.
   final int titleFieldCount;
 
+  /// A conversation Harness did not start — [PhoneDestinationKind.external].
+  final ExternalSessionRef? external;
+
+  /// When [external] was last worked on, from the hit that found it.
+  final DateTime? lastAt;
+
   bool get isAgent => kind == PhoneDestinationKind.agent;
+  bool get isExternal => kind == PhoneDestinationKind.external;
   bool get isProject => kind == PhoneDestinationKind.project;
   bool get isMachine => kind == PhoneDestinationKind.machine;
   bool get isCommand => kind == PhoneDestinationKind.command;

@@ -1,7 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 
+import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 
 /// Where behavioural events go, whether they go at all, and under what limits.
@@ -56,7 +55,7 @@ class AnalyticsConfig {
 
   /// Stamped on every event, so this app's stream stays separable from Grid's
   /// and the website's inside the shared project. Grid sends `grid-app`.
-  static const String category = 'harness-desktop-v2';
+  static const String category = kIsWeb ? 'harness-web' : 'harness-desktop-v2';
 
   /// Env var / `--dart-define` names. The URL and key overrides are dev-only so
   /// a shipped build always reports to production; [disableEnvKey] is honoured
@@ -111,7 +110,8 @@ class AnalyticsConfig {
 
   /// True when `HARNESS_ANALYTICS_DISABLED` is set to anything truthy.
   static bool get _muted {
-    final value = Platform.environment[disableEnvKey]?.toLowerCase().trim();
+    if (const bool.fromEnvironment('HARNESS_ANALYTICS_DISABLED')) return true;
+    final value = RuntimePlatform.environment[disableEnvKey]?.toLowerCase().trim();
     return value == '1' || value == 'true' || value == 'yes';
   }
 
@@ -130,7 +130,7 @@ class AnalyticsConfig {
       _ => '',
     };
     if (define.isNotEmpty) return define;
-    final value = Platform.environment[key];
+    final value = RuntimePlatform.environment[key];
     return (value != null && value.isNotEmpty) ? value : null;
   }
 }

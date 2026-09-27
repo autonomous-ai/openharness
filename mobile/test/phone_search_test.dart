@@ -16,8 +16,10 @@ import 'package:harness_mobile/phone/phone_search_field.dart';
 import 'package:harness_mobile/phone/phone_search_groups.dart';
 import 'package:harness_mobile/phone/phone_search_page.dart';
 import 'package:harness_mobile/phone/phone_search_rank.dart';
+import 'package:harness_mobile/phone/phone_search_results.dart';
 import 'package:harness_mobile/phone/resume_agent.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/pending_question.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
@@ -29,6 +31,7 @@ Agent _agent(
   String? title,
   String cwd = '/srv/work',
   int? minutesAgo,
+  int? openedMinutesAgo,
   bool terminal = true,
   bool stopped = false,
   // Stopped work that a resume can reopen has a saved conversation; `resumable: false` is the
@@ -51,6 +54,9 @@ Agent _agent(
   updatedAt: minutesAgo == null
       ? null
       : _now.subtract(Duration(minutes: minutesAgo)),
+  lastOpenedAt: openedMinutesAgo == null
+      ? null
+      : _now.subtract(Duration(minutes: openedMinutesAgo)),
   terminalAvailable: stopped ? false : terminal,
 );
 
@@ -91,6 +97,102 @@ AppNotifier _app(
     app.machineStates[state.machine.machineId] = state;
   }
   return app;
+}
+
+/// A machine whose session index found "dial" in a Claude Code conversation Harness did not start,
+/// and that resumes it as a harness when asked.
+class _ExternalConn extends WsConn {
+  _ExternalConn()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'box',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  final created = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type == 'agent_create') {
+      created.add(payload);
+      return {
+        'state': 'created',
+        'creationId': payload['creationId'],
+        'agent': {
+          'id': 'resumed',
+          'name': 'Fix the dial',
+          'status': 'active',
+          'engine': 'claude',
+          'terminal': {'available': true},
+        },
+      };
+    }
+    if (type != 'session_search') return {};
+    return {
+      'hits': [
+        if ((payload['query'] as String).startsWith('dial'))
+          {
+            'agentId': '',
+            'sessionId': 'c0ffee',
+            'engine': 'claude',
+            'field': 'ask',
+            'snippet': 'make the \u0002dial\u0003 scroll smoothly',
+            'together': true,
+            'score': 1,
+            'external': {
+              'cwd': '/home/u/code/dial',
+              'title': 'Fix the dial',
+              'origin': 'terminal',
+              'open': false,
+            },
+          },
+      ],
+    };
+  }
+}
+
+/// A machine whose session index heard "dial" in agent 2312's conversation.
+class _SearchConn extends WsConn {
+  _SearchConn()
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'box',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'session_search') return {};
+    return {
+      'hits': [
+        if ((payload['query'] as String).startsWith('dial'))
+          {
+            'agentId': '2312',
+            'sessionId': 'session-2312',
+            'field': 'ask',
+            'snippet': 'fix the \u0002dial\u0003 scroll',
+            'together': true,
+            'score': 1,
+          },
+      ],
+    };
+  }
 }
 
 /// A machine answering `agent_recent` with what was asked of each agent, and
@@ -945,7 +1047,7 @@ void main() {
       expect(_agentIds(_rank(app, '', cache: cache)), ['idle', 'busy']);
     });
 
-    test('with nothing typed, the desktop monitor\'s order — visits do not move it', () {
+    test('with nothing typed, last use leads — on any app — and visits only break ties', () {
       final app = _app([
         _machine('box', [
           _agent('alpha', minutesAgo: 90),
@@ -954,17 +1056,34 @@ void main() {
         ]),
       ]);
       addTearDown(app.dispose);
-      // The freshest conversation leads, as it does in the Harness Monitor.
+      // The freshest conversation leads, as it does in the desktop's ⌘P.
       expect(_agentIds(_rank(app, '')), ['delta', 'bravo', 'alpha']);
 
-      // ⚠️ This phone's own visits used to outrank that, so the field opened on
-      // a list the laptop beside it did not show. The monitor has no idea what
-      // the phone visited; neither does its order.
-      expect(_agentIds(_rank(app, '', recent: ['agent:box\u0000alpha'])), [
-        'delta',
-        'bravo',
-        'alpha',
+      // ⚠️ **This phone's own visits do not reorder the list.** Last use is
+      // the account's: the desktop's ⌘P reads the same order, and a visit here
+      // reaches it through the daemon's `lastOpenedAt`, not this history.
+      expect(
+        _agentIds(
+          _rank(
+            app,
+            '',
+            recent: ['agent:box\u0000alpha', 'agent:box\u0000bravo'],
+          ),
+        ),
+        ['delta', 'bravo', 'alpha'],
+      );
+    });
+
+    test('opening a harness on another app does not move it: the conversation that moved last leads', () {
+      // The owner: "use conversation last move, not last open — that's the true timestamp".
+      final app = _app([
+        _machine('box', [
+          _agent('alpha', minutesAgo: 90, openedMinutesAgo: 0),
+          _agent('delta', minutesAgo: 1),
+        ]),
       ]);
+      addTearDown(app.dispose);
+      expect(_agentIds(_rank(app, '')), ['delta', 'alpha']);
     });
 
     test('paused work keeps its place by when it last moved', () {
@@ -982,10 +1101,11 @@ void main() {
       // `blank` cannot be opened, and still sits where the monitor has it.
       expect(_agentIds(search.rows), ['paused', 'blank', 'live']);
 
-      // Once something is typed the match decides, and what a tap cannot open
-      // goes last, as it always has.
+      // Typing filters the same order, the desktop ⌘P's rule: every row here
+      // matches, and what a tap cannot open stays where it is, dimmed, rather
+      // than sinking.
       search.setQuery('work');
-      expect(_agentIds(search.rows).last, 'blank');
+      expect(_agentIds(search.rows), ['paused', 'blank', 'live']);
     });
 
     test('an agent is named as the desktop names it, and found by either', () {
@@ -1017,11 +1137,10 @@ void main() {
       ]);
       addTearDown(app.dispose);
 
-      expect([for (final row in _rank(app, '')) row.title], [
-        'Logo update',
-        kUntitledPane,
-        'api-server',
-      ]);
+      expect(
+        [for (final row in _rank(app, '')) row.title],
+        ['Logo update', kUntitledPane, 'api-server'],
+      );
       // The CLI's name is what the terminal's title bar shows, so it still
       // finds the row.
       expect(_agentIds(_rank(app, 'Terminal harness')).first, 'bare');
@@ -1142,6 +1261,182 @@ void main() {
     expect(top('work · 2312'), lessThan(top('work · 9999')));
   });
 
+  test('typing a name puts the harness named for it first, over newer ones whose path spells it', () {
+    // Main's Cmd-P fix, on the phone: `hn` was 6th of 166 — every newer harness under
+    // `.../harnesses/worktrees/autonomous-harness/...` matched its scattered letters, and a typed
+    // list sorted by last use alone.
+    Agent worktree(int i) => Agent(
+      id: 'w$i',
+      name: 'Claude harness $i',
+      status: 'active',
+      engine: 'claude',
+      project: AgentProject(
+        name: 'autonomous-harness',
+        cwd: '/home/u/harnesses/worktrees/autonomous-harness/w$i',
+      ),
+      updatedAt: _now.subtract(Duration(minutes: i)),
+      terminalAvailable: true,
+    );
+    final machine = _machine('box', [
+      for (var i = 0; i < 5; i++) worktree(i),
+      Agent(
+        id: 'hn',
+        name: 'hn',
+        status: 'active',
+        engine: 'claude',
+        project: const AgentProject(
+          name: 'autonomous-harness',
+          cwd: '/home/u/code/autonomous-harness',
+        ),
+        updatedAt: _now.subtract(const Duration(hours: 3)),
+        terminalAvailable: true,
+      ),
+    ]);
+    final app = _app([machine]);
+    addTearDown(app.dispose);
+    final search = PhoneSearchController(notifier: app, modes: false);
+    addTearDown(search.dispose);
+
+    search.setQuery('hn');
+    expect(search.rows.first.title, 'hn');
+    // Two letters count only as initials: not every harness whose path holds an h and an n.
+    expect(search.rows, hasLength(1));
+  });
+
+  testWidgets(
+    'a word said in a conversation finds its harness, and the row shows where it was said',
+    (tester) async {
+      final machine = _machine('box', [
+        _agent('3188', minutesAgo: 4),
+        _agent('2312', minutesAgo: 30),
+      ]);
+      final app = _app([machine], conn: _SearchConn());
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app, modes: false);
+      addTearDown(search.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhoneSearchResults(
+              notifier: app,
+              controller: search,
+              fzf: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Neither name holds "dial": only what was said in 2312 does.
+      search.setQuery('dial');
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      expect(search.rows.map((row) => row.title), ['work · 2312']);
+      expect(
+        find.textContaining('> fix the dial scroll', findRichText: true),
+        findsOneWidget,
+      );
+      // Opening search reaches the machines (see `reachAllMachines`): let its timers run out.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+    },
+  );
+
+  testWidgets(
+    'a conversation Harness did not start is found by what was said, and a tap resumes it',
+    (tester) async {
+      final machine = _machine('box', [_agent('3188', minutesAgo: 4)]);
+      final conn = _ExternalConn();
+      final app = _app([machine], conn: conn);
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app, modes: false);
+      addTearDown(search.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhoneSearchResults(
+              notifier: app,
+              controller: search,
+              fzf: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      search.setQuery('dial');
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      // Only a search shows it — the desktop Cmd-P's rule — with where it was said, and `resume`.
+      expect(find.text('Fix the dial', findRichText: true), findsOneWidget);
+      expect(find.text('resume'), findsOneWidget);
+      expect(
+        find.textContaining('> make the dial scroll', findRichText: true),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Fix the dial', findRichText: true));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(conn.created.single['resumeSessionId'], 'c0ffee');
+      expect(conn.created.single['cwd'], '/home/u/code/dial');
+      expect(conn.created.single['engine'], 'claude');
+      expect(
+        machine.agents.map((agent) => agent.id),
+        contains('resumed'),
+        reason: 'the new harness joins its machine',
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+    },
+  );
+
+  testWidgets(
+    'Find holds the order it opened with: a harness that asks stays put',
+    (tester) async {
+      final machine = _machine('box', [
+        _agent('3188', minutesAgo: 4),
+        _agent('2312', minutesAgo: 30),
+        _agent('9999', minutesAgo: 90),
+      ]);
+      final app = _app([machine]);
+      addTearDown(app.dispose);
+      final search = PhoneSearchController(notifier: app);
+      addTearDown(search.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PhoneSearchResults(
+              notifier: app,
+              controller: search,
+              fzf: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      double top(String name) => tester.getTopLeft(find.text(name)).dy;
+      final was = {
+        for (final id in ['3188', '2312', '9999']) id: top('work · $id'),
+      };
+      expect(find.text('needs you'), findsNothing);
+
+      // The bottom one starts asking, and another one does something new, while Find is open.
+      _markWaiting(machine, '9999');
+      machine.agentActivityAt['2312'] = DateTime.now();
+      app.notifyListeners();
+      await tester.pump();
+
+      // Nothing moved: no `needs you` pushed in above, and every row is where it was.
+      expect(find.text('needs you'), findsNothing);
+      for (final MapEntry(key: id, value: dy) in was.entries) {
+        expect(top('work · $id'), dy, reason: id);
+      }
+    },
+  );
+
   testWidgets('opening search warms content; the matching line is quoted', (
     tester,
   ) async {
@@ -1229,7 +1524,7 @@ void main() {
   // ⚠️ **The sheet's own bar, not the page's.** No chevron in it: Cancel ends
   // the SEARCH and leaves the sheet up on its tabs, and Back steps out of the
   // search first and closes the sheet only after — never leaves the agent.
-  testWidgets('terminal search: Cancel ends the search, Back then the sheet', (
+  testWidgets('Find: Back ends the search, then Find — no Cancel to find', (
     tester,
   ) async {
     final app = _app([
@@ -1249,40 +1544,34 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(SheetSearchField), findsOneWidget);
-    expect(find.byType(PhoneSearchField), findsNothing);
-    expect(find.text('Cancel'), findsNothing);
+    // The field at the top, and no Cancel: a swipe or Back is the way out.
+    expect(find.byType(TtyField), findsOneWidget);
+    expect(find.byType(SheetSearchField), findsNothing);
 
-    // A tap on the field starts a search; Cancel slides in over 250ms.
     Future<void> search() async {
       await tester.tap(find.byType(TextField));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('Cancel'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '31');
+      await tester.pump();
     }
 
     Future<void> back() async {
       await tester.binding.handlePopRoute();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
     }
 
-    await search();
-    await tester.tap(find.text('Cancel'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Cancel'), findsNothing);
-    expect(closed, 0);
-
+    // Back ends the search and leaves Find up, then closes it.
     await search();
     await back();
-    expect(find.text('Cancel'), findsNothing);
     expect(closed, 0);
-
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '',
+    );
     await back();
     expect(closed, 1);
   });
-
   testWidgets('one bar: no Cancel beside it, and its chevron closes search', (
     tester,
   ) async {

@@ -20,6 +20,11 @@ export function shouldSkipAuth(url: string): boolean {
     path === '/api/auth/authorize-native' ||
     path === '/api/auth/exchange' ||
     path === '/api/auth/refresh' ||
+    // Scan to sign in: the phone has no token yet, and the one-time code it carries IS the credential
+    // (lib/harnessSession.ts). Revoke takes the refresh token, the same authority /refresh does.
+    // `/api/auth/handoff` itself is NOT listed: minting a code needs the computer's sign-in.
+    path === '/api/auth/handoff/redeem' ||
+    path === '/api/auth/revoke' ||
     path === '/api/auth/logout-url' ||
     // Public app-deploy registration — agent-key gated (x-api-key), self-validated in its
     // own preHandler (agentAuth). Called by the agent-node's domain MCP, not the web SSO token.

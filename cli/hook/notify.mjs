@@ -1312,6 +1312,9 @@ async function fallbackRegister(input, engine, tmuxPane) {
       // Fill-only, exactly as the daemon's own registry treats it.
       hermesHome: hermesHome || (typeof existing?.hermesHome === 'string' && existing.hermesHome ? existing.hermesHome : null),
       ...(existing?.bypassPermission === true ? { bypassPermission: true } : {}),
+      // When an app last opened this agent (RegisteredSession.lastOpenedAt): a fact about the person,
+      // not the process, and the daemon's own rebuild carries it the same way.
+      ...(Number.isSafeInteger(existing?.lastOpenedAt) && existing.lastOpenedAt > 0 ? { lastOpenedAt: existing.lastOpenedAt } : {}),
     }
     const entry = {
       schemaVersion: 2,

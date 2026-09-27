@@ -28,23 +28,30 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
-    if (id == 'navigation.commands' &&
+    if (!kIsWeb &&
+        id == 'navigation.commands' &&
         defaultTargetPlatform == TargetPlatform.linux) {
       return const ['ctrl+shift+p'];
     }
-    if (id == 'harnesses.list' &&
+    if (!kIsWeb &&
+        id == 'harnesses.list' &&
         defaultTargetPlatform == TargetPlatform.linux) {
       return const ['ctrl+p'];
     }
-    if (id == 'models.list' && defaultTargetPlatform == TargetPlatform.linux) {
+    if (!kIsWeb &&
+        id == 'models.list' &&
+        defaultTargetPlatform == TargetPlatform.linux) {
       return const ['ctrl+i', 'cmd+i'];
     }
-    if (id == 'picker.complete' &&
+    if (!kIsWeb &&
+        id == 'picker.complete' &&
         defaultTargetPlatform == TargetPlatform.linux) {
       // Ctrl-I opens Models on Linux, including from another picker scope.
       return const ['tab'];
     }
-    return action == null ? extraKeys : _workspaceKeys[action] ?? const [];
+    return action == null
+        ? extraKeys.map(platformWorkspaceBinding).toList(growable: false)
+        : _workspaceKeys[action] ?? const [];
   }
 
   final ShortcutAction? action;
@@ -476,6 +483,15 @@ final harnessCommands = <HarnessCommand>[
     action: ShortcutAction.showSettings,
     nativeAction: 'settings',
   ),
+  // Harness ▸ Add Phone…, beside Settings in the app menu. No default keys:
+  // it is a once-per-phone errand, not a chord worth learning.
+  const HarnessCommand(
+    'app.add_phone',
+    'Add phone',
+    ShortcutGroup.actions,
+    keywords: ['iphone', 'mobile', 'pair', 'qr', 'scan', 'connect'],
+    nativeAction: 'addPhone',
+  ),
   const HarnessCommand(
     'keyboard.help',
     'Keyboard shortcuts',
@@ -768,10 +784,10 @@ ResolvedKeymap get harnessDefaultKeymap =>
     );
 
 List<String> describeKeyStrokeKeys(KeyStroke stroke) => [
-  if (stroke.control) '⌃',
-  if (stroke.alt) '⌥',
-  if (stroke.shift) '⇧',
-  if (stroke.command) '⌘',
+  if (stroke.control) kIsWeb ? 'Ctrl' : '⌃',
+  if (stroke.alt) kIsWeb ? 'Alt' : '⌥',
+  if (stroke.shift) kIsWeb ? 'Shift' : '⇧',
+  if (stroke.command) kIsWeb ? 'Cmd' : '⌘',
   const {
         'left': '←',
         'right': '→',
@@ -800,6 +816,6 @@ List<String> describeKeyStrokeKeys(KeyStroke stroke) => [
       stroke.key.toUpperCase(),
 ];
 String describeKeyStroke(KeyStroke stroke) =>
-    describeKeyStrokeKeys(stroke).join();
+    describeKeyStrokeKeys(stroke).join(kIsWeb ? '+' : '');
 String describeKeyBinding(KeyBinding binding) =>
     binding.keys.map(describeKeyStroke).join(' ');

@@ -150,13 +150,22 @@ class SheetSearchField extends StatelessWidget {
     required this.onClear,
     required this.hintText,
     this.onCancel,
+    this.onNew,
+    this.onSubmitted,
   });
+
+  /// The return key: Find opens the top row, as Enter does in the desktop's ⌘P.
+  final VoidCallback? onSubmitted;
 
   final TextEditingController controller;
   final FocusNode focus;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
   final String hintText;
+
+  /// A `+` beside the box, for a new agent. Null leaves it out — and it IS null while [onCancel] is
+  /// set, so the two never stand side by side.
+  final VoidCallback? onNew;
 
   /// "Cancel", beside the box. Null leaves it out.
   ///
@@ -207,10 +216,11 @@ class SheetSearchField extends StatelessWidget {
                         controller: controller,
                         focus: focus,
                         onChanged: onChanged,
-                        // The sheet is opened to read its tabs, and focus is
-                        // what trades them for the results.
+                        // Opened to read the recent agents; focus is what
+                        // brings the keyboard.
                         autofocus: false,
                         hintText: hintText,
+                        onSubmitted: onSubmitted,
                         // The query's own size, and ink a step under it: the
                         // hint is one short phrase here, and iOS draws its
                         // placeholder bright enough to be read at a glance.
@@ -227,7 +237,43 @@ class SheetSearchField extends StatelessWidget {
             ),
           ),
           _CancelButton(onTap: onCancel),
+          if (onNew != null && onCancel == null) _NewButton(onTap: onNew!),
         ],
+      ),
+    );
+  }
+}
+
+/// `+`, for a new agent — see [SheetSearchField.onNew].
+class _NewButton extends StatelessWidget {
+  const _NewButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Semantics(
+      button: true,
+      label: 'New agent',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          // Padding, not a gap: the space between the box and the mark is part of the target.
+          padding: const EdgeInsets.only(left: 12),
+          child: SizedBox(
+            width: 32,
+            height: 44,
+            child: Center(
+              child: Icon(
+                LucideIcons.plus,
+                size: 24,
+                color: AppPalette.accentOnSurface,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -338,11 +384,15 @@ class _QueryInput extends StatelessWidget {
     required this.autofocus,
     required this.hintText,
     required this.hintStyle,
+    this.onSubmitted,
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final ValueChanged<String> onChanged;
+
+  /// The keyboard's return key. Null puts the keyboard away and nothing more.
+  final VoidCallback? onSubmitted;
   final bool autofocus;
   final String hintText;
 
@@ -363,7 +413,10 @@ class _QueryInput extends StatelessWidget {
       // nothing left for the return key to submit, so it stays a plain "done"
       // that drops the keyboard and leaves the results up.
       textInputAction: TextInputAction.search,
-      onSubmitted: (_) => focus.unfocus(),
+      onSubmitted: (_) {
+        focus.unfocus();
+        onSubmitted?.call();
+      },
       // Composing stays on — or Telex types `thoi tiet` for `thời tiết`. See
       // [ComposingKeyboard]; with autocorrect on, iOS would also start curling
       // quotes and joining dashes, which a query means literally.

@@ -141,6 +141,82 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  // -- pairing a phone (Harness ▸ Add Phone…) --
+
+  /// `POST /api/pair` — hand THIS computer's daemon the one-time code the Add
+  /// Phone QR is showing, so it runs the end-to-end-encryption handshake with
+  /// the phone that scanned it. The same call `harness pair <code>` makes
+  /// (cli.ts `pairCommand`, hookServer.ts `/api/pair`).
+  ///
+  /// Answers the HTTP status and the daemon's own body, untouched: this route
+  /// does NOT speak the `{success, data, error}` envelope [unwrapApiResponse]
+  /// reads — it answers `{label, fingerprint}` on success and `{error: CODE}`
+  /// otherwise — so the caller (`widgets/add_phone_dialog.dart`) reads the
+  /// code itself. A transport failure still throws its [DioException].
+  ///
+  /// ⚠️ A LONG POLL, hence its own receive timeout. With no phone waiting the
+  /// daemon answers at once (`NO_INTENT`); with one, it holds the request
+  /// until the handshake is over, which its own round timers bound at 15 s a
+  /// round. The client's shared 30 s would cut a slow-but-healthy handshake
+  /// off in the middle and report a timeout for a pairing that then succeeds.
+  Future<({int status, Map<String, dynamic> body})> pair(
+    String code, {
+    CancelToken? cancelToken,
+  }) async {
+    final res = await _dio.post(
+      '/api/pair',
+      data: {'code': code},
+      cancelToken: cancelToken,
+      // A write, so the daemon's CSRF gate wants the local header — as it
+      // does for renaming a machine.
+      options: Options(
+        headers: {'x-adapter-local': '1'},
+        receiveTimeout: const Duration(seconds: 60),
+        // 409 is "no phone yet" (NO_INTENT / EXPIRED / BUSY), asked every
+        // 1.5 s while the dialog is open: not a failure worth a log line.
+        extra: {
+          httpLogRoutineStatusesKey: const <int>{409},
+        },
+      ),
+    );
+    final body = res.data;
+    return (
+      status: res.statusCode ?? 0,
+      body: body is Map ? Map<String, dynamic>.from(body) : <String, dynamic>{},
+    );
+  }
+
+  /// A one-time code that signs a phone in to this account: the Add Phone
+  /// QR's `h=`, which the phone redeems for a session of its own instead of
+  /// asking for an emailed code (backend `lib/harnessSession.ts`).
+  ///
+  /// Minted by the backend against the daemon's own session, and the daemon
+  /// hands it out over its owner-only socket and nowhere else — a code that
+  /// signs a device in is a credential. So null is an ordinary answer: an
+  /// older daemon or backend, this app on the TCP fallback, the backend down.
+  /// The QR then goes without it and the phone falls back to the email code.
+  Future<({String code, Duration ttl})?> phoneSignInCode() async {
+    try {
+      final res = await _dio.post(
+        '/api/auth/handoff',
+        data: const <String, Object?>{},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      );
+      final data = unwrapApiResponse(res);
+      final code = data is Map ? data['code'] : null;
+      final expiresIn = data is Map ? data['expiresIn'] : null;
+      if (code is! String || code.isEmpty) return null;
+      return (
+        code: code,
+        ttl: Duration(
+          seconds: expiresIn is int && expiresIn > 0 ? expiresIn : 60,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   // -- the Harness Store: ratings and reviews (control plane, proxied by the local CLI) --
   Future<Map<String, dynamic>?> storeRatings() async {
     final res = await _dio.get('/api/store/ratings');

@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:harness_mobile/widgets/link_machine_screen.dart';
 
-import 'phone_header.dart';
 import 'phone_shell_scope.dart';
+import 'tty.dart';
+import 'tty_controls.dart';
+import 'welcome/unlock_computer.dart';
 
 /// A machine's password form, as a phone page — the same [LinkMachineScreen] the desktop pops
 /// up, since the exchange behind it is the same.
@@ -106,27 +107,33 @@ class _LinkPageState extends State<LinkPage> {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    final tty = Tty.of(context);
     final machine = widget.notifier.stateOf(widget.machineId);
     return Scaffold(
-      backgroundColor: AppPalette.windowBg,
+      backgroundColor: tty.ground,
       body: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            PhoneHeader(
-              title: machine?.machine.displayName ?? 'Machine',
-              subtitle: Text(
-                'Enter the password set on this machine',
-                style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
+            if (!widget.embedded)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TtyBackButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
               ),
-            ),
             if (machine != null)
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  child: LinkMachineScreen(
-                    notifier: widget.notifier,
-                    machineState: machine,
-                  ),
+                child: UnlockComputer(
+                  notifier: widget.notifier,
+                  machineState: machine,
+                  // Home, not a pushed page: nothing pops here, so the shell is told — and it
+                  // carries on to the harnesses, or to New when there are none.
+                  onUnlocked: widget.embedded
+                      ? () =>
+                            PhoneShellScope.maybeOf(context)
+                                ?.onMachineLinked(widget.machineId)
+                      : null,
                 ),
               ),
           ],

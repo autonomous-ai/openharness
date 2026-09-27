@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
@@ -44,6 +45,9 @@ class WorkspaceWelcome extends StatefulWidget {
 }
 
 class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
+  // Resolve the icon at compile time. Lazy initialization of Lucide's large
+  // generated library overflows the browser debug runtime's stack here.
+  static const _phoneIcon = LucideIcons.smartphone500;
   WelcomeSessions? _sessions;
   int _cursor = 0;
   final _focus = FocusNode(debugLabel: 'Welcome sessions');
@@ -374,6 +378,42 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
               ],
             ),
           ),
+        // The phone, where everyone looks rather than only in the app menu —
+        // after a blank row, since it has no shortcut to stand in the list.
+        Text(' ', style: style),
+        TextButton(
+          key: const ValueKey('welcome-add-phone'),
+          onPressed: () => onCommand('app.add_phone'),
+          style: TextButton.styleFrom(
+            foregroundColor: ink,
+            textStyle: style,
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            shape: const RoundedRectangleBorder(),
+          ),
+          // Laid out like the rows above: a phone where their key stands.
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: keyWidth,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  // Drawn at the weight and height of the ⌘ keys beside it.
+                  child: Icon(
+                    _phoneIcon,
+                    color: accent,
+                    size: (style.fontSize ?? 13) * 1.15,
+                  ),
+                ),
+              ),
+              const Expanded(
+                child: Text('Work from your phone', textAlign: TextAlign.left),
+              ),
+            ],
+          ),
+        ),
       ],
     ),
   );

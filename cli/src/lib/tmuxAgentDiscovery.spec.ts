@@ -340,7 +340,7 @@ function registered(agent: DiscoveredTmuxAgent, agentId = 'agent-1'): Registered
     cliVersion: null,
     processIdentity: agent.processIdentity,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
   }

@@ -1,7 +1,7 @@
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
 
-/// Persists the SSO access + refresh tokens in the Desktop Harness state file.
+/// Persists SSO access + refresh tokens through the platform's state store.
 class AuthSession {
   final LocalKeyValueStore _storage;
   static const _access = 'auth_access_token';

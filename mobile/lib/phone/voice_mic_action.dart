@@ -29,8 +29,8 @@ VoiceMicAction voiceMicAction(
 /// Tap to talk, tap Send — [VoiceMicMode.tapToToggle].
 ///
 /// The second tap ends the take and sends what was heard as a composer turn —
-/// the daemon pastes it into the prompt and presses Return. `×` in the pill
-/// beside the mic is the way out while it listens.
+/// the daemon pastes it into the prompt and presses Return. A swipe down on the
+/// mic is the way out while it listens (see `VoiceMicButton.onSwipeDown`).
 ///
 /// ⚠️ **A composer turn, never keystrokes typed into the pane.** Typing the
 /// words and pressing Return from here puts both on the wire in the same
@@ -46,7 +46,7 @@ VoiceMicAction voiceMicAction(
 /// the person's back is worse than asking for one more tap.
 VoiceMicAction _tapAction(VoiceInputController voice, TerminalSession session) {
   final canSend = session.acceptsInput;
-  void send() => unawaited(voice.submit(session.sendComposerText));
+  void send() => unawaited(voice.submit(session.voiceDeliver ?? session.sendComposerText));
   if (voice.isSending) return _face(VoiceMicFace.sending);
   return switch (voice.status) {
     VoiceInputStatus.transcribing => _face(VoiceMicFace.busy),
@@ -131,7 +131,7 @@ VoiceMicAction _holdAction(
         : VoiceMicFace.talk,
     onPressed: live ? _live : null,
     onHoldStart: live
-        ? () => unawaited(voice.startHold(session.sendComposerText))
+        ? () => unawaited(voice.startHold(session.voiceDeliver ?? session.sendComposerText))
         : null,
     onHoldFinish: live ? _release(voice, session) : null,
   );
@@ -158,7 +158,7 @@ void Function({required bool cancelled}) _release(
     voice.cancelHold();
     return;
   }
-  unawaited(voice.finishHold(session.sendComposerText));
+  unawaited(voice.finishHold(session.voiceDeliver ?? session.sendComposerText));
 };
 
 /// Marks the button live in hold mode without giving it anything to do on tap.

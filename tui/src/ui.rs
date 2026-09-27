@@ -116,10 +116,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
-    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
+    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false)
+        || app.daemons.brain.line.as_ref().map(|l| l.live()).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
+    // The daemons' popups (the hatch, the zoo, a line's detail, the consent) over everything.
+    if crate::daemon::overlay::draw(buf, app) { cursor = None }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
 
@@ -478,6 +481,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
             return None;
         }
     }
+    // The daemon's line (daemon/brain.rs): keys first, for as long as it lives.
+    if crate::daemon::brain::draw_line(buf, app, Rect::new(rect.x, rect.y, rect.width, 1)) { return None }
     let base = app.status_style();
     buf.set_style(rect, base);
     // Each line is its status-format, expanded and drawn as tmux's format_draw draws it: the

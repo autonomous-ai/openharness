@@ -4,7 +4,7 @@ import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
+import { AGENT_OPENED_THROTTLE_MS, BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -87,6 +87,118 @@ describe('confirmed harness pause replies', () => {
     if (state !== 'confirmed') expect(reply.deleted).toBeUndefined()
     if (state === 'unconfirmed') expect(reply.detail).toBe('The process could not be verified.')
     await socket.stop()
+  })
+})
+
+/**
+ * `agent_update {opened: true}` — an app opened this agent, so the daemon that owns it stamps
+ * `lastOpenedAt` on its own clock and tells every app, which then all sort by the same "last used".
+ */
+describe('agent_update opened: one "last used" for every app', () => {
+  const OPENED = Date.UTC(2026, 8, 26, 9, 30)
+  const iso = (ms: number) => new Date(ms).toISOString()
+  let socket: BackendSocket
+  let frames: any[]
+  let agentId = ''
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    // Only the clock: the dispatch queue and vi.waitFor still run on real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(OPENED)
+    socket = new BackendSocket('fixture')
+    frames = []
+    socket.registerLocalClient('local:opened', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    agentId = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' })!.agentId
+  })
+
+  afterEach(async () => {
+    registry.removeAgent(agentId)
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    await socket.stop()
+  })
+
+  const replyTo = (requestId: string) => frames.find(frame => frame.type === 'agent_update_result' && frame.payload.requestId === requestId)?.payload
+  /** What `handleLocalFrame` queues for a window on this computer, awaited so the clock stays put. */
+  async function update(payload: Record<string, unknown>, requestId: string): Promise<any> {
+    await (socket as any).dispatchDown({ type: 'agent_update', payload: { requestId, ...payload } }, 'local:opened', 'local')
+    return replyTo(requestId)
+  }
+  const pushes = () => frames.filter(frame => frame.type === 'agent_synced')
+
+  it('arrives through the desktop window’s own door (localWsServer → handleLocalFrame)', async () => {
+    socket.handleLocalFrame('local:opened', { type: 'agent_update', payload: { requestId: 'door', agentId, opened: true } })
+    await vi.waitFor(() => expect(replyTo('door')).toBeTruthy())
+    // vi.waitFor moves a faked clock while it polls, so the stamp is read back rather than predicted.
+    const stamped = registry.byAgent(agentId)?.lastOpenedAt
+    expect(stamped).toBeGreaterThanOrEqual(OPENED)
+    expect(replyTo('door').agent.lastOpenedAt).toBe(iso(stamped!))
+    expect(pushes()).toHaveLength(1)
+  })
+
+  it('stamps the owner’s clock, answers with the frame, and pushes it to every app but the dial', async () => {
+    const commander = vi.spyOn(socket, 'sendCommander')
+    // A time from the client is never taken: two apps whose clocks disagree would order the list differently.
+    const reply = await update({ agentId, opened: true, lastOpenedAt: '2001-01-01T00:00:00.000Z', at: 1 }, 'open-1')
+    expect(reply.error).toBeUndefined()
+    expect(reply.agent).toMatchObject({ id: agentId, lastOpenedAt: iso(OPENED) })
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBe(OPENED)
+    expect(pushes()).toHaveLength(1)
+    expect(pushes()[0].payload.agent).toEqual(reply.agent)
+    expect(commander).not.toHaveBeenCalled()
+  })
+
+  it('answers a repeat inside the throttle with the current frame, and stamps and tells no one', async () => {
+    await update({ agentId, opened: true }, 'open-1')
+    vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS - 1)
+    const repeat = await update({ agentId, opened: true }, 'open-2')
+    expect(repeat.agent).toMatchObject({ id: agentId, lastOpenedAt: iso(OPENED) })
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBe(OPENED)
+    expect(pushes()).toHaveLength(1)
+
+    vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS)
+    const later = await update({ agentId, opened: true }, 'open-3')
+    expect(later.agent.lastOpenedAt).toBe(iso(OPENED + AGENT_OPENED_THROTTLE_MS))
+    expect(pushes()).toHaveLength(2)
+    expect(pushes()[1].payload.agent.lastOpenedAt).toBe(iso(OPENED + AGENT_OPENED_THROTTLE_MS))
+  })
+
+  it('still answers MISSING_UPDATE for a request that asks for nothing, and stamps nothing', async () => {
+    expect(await update({ agentId }, 'empty')).toMatchObject({ error: 'MISSING_UPDATE' })
+    expect(await update({ agentId, opened: false }, 'not-opened')).toMatchObject({ error: 'MISSING_UPDATE' })
+    expect(await update({ agentId, opened: 'yes' }, 'truthy')).toMatchObject({ error: 'MISSING_UPDATE' })
+    expect(await update({ opened: true }, 'no-agent')).toMatchObject({ error: 'MISSING_AGENT_ID' })
+    expect(await update({ agentId: 'nobody', opened: true }, 'unknown')).toMatchObject({ error: 'AGENT_NOT_FOUND' })
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBeUndefined()
+    expect(pushes()).toHaveLength(0)
+  })
+
+  it('stamps but does not push an agent whose terminal this daemon cannot see', async () => {
+    // Such a row is not in agents_list; a push would put it back on every screen (cli.ts syncSession).
+    registry.setTerminalAvailable(agentId, false)
+    const reply = await update({ agentId, opened: true }, 'hidden')
+    expect(reply.agent.lastOpenedAt).toBe(iso(OPENED))
+    expect(pushes()).toHaveLength(0)
+  })
+
+  it('takes the open from a sealed remote session too — the phone, or another computer’s desktop via its relay', async () => {
+    const internals = socket as any
+    const clear = { type: 'agent_update', payload: { requestId: 'remote-1', agentId, opened: true } }
+    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
+    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
+    const sealedReply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_update_result', payload: { __e2e: 'sealed' } })
+    await internals.dispatchDown({ type: 'agent_update', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote-conn')
+    expect(sealedReply).toHaveBeenCalledWith('remote-conn', 'agent_update_result', 'remote-1',
+      expect.objectContaining({ agent: expect.objectContaining({ id: agentId, lastOpenedAt: iso(OPENED) }) }))
+    // ...and this computer's own window hears the new order like everyone else.
+    expect(pushes()).toHaveLength(1)
+  })
+
+  it('refuses an unsealed remote open like any other agent_update', async () => {
+    await (socket as any).dispatchDown({ type: 'agent_update', payload: { requestId: 'plain', agentId, opened: true } }, 'remote-conn')
+    expect(registry.byAgent(agentId)?.lastOpenedAt).toBeUndefined()
+    expect(pushes()).toHaveLength(0)
   })
 })
 
@@ -795,7 +907,7 @@ describe('BackendSocket outbound queue', () => {
       cliVersion: null,
       processIdentity: null,
       registeredAt: 1,
-      updatedAt: 1,
+      touchedAt: 1,
       lastHookAt: 1,
       lastTranscriptAt: 1,
     }
@@ -1054,7 +1166,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     socket.onCreateAgent = async () => ({ ok: true, session: pending })
 
@@ -1081,7 +1193,7 @@ describe('BackendSocket outbound queue', () => {
     socket.registerLocalClient('local:resume', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
     })
-    const inputs: Array<{ resumeSessionId?: string | null; cwd: string }> = []
+    const inputs: Array<{ resumeSessionId?: string | null; takeOver?: string | null; cwd: string }> = []
     socket.onCreateAgent = async (input) => {
       inputs.push(input)
       return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' }
@@ -1095,12 +1207,17 @@ describe('BackendSocket outbound queue', () => {
     expect(inputs[0]).toMatchObject({ resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', cwd: '/work/cohorts' })
     // What cli.ts said about it reaches the client as it was said.
     expect(reply('ok')).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE', detail: 'It is open in another terminal or app.' })
+    // Taken over from the terminal that has it: how, passed on as asked.
+    create('wait', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'wait' })
+    await vi.waitFor(() => expect(reply('wait')).toBeDefined())
+    expect(inputs[1]).toMatchObject({ takeOver: 'wait' })
     create('shape', { resumeSessionId: '../../etc/passwd' })
     create('prompt', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', prompt: 'and then this' })
-    await vi.waitFor(() => expect(reply('prompt')).toBeDefined())
-    expect(reply('shape')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(reply('prompt')).toMatchObject({ error: 'INVALID_SESSION' })
-    expect(inputs).toHaveLength(1)
+    create('how', { resumeSessionId: '01a0c4ad-de5e-7000-8000-000000000001', takeOver: 'forcefully' })
+    create('what', { takeOver: 'now' })
+    await vi.waitFor(() => expect(reply('what')).toBeDefined())
+    for (const id of ['shape', 'prompt', 'how', 'what']) expect(reply(id)).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(inputs).toHaveLength(2)
     await socket.unregisterLocalClient('local:resume')
     await socket.stop()
   })
@@ -1117,7 +1234,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     })
     const create = vi.fn(async (input: { bypassPermission: boolean; permissionMode: string | null }) => ({ ok: true as const, session: pending(`b-${create.mock.calls.length}`) }))
     socket.onCreateAgent = create
@@ -1159,7 +1276,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'nqhieu84', cwd: homedir(),
       runtimes: [{ backend: 'tmux', paneId: '%9' }], primaryRuntimeKey: 'tmux/%9', tmuxPane: '%9',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const create = vi.fn(async (_input: { engine: string; cwd: string }) => ({ ok: true as const, session: pending }))
     socket.onCreateAgent = create
@@ -1196,7 +1313,7 @@ describe('BackendSocket outbound queue', () => {
       transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
       runtimes: [{ backend: 'tmux', paneId: '%receipt' }], primaryRuntimeKey: 'tmux/%receipt', tmuxPane: '%receipt',
       source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-      registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
     }
     const lookup = vi.spyOn(registry, 'byAgent').mockReturnValue(pending)
     let finish!: () => void
@@ -1698,6 +1815,25 @@ describe('desk_changed relay', () => {
     await socket.unregisterLocalClient('local:desk')
     await socket.stop()
   })
+
+  it('hands the backend\'s zoo_changed to the window as its own frame, and only the backend\'s', async () => {
+    const socket = new BackendSocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:zoo', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'zoo_changed', payload: { revision: 4 } } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'zoo_changed', payload: { revision: 4 } }))
+    expect(frames.some((f) => f.type === 'desk_changed')).toBe(false)
+    // A local client, or a client relayed with its own connId, is not the backend: nothing is relayed.
+    socket.handleLocalFrame('local:zoo', { type: 'zoo_changed', payload: { revision: 99 } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'zoo_changed', payload: { revision: 98 } } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(frames.filter((f) => f.type === 'zoo_changed')).toEqual([{ type: 'zoo_changed', payload: { revision: 4 } }])
+    await socket.unregisterLocalClient('local:zoo')
+    await socket.stop()
+  })
 })
 
 describe('agent_fork RPC', () => {
@@ -1711,7 +1847,7 @@ describe('agent_fork RPC', () => {
     forkedFrom: { agentId: 'agent-1', name: 'Agent one' },
     transcriptPath: null, projectDir: 'workspace', cwd: '/tmp/workspace', runtimes: [], primaryRuntimeKey: '',
     tmuxPane: '%2', source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 2, updatedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
+    registeredAt: 2, touchedAt: 2, lastHookAt: 2, lastTranscriptAt: 2,
   }
 
   function localSocket(): { socket: BackendSocket; frames: Array<Record<string, unknown>> } {
@@ -1856,7 +1992,7 @@ describe('agent_restart RPC', () => {
     cliVersion: null,
     processIdentity: null,
     registeredAt: 1,
-    updatedAt: 1,
+    touchedAt: 1,
     lastHookAt: 1,
     lastTranscriptAt: 1,
   }
@@ -2264,7 +2400,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
     transcriptPath: null, projectDir: 'home', cwd: '/home/someone', defaultName: 'Local model',
     runtimes: [{ backend: 'tmux', paneId: '%11' }], primaryRuntimeKey: 'tmux/%11', tmuxPane: '%11',
     source: null, title: null, model: null, cliVersion: null, processIdentity: null,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 
   async function create(choices: Record<string, unknown>) {
@@ -2659,6 +2795,112 @@ describe('local terminal focus', () => {
     expect(setFocusedAgent.mock.calls).toEqual([['local:window', 'agent-1'], ['local:window', null]])
 
     await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+})
+
+describe('question_response reports what became of the answer', () => {
+  // The answer is keyed into the agent's own terminal, and it can arrive after the dialog it was for has
+  // gone — the agent moved on, another client answered. The daemon then types nothing, and the client
+  // that answered has to hear why, or it reports "Answered" for an answer that went nowhere.
+  afterEach(() => {
+    wsMock.instances.length = 0
+    vi.restoreAllMocks()
+  })
+
+  function harness() {
+    const socket = new BackendSocket('token')
+    const frames: Array<{ type: string; payload: Record<string, unknown> }> = []
+    socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as { type: string; payload: Record<string, unknown> }); return true }, sendBinary: () => true })
+    const dispatch = (payload: Record<string, unknown>) =>
+      (socket as any).dispatchDown({ type: 'question_response', payload }, 'local:hn', 'local') as Promise<void>
+    const results = () => frames.filter((f) => f.type === 'question_response_result')
+    return { socket, dispatch, results }
+  }
+
+  it('replies STALE_QUESTION under the question\'s own requestId when the dialog changed first', async () => {
+    const { socket, dispatch, results } = harness()
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }))
+    await dispatch({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    expect(results()[0].payload).toEqual({ requestId: 'q_0badf00d', error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
+    expect(socket.onQuestionAnswer).toHaveBeenCalledWith({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
+    await socket.unregisterLocalClient('local:hn')
+  })
+
+  it('replies ok once the answer was typed', async () => {
+    const { socket, dispatch, results } = harness()
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    await dispatch({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    expect(results()[0].payload).toEqual({ requestId: 'q_1', ok: true })
+    await socket.unregisterLocalClient('local:hn')
+  })
+
+  it('tells the window that answered, and no other window', async () => {
+    const { socket, dispatch, results } = harness()
+    const other: Array<{ type: string }> = []
+    socket.registerLocalClient('local:other', { sendFrame: (frame) => { other.push(frame as { type: string }); return true }, sendBinary: () => true })
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    await dispatch({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
+    await vi.waitFor(() => expect(results()).toHaveLength(1))
+    expect(other.filter((f) => f.type === 'question_response_result')).toEqual([])
+    await socket.unregisterLocalClient('local:other')
+    await socket.unregisterLocalClient('local:hn')
+  })
+
+  it('answers a relayed answerer alone and sealed — never every window and web client of this machine', async () => {
+    // A dial, a phone, or another machine relaying for its app answered over the relay. What became of
+    // that answer is its business: broadcast, every window here and every web client of this machine was
+    // handed a `question_response_result` for an answer it never gave, in the clear.
+    const socket = new BackendSocket('token')
+    const windowFrames: Array<{ type: string }> = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { windowFrames.push(frame as { type: string }); return true }, sendBinary: () => true })
+    const stale = { ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }
+    socket.onQuestionAnswer = vi.fn(async () => stale)
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'hasSession').mockImplementation((connId: string) => connId === 'dial-1')
+    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+      type: 'question_response_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } },
+    })
+
+    ws.message(sealedDown(socket, 'dial-1', 'question_response', { requestId: 'q_0badf00d', agentId: 'a1', answers: { q: 'Yes' } }))
+
+    await vi.waitFor(() => {
+      expect(wrapReply).toHaveBeenCalledWith('dial-1', 'question_response_result', 'q_0badf00d', { error: stale.error, detail: stale.detail })
+    })
+    await vi.waitFor(() => {
+      const results = parseSent(ws).filter((item) => (item.frame as { type?: string } | undefined)?.type === 'question_response_result')
+      expect(results).toEqual([expect.objectContaining({
+        targetConnId: 'dial-1',
+        frame: { type: 'question_response_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } },
+      })])
+    })
+    expect(socket.onQuestionAnswer).toHaveBeenCalledWith({ requestId: 'q_0badf00d', agentId: 'a1', answers: { q: 'Yes' } })
+    expect(windowFrames.filter((f) => f.type === 'question_response_result')).toEqual([])
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
+  it('still answers only that connection when its session is gone by the time the answer is typed', async () => {
+    // Keying a dialog takes seconds; the answerer can drop in between. Nothing to seal with then — it gets a
+    // bare error, addressed to it, and nobody else hears anything.
+    const socket = new BackendSocket('token')
+    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(false)
+    ws.message(sealedDown(socket, 'phone-1', 'question_response', { requestId: 'q_1', agentId: 'a1', answers: { q: 'Tea' } }))
+    await vi.waitFor(() => {
+      const results = parseSent(ws).filter((item) => (item.frame as { type?: string } | undefined)?.type === 'question_response_result')
+      expect(results).toEqual([expect.objectContaining({
+        targetConnId: 'phone-1',
+        frame: { type: 'question_response_result', payload: { requestId: 'q_1', error: 'E2EE_REQUIRED' } },
+      })])
+    })
     await socket.stop()
   })
 })

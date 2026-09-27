@@ -23,7 +23,8 @@
  *   - "Other (type your own)" opens a text editor, so it is never offered as an answerable option.
  */
 
-import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import type { FoundDialog, PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 /** `↑↓ navigate · ␣ toggle · ↵ select · …` — the line that marks a dialog as open. */
 const FOOTER_RE = /navigate\s*·.*\bselect\b/i
@@ -49,13 +50,20 @@ function stripAnsi(value: string): string {
  * one.
  */
 export function parseDevinQuestionPane(capture: string): PaneView {
+  return locateDevinQuestion(capture)?.view ?? null
+}
+
+/** `parseDevinQuestionPane`, with the footer it anchored on. */
+export function locateDevinQuestion(capture: string): FoundDialog | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const footer = lines.findLastIndex((line) => FOOTER_RE.test(line))
   if (footer < 0) return null
 
-  // Above the footer: the plain closing rule, the rows, then the titled rule that opens the dialog.
+  // Above the footer: the plain closing rule, the rows, then the titled rule that opens the dialog —
+  // never above an earlier dialog's end, whose titled rule is not this one's.
   let top = -1
-  for (let i = footer - 1; i >= 0 && footer - i < 40; i--) {
+  const floor = earlierDialogEnd(lines, footer, 40)
+  for (let i = footer - 1; i > floor && footer - i < 40; i--) {
     if (TITLED_RULE_RE.test(lines[i])) { top = i; break }
   }
   if (top < 0) return null
@@ -82,7 +90,7 @@ export function parseDevinQuestionPane(capture: string): PaneView {
   if (!rows.length) return null
   // Devin also states it outright, which covers a dialog whose boxes are off-screen.
   if (/\(multi-select\)/i.test(question)) multi = true
-  return { kind: 'question', question: question.replace(/\s*\(multi-select\)\s*$/i, '').trim(), rows, multi, typeRow: null }
+  return { view: { kind: 'question', question: question.replace(/\s*\(multi-select\)\s*$/i, '').trim(), rows, multi, typeRow: null }, at: footer }
 }
 
 /**
@@ -123,14 +131,21 @@ const APPROVE_RE = /^(yes|allow|approve|accept|proceed|run|continue)\b/i
 const REJECT_RE = /^(no|reject|deny|decline|cancel|don'?t|stop)\b/i
 
 export function parseDevinPermissionPane(capture: string): PaneView {
+  return locateDevinPermission(capture)?.view ?? null
+}
+
+/** `parseDevinPermissionPane`, with the footer it anchored on. */
+export function locateDevinPermission(capture: string): FoundDialog | null {
   const lines = stripAnsi(capture).replace(/ /g, ' ').split('\n')
   const footer = lines.findLastIndex((line) => PERMISSION_FOOTER_RE.test(line))
   if (footer < 0) return null
 
-  // The rows sit directly above the footer, back to the one numbered 1.
+  // The rows sit directly above the footer, back to the one numbered 1. Nothing above an earlier
+  // dialog's end is this prompt's: not a row, not the command.
   const rows: QuestionRow[] = []
   let start = -1
-  for (let i = footer - 1; i >= 0 && footer - i <= 20; i--) {
+  const floor = earlierDialogEnd(lines, footer, 20)
+  for (let i = footer - 1; i > floor && footer - i <= 20; i--) {
     const match = ROW_RE.exec(lines[i])
     if (!match) continue
     const [, , number, label] = match
@@ -146,9 +161,9 @@ export function parseDevinPermissionPane(capture: string): PaneView {
   // What is being approved: the `$ …` line above the rows. Best-effort, like every other engine's — the
   // row list is what the answer actually depends on.
   let command = ''
-  for (let i = start - 1; i >= 0 && start - i <= 8; i--) {
+  for (let i = start - 1; i > floor && start - i <= 8; i--) {
     const match = COMMAND_RE.exec(lines[i])
     if (match) { command = match[1]; break }
   }
-  return { kind: 'question', question: command ? `Approve ${command}` : 'Approval required', rows: answerable, multi: false, typeRow: null }
+  return { view: { kind: 'question', question: command ? `Approve ${command}` : 'Approval required', rows: answerable, multi: false, typeRow: null }, at: footer }
 }

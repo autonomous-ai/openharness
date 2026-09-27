@@ -54,6 +54,39 @@ void main() {
     expect(outbound, ['\x1b', '\x1b[D', '\x1b[A', '\x1b[B', '\x1b[C']);
   });
 
+  testWidgets('^C sends interrupt at one tap', (tester) async {
+    await pumpBar(tester);
+    await tapKey(tester, 'Control C');
+    expect(outbound, ['\x03']);
+  });
+
+  testWidgets(
+    'ctrl is the session\'s when it has one, so a typed letter can spend it',
+    (tester) async {
+      var armed = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) => TerminalKeyBar(
+                terminal: terminal,
+                enabled: true,
+                onDismissKeyboard: () {},
+                ctrlArmed: armed,
+                onArmCtrl: (value) => setState(() => armed = value),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tapKey(tester, 'ctrl');
+      expect(armed, isTrue, reason: 'armed on the session, not the row alone');
+      await tapKey(tester, 'Up');
+      expect(armed, isFalse, reason: 'spent by the next key');
+      expect(outbound.single, contains('1;5A'));
+    },
+  );
+
   testWidgets('tab reaches the pty and empties the keyboard buffer', (
     tester,
   ) async {

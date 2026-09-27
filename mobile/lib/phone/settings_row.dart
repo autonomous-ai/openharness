@@ -58,14 +58,10 @@ class SettingsCaption extends StatelessWidget {
       // that group than to the one it follows. Equal gaps either side would leave every caption
       // floating between two cards with nothing to say which it labels.
       padding: const EdgeInsets.fromLTRB(4, 22, 4, 8),
+      // Lowercase and 13pt, the way Find heads its sections (`needs you`, `recent`).
       child: Text(
-        text.toUpperCase(),
-        style: TextStyle(
-          color: AppPalette.textFaint,
-          fontSize: 11.5,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
-        ),
+        text.toLowerCase(),
+        style: TextStyle(color: AppPalette.textFaint, fontSize: 13),
       ),
     );
   }
@@ -111,10 +107,10 @@ class SettingsGroup extends StatelessWidget {
       // row happens to need. Belt and braces with the `stretch` below: the alignment makes the rows
       // fill the card, this makes the card fill the list.
       width: double.infinity,
+      // Filled, not outlined: one raised step off the page, like the phone's fields.
       decoration: BoxDecoration(
         color: AppGlass.rowFill,
         borderRadius: BorderRadius.circular(AppCard.radius),
-        border: Border.all(color: AppGlass.hair),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppCard.radius),

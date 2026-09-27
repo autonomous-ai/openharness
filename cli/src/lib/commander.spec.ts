@@ -371,6 +371,33 @@ describe('CommanderMirror recap events', () => {
     expect(mirror.recent('session-off', 1)).toHaveLength(0)
   })
 
+  it('alwaysGenerate may be a switch read per turn (the pair brain), and onSummary sees each stored recap', async () => {
+    let pairing = false
+    const summaries: Array<[string, { recap: string; body: string }]> = []
+    const mirror = new CommanderMirror({
+      send: () => {}, sendWeb: () => {},
+      hasDevice: () => false,
+      alwaysGenerate: () => pairing,
+      onSummary: (sessionId, summary) => summaries.push([sessionId, summary]),
+      summarize: async () => 'Fixed the flaky test\n\nPinned the clock in billing.spec.ts.',
+      dataDir,
+    })
+    const turn = [
+      { type: 'turn_started', payload: { userMessage: 'fix it' } },
+      { type: 'text_delta', payload: { content: 'done' } },
+      { type: 'turn_ended', payload: {} },
+    ] as LiveEvent[]
+    mirror.ingest(turn, 'session-pair')
+    await vi.runAllTimersAsync()
+    await Promise.resolve()
+    expect(summaries).toHaveLength(0)
+    pairing = true
+    mirror.ingest(turn, 'session-pair')
+    await vi.runAllTimersAsync()
+    await Promise.resolve()
+    expect(summaries).toEqual([['session-pair', { recap: 'Fixed the flaky test', body: 'Pinned the clock in billing.spec.ts.' }]])
+  })
+
   it('runs the recap once when a turn closes twice (Stop hook + watcher race)', async () => {
     const deviceFrames: CommanderFrame[] = []
     let summarizeCalls = 0
@@ -722,5 +749,22 @@ describe('CommanderMirror keeps the complete final answer beside the clipped one
     expect(full).not.toContain('�')
     // A round trip through UTF-8 is lossless only if nothing was severed.
     expect(Buffer.from(full, 'utf8').toString('utf8')).toBe(full)
+  })
+})
+
+describe('CommanderMirror keeps the open tool calls for the pair\'s floor', () => {
+  it('a call is open from its tool_start to its tool_end, and a turn boundary clears them all', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-commander-tools-'))
+    const mirror = new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => false, summarize: async () => null, dataDir: dir })
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'test it' } },
+      { type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: { command: 'npm test', description: 'Run the tests' } } },
+      { type: 'tool_start', payload: { id: 't2', tool: 'Read', input: { file_path: '/w/a.ts' } } },
+      { type: 'tool_end', payload: { id: 't2', tool: 'Read', output: '', isError: false, summary: '' } },
+    ] as LiveEvent[], 's1')
+    expect(mirror.openTools('s1')).toEqual([{ name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }])
+    mirror.ingest([{ type: 'turn_ended', payload: {} }] as LiveEvent[], 's1')
+    expect(mirror.openTools('s1')).toEqual([])
+    rmSync(dir, { recursive: true, force: true })
   })
 })

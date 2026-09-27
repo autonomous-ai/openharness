@@ -5,6 +5,7 @@ import '../core/config.dart';
 import '../e2ee/keys.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
+import 'code_link.dart';
 import 'password_link.dart';
 import 'viewer_key_store.dart';
 
@@ -60,6 +61,54 @@ class DirectLink implements PeerLinkClient {
             : displayName;
         return CliLinkConnectResult(
           error: humanizeLinkError(code, name, retryAt: retryAt),
+        );
+    }
+  }
+
+  /// The QR's one-time code in place of the password: the same pin, from [linkWithCode].
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+  }) async {
+    final String token;
+    try {
+      token = await auth.accessToken();
+    } on DirectAuthException catch (error) {
+      return CliLinkConnectResult(error: error.message);
+    }
+    final result = await linkWithCode(
+      machineId: machineId,
+      code: code,
+      label: label,
+      identity: await keys.identity(),
+      accessToken: token,
+      wsBaseUrl: config.wsBaseUrl,
+      autonomousEnv: config.autonomousEnv,
+      socket: socket,
+    );
+    switch (result) {
+      case PasswordLinked(:final peerPub, :final fingerprint):
+        await keys.pin(machineId, peerPub);
+        return CliLinkConnectResult(
+          linkedMachineId: machineId,
+          fingerprint: fingerprint,
+        );
+      case PasswordLinkFailed(:final code):
+        final name = displayName == null || displayName.isEmpty
+            ? 'the computer'
+            : displayName;
+        return CliLinkConnectResult(
+          error: switch (code) {
+            'CODE_MISMATCH' =>
+              'That code didn’t match. Scan the new one on $name.',
+            'TIMEOUT' => 'Keep “Add phone” open on $name, then scan again.',
+            'PAIRING_BUSY' =>
+              '$name is pairing with something else. Try again.',
+            _ => 'Couldn’t connect to $name ($code).',
+          },
         );
     }
   }

@@ -111,7 +111,7 @@ export interface HookServerHandlers {
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
   onRemotePasswordStatus?: () => PairOutcome
   /** Local dashboard status snapshot (GET /api/status). */
-  onStatus?: () => Record<string, unknown>
+  onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
   onLogs?: () => string
   /** Stop the adapter from the local dashboard (POST /api/stop). */
@@ -125,12 +125,20 @@ export interface HookServerHandlers {
   onMachineDelete?: (machineId: string) => Promise<PairOutcome>
   /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
   onAuthMe?: () => Promise<PairOutcome>
+  /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
+   *  Add Phone QR), minted by backend against this daemon's own session. */
+  onAuthHandoff?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
   /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
   onDeskRead?: () => Promise<PairOutcome>
   /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
    *  local write, so CSRF-guarded like a rename. */
   onDeskOps?: (body: unknown) => Promise<PairOutcome>
+  /** GET /api/zoo — the account's daemons and eggs (daemons/README.md); proxied like the desk. */
+  onZooRead?: () => Promise<PairOutcome>
+  /** POST /api/zoo/ops — habits, hatches, pair and nickname, applied on the backend (its routes/zoo.ts),
+   *  which alone draws; a local write, so CSRF-guarded like the desk's ops. */
+  onZooOps?: (body: unknown) => Promise<PairOutcome>
   /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
    *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
   onStore?: StoreHandler
@@ -446,7 +454,7 @@ export function startHookServer(
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(LOCAL_WEB_HTML); return
       }
       if (req.method === 'GET' && url === '/api/status') {
-        json(200, handlers.onStatus ? handlers.onStatus() : { supported: false }); return
+        json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
       }
       if (req.method === 'GET' && url === '/api/logs') {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return
@@ -681,10 +689,34 @@ export function startHookServer(
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onDeskOps!(body)); return
       }
+      if (req.method === 'GET' && url === '/api/zoo') {
+        if (!handlers.onZooRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onZooRead); return
+      }
+      if (req.method === 'POST' && url === '/api/zoo/ops') {
+        // Any local process that sets the header can send an op here, `zoo.autonomy` and `zoo.consent`
+        // included: the account's dial is only a REQUEST to each daemon, which acts above `suggest` only
+        // after the person confirms it at a window (pair/gate.ts, daemons/BRAIN.md "Security").
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onZooOps) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onZooOps!(body)); return
+      }
       if (req.method === 'GET' && url === '/api/auth/me') {
         const me = handlers.onAuthMe
         if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(me); return
+      }
+      // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
+      // a credential. So not the CSRF header, which any local process can send, but the daemon's
+      // owner-only socket: the filesystem has already said this is the user who signed in. Another
+      // account on a shared computer reaches the loopback port, never the socket. A client on TCP is
+      // refused, and the Add Phone QR goes without the code (the phone asks for an emailed one).
+      if (req.method === 'POST' && url === '/api/auth/handoff') {
+        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onAuthHandoff); return
       }
       if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:archive/archive.dart' show ZLibDecoder;
 import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
@@ -837,7 +837,7 @@ class TerminalSession extends ChangeNotifier {
   Uint8List? _decodeBinaryBytes(TerminalBinaryFrame frame) {
     try {
       return frame.compressed
-          ? Uint8List.fromList(ZLibDecoder().convert(frame.bytes))
+          ? const ZLibDecoder().decodeBytes(frame.bytes, verify: true)
           : frame.bytes;
     } catch (_) {
       return null;

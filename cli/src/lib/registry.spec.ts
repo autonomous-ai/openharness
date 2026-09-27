@@ -271,12 +271,17 @@ describe('registry remote display names', () => {
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
       schemaVersion: 2,
+      // Saved as `updatedAt` before the row's bookkeeping time was named for what it is.
+      touchedAt: 20,
     })
-    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]).toMatchObject({
+    const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]
+    expect(saved).toMatchObject({
       agentId: 'stable-agent',
       tmuxPane: '%17',
       runtimes: [{ backend: 'tmux', paneId: '%17' }],
+      touchedAt: 20,
     })
+    expect(saved).not.toHaveProperty('updatedAt')
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.pre-v2.json'), 'utf8'))[0]).toMatchObject({
       agentId: 'stable-agent', sessionId: 'legacy-session', tmuxPane: '%17',
     })
@@ -1833,5 +1838,81 @@ describe('a terminal: a pane that becomes an engine and back', () => {
 
     // And the next engine typed into the same shell is adopted just the same.
     expect(registry.adoptEngine(opened.agentId, 'codex', processIdentity(913))).toMatchObject({ engine: 'codex' })
+  })
+})
+
+describe('lastOpenedAt: when an app last opened the agent, on the daemon clock', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-opened-'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(dataDir, { recursive: true, force: true })
+    delete process.env.ADAPTER_DATA_DIR
+    delete process.env.CLAUDE_PROJECTS_DIR
+    delete process.env.CODEX_HOME
+    delete process.env.CURSOR_HOME
+  })
+
+  const OPENED = Date.UTC(2026, 8, 26, 9, 30)
+  const onDisk = () => JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
+
+  it('stamps the daemon’s own clock, persists it, and leaves the bookkeeping `touchedAt` alone', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%41' }], cwd: '/tmp/demo' })!
+    expect(pending.lastOpenedAt).toBeUndefined()
+    expect(onDisk()[0]).not.toHaveProperty('lastOpenedAt')
+    const touchedAt = pending.touchedAt
+
+    vi.setSystemTime(OPENED)
+    const opened = registry.markOpened(pending.agentId)
+    expect(opened?.lastOpenedAt).toBe(OPENED)
+    expect(opened?.touchedAt).toBe(touchedAt)
+    expect(onDisk()[0]).toMatchObject({ agentId: pending.agentId, lastOpenedAt: OPENED, touchedAt })
+    expect(registry.markOpened('nobody')).toBeNull()
+
+    // The load rebuilds every row from a named list: a field missing there is written and then lost.
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.lastOpenedAt).toBe(OPENED)
+  })
+
+  it('survives the hook that rebuilds the row — the first prompt after an open must not erase it', async () => {
+    const transcriptPath = join(dataDir, 'session-opened.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%42' }], cwd: '/tmp/demo' })!
+    vi.setSystemTime(OPENED)
+    registry.markOpened(pending.agentId)
+
+    vi.setSystemTime(OPENED + 60_000)
+    const bound = registry.register({ sessionId: 'session-opened', transcriptPath, tmuxPane: '%42', cwd: '/tmp/demo' })
+    expect(bound?.entry.agentId).toBe(pending.agentId)
+    expect(bound?.entry.lastOpenedAt).toBe(OPENED)
+    // ...and again on a re-register of the same session, then on disk.
+    const again = registry.register({ sessionId: 'session-opened', transcriptPath, tmuxPane: '%42', cwd: '/tmp/demo' })
+    expect(again?.entry.lastOpenedAt).toBe(OPENED)
+    expect(onDisk()[0]).toMatchObject({ agentId: pending.agentId, lastOpenedAt: OPENED })
+  })
+
+  it('never lets a hand-edited or nonsensical stamp reach the frame', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%43' }], cwd: '/tmp/demo' })!
+    const row = onDisk()[0]
+    expect(strictPersistedRow({ ...row, lastOpenedAt: OPENED })?.lastOpenedAt).toBe(OPENED)
+    for (const bad of ['yesterday', -5, 0, 1.5, Number.NaN, null]) {
+      expect(strictPersistedRow({ ...row, lastOpenedAt: bad })).not.toHaveProperty('lastOpenedAt')
+    }
+
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([{ ...row, lastOpenedAt: 'yesterday' }]), { mode: 0o600 })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)).toBeTruthy()
+    expect(reloaded.byAgent(pending.agentId)).not.toHaveProperty('lastOpenedAt')
   })
 })

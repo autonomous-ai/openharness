@@ -22,7 +22,7 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'opencode'): Registered
     tmuxPane: '%1', source: null, title: null, model: null,
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
     cliVersion: engine === 'codex' ? '0.144.5' : engine === 'cursor' ? '2026.07.20-8cc9c0b' : engine === 'opencode' ? '1.18.31' : '2.1.212', processIdentity: null,
-    registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
 

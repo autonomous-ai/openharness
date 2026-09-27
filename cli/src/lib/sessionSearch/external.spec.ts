@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { ExternalSessions, OpenSessions, readClaudeHead, readCodexHead } from './external.js'
+import { ExternalSessions, OpenSessions, readClaudeHead, readCodexHead, sessionBusy, stopSessionOwner } from './external.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -98,7 +98,9 @@ describe('ExternalSessions', () => {
 })
 
 describe('OpenSessions', () => {
-  it('knows Claude sessions from their live process records, and Codex ones from open rollouts', async () => {
+  const rollout = (id: string) => `/h/.codex/sessions/2026/09/20/rollout-2026-09-20T10-00-00-${id}.jsonl`
+
+  it('knows Claude sessions from their live process records, Codex ones from open rollouts, and which are in a terminal', async () => {
     const root = home()
     write(join(root, 'sessions', '101.json'), [{ pid: 101, sessionId: A }])
     write(join(root, 'sessions', '102.json'), [{ pid: 102, sessionId: B }])
@@ -108,13 +110,14 @@ describe('OpenSessions', () => {
     const open = new OpenSessions({
       claudeHome: root,
       alive: (pid) => pid === 101,
-      openRollouts: async () => { reads++; return [`/h/.codex/sessions/2026/09/20/rollout-2026-09-20T10-00-00-${C}.jsonl`] },
+      openRollouts: async () => { reads++; return [{ pid: 201, path: rollout(C) }] },
+      ttys: async (pids) => new Map(pids.map((pid) => [pid, pid === 101 ? '/dev/ttys003' : null])),
       now: () => now,
       maxAgeMs: 5_000,
     })
     expect(open.known().size).toBe(0)
     const ids = await open.fresh()
-    expect([...ids].sort()).toEqual([A, C].sort())
+    expect([...ids].sort()).toEqual([[A, 'terminal'], [C, 'app']].sort())
     expect(reads).toBe(1)
     now += 1_000
     await open.fresh()
@@ -122,6 +125,54 @@ describe('OpenSessions', () => {
     now += 10_000
     await open.fresh()
     expect(reads).toBe(2)
-    expect(open.known().has(C)).toBe(true)
+    expect(open.known().get(C)).toBe('app')
+    // Who has one is looked at now, not taken from the last answer.
+    expect(await open.owner(A)).toEqual({ pid: 101, engine: 'claude', tty: '/dev/ttys003', record: join(root, 'sessions', '101.json') })
+    expect(reads).toBe(3)
+    expect(await open.owner(B)).toBeNull()
+  })
+})
+
+describe('sessionBusy', () => {
+  it("reads Claude Code's record, and where the last Codex turn in the rollout stands", async () => {
+    const dir = home()
+    const claude = (status: string) => ({ engine: 'claude' as const, record: write(join(dir, `${status}.json`), [{ pid: 1, sessionId: A, status }]) })
+    expect(await sessionBusy(claude('idle'))).toBe(false)
+    expect(await sessionBusy(claude('busy'))).toBe(true)
+    expect(await sessionBusy({ engine: 'claude', record: join(dir, 'gone.json') })).toBe(false)
+
+    const event = (type: string) => ({ type: 'event_msg', payload: { type } })
+    const codex = (name: string, lines: unknown[]) => ({ engine: 'codex' as const, record: write(join(dir, `${name}.jsonl`), [codexMeta(C, 'cli'), ...lines]) })
+    // What was said can name the events; only the events count.
+    const talk = { type: 'response_item', payload: { type: 'message', content: [{ text: 'then "task_complete" arrives' }] } }
+    expect(await sessionBusy(codex('ended', [event('task_started'), talk, event('task_complete'), talk]))).toBe(false)
+    expect(await sessionBusy(codex('aborted', [event('task_started'), event('turn_aborted')]))).toBe(false)
+    expect(await sessionBusy(codex('working', [event('task_complete'), event('task_started'), talk]))).toBe(true)
+    expect(await sessionBusy(codex('unsaid', []))).toBe(true)
+  })
+})
+
+describe('stopSessionOwner', () => {
+  it('asks it to quit, makes it after five seconds, and gives the terminal its cursor back', async () => {
+    const signals: string[] = []
+    const written: string[] = []
+    let living = true
+    let slept = 0
+    const opts = {
+      alive: () => living,
+      kill: (_pid: number, signal: NodeJS.Signals) => { signals.push(signal); if (signal === 'SIGTERM' && slept === 0) return; living = false },
+      sleep: async (ms: number) => { slept += ms },
+      writeTty: async (tty: string, text: string) => { written.push(`${tty} ${JSON.stringify(text)}`) },
+    }
+    expect(await stopSessionOwner({ pid: 7, tty: '/dev/ttys009' }, opts)).toBe(true)
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(slept).toBe(5_000)
+    expect(written).toEqual(['/dev/ttys009 "\\u001b[?25h"'])
+
+    // One that quits when asked is not made to; one that will not quit at all is reported.
+    signals.length = 0; living = true; slept = 1
+    expect(await stopSessionOwner({ pid: 7, tty: null }, opts)).toBe(true)
+    expect(signals).toEqual(['SIGTERM'])
+    expect(await stopSessionOwner({ pid: 8, tty: null }, { ...opts, alive: () => true, kill: () => undefined })).toBe(false)
   })
 })

@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import '../core/browser_storage.dart';
 import '../core/harness_file_store.dart';
 import 'analytics_config.dart';
 
@@ -27,14 +30,19 @@ import 'analytics_config.dart';
 /// overridable so tests never touch a real Harness home.
 class AnalyticsIdentityStore {
   AnalyticsIdentityStore({File? file, File? computerIdFile, Random? random})
-    : _file = file ?? File('${HarnessFileStore.defaultDirectoryPath()}/$_name'),
-      _computerIdFile = computerIdFile ?? File(_defaultComputerIdPath()),
+    : _file =
+          file ??
+          (kIsWeb
+              ? null
+              : File('${HarnessFileStore.defaultDirectoryPath()}/$_name')),
+      _computerIdFile =
+          computerIdFile ?? (kIsWeb ? null : File(_defaultComputerIdPath())),
       _random = random ?? Random.secure();
 
   static const String _name = 'analytics.json';
 
-  final File _file;
-  final File _computerIdFile;
+  final File? _file;
+  final File? _computerIdFile;
   final Random _random;
 
   _StoredIdentity? _state;
@@ -90,8 +98,11 @@ class AnalyticsIdentityStore {
     if (cached != null) return cached;
     var json = const <String, Object?>{};
     try {
-      if (_file.existsSync()) {
-        final decoded = jsonDecode(_file.readAsStringSync());
+      final raw = kIsWeb
+          ? readBrowserPreference('analytics')
+          : (_file!.existsSync() ? _file.readAsStringSync() : null);
+      if (raw != null) {
+        final decoded = jsonDecode(raw);
         if (decoded is Map) json = decoded.cast<String, Object?>();
       }
     } on Object {
@@ -120,7 +131,7 @@ class AnalyticsIdentityStore {
 
   String? _computerId() {
     try {
-      if (!_computerIdFile.existsSync()) return null;
+      if (_computerIdFile == null || !_computerIdFile.existsSync()) return null;
       final id = _computerIdFile.readAsStringSync().trim();
       return id.isEmpty ? null : id;
     } on Object {
@@ -131,16 +142,18 @@ class AnalyticsIdentityStore {
   /// Writes the ids back, `enabled` included so a user's opt-out survives.
   void _persist(_StoredIdentity state) {
     try {
-      _file.parent.createSync(recursive: true);
-      _file.writeAsStringSync(
-        const JsonEncoder.withIndent('  ').convert({
-          'user_pseudo_id': state.pseudoId,
-          'session_id': state.sessionId,
-          'last_active_ms': state.lastActive,
-          'enabled': !state.optedOut,
-        }),
-        flush: true,
-      );
+      final contents = const JsonEncoder.withIndent('  ').convert({
+        'user_pseudo_id': state.pseudoId,
+        'session_id': state.sessionId,
+        'last_active_ms': state.lastActive,
+        'enabled': !state.optedOut,
+      });
+      if (kIsWeb) {
+        writeBrowserPreference('analytics', contents);
+      } else {
+        _file!.parent.createSync(recursive: true);
+        _file.writeAsStringSync(contents, flush: true);
+      }
     } on Object {
       // A read-only home or a full disk costs id stability across restarts,
       // not the event in hand.

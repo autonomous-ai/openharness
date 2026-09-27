@@ -13,6 +13,8 @@ import 'package:harness_mobile/shared/widgets/app_dialog.dart'
         showAppDialog;
 
 import 'settings_row.dart';
+import 'tty.dart';
+import 'tty_controls.dart';
 
 /// One action in a phone sheet.
 class PhoneSheetAction {
@@ -25,10 +27,14 @@ class PhoneSheetAction {
     this.valueColor,
     this.enabled = true,
     this.chevron = false,
+    this.quiet = false,
   });
 
   final IconData icon;
   final String label;
+
+  /// Drawn small and faint, at the foot — the action least used, kept out of the way (Stop).
+  final bool quiet;
 
   /// Run AFTER the sheet has closed — see [showPhoneSheet], which pops first and then calls this.
   /// A dialog opened from here would otherwise open behind the closing sheet.
@@ -107,6 +113,7 @@ Future<void> showPhoneSheet(
   List<String>? titleParts,
   Widget? titleDetail,
   Widget? titleLeading,
+  String? titleBranch,
 }) {
   assert(debugCheckHasMediaQuery(context));
   assert(debugCheckHasMaterialLocalizations(context));
@@ -125,117 +132,213 @@ Future<void> showPhoneSheet(
       barrierOnTapHint: localizations.scrimOnTapHint(
         localizations.bottomSheetLabel,
       ),
-      showDragHandle: true,
-      backgroundColor: AppPalette.panelBg,
-      // ⚠️ **Without this the sheet is capped at 9/16 of the screen**, which is Flutter's default and
-      // is not a height anything here asked for. An agent's sheet — three cards, a caption, a two-line
-      // title detail under the name — outgrows it on a normal phone, and the row that fell past the cap was
-      // Settings: the column below scrolls, so nothing was broken, but a sheet that ends mid-list with
-      // no bottom edge in sight reads as the whole menu rather than as a scrollable one.
+      // The terminal's ground, a rounded top like every sheet New opens, no handle.
+      showDragHandle: false,
+      backgroundColor: Tty.of(context).ground,
       isScrollControlled: true,
-      // A ceiling of its own, because `isScrollControlled` alone removes the cap altogether and lets a
-      // long sheet stand up the full height of the screen — voice input's six languages would. Short of
-      // the top on purpose: the gap is what says a sheet is a layer over the page rather than a page of
-      // its own, and it keeps the terminal underneath recognisable while its own menu is open.
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * 0.85,
       ),
       builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              // 20 from the edge is 4 inside the cards' own 16 — where a Settings caption stands over
-              // its card — so the title reads as the heading of what follows it. A title with parts
-              // (an agent's name over where it runs) is a block of its own and takes more room below.
-              padding: EdgeInsets.fromLTRB(
-                20,
-                0,
-                titleAction == null ? 20 : 8,
-                titleParts == null ? 12 : 16,
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (titleLeading != null) ...[
-                    titleLeading,
-                    const SizedBox(width: 14),
-                  ],
-                  Expanded(
-                    child: titleParts == null
-                        ? Text(
-                            title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: AppPalette.textSecondary,
-                              fontSize: 13,
-                            ),
-                          )
-                        : Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _TitleParts(parts: titleParts),
-                              if (titleDetail != null) ...[
-                                const SizedBox(height: 3),
-                                titleDetail,
-                              ],
-                            ],
-                          ),
-                  ),
-                  // [titleAction]: an icon on the title line — for something that is not about the
-                  // subject of the sheet (Settings, on an agent's sheet), so it does not take a row
-                  // among the actions that are. Its label is the tooltip.
-                  if (titleAction != null)
-                    IconButton(
-                      tooltip: titleAction.label,
-                      icon: Icon(
-                        titleAction.icon,
-                        size: 20,
-                        color: AppPalette.textSecondary,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () {
-                        Navigator.of(sheetContext).pop();
-                        titleAction.onTap();
-                      },
-                    ),
-                ],
-              ),
-            ),
-            // Scrolls once the rows outgrow the sheet — voice input's six languages do on a short phone —
-            // and is laid out exactly like a plain column until then.
-            Flexible(
-              // Stateful only for [PhoneSheetSection.maxVisible]: "N more" opens the rest in place
-              // rather than closing the sheet.
-              child: StatefulBuilder(
-                builder: (context, setSheetState) => ListView(
-                  shrinkWrap: true,
-                  // The cards' inset from the sheet's edge: the Settings list's own 16.
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  children: _sheetCards(
-                    actions: actions,
-                    sections: sections,
-                    // Close first, then act: an action that opens a dialog or pushes a page must not
-                    // do it underneath a sheet that is still animating out.
-                    onAction: (action) {
-                      Navigator.of(sheetContext).pop();
-                      action.onTap();
-                    },
-                    // Stays open: this row reveals, it does not act.
-                    onExpand: (section) => setSheetState(section.expand),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
+        child: _TmuxMenu(
+          title: title,
+          branch: titleBranch,
+          actions: actions,
+          sections: sections,
+          onAction: (action) {
+            Navigator.of(sheetContext).pop();
+            action.onTap();
+          },
         ),
       ),
     ),
   );
+}
+
+/// A harness's menu, the phone's way: its name and where it runs at the top with Cancel, one 17pt
+/// row per action, a rule between groups, the destructive one red, `›` on one that opens more.
+/// Drawn in the terminal's face, like every sheet New opens.
+class _TmuxMenu extends StatefulWidget {
+  const _TmuxMenu({
+    required this.title,
+    this.branch,
+    required this.actions,
+    required this.sections,
+    required this.onAction,
+  });
+
+  final String title;
+
+  /// Under the name, after where it runs, behind the branch icon — see [ttyBranchMark].
+  final String? branch;
+  final List<PhoneSheetAction> actions;
+  final List<PhoneSheetSection> sections;
+  final void Function(PhoneSheetAction action) onAction;
+
+  @override
+  State<_TmuxMenu> createState() => _TmuxMenuState();
+}
+
+class _TmuxMenuState extends State<_TmuxMenu> {
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final groups = <List<Widget>>[
+      if (widget.actions.isNotEmpty)
+        [for (final action in widget.actions) _item(tty, action)],
+      for (final section in widget.sections)
+        if (section.actions.isNotEmpty)
+          [
+            if (section.caption case final caption?)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  10,
+                  Tty.origin,
+                  2,
+                ),
+                child: TtyText(
+                  caption.toLowerCase(),
+                  color: tty.faint,
+                  size: TtySize.meta,
+                ),
+              ),
+            for (final action in section.visible) _item(tty, action),
+            if (section.hiddenCount > 0)
+              _item(
+                tty,
+                PhoneSheetAction(
+                  icon: LucideIcons.ellipsis300,
+                  label: '${section.hiddenCount} more',
+                  onTap: () {},
+                ),
+                onTap: () => setState(section.expand),
+              ),
+          ],
+    ];
+    // `hn · M2:autonomous-harness (main)`: the name on its own line, where it runs under it.
+    final split = widget.title.indexOf(' · ');
+    final name = split < 0 ? widget.title : widget.title.substring(0, split);
+    final place = split < 0 ? null : widget.title.substring(split + 3);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Tty.origin, 10, 4, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tty.style(
+                        size: TtySize.title,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
+                    if (place != null || widget.branch != null)
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            if (place != null) TextSpan(text: place),
+                            if (widget.branch case final branch?) ...[
+                              ttyBranchMark(tty, lead: place == null ? 0 : 8),
+                              TextSpan(text: branch),
+                            ],
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: tty.style(size: TtySize.meta, color: tty.faint),
+                      ),
+                  ],
+                ),
+              ),
+              // No Cancel: a tap anywhere outside the sheet puts it away.
+            ],
+          ),
+        ),
+        Flexible(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 8),
+            children: [
+              for (var g = 0; g < groups.length; g++) ...[
+                if (g > 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Container(
+                      height: 1,
+                      color: tty.dim.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ...groups[g],
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _item(Tty tty, PhoneSheetAction action, {VoidCallback? onTap}) {
+    if (action.quiet) {
+      return TtyTap(
+        onTap: action.enabled ? (onTap ?? () => widget.onAction(action)) : null,
+        semanticsLabel: action.label,
+        minHeight: 44,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+          child: TtyText(action.label, color: tty.faint, size: TtySize.meta),
+        ),
+      );
+    }
+    final color = !action.enabled
+        ? tty.dim
+        : action.destructive
+        ? tty.red
+        : tty.text;
+    return TtyTap(
+      onTap: action.enabled ? (onTap ?? () => widget.onAction(action)) : null,
+      semanticsLabel: action.label,
+      minHeight: 52,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+        child: Row(
+          children: [
+            Expanded(
+              child: TtyText(
+                action.label,
+                color: color,
+                size: TtySize.row,
+                weight: FontWeight.w500,
+              ),
+            ),
+            if (action.value case final value?)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: TtyText(
+                  value,
+                  color: action.valueColor ?? tty.faint,
+                  size: TtySize.meta,
+                ),
+              ),
+            if (action.chevron)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: TtyText('›', color: tty.faint, size: TtySize.title),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// The route [showPhoneSheet] pushes: Material's own bottom sheet, standing on the app's sheet veil
@@ -264,6 +367,9 @@ class _PhoneSheetRoute<T> extends ModalBottomSheetRoute<T> {
     required super.showDragHandle,
     required super.isScrollControlled,
   }) : super(
+         shape: const RoundedRectangleBorder(
+           borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
+         ),
          modalBarrierColor: Colors.black.withValues(alpha: kSheetVeilOpacity),
        );
 
@@ -283,172 +389,6 @@ class _PhoneSheetRoute<T> extends ModalBottomSheetRoute<T> {
         );
       },
       child: super.buildModalBarrier(),
-    );
-  }
-}
-
-/// The body of a sheet, as cards: [actions] first, then every section that has rows.
-List<Widget> _sheetCards({
-  required List<PhoneSheetAction> actions,
-  required List<PhoneSheetSection> sections,
-  required void Function(PhoneSheetAction action) onAction,
-  required void Function(PhoneSheetSection section) onExpand,
-}) {
-  final cards = <Widget>[];
-  void addCard(List<Widget> rows, {String? caption}) {
-    if (caption != null) {
-      cards.add(SettingsCaption(caption));
-    } else if (cards.isNotEmpty) {
-      // A bare card still has to part from the one above it, or the two read as one card with a
-      // seam in it — and the row set apart would not be.
-      cards.add(const SizedBox(height: 16));
-    }
-    cards.add(SettingsGroup(children: rows));
-  }
-
-  if (actions.isNotEmpty) {
-    addCard([
-      for (final action in actions)
-        _SheetRow(action: action, onTap: () => onAction(action)),
-    ]);
-  }
-  for (final section in sections) {
-    if (section.actions.isEmpty) continue;
-    addCard([
-      for (final action in section.visible)
-        _SheetRow(action: action, onTap: () => onAction(action)),
-      if (section.hiddenCount > 0)
-        _SheetRow(
-          action: PhoneSheetAction(
-            icon: LucideIcons.ellipsis300,
-            label: '${section.hiddenCount} more',
-            onTap: () {},
-          ),
-          onTap: () => onExpand(section),
-        ),
-    ], caption: section.caption);
-  }
-  return cards;
-}
-
-/// A title made of named parts — an agent, then its machine — one per line.
-///
-/// The first part reads as the title and the rest as quieter lines under it. A long name wraps, up to
-/// two lines each, and only past that is it cut with `…` — so a pathological name cannot push the
-/// actions off the sheet.
-class _TitleParts extends StatelessWidget {
-  const _TitleParts({required this.parts});
-
-  final List<String> parts;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      for (var index = 0; index < parts.length; index++)
-        Text(
-          parts[index],
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          // 17 over the place lines' 13: the name is what the whole sheet is about, and it has to
-          // read as the heading of the cards under it rather than as one more line among them.
-          style: index == 0
-              ? TextStyle(
-                  color: AppPalette.textPrimary,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                )
-              : TextStyle(color: AppPalette.textSecondary, fontSize: 13),
-        ),
-    ],
-  );
-}
-
-/// One row of a sheet's card: the icon, the label, then a value and a chevron when it has them.
-///
-/// On a [Material] of its own because the card under it is a painted box: an [InkWell] draws on the
-/// nearest Material, which without this is the sheet's — UNDER the card's fill, where no press
-/// would ever show. [SettingsRow] does the same, for the same reason.
-class _SheetRow extends StatelessWidget {
-  const _SheetRow({required this.action, required this.onTap});
-
-  final PhoneSheetAction action;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    // ⚠️ **The danger INK, not [AppPalette.dangerFill].** The fill is darkened to carry white
-    // lettering on top of it; used as the lettering itself it measured 3.4:1 on this sheet — under
-    // the 4.5:1 floor, on the one row a reader most needs to read right. `colorScheme.error` is the
-    // red tuned as ink on a dark surface: 4.8:1 on the card.
-    final color = !action.enabled
-        ? AppPalette.textFaint
-        : action.destructive
-        ? Theme.of(context).colorScheme.error
-        : AppPalette.textPrimary;
-    final value = action.value;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: action.enabled ? onTap : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              Icon(action.icon, size: 20, color: color),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  action.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-              if (value != null) ...[
-                const SizedBox(width: 12),
-                // Capped rather than left to its own width: a value can be as
-                // long as a model id, and a Row lays a non-flex child out before
-                // it gives the label what is left — so an uncapped one would eat
-                // the label first and then run off the end of the sheet.
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 150),
-                  child: Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
-                    style: TextStyle(
-                      color: action.valueColor ?? AppPalette.textSecondary,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              ],
-              if (action.chevron)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Transform.translate(
-                    // Nudged right by the blank the glyph carries — see [kChevronInk] — so the
-                    // arrow ends on the row's margin, where a label or a value would.
-                    offset: const Offset(kChevronInk, 0),
-                    child: Icon(
-                      LucideIcons.chevronRight300,
-                      size: 20,
-                      color: AppPalette.textFaint,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -511,7 +451,10 @@ class _ConfirmDialog extends StatelessWidget {
     return Dialog(
       // 16 from a phone's edges, as the rename dialog: the sentence gets the width, up to the 360
       // the card stops at on anything wider.
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: const EdgeInsets.symmetric(
+        horizontal: Tty.origin,
+        vertical: 24,
+      ),
       child: Semantics(
         scopesRoute: true,
         namesRoute: true,

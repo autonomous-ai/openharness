@@ -1,21 +1,14 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
-/// The resting fill of the terminal's floating buttons — the mic, Search and
-/// `+`.
+/// The resting fill of the terminal's floating buttons — the mic, and Find while the keyboard is up.
 ///
-/// ⚠️ **Lighter than the terminal in both themes, because the terminal is dark
-/// in both.** Every terminal palette is a near-black, so the dark theme's
-/// surface grey laid over one at half strength drew a circle a few shades off
-/// the page under it — the buttons read as missing. White at low strength is a
-/// raised pane over that black; the light theme's is near-solid, as its
-/// surfaces are.
+/// ⚠️ **Solid, not see-through.** Over a terminal every button needs its own ground for its glyph to
+/// read, and a near-opaque fill gives it one for nothing — the frosted blur that did the same job
+/// read the whole backdrop through a GPU filter on every frame the output moved under it.
 Color get floatingButtonFill =>
-    AppTheme.pick(const Color(0xD1FFFFFF), const Color(0x33FFFFFF));
-
+    AppTheme.pick(const Color(0xF2FFFFFF), const Color(0xF22A2A2F));
 /// The rim that draws the circle's edge over whatever runs under it.
 Color get floatingButtonRim =>
     AppTheme.pick(const Color(0x29000000), const Color(0x59FFFFFF));
@@ -30,38 +23,17 @@ List<BoxShadow> get floatingButtonShadow => [
   ),
 ];
 
-/// Frosted glass under a floating button: the output beneath [child] is
-/// blurred to a soft wash, so its glyph reads against any line of text, while
-/// the colour and movement of the terminal still show through.
+/// What stood under a floating button to frost the output behind it — now nothing: the fill is
+/// solid ([floatingButtonFill]). Kept as a pass-through so the buttons keep one shape to change.
 ///
-/// ⚠️ **Blurred, not see-through.** A clear fill let every character under the
-/// button cross its glyph, and the buttons were reported as too hard to see.
-/// What the button covers is not readable any more — it was not readable
-/// through a glyph either.
-///
-/// [child] is the circle itself and sets the size; the blur is clipped to it.
-/// Grouped with the other floating buttons' blurs when a [BackdropGroup] is
-/// above, so the backdrop is read once for all of them.
+/// ⚠️ **The blur went for speed.** A `BackdropFilter` re-reads and blurs what is under it every time
+/// that changes, and under a streaming terminal it changes every frame — the one control that is
+/// always on screen was the costliest thing on it.
 class FloatingGlass extends StatelessWidget {
   const FloatingGlass({super.key, required this.child});
 
   final Widget child;
 
-  static const double blurSigma = 6;
-
   @override
-  Widget build(BuildContext context) => Stack(
-    alignment: Alignment.center,
-    children: [
-      Positioned.fill(
-        child: ClipOval(
-          child: BackdropFilter.grouped(
-            filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-            child: const SizedBox.expand(),
-          ),
-        ),
-      ),
-      child,
-    ],
-  );
+  Widget build(BuildContext context) => child;
 }

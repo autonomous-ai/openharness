@@ -872,6 +872,9 @@ describe('hook notify terminal scope', () => {
       updatedAt: 1,
       lastHookAt: 1,
       lastTranscriptAt: 1,
+      // When an app last opened it — every app's "last used" order reads this, so a hook that lands
+      // while the daemon is down must not be the write that forgets it.
+      lastOpenedAt: 1_790_000_000_000,
     }]))
 
     await runHook({
@@ -891,6 +894,7 @@ describe('hook notify terminal scope', () => {
       grid: { baseUrl: gridLaunch.baseUrl, model: null },
       gridLaunch,
       bypassPermission: true,
+      lastOpenedAt: 1_790_000_000_000,
     })
     expect(registry[0]).not.toHaveProperty('launch')
   })

@@ -35,6 +35,7 @@ import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
+import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
 import { AppError } from '../errors/index.js'
@@ -169,7 +170,7 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   const countryCode = countryCodeFromHeaders(req.headers)
   void (async () => {
     let user
-    try { user = await authenticateAccessToken(accessToken, autonomousEnv) } catch (err) {
+    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: false }) } catch (err) {
       if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
         try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()
@@ -209,7 +210,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   send({ t: 'connected', machineId })
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
-  const accountPushesUnsub = await relayAccountPushes(userId, send)
+  const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on })
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.

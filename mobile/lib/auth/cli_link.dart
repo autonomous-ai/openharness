@@ -150,6 +150,17 @@ class CliLink implements PeerLinkClient {
   /// `verifying`) as the handshake proceeds; best-effort UI feedback only, never required for
   /// correctness. [displayName], when given, is how the CLI's error messages name the machine —
   /// otherwise they show the raw [machineId], which is all a terminal user would have.
+  /// The desktop is the side that SHOWS the code; it never scans one.
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+  }) async => const CliLinkConnectResult(
+    error: 'Pairing by code is done from the phone.',
+  );
+
   @override
   Future<CliLinkConnectResult> connect(
     String machineId,

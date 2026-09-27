@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'app_log.dart';
 import 'cli_log.dart';
 import 'debug_surface.dart';
@@ -21,6 +23,11 @@ const String kCliLogBase = 'cli';
 /// Deliberately not `async`: the first lines this app writes are the ones about
 /// starting up, and awaiting a directory probe here would lose them.
 void installFileLogs() {
+  if (kIsWeb) {
+    appLog = StreamAppLog(logStream);
+    cliLog = StreamCliLog(logStream);
+    return;
+  }
   final directory = DailyLogFile.defaultDirectory;
   final file = FileAppLog(DailyLogFile(directory, kAppLogBase));
   final cli = FileCliLog(DailyLogFile(directory, kCliLogBase));

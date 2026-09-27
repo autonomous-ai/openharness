@@ -178,7 +178,7 @@ class _Badge extends StatelessWidget {
           color: AppTheme.pick(Colors.white, const Color(0xFF181818)),
           fontSize: 10,
           height: 1.2,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           fontFeatures: AppFont.tabularFigures,
         ),
       ),

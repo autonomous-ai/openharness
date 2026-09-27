@@ -8,14 +8,14 @@ import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'link_page.dart';
+import 'welcome/connect_computer.dart';
+import 'tty_controls.dart';
+import 'tty.dart';
+import 'find_row.dart';
 import 'machine_actions.dart';
 import 'machine_index.dart';
-import 'machine_tile.dart';
 import 'phone_card.dart';
-import 'phone_header.dart';
 import 'phone_navigation.dart';
-import 'phone_search_button.dart';
-import 'phone_section_label.dart';
 import 'phone_status.dart';
 
 /// The machines on the account, grouped by what they need.
@@ -40,23 +40,26 @@ class MachinesTab extends StatelessWidget {
     listenable: notifier,
     builder: (context, _) {
       AppTheme.watch(context);
+      final tty = Tty.of(context);
       return Scaffold(
-        backgroundColor: AppPalette.windowBg,
+        backgroundColor: tty.ground,
         body: SafeArea(
           bottom: false,
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // The same search the Agents tab offers, reached the same way.
-              // It spans both kinds, so which tab it was opened from changes
-              // nothing about what it finds — a machine hunted for from here
-              // and an agent hunted for from there are one query.
-              PhoneHeader(
-                large: large,
-                title: 'Machines',
-                trailing: [
-                  if (notifier.machines.isNotEmpty)
-                    PhoneSearchButton(notifier: notifier),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  12,
+                  Tty.origin,
+                  4,
+                ),
+                child: TtyText(
+                  'Computers',
+                  size: large ? 24 : TtySize.title,
+                  weight: FontWeight.w600,
+                ),
               ),
               Expanded(child: _Body(notifier: notifier)),
             ],
@@ -89,7 +92,7 @@ class _Body extends StatelessWidget {
     if (ordered.isEmpty && failure != null) {
       return EmptyState(
         icon: LucideIcons.circleAlert300,
-        title: "Couldn't load your machines",
+        title: "Couldn't reach your computers",
         message: failure,
         action: FilledButton(
           onPressed: () => unawaited(notifier.retryMachines()),
@@ -100,58 +103,84 @@ class _Body extends StatelessWidget {
     if (ordered.isEmpty) {
       return const EmptyState(
         icon: LucideIcons.laptopMinimal300,
-        title: 'No machines yet',
+        title: 'No computers yet',
         message:
-            'Run Harness on a computer signed in to this account and it will '
-            'appear here.',
+            'Set up Harness on your computer, signed in to this account, and it '
+            'appears here.',
       );
     }
 
-    final working = workingMachines(ordered);
-    final needsAttention = machinesNeedingAttention(ordered);
-
+    final tty = Tty.of(context);
     return RefreshIndicator(
       onRefresh: notifier.retryMachines,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: phoneListPadding(context),
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.paddingOf(context).bottom + 24,
+        ),
         children: [
-          if (working.isNotEmpty) ...[
-            const PhoneSectionLabel('Linked'),
-            for (final state in working) _tile(context, state),
-            const SizedBox(height: 6),
-          ],
-          if (needsAttention.isNotEmpty) ...[
-            if (working.isNotEmpty)
-              const PhoneSectionLabel('Needs your attention'),
-            for (final state in needsAttention) _tile(context, state),
-          ],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 0, Tty.origin, 8),
+            child: Text(
+              'Your harnesses run on these. Each one is unlocked with its own '
+              'phone password.',
+              style: tty.style(size: TtySize.meta, color: tty.faint),
+            ),
+          ),
+          for (final state in ordered) _row(context, state, tty),
+          const SizedBox(height: 8),
+          FindAddRow(
+            label: 'Set up another computer',
+            onTap: () => Navigator.of(context).push(
+              phoneRoute(
+                (route) => ConnectComputerPage(
+                  notifier: notifier,
+                  signedIn: false,
+                  onBack: () => Navigator.of(route).maybePop(),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _tile(BuildContext context, MachineState state) => Padding(
-    padding: const EdgeInsets.only(bottom: kPhoneCardGap),
-    // An offline machine has nothing to connect to and nothing to unlink from here that would
-    // change anything, so its row does not open — see [PhoneCard], which dims a row with no tap.
-    child: MachineTile(
-      machine: state,
-      onTap: phoneMachineStatusOf(state) == PhoneMachineStatus.offline
+  Widget _row(BuildContext context, MachineState state, Tty tty) {
+    final status = phoneMachineStatusOf(state);
+    final count = state.agents.length;
+    final (String word, Color color, String detail) = switch (status) {
+      PhoneMachineStatus.ready => (
+        'ready',
+        tty.green,
+        count == 0
+            ? 'nothing running'
+            : '$count harness${count == 1 ? '' : 'es'}',
+      ),
+      PhoneMachineStatus.connecting => ('connecting', tty.faint, 'one moment…'),
+      PhoneMachineStatus.needsPassword => (
+        'locked',
+        tty.yellow,
+        'tap to unlock with its phone password',
+      ),
+      PhoneMachineStatus.offline => (
+        'asleep',
+        tty.faint,
+        'turn it on, or run harness start there',
+      ),
+    };
+    return FindRow(
+      title: state.machine.displayName,
+      detail: detail,
+      state: word,
+      stateColor: color,
+      enabled: status != PhoneMachineStatus.offline,
+      onTap: status == PhoneMachineStatus.offline
           ? null
           : () => _open(context, state),
-    ),
-  );
+    );
+  }
 
-  /// This screen connects and disconnects, and does nothing else.
-  ///
-  /// A machine that wants its password opens the form for it. A machine that already has one has
-  /// exactly one thing left to offer — giving it up — so a tap brings that rather than a page.
-  ///
-  /// ⚠️ Deliberately NOT the agent list any more. Agents belong to the Agents tab, which lists
-  /// every one on the account and treats the machine as a filter; reaching them a second way
-  /// through here made the machine something to navigate THROUGH, which is the shape that tab
-  /// exists to replace.
   void _open(BuildContext context, MachineState state) {
     if (state.needsLink) {
       Navigator.of(context).push(

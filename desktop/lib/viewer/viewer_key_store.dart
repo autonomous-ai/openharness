@@ -66,13 +66,14 @@ class ViewerKeyStore {
   /// Minted on first use and kept: every linked machine has pinned it.
   Future<E2eeIdentity> identity() => _identity ??= _loadOrMintIdentity();
 
-  Future<E2eeIdentity> _loadOrMintIdentity() async {
-    final stored = await _storage.read(_seedKey);
-    if (stored != null) return E2eeIdentity.fromSeed(b64d(stored));
-    final minted = await E2eeIdentity.generate();
-    await _storage.write(_seedKey, b64e(minted.seed));
-    return minted;
-  }
+  Future<E2eeIdentity> _loadOrMintIdentity() =>
+      _storage.synchronized('viewer_identity', () async {
+        final stored = await _storage.read(_seedKey);
+        if (stored != null) return E2eeIdentity.fromSeed(b64d(stored));
+        final minted = await E2eeIdentity.generate();
+        await _storage.write(_seedKey, b64e(minted.seed));
+        return minted;
+      });
 
   /// Newest link first.
   Future<List<MachinePeer>> peers() async {
@@ -96,27 +97,31 @@ class ViewerKeyStore {
     return null;
   }
 
-  Future<void> pin(String machineId, List<int> pub, {String label = ''}) async {
-    await _write([
-      for (final peer in await peers())
-        if (peer.machineId != machineId) peer,
-      MachinePeer(
-        machineId: machineId,
-        pub: Uint8List.fromList(pub),
-        label: label,
-        linkedAt: DateTime.now(),
-      ),
-    ]);
-  }
+  Future<void> pin(String machineId, List<int> pub, {String label = ''}) =>
+      _storage.synchronized('viewer_peers', () async {
+        await _write([
+          for (final peer in await peers())
+            if (peer.machineId != machineId) peer,
+          MachinePeer(
+            machineId: machineId,
+            pub: Uint8List.fromList(pub),
+            label: label,
+            linkedAt: DateTime.now(),
+          ),
+        ]);
+      });
 
   /// False when [machineId] was not linked.
-  Future<bool> unlink(String machineId) async {
-    final current = await peers();
-    final remaining = current.where((peer) => peer.machineId != machineId).toList();
-    if (remaining.length == current.length) return false;
-    await _write(remaining);
-    return true;
-  }
+  Future<bool> unlink(String machineId) =>
+      _storage.synchronized('viewer_peers', () async {
+        final current = await peers();
+        final remaining = current
+            .where((peer) => peer.machineId != machineId)
+            .toList();
+        if (remaining.length == current.length) return false;
+        await _write(remaining);
+        return true;
+      });
 
   Future<void> _write(List<MachinePeer> peers) => _storage.write(
     _peersKey,

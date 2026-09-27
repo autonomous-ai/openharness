@@ -22,6 +22,7 @@ import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
 import '../terminal/terminal_links.dart';
 import '../terminal/terminal_prompt_zone.dart';
+import '../phone/tty.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -93,6 +94,14 @@ class TerminalPanel extends StatefulWidget {
   final bool showHeader;
   final int focusRequest;
 
+  /// Where the reader is while scrolled up in the history — tmux's copy-mode position,
+  /// `[above/total]`: lines between the view and the end, and lines of history in all — or null at
+  /// the end, following the stream. Null for a host that draws no position.
+  final ValueNotifier<({int above, int total})?>? scrollback;
+
+  /// Bumped by the host to go back to the end and follow the stream again — the position's tap.
+  final int jumpToEndRequest;
+
   /// Takes over the tap that would raise the software keyboard. Null leaves it
   /// to xterm, which is what every desktop tile does.
   ///
@@ -107,6 +116,10 @@ class TerminalPanel extends StatefulWidget {
   /// is swallowed: somebody tapping the output is reading it, and a keyboard
   /// jumping up would cover half of what they were reading.
   final VoidCallback? onInputTap;
+
+  /// A tap on a row of output, with that row's text — before [onInputTap] is considered. True
+  /// when the host took it: on the phone, an answer's own line while a question is open.
+  final bool Function(String line)? onLineTap;
 
   /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
   final bool composerVisible;
@@ -137,7 +150,10 @@ class TerminalPanel extends StatefulWidget {
     this.compactHeader = false,
     this.showHeader = true,
     this.focusRequest = 0,
+    this.scrollback,
+    this.jumpToEndRequest = 0,
     this.onInputTap,
+    this.onLineTap,
     this.composerVisible = false,
     this.readOnly = false,
     this.notice,
@@ -240,6 +256,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     WidgetsBinding.instance.addObserver(this);
     widget.session.attachViewport(this);
     widget.session.addListener(_onSessionChanged);
+    widget.session.outputTicks.addListener(_onOutput);
     terminalFontStore.addListener(_onFontChanged);
     // Colours repaint the view in place — no relayout, no resize frame — but
     // they still need a rebuild to reach it, and this widget reads the store
@@ -282,6 +299,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.jumpToEndRequest != widget.jumpToEndRequest) _jumpToEnd();
     if (!identical(oldWidget.session, widget.session)) {
       _closeFind(restore: false, focus: false, rebuild: false);
       _clearLastFind();
@@ -290,9 +308,18 @@ class _TerminalPanelState extends State<TerminalPanel>
       _previewProgress.value = null;
       oldWidget.session.setCursorBlinkPhase(true);
       oldWidget.session.removeListener(_onSessionChanged);
+      oldWidget.session.outputTicks.removeListener(_onOutput);
       oldWidget.session.detachViewport(this);
       widget.session.attachViewport(this);
       widget.session.addListener(_onSessionChanged);
+      widget.session.outputTicks.addListener(_onOutput);
+      // A new agent starts at its end. Cleared after the frame: this is build.
+      final scrollback = widget.scrollback;
+      if (scrollback != null) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => scrollback.value = null,
+        );
+      }
       _composerFocusPending = false;
       _cancelDialInertia();
       _controller.clearSelection();
@@ -363,6 +390,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _observeLinkModifiers(false);
     widget.session.setCursorBlinkPhase(true);
     widget.session.removeListener(_onSessionChanged);
+    widget.session.outputTicks.removeListener(_onOutput);
     widget.session.detachViewport(this);
     terminalFontStore.removeListener(_onFontChanged);
     terminalThemeStore.removeListener(_onFontChanged);
@@ -1044,6 +1072,16 @@ class _TerminalPanelState extends State<TerminalPanel>
     _lastInertiaMicros = null;
   }
 
+  /// Copies what is selected and lets it go — the phone's Copy: a long press, then this.
+  Future<void> _copySelection() async {
+    final selection = _controller.selection;
+    if (selection == null) return;
+    final text = widget.session.terminal.buffer.getText(selection);
+    _controller.clearSelection();
+    await Clipboard.setData(ClipboardData(text: text));
+    HapticFeedback.lightImpact();
+  }
+
   Future<void> _copyOrPaste() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
@@ -1210,6 +1248,59 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
     _followTail = position.maxScrollExtent - position.pixels < 1;
+    _publishScrollback(position);
+  }
+
+  /// Tells the host where the reader is — see [TerminalPanel.scrollback].
+  void _publishScrollback(ScrollPosition position) {
+    final scrollback = widget.scrollback;
+    if (scrollback == null) return;
+    if (_followTail || _find != null) {
+      scrollback.value = null;
+      return;
+    }
+    final line = _laidOutTerminalView()?.renderTerminal.lineHeight ?? 0;
+    if (line <= 0) return;
+    final terminal = widget.session.terminal;
+    final next = (
+      above: ((position.maxScrollExtent - position.pixels) / line).round(),
+      total: math.max(0, terminal.buffer.lines.length - terminal.viewHeight),
+    );
+    if (scrollback.value != next) scrollback.value = next;
+  }
+
+  bool _scrollbackPending = false;
+
+  /// Output arrived. Below a reader scrolled up in the history the view holds still, and the
+  /// position counts the new lines — once per frame, after the layout that placed them.
+  void _onOutput() {
+    if (_followTail || !widget.visible || widget.scrollback == null) return;
+    if (_scrollbackPending) return;
+    _scrollbackPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollbackPending = false;
+      if (!mounted || !_scrollController.hasClients) return;
+      _publishScrollback(_scrollController.position);
+    });
+  }
+
+  /// Back to the end, following the stream again — the host's position tap.
+  ///
+  /// Runs from `didUpdateWidget`, inside a build, so [scrollback] is left to the host that asked —
+  /// it clears it with the tap — and to the scroll that follows.
+  void _jumpToEnd() {
+    _cancelDialInertia();
+    // A fling still coasting up through the history would carry on past the tap and take the view
+    // straight back off the end: stopped where it is, first.
+    //
+    // Jumped to the laid-out end, so the scroll it reports reads as "at the end"; the layout the
+    // render asks for below then settles it against any output since.
+    if (_scrollController.hasClients) {
+      final position = _scrollController.position;
+      position.jumpTo(position.maxScrollExtent);
+    }
+    _followTail = true;
+    _laidOutTerminalView()?.scrollToBottom();
   }
 
   void _onScrollChanged() {
@@ -1250,12 +1341,25 @@ class _TerminalPanelState extends State<TerminalPanel>
       return;
     }
     _inputTapClaimed = false;
-    if (!isPromptTap(_viewTerminal.buffer, cell.y)) return;
+    final buffer = _viewTerminal.buffer;
+    if (cell.y >= 0 &&
+        cell.y < buffer.lines.length &&
+        (widget.onLineTap?.call(buffer.lines[cell.y].getText()) ?? false)) {
+      return;
+    }
+    if (!isPromptTap(buffer, cell.y)) return;
     widget.onInputTap?.call();
   }
 
+  /// Whether a tap on a link opens it. On a phone, always: there is no ⌘ or ctrl to hold, and a
+  /// URL or `file:line` you cannot open by touching it is a dead word. Elsewhere, with the modifier.
+  bool get _linkTapOpens =>
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.android ||
+      _linkModifierPressed;
+
   bool _onLinkTapDown(TapDownDetails details, CellOffset cell) {
-    _pressedLink = _linkModifierPressed
+    _pressedLink = _linkTapOpens
         ? _linkAtPointer(details.globalPosition)
         : null;
     return _pressedLink != null;
@@ -1267,7 +1371,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     // Read the current buffer again: streamed output may have replaced the
     // text between press and release, or this pane may now show another agent.
     if (target == null ||
-        !_linkModifierPressed ||
+        !_linkTapOpens ||
         target != _linkAtPointer(details.globalPosition)) {
       return;
     }
@@ -1467,7 +1571,9 @@ class _TerminalPanelState extends State<TerminalPanel>
                           // edge and the gap travelled with the content rather
                           // than staying put like a margin. The sides are
                           // margins beside chrome, not under it, and stay.
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: Tty.origin,
+                          ),
                           textStyle: terminalFontStore.value,
                           // ⚠️ The terminal is NOT app chrome, and the user said so:
                           // it carries its own font settings (Settings ▸ Terminal,
@@ -1523,6 +1629,22 @@ class _TerminalPanelState extends State<TerminalPanel>
                       session: session,
                       preview: _previewProgress,
                       onCancelPreview: () => _previewCancellation?.cancel(),
+                    ),
+                  ),
+                  // A long press selects on a phone, and nothing else offered to copy what it
+                  // selected: `Copy` rides the selection, top right, until used or cleared.
+                  // Under the phone's title (three rows, laid over the pane's top), not behind it.
+                  Positioned(
+                    top: 60,
+                    right: 8,
+                    child: ListenableBuilder(
+                      listenable: _controller,
+                      builder: (context, _) => _controller.selection == null
+                          ? const SizedBox.shrink()
+                          : _SelectionActions(
+                              onCopy: () => unawaited(_copySelection()),
+                              onClear: _controller.clearSelection,
+                            ),
                     ),
                   ),
                 ],
@@ -1704,6 +1826,54 @@ class _TransferOverlay extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// `Copy  ×` over a selection — the phone has no right click and no ⌘C.
+class _SelectionActions extends StatelessWidget {
+  const _SelectionActions({required this.onCopy, required this.onClear});
+
+  final VoidCallback onCopy;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    Widget action(String label, VoidCallback onTap, {bool bold = false}) =>
+        Semantics(
+          button: true,
+          label: label == '×' ? 'Clear selection' : label,
+          excludeSemantics: true,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Center(
+                  widthFactor: 1,
+                  child: Text(
+                    label,
+                    style: tty.style(
+                      size: 15,
+                      weight: bold ? FontWeight.w700 : FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+    return Material(
+      color: Color.alphaBlend(tty.text.withValues(alpha: 0.12), tty.ground),
+      elevation: 2,
+      borderRadius: BorderRadius.circular(6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [action('Copy', onCopy, bold: true), action('×', onClear)],
       ),
     );
   }

@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+
+import 'package:dio/dio.dart';
 
 import 'analytics_config.dart';
 
@@ -33,42 +33,40 @@ abstract interface class AnalyticsClient {
   void dispose();
 }
 
-/// Real [AnalyticsClient] over `dart:io` [HttpClient].
+/// Real [AnalyticsClient] using Dio on both native and browser targets.
 ///
 /// Deliberately not the app's Dio [ApiClient]: that one carries the CLI's base
 /// URL and unwraps `{success, data|error}` envelopes, neither of which applies
-/// to a third-party ingest host. One [HttpClient] for the life of the app, so a
+/// to a third-party ingest host. One HTTP client for the life of the app, so a
 /// burst of events reuses the connection instead of paying a TLS handshake per
 /// click.
 class HttpAnalyticsClient implements AnalyticsClient {
   HttpAnalyticsClient(this._config);
 
   final AnalyticsConfig _config;
-  HttpClient? _client;
+  late final Dio _client = Dio(
+    BaseOptions(
+      connectTimeout: AnalyticsLimits.requestTimeout,
+      receiveTimeout: AnalyticsLimits.requestTimeout,
+      sendTimeout: AnalyticsLimits.requestTimeout,
+      validateStatus: (status) => status != null,
+      headers: {'Authorization': _config.writeKey},
+    ),
+  );
   bool _disposed = false;
 
   @override
   Future<AnalyticsSendResult> send(Map<String, Object?> payload) async {
     if (_disposed) return AnalyticsSendResult.rejected;
     try {
-      final body = utf8.encode(jsonEncode(payload));
-      final request = await _http().postUrl(_config.endpoint);
-      request.headers.set(HttpHeaders.authorizationHeader, _config.writeKey);
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      request.contentLength = body.length;
-      request.add(body);
-      final response = await request.close().timeout(
-        AnalyticsLimits.requestTimeout,
+      final response = await _client.post<dynamic>(
+        _config.endpoint.toString(),
+        data: payload,
       );
-      // Drained rather than read: the response body says nothing the app acts
-      // on, but an undrained socket is one that never returns to the pool.
-      await response.drain<void>();
-      return _resultFor(response.statusCode);
+      return _resultFor(response.statusCode ?? 0);
     } on TimeoutException {
       return AnalyticsSendResult.retry;
-    } on SocketException {
-      return AnalyticsSendResult.retry;
-    } on HttpException {
+    } on DioException {
       return AnalyticsSendResult.retry;
     } on Object {
       // Anything left (a bad URL, a TLS failure) would fail the same way every
@@ -80,13 +78,8 @@ class HttpAnalyticsClient implements AnalyticsClient {
   @override
   void dispose() {
     _disposed = true;
-    _client?.close(force: true);
-    _client = null;
+    _client.close(force: true);
   }
-
-  HttpClient _http() =>
-      _client ??= (HttpClient()
-        ..connectionTimeout = const Duration(seconds: 10));
 
   /// 408 and 429 are "come back later", not "you are wrong" — they retry with
   /// the rest of the transport failures.

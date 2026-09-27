@@ -14,6 +14,16 @@ abstract interface class PeerLinkClient {
     String? displayName,
   });
 
+  /// Pairing by the one-time code a desktop app's "Add phone" QR carries (`viewer/code_link.dart`)
+  /// — no remote password. [label] is how the machine lists this device. A build that cannot says
+  /// so in the error.
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+  });
+
   Future<CliLinkListResult> list();
 
   /// Null on success.

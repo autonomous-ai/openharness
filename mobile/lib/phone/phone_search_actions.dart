@@ -9,6 +9,7 @@ import 'phone_navigation.dart';
 import 'phone_search_commands.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
+import 'welcome/how_it_works.dart';
 
 /// What `>` offers on the phone, and so what `?` lists under its three modes.
 ///
@@ -35,25 +36,31 @@ List<PhoneCommand> phoneSearchCommands(
         title: 'New Harness',
         detail: ready.length == 1
             ? 'On ${ready.first.machine.displayName}'
-            : 'Choose a machine, then an engine',
+            : 'Choose a computer, then an agent',
         run: () =>
             openNewAgent(context, notifier, ready.first.machine.machineId),
       ),
     PhoneCommand(
       id: 'navigation.agents',
       title: 'All harnesses',
-      detail: 'Every harness on the account, by machine',
-      run: () => Navigator.of(
-        context,
-      ).push(phoneRoute((_) => AgentsListPage(notifier: notifier))),
+      detail: 'Every harness on the account, by computer',
+      run: () =>
+          Navigator.of(context)
+              .push(phoneRoute((_) => AgentsListPage(notifier: notifier))),
     ),
     PhoneCommand(
       id: 'app.settings',
       title: 'Settings',
       detail: 'Appearance · terminal · account',
-      run: () => Navigator.of(context).push(
-        phoneRoute((_) => SettingsPage(notifier: notifier, large: false)),
-      ),
+      run: () => Navigator.of(
+        context,
+      ).push(phoneRoute((_) => SettingsPage(notifier: notifier, large: false))),
+    ),
+    PhoneCommand(
+      id: 'app.help',
+      title: 'Help: how Harness works',
+      detail: 'Computers, agents, harnesses and the gestures',
+      run: () => openHowItWorks(context),
     ),
   ];
 }

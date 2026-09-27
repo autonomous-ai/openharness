@@ -22,7 +22,7 @@ enum TerminalThemeChoice {
   /// Today's behaviour, and still the default: ground and cursor follow the
   /// palette chosen in Settings ▸ Appearance, ANSI ramp from `darkTerminalTheme`.
   matchApp(
-    'Match app appearance',
+    'Same as the app',
     'Ground and cursor follow Settings ▸ Appearance',
   ),
 

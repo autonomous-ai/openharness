@@ -27,7 +27,13 @@ import '../theme/app_theme.dart' show AppFont;
 /// become a grey haze that looks like a rendering fault rather than depth. 7
 /// is where a line behind the panel is unmistakably gone while the window
 /// still reads as the window.
-const double kDialogVeilBlur = 7;
+///
+/// ⚠️ **Zero on the phone: no blur at all.** A blur re-reads and filters the
+/// whole screen behind it on every frame that screen changes — behind a sheet
+/// that is a streaming terminal, so every frame. The phone is meant to feel
+/// instant; the tint alone sets the depth. Every veil that multiplies by this
+/// (dialogs, sheets, Find) turns its filter off at zero.
+const double kDialogVeilBlur = 0;
 
 /// Shared dark backdrop for dialogs and centered pickers. Terminal output
 /// stays in the background while the active surface has the user's attention.

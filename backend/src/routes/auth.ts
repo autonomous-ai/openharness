@@ -21,6 +21,8 @@ import {
   type SsoTx,
 } from '../lib/sso.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
+import { isHarnessRefreshToken } from '../lib/harnessTokenFormat.js'
+import { redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from '../lib/harnessSession.js'
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   // 1) Start login (web-driven). The web fetches this (XHR, so the API URL never hits the address
@@ -105,6 +107,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : ''
       if (!refreshToken) return sendError(reply, 'refresh token is required', 'INVALID_REFRESH_REQUEST', 400)
+
+      // A session Harness issued itself (a phone signed in by a QR) renews here, not at the SSO.
+      if (isHarnessRefreshToken(refreshToken)) {
+        try {
+          const tokens = await refreshHarnessSession(refreshToken)
+          if (!tokens) return sendError(reply, 'Refresh token is invalid or expired', 'REFRESH_TOKEN_INVALID', 401)
+          return sendSuccess(reply, tokens)
+        } catch (e) {
+          logger.error('harness session refresh failed', e)
+          return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+        }
+      }
 
       let autonomousEnv: AutonomousEnvironment
       try { autonomousEnv = parseAutonomousEnvironment(req.body?.autonomousEnv) } catch {
@@ -195,6 +209,51 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return sendSuccess(reply, {
       logoutUrl: logoutUrl(resolveWebOrigin(requestedWebOrigin(req.query, req.headers)), autonomousEnv),
     })
+  })
+
+  // 4) Scan to sign in (lib/harnessSession.ts). A signed-in computer asks for a one-time code for
+  //    its Add Phone QR; the phone that scans it redeems the code for a session of its own. Only an
+  //    Autonomous sign-in can hand one off — a phone's session cannot mint more of itself.
+  app.post('/api/auth/handoff', async (req, reply) => {
+    if (req.user!.harnessSessionId) {
+      return sendError(reply, 'Add a phone from a computer signed in to Harness', 'HANDOFF_NOT_ALLOWED', 403)
+    }
+    try {
+      return sendSuccess(reply, await startHandoff(req.user!.sub))
+    } catch (e) {
+      logger.error('handoff start failed', e)
+      return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+    }
+  })
+
+  // Unauthenticated BY DESIGN, like /refresh: the code is the credential. It is 32 random bytes,
+  // good for one redeem within 90 seconds, so there is nothing to guess and nothing to replay.
+  app.post<{ Body: { code?: string; label?: string } }>('/api/auth/handoff/redeem', async (req, reply) => {
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : ''
+    const label = (typeof req.body?.label === 'string' ? req.body.label.trim() : '').slice(0, 80) || 'phone'
+    try {
+      const tokens = await redeemHandoff(code, label)
+      // Expired, spent, or never ours — one answer, so a caller learns nothing from which.
+      if (!tokens) return sendError(reply, 'That code has expired. Scan the new one.', 'HANDOFF_INVALID', 401)
+      logger.info('handoff redeemed', { label })
+      return sendSuccess(reply, tokens)
+    } catch (e) {
+      logger.error('handoff redeem failed', e)
+      return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+    }
+  })
+
+  // Sign a Harness-issued session out. Knowing the refresh token is the authority, as for /refresh;
+  // an Autonomous refresh token is not ours to revoke and is ignored.
+  app.post<{ Body: { refreshToken?: string } }>('/api/auth/revoke', async (req, reply) => {
+    const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : ''
+    try {
+      await revokeHarnessSession(refreshToken)
+      return sendSuccess(reply, { revoked: true })
+    } catch (e) {
+      logger.error('harness session revoke failed', e)
+      return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
+    }
   })
 
   // Current session's mirrored user, SSO-access-token gated by the auth middleware.

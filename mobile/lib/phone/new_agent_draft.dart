@@ -32,7 +32,11 @@ class NewAgentDraft {
     this.git,
     this.gitFolder,
     this.codexProfile,
+    this.task,
   });
+
+  /// The first task, typed or said and not yet started — it survives Cancel until the next Start.
+  final String? task;
 
   final String machineId;
   final String? engine;

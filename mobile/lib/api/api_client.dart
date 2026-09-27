@@ -109,6 +109,29 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  // -- the zoo: the account's daemons and eggs (daemons/README.md), its own document --
+
+  /// `{revision, zoo}` (the backend's `routes/zoo.ts`); null on a backend that
+  /// predates the zoo (404) or a session it will not take (401) — the phone
+  /// then draws no daemon at all.
+  Future<Map<String, dynamic>?> zoo() async {
+    final res = await _dio.get('/api/zoo');
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// Apply [ops] in order; answers `{revision, zoo, hatched, grants,
+  /// levelUps}`. Null under the same two conditions as [zoo].
+  Future<Map<String, dynamic>?> zooOps(List<Map<String, dynamic>> ops) async {
+    final res = await _dio.post(
+      '/api/zoo/ops',
+      data: {'ops': ops},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    if (res.statusCode == 404 || res.statusCode == 401) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
   // -- voice (backend only: the viewer's own SSO session signs it) --
 
   /// The words in one WAV recording, in [lang] — `POST /api/voice/stt`, the

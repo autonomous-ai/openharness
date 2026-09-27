@@ -8,6 +8,7 @@ import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/runtime_platform.dart';
 import '../analytics/analytics.dart';
 import '../core/codex_profiles.dart';
 import '../core/dsh_catalog.dart';
@@ -415,7 +416,7 @@ class NewHarnessController extends ChangeNotifier {
        _machineId = draft?.machineId ?? machineId,
        _autoProject = autoProject || draft?.project.generated != null,
        _now = now ?? DateTime.now,
-       _home = home ?? Platform.environment['HOME'] {
+       _home = home ?? RuntimePlatform.environment['HOME'] {
     final explicitSelection =
         draft != null || engine != null || harnessId != null;
     _rememberedAgent = !explicitSelection;

@@ -1,10 +1,9 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
+import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -71,7 +70,7 @@ class WebPanePanel extends StatefulWidget {
 
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
-  static bool get webviewAvailable => !kUnderTest && Platform.isMacOS;
+  static bool get webviewAvailable => !kUnderTest && RuntimePlatform.isMacOS;
 
   @override
   State<WebPanePanel> createState() => _WebPanePanelState();
@@ -152,7 +151,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
     // while a viewer loads. WKWebView on macOS has no such setting (the plugin
     // throws UnimplementedError, seen live 2026-09-15 as a red pane), so only
     // platforms that do get it.
-    if (!Platform.isMacOS) {
+    if (!RuntimePlatform.isMacOS) {
       controller.setBackgroundColor(grid.AppPalette.windowBg);
     }
     controller.loadRequest(uri);

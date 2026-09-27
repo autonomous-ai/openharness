@@ -10,7 +10,6 @@ import 'package:harness_mobile/shared/widgets/pulse.dart';
 
 import 'voice_input_controller.dart';
 import 'voice_mic_action.dart';
-import 'voice_mic_face.dart';
 import 'voice_mic_mode.dart';
 import 'voice_take_meter.dart';
 
@@ -62,8 +61,9 @@ class VoiceStatusPill extends StatefulWidget {
   /// stands on its own.
   final double micClearance;
 
-  /// The body's least height: the mic's circle, so the circle closes its end.
-  static const double height = VoiceMicCore.diameter;
+  /// The body's least height. It stood beside the mic once and took the circle's height to close
+  /// round it; it stands over the mic now, on its own.
+  static const double height = 52;
 
   @override
   State<VoiceStatusPill> createState() => _VoiceStatusPillState();

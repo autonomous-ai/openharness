@@ -172,7 +172,7 @@ run('TmuxControlStream real tmux', () => {
         engine,
         active: true,
         registeredAt: Date.now(),
-        updatedAt: Date.now(),
+        touchedAt: Date.now(),
         runtimes: [{ backend: 'tmux', paneId }],
         primaryRuntimeKey: `tmux:default:${paneId}`,
       } as unknown as RegisteredSession

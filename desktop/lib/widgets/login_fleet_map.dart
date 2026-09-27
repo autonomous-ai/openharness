@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../shared/theme/app_theme.dart' as grid;
 
@@ -17,7 +18,8 @@ import '../shared/theme/app_theme.dart' as grid;
 /// A fully drawn still shows a sealed packet and a plain packet together,
 /// without an entrance delay or a continuous idle repaint loop.
 class LoginFleetMap extends StatelessWidget {
-  const LoginFleetMap({super.key});
+  const LoginFleetMap({super.key, this.seamless = false});
+  final bool seamless;
 
   static const double aspectRatio = 512 / 190;
   // Show both sealed and plain packets without running a ticker while idle.
@@ -30,7 +32,7 @@ class LoginFleetMap extends StatelessWidget {
     // from a paint callback.
     final palette = _MapPalette(
       dot: grid.AppPalette.guide,
-      field: grid.AppGlass.surfaceFill,
+      field: seamless ? Colors.transparent : grid.AppGlass.surfaceFill,
       arc: grid.AppPalette.accentOnSurface,
       pinFill: grid.AppCard.inset,
       pinRim: grid.AppPalette.textSecondary,
@@ -55,7 +57,12 @@ class LoginFleetMap extends StatelessWidget {
       child: AspectRatio(
         aspectRatio: LoginFleetMap.aspectRatio,
         child: CustomPaint(
-          painter: _MapPainter(entrance: 1, t: _reducedPhase, palette: palette),
+          painter: _MapPainter(
+            entrance: 1,
+            t: _reducedPhase,
+            palette: palette,
+            seamless: seamless,
+          ),
           size: Size.infinite,
         ),
       ),
@@ -151,7 +158,13 @@ Color _fade(Color color, double k) => color.withValues(alpha: color.a * k);
 /// The drawing, in its own 512×190 space; the canvas is scaled to fit so every
 /// number here is the one from the mockup rather than a fraction to re-derive.
 class _MapPainter extends CustomPainter {
-  _MapPainter({required this.entrance, required this.t, required this.palette});
+  _MapPainter({
+    required this.entrance,
+    required this.t,
+    required this.palette,
+    this.seamless = false,
+  });
+  final bool seamless;
 
   /// 0 → 1 over the first sight of the field; 1 forever after.
   final double entrance;
@@ -245,6 +258,11 @@ class _MapPainter extends CustomPainter {
     final dot = Paint()..color = _fade(palette.dot, 0.55);
     for (var y = 5.0; y < _design.height; y += 10) {
       for (var x = 5.0; x < _design.width; x += 10) {
+        if (seamless) {
+          final dx = (x / _design.width * 2 - 1).abs();
+          final dy = (y / _design.height * 2 - 1).abs();
+          dot.color = _fade(palette.dot, 0.55 * (1 - dx * dx) * (1 - dy * dy));
+        }
         canvas.drawCircle(Offset(x, y), 0.8, dot);
       }
     }
@@ -324,7 +342,7 @@ class _MapPainter extends CustomPainter {
     );
     _text(
       canvas,
-      '● this Mac · 4 linked',
+      kIsWeb ? 'this browser · 4 linked' : '● this Mac · 4 linked',
       Offset(_window.left + 7, _window.top + 6),
 
       color: _fade(palette.ink2, landed),

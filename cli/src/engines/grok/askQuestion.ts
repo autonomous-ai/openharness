@@ -1,4 +1,5 @@
 import type { PaneView, QuestionRow, QuestionView } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 function stripAnsi(value: string): string {
   return value.replace(/\u001b\[[0-9;:]*[A-Za-z]/g, '')
@@ -32,16 +33,20 @@ function stripAnsi(value: string): string {
  * `1/3:select` is the range of digits the dialog accepts, and pressing one both selects AND submits here
  * too \u2014 verified by pressing `2` on a live prompt and watching the command run. The question line the
  * parser lands on is the COMMAND rather than grok's own one-line summary above it, which is the more
- * useful of the two on a device screen.
+ * useful of the two on a device screen. Only that footer (`Ctrl+o:always-approve`) or the approval's own
+ * first row (`always-approve mode`) marks the dialog a permission prompt, and only on the LIVE dialog: an
+ * answered approval still in scrollback made the questionnaire under it read as one.
  */
 export function parseGrokQuestionPane(capture: string): PaneView {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const footer = lines.findLastIndex((line) => /enter\s*:\s*submit|\d+\/\d+\s*:\s*select/i.test(line))
   if (footer < 0) return null
 
+  // Nothing above an earlier dialog's end is this dialog's: not a row, not the question.
+  const floor = earlierDialogEnd(lines, footer, 28)
   const rows: QuestionRow[] = []
   let start = -1
-  for (let i = footer - 1; i >= 0 && footer - i <= 20; i--) {
+  for (let i = footer - 1; i > floor && footer - i <= 20; i--) {
     const match = /^\s*[┃|]?\s*([0-9a-z])\s+\([^)]*\)\s+(.+?)\s*$/i.exec(lines[i])
     if (!match) continue
     const label = match[2].split(/\s{2,}/)[0].trim()
@@ -51,10 +56,12 @@ export function parseGrokQuestionPane(capture: string): PaneView {
   if (!rows.length || start < 0) return null
 
   let question = ''
-  for (let i = start - 1; i >= 0 && start - i <= 8; i--) {
+  let top = start
+  for (let i = start - 1; i > floor && start - i <= 8; i--) {
     const line = lines[i].replace(/^\s*[┃|]\s?/, '').trim()
     if (!line) continue
     question = line
+    top = i
     break
   }
   if (!question) return null
@@ -68,5 +75,6 @@ export function parseGrokQuestionPane(capture: string): PaneView {
     multi: false,
     typeRow,
   }
-  return view
+  // Grok prints this footer only for tool approval, never its questionnaire.
+  return /always-approve|Ctrl\+o:/i.test(lines.slice(top).join('\n')) ? { ...view, permission: true } : view
 }

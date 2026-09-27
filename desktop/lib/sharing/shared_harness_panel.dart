@@ -15,6 +15,7 @@ import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_session.dart';
 import '../widgets/terminal_panel.dart';
 import '../ws/ws_conn.dart';
+import '../viewer/observer_relay_codec.dart';
 
 class SharedHarnessPanel extends StatefulWidget {
   const SharedHarnessPanel({
@@ -60,6 +61,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
 
   void _start() {
     final generation = ++_generation;
+    final viewer = widget.notifier.viewer;
     final uri = Uri.parse(widget.notifier.config.localCliBaseUrl)
         .replace(scheme: 'ws', path: '/api/local-ws');
     _terminal = TerminalSession(
@@ -74,14 +76,31 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
       resyncTimeout: const Duration(seconds: 15),
     );
     _connection = WsConn(
-      wsBaseUrl: '',
+      wsBaseUrl: widget.notifier.config.wsBaseUrl,
       autonomousEnv: widget.notifier.config.autonomousEnv,
       machineId: widget.pane.machineId,
       observerShareId: widget.grant.id,
-      transportKind: WsTransportKind.localPlaintext,
+      transportKind: viewer == null
+          ? WsTransportKind.localPlaintext
+          : WsTransportKind.cloudE2ee,
       localWsUri: uri,
-      localTransport: widget.notifier.localDaemonTransport,
-      accessTokenProvider: (_, _) async => '',
+      localTransport: viewer == null
+          ? widget.notifier.localDaemonTransport
+          : null,
+      accessTokenProvider: (force, failedToken) async => viewer == null
+          ? ''
+          : viewer.auth.accessToken(force: force, failedToken: failedToken),
+      relayCodecs: viewer == null
+          ? null
+          : (_) async {
+              final owner = widget.grant.ownerPublicKey;
+              if (owner == null || owner.isEmpty) return null;
+              return ObserverRelayCodec.create(
+                machineId: widget.pane.machineId,
+                shareId: widget.grant.id,
+                ownerPublicKey: owner,
+              );
+            },
       onAuthFailure: (reason) {
         if (generation == _generation) _end(reason);
       },
@@ -186,7 +205,9 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
     if (!widget.hasAccess && !_ended) {
       _end('Access removed or invitation expired.');
     } else if (widget.hasAccess &&
-        (!oldWidget.hasAccess || widget.grant.id != oldWidget.grant.id)) {
+        (!oldWidget.hasAccess ||
+            widget.grant.id != oldWidget.grant.id ||
+            widget.grant.ownerPublicKey != oldWidget.grant.ownerPublicKey)) {
       unawaited(_connection.close());
       _terminal.dispose();
       _ended = false;

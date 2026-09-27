@@ -9,6 +9,7 @@ import { DSH_ID_RE, dshSupportedEngines, dshTier, viewerUse } from './manifest.j
 import { registrySourceUrl, type DshRegistryEntry } from './registry.js'
 import { currentDshRegistry } from './catalog.js'
 import { dshUpdateInfo } from './updates.js'
+import { isHiddenBuiltin } from './builtins.js'
 
 /**
  * `dsh_list`: the harnesses installed on this machine, then what the registry offers that is not.
@@ -38,6 +39,8 @@ export function dshListRows(
   const rows: Record<string, unknown>[] = []
   for (const entry of installed) {
     seen.add(entry.id)
+    // The pair harness is the daemon's own: started by talking to it, never picked.
+    if (isHiddenBuiltin(entry)) continue
     rows.push({
       id: entry.id,
       kind: entry.manifest.kind ?? 'agent',

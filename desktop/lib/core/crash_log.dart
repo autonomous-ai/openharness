@@ -40,7 +40,7 @@ class CrashLog {
       error: error,
       stackTrace: stackTrace,
     );
-    if (kUnderTest && testFile == null) return;
+    if (kIsWeb || (kUnderTest && testFile == null)) return;
     try {
       final file = _file;
       // The directory may not exist yet, and the first run is exactly when this

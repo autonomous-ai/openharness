@@ -37,7 +37,6 @@ mod picker;
 mod proto;
 mod theme;
 mod term_out;
-mod tim;
 mod tmuxconf;
 mod ui;
 

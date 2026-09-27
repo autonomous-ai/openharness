@@ -223,11 +223,10 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
         if (open)
           Padding(
             padding: EdgeInsets.only(top: gap * .5),
-            child: Text(
-              '${widget.search.sessionUnavailable(row) ?? 'Open elsewhere'}. '
-              'Close it there to open it here.',
-              style: muted.copyWith(color: warning),
-            ),
+            child: Text(switch (widget.search.sessionUnavailable(row)) {
+              null => 'Open in a terminal. Opening it here moves it.',
+              final where => '$where. Close it there to open it here.',
+            }, style: muted.copyWith(color: warning)),
           ),
       ],
     );

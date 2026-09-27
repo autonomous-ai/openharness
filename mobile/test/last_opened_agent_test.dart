@@ -15,9 +15,10 @@ void main() {
   LastOpenedAgent launch() => LastOpenedAgent(HarnessFileStore(directory: dir));
 
   /// [LastOpenedAgent.remember] does not wait for its write; a relaunch comes
-  /// long after it has landed.
+  /// long after it has landed. A second, not 200ms: under a full parallel run the
+  /// write queued behind other tests' disk work and a shorter wait read it early.
   Future<void> settle() =>
-      Future<void>.delayed(const Duration(milliseconds: 200));
+      Future<void>.delayed(const Duration(seconds: 1));
 
   test('the last agent remembered is the one the next launch reads', () async {
     final first = launch();

@@ -35,6 +35,7 @@
  */
 
 import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
+import { earlierDialogEnd } from '../../lib/dialogEnd.js'
 
 /** The dialog's own footer. `Enter select` is the stable half; a narrow pane truncates from the end. */
 const FOOTER_RE = /enter select|↑\/↓\/j\/k move/i
@@ -85,9 +86,11 @@ export function parseAmpQuestionPane(capture: string): PaneView {
   }
   if (footer < 0) return null
   // The footer regex alone is not enough — the title is what proves this is an approval and not some
-  // other box that happens to explain its own key bindings.
+  // other box that happens to explain its own key bindings. It is this prompt's own title: never one from
+  // above an earlier dialog's end.
+  const floor = earlierDialogEnd(raw, footer, 60)
   let title = -1
-  for (let i = footer - 1; i >= 0 && footer - i < 60; i--) {
+  for (let i = footer - 1; i > floor && footer - i < 60; i--) {
     if (TITLE_RE.test(raw[i])) { title = i; break }
   }
   if (title < 0) return null

@@ -289,5 +289,6 @@ It is open hardware, all the way down. This repository has everything it takes t
 Make a harness for a tool you love. Improve terminals, engines, the daemon or the relay. Port the
 firmware. Start with the [contribution guide](CONTRIBUTING.md).
 
+[Architecture](docs/architecture.md) · [Product direction (proposal)](docs/product-direction.md) ·
 [Development](docs/development.md) · [Extending](docs/extending.md) · [CLI](docs/cli.md) ·
 [Security](SECURITY.md) · [MIT license](LICENSE); upstream tools keep their own.

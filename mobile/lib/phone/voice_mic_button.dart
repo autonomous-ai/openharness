@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -34,9 +35,21 @@ class VoiceMicButton extends StatefulWidget {
     this.onHoldStart,
     this.onHoldFinish,
     this.onSlipChanged,
+    this.working = false,
+    this.level,
+    this.onSwipeDown,
   });
 
   final VoiceMicFace face;
+
+  /// The microphone's level while it listens — see [VoiceMicCore.level].
+  final ValueListenable<double>? level;
+
+  /// A swipe down on the mic: throws the take away. Null when there is no take to throw.
+  final VoidCallback? onSwipeDown;
+
+  /// The agent is working — see [VoiceMicCore.working].
+  final bool working;
 
   /// Null draws the button dimmed and dead.
   ///
@@ -71,7 +84,7 @@ class VoiceMicButton extends StatefulWidget {
   /// now (see `voice_mic_fab.dart`), so this is simply the box the `Positioned`
   /// sizes to — raising it costs the terminal nothing, and the hit area below
   /// already reaches well past it either way.
-  static const double extent = 60;
+  static const double extent = 80;
 
   /// What the finger may actually land on.
   ///
@@ -81,7 +94,9 @@ class VoiceMicButton extends StatefulWidget {
   /// [OverflowBox] is what allows a child bigger than its parent: the hit area
   /// reaches out over the terminal on every side, which has nothing tappable to
   /// collide with.
-  static const double touchExtent = 84;
+  /// The hit circle: the disc and a little more, never the 96pt it was — a tap on the agent's
+  /// prompt beside the mic must reach the terminal, not start a recording.
+  static const double touchExtent = 80;
 
   /// How far the hit area spills past its slot on each side.
   ///
@@ -119,6 +134,9 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
   /// A finger is on the live mic, and the circle sinks a little under it.
   bool _pressed = false;
 
+  /// How far down the finger has gone in a swipe on the mic.
+  double _swipe = 0;
+
   bool get _live => widget.onPressed != null;
 
   /// What to draw: the face given, unless a hold has been dragged off the
@@ -143,7 +161,9 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
       micHoldsToTalk ? 'Hold to talk to the harness' : 'Talk to the harness',
     VoiceMicFace.starting => 'Cancel',
     VoiceMicFace.listening =>
-      micHoldsToTalk ? 'Release to send' : 'Done talking',
+      micHoldsToTalk
+          ? 'Release to send'
+          : 'Listening. Tap to send, swipe down to cancel',
     VoiceMicFace.cancelling => 'Release to cancel',
     VoiceMicFace.busy || VoiceMicFace.sending => 'Working',
     VoiceMicFace.retry => 'Send again',
@@ -297,7 +317,12 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
                     duration: const Duration(milliseconds: 140),
                     curve: Curves.easeOut,
                     scale: _pressed && !_slippedOff ? 0.92 : 1,
-                    child: VoiceMicCore(face: _face, dead: _dead),
+                    child: VoiceMicCore(
+                      face: _face,
+                      dead: _dead,
+                      working: widget.working,
+                      level: widget.level,
+                    ),
                   ),
                 ),
               ),
@@ -334,6 +359,22 @@ class _VoiceMicButtonState extends State<VoiceMicButton> {
               }
             : null,
         onLongPress: widget.onLongPress,
+        // A swipe down throws the take away — past the slop it is no tap, so nothing is sent.
+        onVerticalDragStart: widget.onSwipeDown == null
+            ? null
+            : (_) => _swipe = 0,
+        onVerticalDragUpdate: widget.onSwipeDown == null
+            ? null
+            : (details) => _swipe += details.delta.dy,
+        onVerticalDragEnd: widget.onSwipeDown == null
+            ? null
+            : (details) {
+                _setPressed(false);
+                if (_swipe > 24 || (details.primaryVelocity ?? 0) > 300) {
+                  HapticFeedback.mediumImpact();
+                  widget.onSwipeDown!();
+                }
+              },
         child: child,
       );
     }

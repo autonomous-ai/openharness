@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'runtime_platform.dart';
+
 /// The version of the build currently running.
 ///
 /// `flutter build linux` has no equivalent of Xcode's Info.plist stamping —
@@ -16,8 +18,8 @@ Future<String> runningAppVersion({
   String? executablePath,
   Future<String> Function()? packageInfoVersion,
 }) async {
-  if (Platform.isLinux) {
-    final exe = File(executablePath ?? Platform.resolvedExecutable);
+  if (RuntimePlatform.isLinux) {
+    final exe = File(executablePath ?? RuntimePlatform.resolvedExecutable);
     final versionFile = File('${exe.parent.path}/version.txt');
     try {
       // Read synchronously. It is a dozen bytes sitting next to the executable,

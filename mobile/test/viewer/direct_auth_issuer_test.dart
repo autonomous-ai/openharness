@@ -69,6 +69,79 @@ void main() {
     expect(account.sent, isEmpty);
   });
 
+  test('a scanned QR signs in with Harness\'s own session, renewed and revoked at the backend', () async {
+    backend.replies['/api/auth/handoff/redeem'] = (
+      status: 200,
+      body: {
+        'success': true,
+        'data': {
+          'token': 'hna_first',
+          'refreshToken': 'hnr_1',
+          'expiresIn': 3600,
+          'autonomousEnv': 'prod',
+        },
+      },
+    );
+    backend.replies['/api/auth/revoke'] = (
+      status: 200,
+      body: {
+        'success': true,
+        'data': {'revoked': true},
+      },
+    );
+    await EmailCodeLogin(auth: auth)
+        .signInWithScan('hnh_code', label: 'iPhone');
+    expect(backend.sent.first.body, {'code': 'hnh_code', 'label': 'iPhone'});
+    expect(await session.issuer(), SessionIssuer.harness);
+    expect(await session.accessToken(), 'hna_first');
+
+    expect(await auth.accessToken(force: true), 'from-backend');
+    expect(backend.sent.last.path, '/api/auth/refresh');
+    expect(backend.sent.last.body['refreshToken'], 'hnr_1');
+    expect(account.sent, isEmpty);
+
+    await auth.signOut();
+    expect(backend.sent.last.path, '/api/auth/revoke');
+    expect(backend.sent.last.body, {'refreshToken': 'hnr_1'});
+    expect(await session.accessToken(), isNull);
+  });
+
+  test(
+    'a spent QR code is the backend\'s own sentence, and no session',
+    () async {
+      backend.replies['/api/auth/handoff/redeem'] = (
+        status: 401,
+        body: {
+          'success': false,
+          'error': {
+            'code': 'HANDOFF_INVALID',
+            'message': 'That code has expired. Scan the new one.',
+          },
+        },
+      );
+      await expectLater(
+        EmailCodeLogin(auth: auth).signInWithScan('hnh_old', label: 'iPhone'),
+        throwsA(
+          isA<DirectAuthException>().having(
+            (e) => e.message,
+            'message',
+            'That code has expired. Scan the new one.',
+          ),
+        ),
+      );
+      expect(await session.accessToken(), isNull);
+    },
+  );
+
+  test('signing out offline still signs out', () async {
+    await auth.signIn(
+      const IssuedTokens(token: 'hna_t', refreshToken: 'hnr_r'),
+      issuer: SessionIssuer.harness,
+    );
+    await auth.signOut(); // no /api/auth/revoke reply: the network is down
+    expect(await session.accessToken(), isNull);
+  });
+
   test('a session saved before issuers were recorded is an SSO one', () async {
     final storage = MemoryKeyValueStore();
     await storage.write('auth_access_token', 'old');

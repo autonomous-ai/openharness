@@ -40,7 +40,8 @@ class AgentContextLine extends StatelessWidget {
     final machineName = this.machineName;
     final place = <InlineSpan>[
       if (project != null) TextSpan(text: project!.label),
-      if (project != null && branch != null) _separator,
+      // No `·` before the branch: its icon is the separator, as everywhere.
+      if (project != null && branch != null) const TextSpan(text: '  '),
       if (branch != null) ...[_branchMark, TextSpan(text: branch)],
     ];
     return Row(

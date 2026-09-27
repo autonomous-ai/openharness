@@ -156,6 +156,97 @@ void main() {
     );
   });
 
+  test(
+    'recent sorts by last use: a harness opened anywhere outranks a busier one',
+    () {
+      app.machineStates['m']!.agents = [
+        Agent.fromJson({'id': 'busy', 'updatedAt': '2026-09-26T11:00:00Z'}),
+        // Quiet since nine, but somebody opened it at noon — in any client.
+        Agent.fromJson({
+          'id': 'opened',
+          'updatedAt': '2026-09-26T09:00:00Z',
+          'lastOpenedAt': '2026-09-26T12:00:00Z',
+        }),
+        // Opened long ago and busy since: the later of the two counts.
+        Agent.fromJson({
+          'id': 'worked',
+          'updatedAt': '2026-09-26T10:00:00Z',
+          'lastOpenedAt': '2026-09-26T08:00:00Z',
+        }),
+        const Agent(id: 'unknown', name: 'Unknown'),
+      ];
+      for (final id in ['busy', 'opened', 'worked', 'unknown']) {
+        app.rememberOpenedHarness('m', id);
+      }
+      expect(SessionSort.recent.label, 'Recently used');
+      expect(
+        visibleHarnessSessions(harnessSessions(app)).map((row) => row.agent.id),
+        ['opened', 'busy', 'worked', 'unknown'],
+      );
+      expect(
+        harnessSessions(app)
+            .singleWhere((row) => row.agent.id == 'opened')
+            .lastUsedAt,
+        DateTime.utc(2026, 9, 26, 12),
+      );
+    },
+  );
+
+  testWidgets('each row shows and says the time it is sorted by', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    app.machineStates['m']!.agents = [
+      Agent(
+        id: _running.id,
+        name: _running.name,
+        engine: _running.engine,
+        sessionId: _running.sessionId,
+        terminalAvailable: true,
+        project: _project,
+        lastActivityAt: now.subtract(const Duration(hours: 3)),
+        lastOpenedAt: now.subtract(const Duration(minutes: 5)),
+      ),
+      _paused,
+    ];
+    await open(tester);
+    final id = agentDestinationId('m', 'a0');
+    final age = find.byKey(ValueKey('session-age:$id'));
+    expect(tester.widget<Text>(age).data, '· 5m');
+    expect(
+      tester
+          .widget<Tooltip>(
+            find.ancestor(of: age, matching: find.byType(Tooltip)).first,
+          )
+          .message,
+      startsWith('Last used '),
+    );
+    expect(
+      tester
+          .widget<Semantics>(find.byKey(ValueKey('session-open:$id')))
+          .properties
+          .value,
+      contains('Last used 5m ago'),
+    );
+    // A daemon with no time for it at all.
+    expect(
+      tester
+          .widget<Semantics>(
+            find.byKey(
+              ValueKey('session-open:${agentDestinationId('m', 'saved')}'),
+            ),
+          )
+          .properties
+          .value,
+      contains('Last use unknown'),
+    );
+    await tester.tap(find.byTooltip('Sort harnesses'));
+    await tester.pumpAndSettle();
+    expect(find.text('Recently used'), findsOneWidget);
+    expect(find.text('Recently active'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'displays remote cached tokens beneath context and leaves missing usage empty',
     (tester) async {

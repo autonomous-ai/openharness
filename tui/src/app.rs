@@ -708,6 +708,8 @@ pub struct App {
     /// The session's environment: update-environment's variables, as they were when hn started
     /// (set, or cleared when hn had none).
     pub session_env: std::collections::BTreeMap<String, EnvVar>,
+    /// The daemons: the paired one in the status line, the zoo, the pair brain's lines (daemon/).
+    pub daemons: crate::daemon::state::Daemons,
     /// The session in front's start directory (#{session_path}); none: where hn started.
     pub session_path: Option<String>,
     /// The session in front's group (new -t), if it is in one.
@@ -715,8 +717,6 @@ pub struct App {
     /// Windows killed (not only unlinked) since the links were last synced: gone from every
     /// session that has them.
     pub killed_windows: Vec<String>,
-    /// tim, the creature in the status line.
-    pub tim: crate::tim::Tim,
     /// Shells hn made for split-window / new-window: they end with their pane.
     pub shells: HashSet<(String, String)>,
     /// Keys typed while a split's shell starts, for it.
@@ -860,10 +860,10 @@ impl App {
             capture_err: None,
             global_env: std::env::vars().map(|(k, v)| (k, EnvVar { value: Some(v), hidden: false })).collect(),
             session_env: Default::default(),
+            daemons: crate::daemon::state::Daemons::load(),
             session_path: None,
             session_group: None,
             killed_windows: Vec::new(),
-            tim: crate::tim::Tim::load(),
             shells: HashSet::new(),
             starting_shell: None,
             shell_waiters: Vec::new(),
@@ -1054,6 +1054,7 @@ impl App {
 
     pub fn boot(&mut self) {
         if self.fleet.agents.is_empty() && self.fleet.machines.is_empty() { self.fleet.load_cache() }
+        crate::daemon::hooks::boot(self);
         let port = self.port;
         self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, |app, status| match status {
             Ok(status) => {
@@ -1223,6 +1224,8 @@ impl App {
     }
 
     fn on_frame(&mut self, machine_id: &str, ty: &str, payload: Value) {
+        // The daemons' frames (the zoo, the pair brain), and what they see of the others (daemon/hooks.rs).
+        if crate::daemon::hooks::on_frame(self, machine_id, ty, &payload) { return }
         // The dial's frames come from this computer's daemon, to the windows on it.
         if machine_id == self.fleet.local_id && crate::dial::on_frame(self, ty, &payload) { return }
         match ty {
@@ -1303,8 +1306,6 @@ impl App {
                     if aborted { agent.did = Some("Interrupted".into()) } else if agent.errored { } else if let Some(line) = fleet::first_line(&said) { agent.did = Some(line) }
                     let name = agent.name.clone();
                     let mine = opened.contains(&agent.key());
-                    // tim hatches on the first turn finished while you watch, and is pleased after each.
-                    if mine { self.tim.turn_done() }
                     // Done and not yet read — any harness's turn (not a re-read, not a sub-agent's)
                     // that ended where you were not looking: the focused pane, with the terminal
                     // focused. A visible pane beside the one you type in is not being read.
@@ -1660,7 +1661,7 @@ impl App {
         let machine_id = pane.machine_id.clone();
         let close_key = self.keymap.hint("confirm-before -p \"kill-pane #P? (y/n)\" kill-pane").unwrap_or_else(|| "C-b x".into());
         self.spawn(async move { link.rpc("agent_resume", json!({ "agentId": agent_id }), Duration::from_secs(120)).await }, move |app, reply| match reply {
-            Ok(_) => { app.relist(&machine_id); app.open_stream(pane_id, true) }
+            Ok(_) => { app.relist(&machine_id); app.open_stream(pane_id, true); crate::daemon::hooks::habit(app, "resume") }
             Err(error) => {
                 if let Some(pane) = app.panes.get_mut(&pane_id) {
                     pane.phase = Phase::Card { title: "Could not resume".into(), detail: error.to_string(), keys: vec![("enter".into(), "try again".into()), (close_key, "close pane".into())] };
@@ -1958,7 +1959,7 @@ impl App {
         }
         let (o, n) = (&mut self.opts, &s.options);
         macro_rules! take { ($($f:ident),*) => { $( if n.$f.is_some() { o.$f = n.$f.clone() } )* } }
-        if let Some(off) = s.options.tim_off { self.tim.off = off }
+        if let Some(off) = s.options.tim_off { self.daemons.tim_off = off }
         take!(status_left, status_right, status_left_length, status_right_length, window_status_format, window_status_current_format,
             window_status_current_style, window_status_separator, renumber_windows, border_titles, mode_keys_emacs, status, status_justify, window_status_style, pane_border_format, main_pane_width, main_pane_height, copy_command, status_keys_vi);
         self.fit_panes();
@@ -5051,6 +5052,7 @@ impl App {
         self.release_waiting();
         self.release_cli();
         crate::dial::tick(self);
+        crate::daemon::hooks::tick(self);
         if self.tick % 4 == 0 { self.check_silence(); self.check_launches() }
         // The client whose session this one shows gone without a word (killed, its terminal
         // closed): this one has the session now.

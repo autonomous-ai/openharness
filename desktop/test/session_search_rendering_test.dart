@@ -307,7 +307,12 @@ void main() {
     (tester) async {
       const session = '01a0c4ad-de5e-7000-8000-000000000001';
       const busy = '01a0c4ad-de5e-7000-8000-000000000002';
-      Map<String, dynamic> external(String id, {required bool open}) => {
+      const movable = '01a0c4ad-de5e-7000-8000-000000000003';
+      Map<String, dynamic> external(
+        String id, {
+        required bool open,
+        String? openIn,
+      }) => {
         'agentId': '',
         'sessionId': id,
         'engine': 'codex',
@@ -324,6 +329,7 @@ void main() {
           'cwd': '/work/cohorts',
           'origin': open ? 'terminal' : 'codex-app',
           'open': open,
+          'openIn': ?openIn,
         },
       };
       final connection = TailConnection(
@@ -331,6 +337,7 @@ void main() {
           'retention cohorts': [
             external(session, open: false),
             external(busy, open: true),
+            external(movable, open: true, openIn: 'terminal'),
           ],
         },
         tail: (payload) => {
@@ -410,6 +417,12 @@ void main() {
         search.sessionUnavailable(open),
         contains('Open in another terminal'),
       );
+      // A machine that can take one over from its terminal says so: it opens.
+      final inTerminal = search.rows.firstWhere(
+        (row) => row.external?.sessionId == movable,
+      );
+      expect(search.sessionUnavailable(inTerminal), isNull);
+      expect(search.canSubmit(inTerminal), isTrue);
 
       // Previewed like any session: what it is, where it ran, its latest turn.
       while (search.selected?.id != row.id) {

@@ -3,7 +3,7 @@ import { isBackendOnlyDownType } from './backendOnlyFrames.js'
 
 describe('isBackendOnlyDownType', () => {
   it('refuses the backend\'s own control frames from any client socket', () => {
-    for (const type of ['machine_meta', 'machine_revoked', 'desk_changed', 'machines_changed', '__clients', '__billing_suspended']) {
+    for (const type of ['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', '__clients', '__billing_suspended']) {
       expect(isBackendOnlyDownType(type), type).toBe(true)
     }
   })

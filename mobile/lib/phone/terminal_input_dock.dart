@@ -125,6 +125,8 @@ class _TerminalInputDockState extends State<TerminalInputDock>
         onTakePhoto: widget.onTakePhoto,
         questionOpen: widget.questionOpen,
         hints: widget.hints,
+        ctrlArmed: widget.session.controlArmed,
+        onArmCtrl: widget.session.armControl,
       ),
     ),
     builder: (context, child) {

@@ -18,6 +18,8 @@ import 'ledger_scanner.dart';
 import 'ledger_types.dart';
 import 'jsonl_ledger_scan.dart';
 
+import '../../core/runtime_platform.dart';
+
 class CodexLedgerScanner implements LedgerScanner {
   CodexLedgerScanner({String? home, Map<String, String>? environment})
     : _environment = environment,
@@ -33,7 +35,7 @@ class CodexLedgerScanner implements LedgerScanner {
   /// `~/.codex`, and reads `archived_sessions/` beside `sessions/` so a session
   /// Codex has since filed away still counts — it was paid for either way.
   List<String> get roots {
-    final env = _environment ?? Platform.environment;
+    final env = _environment ?? RuntimePlatform.environment;
     final codexHome = env['CODEX_HOME']?.trim();
     final base = codexHome != null && codexHome.isNotEmpty
         ? codexHome

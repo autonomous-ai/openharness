@@ -230,12 +230,24 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       settings.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "settings")
       settings.keyEquivalentModifierMask = [.command]
       if settings.menu == nil { appMenu.insertItem(settings, at: min(2, appMenu.numberOfItems)) }
+      // In Settings…'s group, at the top of the menu (HarnessAppMenu.arrange
+      // sets the order): pairing a phone is a setting of this computer, not a
+      // workspace action. Same channel and same keymap hook
+      // as Settings (`app.add_phone` in keymap_commands.dart), so a binding a
+      // person gives it shows here. Dart owns the dialog (add_phone_dialog.dart).
+      let addPhone = NSMenuItem(title: "Add Phone…", action: #selector(menuAction(_:)), keyEquivalent: "")
+      addPhone.target = self
+      addPhone.representedObject = "addPhone"
+      addPhone.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "addPhone")
+      addPhone.image = NSImage(systemSymbolName: "iphone", accessibilityDescription: nil)
+      appMenu.insertItem(addPhone, at: appMenu.index(of: settings) + 1)
       let customize = NSMenuItem(title: "Customize Harness", action: #selector(menuAction(_:)), keyEquivalent: "")
       customize.target = self
       customize.representedObject = "customize"
       customize.identifier = NSUserInterfaceItemIdentifier(HarnessKeymapMenu.actionPrefix + "customize")
       customize.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
       appMenu.insertItem(customize, at: appMenu.index(of: settings))
+      HarnessAppMenu.arrange()
     }
     func add(_ menu: NSMenu, _ title: String, _ key: String, _ action: String, _ modifiers: NSEvent.ModifierFlags = [.command]) {
       let item = NSMenuItem(title: title, action: #selector(menuAction(_:)), keyEquivalent: key)

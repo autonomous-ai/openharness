@@ -103,7 +103,9 @@ class SessionContentHit {
       position: position,
       turn: turn is int ? turn : 0,
       at: at is int ? DateTime.fromMillisecondsSinceEpoch(at) : null,
-      lastAt: lastAt is int ? DateTime.fromMillisecondsSinceEpoch(lastAt) : null,
+      lastAt: lastAt is int
+          ? DateTime.fromMillisecondsSinceEpoch(lastAt)
+          : null,
       external: agentId.isEmpty ? external : null,
     );
   }
@@ -127,6 +129,10 @@ class SessionContentHit {
       origin: origin is String ? origin : 'terminal',
       title: title is String ? title : '',
       open: external['open'] == true,
+      openIn: switch (external['openIn']) {
+        final String where when where == 'terminal' || where == 'app' => where,
+        _ => null,
+      },
     );
   }
 

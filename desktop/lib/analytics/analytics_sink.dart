@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:ffi' show Abi;
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../core/runtime_architecture.dart';
+import '../core/runtime_platform.dart';
 import '../logging/debug_surface.dart';
 import 'analytics.dart';
 import 'analytics_client.dart';
@@ -196,12 +196,12 @@ Future<AnalyticsContext> resolveAnalyticsContext() async {
     // A bundle we can't read is worth an anonymous version, not a lost event.
   }
   return AnalyticsContext(
-    platform: Platform.operatingSystem,
+    platform: RuntimePlatform.operatingSystem,
     appVersion: version,
     appBuild: build,
-    osVersion: Platform.operatingSystemVersion,
-    arch: Abi.current().toString(),
-    locale: Platform.localeName,
+    osVersion: RuntimePlatform.operatingSystemVersion,
+    arch: runtimeAbi,
+    locale: RuntimePlatform.localeName,
     release: kReleaseMode,
   );
 }

@@ -111,12 +111,13 @@ bool _isProcessControl(KeyChord chord) =>
 ///   question` — move through an open one, or leave it;
 /// - `shift+← edit last queued message` — take back a queued message;
 /// - `ctrl+o copy` — the warnings view;
-/// - `ctrl+t to view transcript`.
+/// - `ctrl+t to view transcript`;
+/// - `shift+tab to cycle` — Claude Code's modes (plan, accept edits), one tap instead of two.
 ///
 /// Matched on the WORDS, never the key: the key is the person's to remap, and
 /// the one printed beside the words is the one pressed.
 final RegExp _offered = RegExp(
-  r'^(answer|skip|main prompt|next question|prev(ious)? question|edit last queued|copy|view transcript)\b',
+  r'^(answer|skip|main prompt|next question|prev(ious)? question|edit last queued|copy|view transcript|cycle)\b',
   caseSensitive: false,
 );
 
