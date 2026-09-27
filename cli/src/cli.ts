@@ -238,6 +238,7 @@ import { RuntimeProfileManager, parseRuntimeProfile } from './lib/runtimeProfile
 import { RuntimeProfileController, inspectRuntimePane } from './lib/runtimeProfileController.js'
 import { deviceErrorText } from './lib/deviceErrors.js'
 import { correlateAgentEvent, turnHeartbeatFrame } from './lib/agentEvent.js'
+import { transcriptIsFirstTurn } from './lib/firstTurnReplay.js'
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
@@ -2138,7 +2139,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    */
   const neverFoldedHistory = new Set<string>()
   /**
-   * Sessions whose first turn has already been replayed live by an attach.
+   * Sessions whose first turn has already been replayed live by an attach, or whose transcript an attach
+   * has already folded.
    *
    * NOT the same question as `neverFoldedHistory` above, which is why they stay two sets: that one asks
    * "where should the watcher start reading?", this one asks "has this session's file already been
@@ -2462,7 +2464,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // `reset` attach (claude fires `SessionStart` on compact, which resets) would fold the by-then
     // complete transcript and emit it live on top of everything the watcher had already streamed. That
     // is the same duplicate-turn class this whole change exists to remove.
-    if (replayLive) replayedFirstTurn.add(session.sessionId)
+    // Any fold of a transcript with content counts too: the watcher now tails it from the end, so a later
+    // replay could only send history out again as if it were live.
+    if (replayLive || lines.length) replayedFirstTurn.add(session.sessionId)
     if (initialEvents.length) {
       emitSessionEvents(session.sessionId, initialEvents)
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)
@@ -3172,10 +3176,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // so the birth-vs-`registeredAt` comparison stays, and comparing against `boundAt` instead — the
     // obvious-looking alternative, since `boundAt` is when this session was bound — does not work: the
     // transcript is created a moment BEFORE the hook binds it.
-    const bornAfterAgent = !meta.rebound && entry.boundAt !== null
-      && entry.boundAt - entry.registeredAt > 0
-      && !!entry.transcriptPath
-      && await statBirthMs(entry.transcriptPath) >= entry.registeredAt
+    //
+    // And only while the file is new (`transcriptIsFirstTurn`): a long session's transcript was born after
+    // its agent too, and after a daemon restart its next SessionStart replayed the whole history live.
+    const bornAfterAgent = transcriptIsFirstTurn(
+      entry,
+      entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
+      { rebound: !!meta.rebound, now: Date.now() },
+    )
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
     if (!attached) {
       registry.unbindSession(entry.sessionId)
