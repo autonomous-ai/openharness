@@ -56,9 +56,12 @@ the session named Mobile whose swipe discussion came later.
 - **Left out:** tool output, reasoning, images. Tool-output records are recognised by their first
   kilobyte and skipped unparsed. Across all 76 real transcripts, asks, answers, turn times and
   offsets come out identical with and without the skip.
+- **Beyond the normalizer (Claude):** a message typed while the agent works is written as a
+  `queued_command` attachment, and a `/goal` only as the meta line that turns its Stop hook on.
+  The live view leaves both out, so the index reads them itself.
 - **Cleaned:** harness wrappers removed, whitespace folded, secrets blanked with the CLI's
-  redactor, encoded blobs dropped. Asks are capped at 8 KB, answers at 12 KB (head and tail kept),
-  tool text at 4 KB.
+  redactor, encoded blobs dropped. Asks are capped at 8 KB. A row holds up to 12 KB of answer and
+  4 KB of tool text; a longer turn goes on in continuation rows, split between lines.
 
 ### Keeping it fresh
 
@@ -228,6 +231,31 @@ What it found, all fixed:
 
 Also by design: a leading `#` in Cmd-P opens projects, so type issue numbers without it ("issue
 189", "pr #368").
+
+## Tested live
+
+On 2026-09-27 main's daemon replaced the development Mac's real one: the machine's own sessions,
+live, with the app attached. The index built in about 12 s, including a 346 MB Codex rollout. It
+found three things the sandbox runs could not, because they come from long, busy sessions:
+
+- **Messages typed mid-turn were lost.** Claude Code writes them as `queued_command` attachments,
+  which the normalizer skips. There were 405 of them on this machine. The one asking "keyword or
+  vectors or embeddings?" is what this project was built on, and it was not findable.
+- **A `/goal` was lost** the same way: it exists only in the meta line that activates the goal.
+- **The middle of a long turn was lost.** The overnight turn that built this kept its first 3 KB
+  and last 9 KB of answer, so "fts5 bm25" found nothing in it. Continuation rows keep all of it.
+
+On one machine's sessions, the fixes took the index from 1,851 to 2,376 rows and from 12 MB to
+17 MB. The first build takes 5.5 s, and its longest stall is 38–47 ms once a long first pass
+writes 32 rows per transaction (130 ms in one). On one query set drawn from the old index, accuracy
+is unchanged (two rare words 88% → 88%, answer words 99% → 99%, prefixes 71% → 72%, one word 62% →
+58%). That set can only ask about what both indexes hold; the gains are in what the old one did not.
+
+The live run also showed the daemon crash-looping out of memory, which is not search: after a
+restart, the first `SessionStart` from a long session replayed its whole transcript live (3,553
+events from the 346 MB rollout). The replay was meant only for a first turn announced before its
+file existed. This machine's log has 28 out-of-memory crashes since 2026-09-23, on every build
+including the v0.3.1 release. It is fixed separately.
 
 ## Protocol
 
