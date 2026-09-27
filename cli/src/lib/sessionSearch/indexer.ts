@@ -69,6 +69,8 @@ export interface SessionSearchIndexOptions {
 }
 
 const NO_TURN_DELETE = Number.MAX_SAFE_INTEGER
+/** Rows written per transaction on a long first pass. */
+const WRITE_BATCH = 32
 
 /** The folders a session ran in, as a person would name them: the last two path segments. */
 export function folderWords(cwd: string | null | undefined): string {
@@ -240,7 +242,22 @@ export class SessionSearchIndex {
       lastAt: lastAt ?? (resume ? existing.lastAt : null) ?? mtime,
       turns: 0,
     }
-    store.writeSession(session, fromTurn, open ? [...closed, open] : closed)
+    const turns = open ? [...closed, open] : closed
+    // A long session's first pass writes hundreds of rows. In one transaction that held the thread for
+    // 130 ms, so rows go in batches, each but the last saved as a pass that stopped at the next batch:
+    // a daemon stopped between them resumes there.
+    for (let start = WRITE_BATCH; start < turns.length; start += WRITE_BATCH) {
+      const next = turns[start]
+      store.writeSession(
+        { ...session, size: next.offset, mtime: 0, resumeOffset: next.offset, resumeTurn: next.turn },
+        start === WRITE_BATCH ? fromTurn : NO_TURN_DELETE,
+        turns.slice(start - WRITE_BATCH, start),
+      )
+      await this.pace()
+      if (this.stopped) return
+    }
+    const written = Math.floor(Math.max(0, turns.length - 1) / WRITE_BATCH) * WRITE_BATCH
+    store.writeSession(session, written ? NO_TURN_DELETE : fromTurn, turns.slice(written))
     if (!resume) {
       this.opts.log?.(`[search] indexed ${source.sessionId.slice(0, 8)} · ${source.engine} · ${closed.length + (open ? 1 : 0)} turns · ${Math.round(file.size / 1024)} KB`)
     }

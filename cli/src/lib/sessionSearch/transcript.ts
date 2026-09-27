@@ -33,7 +33,11 @@ export function lineNormalizer(engine: string, sessionId: string): LineNormalize
   switch (engine) {
     case 'claude': {
       const state = newTurnState()
-      return (line) => lineToEvents(line, state)
+      return (line) => {
+        const events = lineToEvents(line, state)
+        const asked = claudeSideAsk(line)
+        return asked ? [{ type: 'user_message', payload: { content: asked } }, ...events] : events
+      }
     }
     case 'codex': {
       // Sub-agent threads are resolved for the live view's cards; search only needs the text.
@@ -53,6 +57,48 @@ export function lineNormalizer(engine: string, sessionId: string): LineNormalize
     case 'commandcode': return ingestWith(new CommandCodeNormalizer('live'))
     default: return null
   }
+}
+
+/**
+ * The person's words that Claude Code writes outside its prompt records. The live view leaves them out
+ * on purpose, since neither opens a turn there, but both are things a person remembers asking:
+ *  - a message typed while the agent was working, delivered mid-turn as a `queued_command` attachment
+ *    (sub-agent hand-backs arrive the same way and are filed under the agent by `askKind`; task
+ *    notifications are not prompts and are left out);
+ *  - a `/goal`, whose text is recorded only in the bookkeeping line that turns its Stop hook on.
+ */
+export function claudeSideAsk(line: string): string | null {
+  const queued = line.includes('"queued_command"')
+  if (!queued && !(line.includes('"isMeta":true') && line.includes(GOAL_HEAD))) return null
+  let raw: {
+    type?: unknown; isMeta?: unknown; message?: { content?: unknown }
+    attachment?: { type?: unknown; commandMode?: unknown; prompt?: unknown; origin?: { kind?: unknown } }
+  }
+  try { raw = JSON.parse(line) } catch { return null }
+  if (queued) {
+    const attachment = raw.attachment
+    if (attachment?.type !== 'queued_command' || attachment.commandMode !== 'prompt') return null
+    // "Goal set: …", which Claude queues for itself: the goal's own line below already holds it.
+    if (attachment.origin?.kind === 'auto-continuation') return null
+    return promptText(attachment.prompt)
+  }
+  if (raw.type !== 'user' || raw.isMeta !== true) return null
+  const goal = GOAL_SET.exec(promptText(raw.message?.content) ?? '')
+  return goal ? goal[1].trim() || null : null
+}
+
+const GOAL_HEAD = 'A session-scoped Stop hook is now active with condition: '
+const GOAL_SET = /^A session-scoped Stop hook is now active with condition: "([\s\S]*)"\. Briefly acknowledge/
+
+/** A prompt's text: a string, or the text blocks of a content array. */
+function promptText(prompt: unknown): string | null {
+  if (typeof prompt === 'string') return prompt.trim() ? prompt : null
+  if (!Array.isArray(prompt)) return null
+  const text = prompt
+    .map((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' ? (block as { text?: unknown }).text : null)
+    .filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+    .join('\n')
+  return text || null
 }
 
 function ingestWith(normalizer: { ingest(line: string): LiveEvent[] }): LineNormalizer {

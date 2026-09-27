@@ -16,7 +16,7 @@ import { chmodSync, existsSync, rmSync } from 'node:fs'
 import { builtinSqlite } from '../sqliteRead.js'
 import type { IndexedTurn } from './turns.js'
 
-const SCHEMA_VERSION = '5'
+const SCHEMA_VERSION = '6'
 
 /** The row that holds a session's name, title and folder: searchable beside its turns. */
 export const HEADER_TURN = -1

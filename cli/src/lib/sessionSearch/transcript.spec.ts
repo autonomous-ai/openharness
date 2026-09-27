@@ -119,3 +119,51 @@ describe('skipping tool output', () => {
     for (const engine of ['opencode', 'kilo', 'hermes', 'devin', 'terminal']) expect(lineNormalizer(engine, 's')).toBeNull()
   })
 })
+
+describe("the person's words outside Claude's prompt records", () => {
+  const queued = (prompt: unknown, minute: number, commandMode = 'prompt', origin = 'human') => JSON.stringify({
+    type: 'attachment', uuid: `q${minute}`, timestamp: at(minute),
+    attachment: { type: 'queued_command', prompt, commandMode, origin: { kind: origin }, humanTurn: true },
+  })
+  const meta = (text: string, minute: number) => JSON.stringify({ type: 'user', isMeta: true, uuid: `m${minute}`, timestamp: at(minute), message: { role: 'user', content: text } })
+
+  it('indexes a message typed while the agent worked, and a /goal, as asks', async () => {
+    const path = file([
+      claude.prompt('cmd p search results are not good', 0),
+      claude.answer('Looking at how Cmd-P ranks rows.', 1),
+      queued('are we doing keyword search, vector search or embeddings?', 2),
+      claude.answer('Keyword search over names only, today.', 3),
+      queued([{ type: 'text', text: '[Image #1] this row' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }], 4),
+      meta('A session-scoped Stop hook is now active with condition: "build the best search engine across all "the" machines". Briefly acknowledge the goal, then immediately start.', 5),
+      claude.answer('On it.', 6),
+    ].join('\n') + '\n')
+    const turns = await turnsOf('claude', path, true)
+    expect(turns.map((turn) => [turn.ask, turn.answer])).toEqual([
+      ['cmd p search results are not good', 'Looking at how Cmd-P ranks rows.'],
+      ['are we doing keyword search, vector search or embeddings?', 'Keyword search over names only, today.'],
+      ['[Image #1] this row', ''],
+      ['build the best search engine across all "the" machines', 'On it.'],
+    ])
+  })
+
+  it('files a hand-back under the agent and leaves task notifications and other bookkeeping out', async () => {
+    const path = file([
+      claude.prompt('audit the dial', 0),
+      queued('<task-notification><task-id>b1</task-id><summary>done</summary></task-notification>', 1, 'task-notification', 'task-notification'),
+      queued('<agent-message from="a1">[Subagent hand-back] found 3 scroll bugs</agent-message>', 2, 'prompt', 'peer'),
+      queued('Goal set: build the best search engine', 2, 'prompt', 'auto-continuation'),
+      meta('Goal check-in: «build the best search engine»', 3),
+      meta('Base directory for this skill: /skills/review', 4),
+      claude.answer('Fixing the three bugs.', 5),
+    ].join('\n') + '\n')
+    const turns = await turnsOf('claude', path, true)
+    expect(turns.map((turn) => turn.ask)).toEqual(['audit the dial', ''])
+    expect(turns[1].answer).toContain('found 3 scroll bugs')
+    expect(turns[1].answer).toContain('Fixing the three bugs.')
+    const text = JSON.stringify(turns)
+    expect(text).not.toContain('task-notification')
+    expect(text).not.toContain('Goal check-in')
+    expect(text).not.toContain('Goal set')
+    expect(text).not.toContain('Base directory')
+  })
+})

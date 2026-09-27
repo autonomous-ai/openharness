@@ -44,18 +44,60 @@ describe('TurnCollector', () => {
     expect(open?.ask).toBe('next')
   })
 
-  it('bounds every field, keeping the end of a long answer where the outcome is', () => {
+  it('bounds the ask, and a single message longer than a row keeps its start and its end', () => {
     const turns = new TurnCollector(0)
     turns.feed([ask('x'.repeat(ASK_MAX * 2))], 0, null)
-    for (let i = 0; i < 400; i++) turns.feed([say(`step ${i} ${'y'.repeat(200)}`)], i, null)
-    turns.feed([say('FINAL OUTCOME')], 500, null)
-    for (let i = 0; i < 200; i++) turns.feed([tool('Bash', { command: `echo ${i} ${'z'.repeat(100)}` })], 600 + i, null)
+    turns.feed([say(`PLAN ${'y'.repeat(ANSWER_MAX * 5)} FINAL OUTCOME`)], 10, null)
     const { open } = turns.finish()
     expect(open!.ask.length).toBe(ASK_MAX)
     expect(open!.answer.length).toBeLessThanOrEqual(ANSWER_MAX + 3)
-    expect(open!.answer.startsWith('step 0 ')).toBe(true)
+    expect(open!.answer.startsWith('PLAN ')).toBe(true)
     expect(open!.answer.endsWith('FINAL OUTCOME')).toBe(true)
-    expect(open!.tools.length).toBeLessThanOrEqual(TOOLS_MAX)
+  })
+
+  it('goes on in continuation rows, so nothing in the middle of a long turn is lost', () => {
+    const turns = new TurnCollector(0)
+    turns.feed([ask('rebuild session search')], 0, 1_000)
+    const lines: Array<[LiveEvent[], number]> = []
+    for (let i = 0; i < 300; i++) lines.push([[say(`step ${i} ${'y'.repeat(200)}`)], 10 + i])
+    for (let i = 0; i < 200; i++) lines.push([[tool('Bash', { command: `echo ${i} ${'zz '.repeat(30)}` })], 400 + i])
+    lines.push([[say('FINAL OUTCOME')], 700])
+    for (const [events, offset] of lines) turns.feed(events, offset, offset * 10)
+    const { closed, open } = turns.finish()
+    const rows = [...closed, open!]
+    expect(rows.length).toBeGreaterThan(3)
+    expect(rows[0].ask).toBe('rebuild session search')
+    for (const row of rows.slice(1)) expect(row.ask).toBe('')
+    const answers = rows.map((row) => row.answer).join(' ')
+    for (let i = 0; i < 300; i++) expect(answers).toContain(`step ${i} `)
+    const tools = rows.map((row) => row.tools).join('\n')
+    for (let i = 0; i < 200; i++) expect(tools).toContain(`echo ${i} `)
+    expect(open!.answer).toContain('FINAL OUTCOME')
+    for (const row of rows) {
+      expect(row.answer.length).toBeLessThanOrEqual(ANSWER_MAX)
+      expect(row.tools.length).toBeLessThanOrEqual(TOOLS_MAX)
+    }
+    // Each continuation opens at a line of its own, dated by that line, numbered in order.
+    expect(rows.map((row) => row.turn)).toEqual(rows.map((_, index) => index))
+    for (const row of rows.slice(1)) expect(row.at).toBe(row.offset * 10)
+
+    // A pass resumed at the last continuation reads it the same way.
+    const last = rows[rows.length - 1]
+    const resumed = new TurnCollector(last.turn)
+    for (const [events, offset] of lines) if (offset >= last.offset) resumed.feed(events, offset, offset * 10)
+    const again = resumed.finish()
+    expect(again.closed).toEqual([])
+    expect(again.open).toEqual(last)
+  })
+
+  it('does not continue a turn on the line that opens the next one', () => {
+    const turns = new TurnCollector(0)
+    turns.feed([ask('first')], 0, null)
+    turns.feed([say('y'.repeat(ANSWER_MAX))], 10, null)
+    turns.feed([ask('second'), say('on it')], 20, null)
+    const { closed, open } = turns.finish()
+    expect(closed.map((row) => [row.turn, row.ask])).toEqual([[0, 'first']])
+    expect(open).toMatchObject({ turn: 1, ask: 'second', answer: 'on it' })
   })
 })
 
@@ -92,6 +134,8 @@ describe('searchableText', () => {
     expect(searchableText('<command-name>/clear</command-name> hello', 100)).toBe('hello')
     expect(searchableText('see <pasted_content id="c200"> https://github.com/x/y/issues/167 </pasted_content id="c200">', 100))
       .toBe('see https://github.com/x/y/issues/167')
+    expect(searchableText('<agent-message from="a38952b54daf6403b">[Subagent hand-back] 3 bugs</agent-message>', 100))
+      .toBe('[Subagent hand-back] 3 bugs')
   })
 })
 

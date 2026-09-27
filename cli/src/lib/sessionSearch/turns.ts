@@ -25,8 +25,12 @@ export interface IndexedTurn {
 }
 
 export const ASK_MAX = 8_000
+/**
+ * What one row holds of a turn's answer and tool calls. A longer turn goes on in continuation rows of
+ * its own (below), so an agent that works for hours has every hour indexed, not the first and the last.
+ */
 export const ANSWER_MAX = 12_000
-/** The start of an answer usually says what it will do and the end what was done: keep both. */
+/** Within one row, a single message longer than the row keeps its start and its end. */
 const ANSWER_HEAD = 3_000
 export const TOOLS_MAX = 4_000
 const TOOL_VALUE_MAX = 300
@@ -58,7 +62,8 @@ export function askKind(text: string): AskKind {
 }
 
 // A paste's markers: what was pasted is the person's, and searchable; the tags around it are not.
-const PASTE_TAGS = /<\/?pasted_content\b[^>]*>/g
+// Nor are the tags around another agent's message.
+const PASTE_TAGS = /<\/?(?:pasted_content|agent-message)\b[^>]*>/g
 
 /** Text as it is stored and searched: wrappers out, whitespace folded, secrets blanked, bounded. */
 export function searchableText(text: string, max: number): string {
@@ -121,6 +126,22 @@ export function toolText(tool: string, input: unknown): string {
   return [tool, ...parts.filter(Boolean)].join(' ')
 }
 
+const opensTurn = (event: LiveEvent): boolean => event.type === 'turn_started' || event.type === 'user_message'
+
+/** Whether one line's text or tool calls would take a row that already holds some past its bounds. */
+function overflows(draft: Draft, events: readonly LiveEvent[], calls: ReadonlyArray<string | null>): boolean {
+  let text = 0
+  let tools = 0
+  for (const [index, event] of events.entries()) {
+    if (event.type === 'text_delta') text += event.payload.content.length + 1
+    const call = calls[index]
+    if (call !== null) tools += call.length + 1
+  }
+  // `answerLength` leaves out the line breaks the parts are joined with.
+  return (text > 0 && draft.answerLength > 0 && draft.answerLength + draft.answer.length + text > ANSWER_MAX)
+    || (tools > 0 && draft.toolsLength > 0 && draft.toolsLength + tools > TOOLS_MAX)
+}
+
 interface Draft {
   /** The message that opened the turn, as it arrived: a second announcement of it is the same turn. */
   opener: string
@@ -150,7 +171,14 @@ export class TurnCollector {
 
   /** Events normalized from one transcript line, with that line's offset and time. */
   feed(events: readonly LiveEvent[], offset: number, at: number | null): void {
-    for (const event of events) {
+    const calls = events.map((event) => event.type === 'tool_start' ? toolText(event.payload.tool, event.payload.input) : null)
+    // A turn whose row this line would overflow goes on in a continuation: a row with no ask that opens
+    // at this line. Split only between lines, so a pass resumed at the continuation reads it the same way.
+    if (this.draft && !events.some(opensTurn) && overflows(this.draft, events, calls)) {
+      this.close()
+      this.current(offset, at)
+    }
+    for (const [index, event] of events.entries()) {
       switch (event.type) {
         case 'turn_started':
           this.open(event.payload.userMessage, offset, at)
@@ -171,7 +199,7 @@ export class TurnCollector {
         case 'tool_start': {
           const draft = this.current(offset, at)
           if (draft.toolsLength >= TOOLS_MAX) break
-          const text = toolText(event.payload.tool, event.payload.input)
+          const text = calls[index]!
           draft.tools.push(text)
           draft.toolsLength += text.length + 1
           break
