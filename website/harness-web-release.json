@@ -1,8 +1,8 @@
 {
-  "version": "0.1.6",
-  "sourceCommit": "1f83e66f4f05efbbddeb30489293f865658aaa81",
+  "version": "1.3.1",
+  "sourceCommit": "c4216fbfcd22bc2ba6d814d54108d72ba84b0721",
   "baseHref": "/harness-web/",
   "apiUrl": "https://harness-api.autonomous.ai",
-  "archiveUrl": "https://github.com/autonomous-ai/openharness/releases/download/v0.1.6_web/harness-web-0.1.6.tar.gz",
-  "sha256": "c1246457cfa6f15c551bfac475eff24156e01f58f1bcf3dd4ef71d64dfad1749"
+  "archiveUrl": "https://github.com/autonomous-ai/openharness/releases/download/v1.3.1_web/harness-web-1.3.1.tar.gz",
+  "sha256": "6cf28ace33e898d28dfd4cec0d69b4795e8d28c70057cb2747a2d515faf9475f"
 }

@@ -1,0 +1,56 @@
+name: Website checks
+
+# The host for harness.autonomous.ai (website/): typecheck, lint, tests, and a production build.
+# Unlike ci.yml this runs on pull requests — the suite is jsdom-only and finishes in about a second,
+# so it has none of the runner-timing flakiness that took ci.yml off PRs.
+#
+# The build step matters on its own: next.config.js carries the Flutter rewrites and every redirect
+# the rest of Harness links to (/install.sh, /cli/install.sh, /desktop/install.sh, /install, the
+# ac./fleet. hosts), and no unit test exercises it. Its prebuild downloads and checksum-verifies the
+# bundle harness-web-release.json pins, the same path a local build takes; release-web.yml builds the
+# real image from a freshly built bundle instead.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['website/**', '.github/workflows/website-checks.yml']
+  push:
+    branches: [main]
+    paths: ['website/**', '.github/workflows/website-checks.yml']
+
+permissions:
+  contents: read
+
+# New commits replace obsolete checks for the same PR or branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  website:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # The major Dockerfile.k8s runs on (node:22-bookworm-slim), at the repo's usual pin.
+          node-version: '22.23.2'
+          cache: npm
+          # Relative to the repo root — an action input, not a `run:`.
+          cache-dependency-path: website/package-lock.json
+
+      # `npm ci`, not `npm install`: it fails when the lockfile and package.json disagree.
+      - run: npm ci --no-audit --no-fund
+
+      - run: npx tsc --noEmit
+
+      - run: npx eslint .
+
+      - run: npx vitest run
+
+      - name: Production build (standalone, with the pinned Flutter bundle)
+        run: npm run build
