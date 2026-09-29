@@ -120,12 +120,10 @@ void main() {
       final login = _QrCliLogin();
       final app = _notifier(AppStatus.unauthenticated, cliLogin: login);
       await tester.pumpWidget(_host(app));
-      await tester.tap(find.text('Sign in'));
+      // Asked for explicitly: the desktop app's default stays the browser until the CLI ships it.
+      unawaited(app.login(qr: true));
       await tester.pump(const Duration(milliseconds: 100));
-      expect(
-        login.attempts.single,
-        isNotNull,
-      ); // a CLI-backed window asks for the QR by default
+      expect(login.attempts.single, isNotNull);
       expect(find.byKey(const Key('login-qr')), findsOneWidget);
       expect(find.byType(PhonePairQr), findsOneWidget);
       expect(find.textContaining('0763·ADD9·1F78·F90D'), findsOneWidget);
@@ -268,7 +266,8 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.textContaining('Sign in with your phone'), findsOneWidget);
+    // The desktop app signs in through the browser until the CLI's QR sign-in is released.
+    expect(find.textContaining('Sign in through your browser'), findsOneWidget);
     expect(find.textContaining('End-to-end encrypted'), findsOneWidget);
   });
 

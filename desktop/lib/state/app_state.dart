@@ -4313,7 +4313,9 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
     // By phone: a CLI-backed window, and a web desktop. A phone's own browser (web mobile) is the
     // approver, and signs itself in by SSO.
-    final byPhone = qr ?? (viewer == null || (kIsWeb && !isMobileWeb));
+    // A CLI-backed desktop signs in through the browser until the harness CLI's QR sign-in is
+    // released; asked for explicitly (`qr: true`), it is already understood here.
+    final byPhone = qr ?? (kIsWeb && !isMobileWeb);
     final wasGuest = isGuest;
     ({String code, String userCode, String? sealedRoster})? browserJoin;
     final revision = _invalidateAuthWork();
