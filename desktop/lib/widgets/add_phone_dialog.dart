@@ -9,6 +9,9 @@ import 'package:qr/qr.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../api/api_client.dart';
+import '../core/local_hostname.dart';
+import '../e2ee/keys.dart' show fingerprint;
+import '../e2ee/pair_code.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
@@ -19,6 +22,9 @@ import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart';
 import 'terminal_prompt.dart';
 import 'terminal_text_action.dart';
+
+// The pairing code moved beside the rest of the E2EE code; its callers still find it here.
+export '../e2ee/pair_code.dart';
 
 /// Harness ▸ Add Phone… — a QR the phone scans to sign in to this account AND
 /// pair with this computer, end to end encrypted, with no password typed.
@@ -50,6 +56,8 @@ Future<void> showAddPhoneDialog(
   VoidCallback? onConnectMachine,
   PairedDevicesCall? listDevices,
   RemovePairedDeviceCall? removeDevice,
+  MachineFingerprintCall? machineFingerprint,
+  GroupMachinesCall? groupMachines,
 }) => showTerminalPrompt<void>(
   context,
   keymap: keymap,
@@ -60,43 +68,35 @@ Future<void> showAddPhoneDialog(
     onConnectMachine: onConnectMachine,
     listDevices: listDevices ?? app.api.pairedDevices,
     removeDevice: removeDevice ?? app.api.removePairedDevice,
+    machineFingerprint: machineFingerprint,
+    groupMachines: groupMachines,
   ),
 );
+
+/// The other machines in this computer's trust group (`GET /api/group`), or null when it cannot
+/// say. After a phone links, the dialog watches this settle to say which machines now reach it.
+typedef GroupMachinesCall =
+    Future<List<({String machineId, String label})>?> Function();
+
+/// The fingerprint of the machine a phone is being paired with: this computer's
+/// daemon's, or — [remoteMachineId], from a viewer — the key pinned for it.
+typedef MachineFingerprintCall = Future<String?> Function(
+  String? remoteMachineId,
+);
+
+Future<String?> machineFingerprintOf(
+  AppNotifier app,
+  String? remoteMachineId,
+) async {
+  if (remoteMachineId == null) return app.api.machineFingerprint();
+  final peer = await app.viewer?.keys.peer(remoteMachineId);
+  return peer == null ? null : fingerprint(peer.pub);
+}
 
 /// Where the QR points. The phone's `ConnectCode` (mobile
 /// `lib/phone/welcome/connect_code.dart`) parses exactly this.
 const kPhonePairHost = 'harness.autonomous.ai';
 const kPhonePairPath = '/pair';
-
-/// The characters a pairing code is drawn from: no `0 O 1 I L`, which read
-/// alike — and no `U` either.
-///
-/// ⚠️ `U` is left out on purpose, although it reads fine. The daemon feeds
-/// the code through core.ts `normalizeCode`, which maps `U` to `V` (Crockford
-/// base32); the phone's `normalizePairCode` only uppercases and strips
-/// separators. A code with a `U` in it would therefore reach CPace as two
-/// different secrets and fail as `CODE_MISMATCH` every time — for a 16-letter
-/// code, about four scans in ten. Without it both sides agree whatever either
-/// normaliser does, at 30 symbols: 78 bits over 16 characters, far past what
-/// three guesses per five minutes (the daemon's rate limit) could dent.
-const kPhonePairCodeAlphabet = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
-const kPhonePairCodeLength = 16;
-
-/// A fresh one-time pairing code, from a cryptographically secure source.
-///
-/// It is the whole secret the pairing rests on — the backend relays the
-/// handshake and must learn nothing from it — so never `Random()`.
-/// [random] exists for tests; `Random.secure().nextInt` is uniform, so no
-/// symbol is likelier than another.
-String newPhonePairCode({math.Random? random}) {
-  final source = random ?? math.Random.secure();
-  return String.fromCharCodes([
-    for (var i = 0; i < kPhonePairCodeLength; i++)
-      kPhonePairCodeAlphabet.codeUnitAt(
-        source.nextInt(kPhonePairCodeAlphabet.length),
-      ),
-  ]);
-}
 
 /// `https://harness.autonomous.ai/pair#e=<email>&m=<machineId>&c=<code>&h=<sign-in code>`.
 ///
@@ -116,11 +116,17 @@ String newPhonePairCode({math.Random? random}) {
 /// or on a phone app that predates it — the phone signs in with an emailed
 /// code, as before. It is the account's credential for its minute, which is
 /// one more reason all of this rides in the fragment.
+///
+/// [fingerprint] (`f`) is the machine's identity fingerprint, separators
+/// dropped: a phone that knows the field refuses a machine proving a different
+/// key. [hostname] (`n`) is for its confirm screen only.
 Uri phonePairLink({
   required String email,
   required String machineId,
   required String code,
   String? signIn,
+  String? fingerprint,
+  String? hostname,
 }) => Uri(
   scheme: 'https',
   host: kPhonePairHost,
@@ -129,7 +135,9 @@ Uri phonePairLink({
       'e=${Uri.encodeQueryComponent(email)}'
       '&m=${Uri.encodeQueryComponent(machineId)}'
       '&c=$code'
-      '${signIn != null ? '&h=${Uri.encodeQueryComponent(signIn)}' : ''}',
+      '${signIn != null ? '&h=${Uri.encodeQueryComponent(signIn)}' : ''}'
+      '${fingerprint != null ? '&f=${fingerprint.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '')}' : ''}'
+      '${hostname != null ? '&n=${Uri.encodeQueryComponent(hostname)}' : ''}',
 );
 
 /// What one `POST /api/pair` came to, as far as this dialog cares.
@@ -252,6 +260,8 @@ class AddPhoneDialog extends StatefulWidget {
     this.onConnectMachine,
     this.listDevices,
     this.removeDevice,
+    this.machineFingerprint,
+    this.groupMachines,
   });
 
   final AppNotifier app;
@@ -263,6 +273,13 @@ class AddPhoneDialog extends StatefulWidget {
   /// to take a device's access back. Null shows no list.
   final PairedDevicesCall? listDevices;
   final RemovePairedDeviceCall? removeDevice;
+
+  /// Null (tests): the QR carries no fingerprint.
+  final MachineFingerprintCall? machineFingerprint;
+
+  /// Null (tests, a viewer): the dialog closes on "Connected" rather than waiting to report the
+  /// trust group the phone brought.
+  final GroupMachinesCall? groupMachines;
 
   @override
   State<AddPhoneDialog> createState() => _AddPhoneDialogState();
@@ -281,6 +298,15 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
 
   /// How long "Connected" stays up before the dialog closes itself.
   static const _connectedHold = Duration(milliseconds: 1500);
+
+  /// After a link, how the group is watched: the phone pushes this computer to its other machines
+  /// and they answer, so the list grows for a few seconds. Reported once it has not grown for
+  /// [_groupSettle] — sooner when there is nobody else to wait for — and never later than
+  /// [_groupWait]. Whoever is offline catches up on their own. Shorter than the CLI's (qrLink.ts):
+  /// somebody is looking at this.
+  static const _groupSettle = Duration(seconds: 6);
+  static const _groupEmpty = Duration(seconds: 12);
+  static const _groupWait = Duration(seconds: 30);
 
   /// How often the QR gets a new sign-in code. Shorter than the code's own
   /// life (90 s at the backend), so the one on screen always has at least
@@ -315,6 +341,13 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// without one: the phone then asks for an emailed code.
   String? _signIn;
   bool _signInAsked = false;
+
+  /// The machine's identity fingerprint for the QR (`f`), asked once on open:
+  /// from this computer's daemon, or — pairing a phone to a remote machine —
+  /// the key this viewer pinned for it. The QR waits for the answer (or its
+  /// absence), so it does not change under a phone mid-scan.
+  String? _fingerprint;
+  bool _fingerprintAsked = false;
   Timer? _signInTimer;
 
   /// The devices paired with this computer, newest first; null until the
@@ -330,6 +363,12 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// No pairing to be had from this daemon — asking stopped for good.
   bool _stopped = false;
   String? _connected;
+
+  /// Watching the trust group after a link ([_watchGroup]).
+  bool _syncing = false;
+
+  /// The machines this computer reaches once the group settled, by name; null before.
+  List<String>? _reaches;
   String? _message;
 
   /// A message that is an instruction to the person ("scan the new code"),
@@ -344,6 +383,21 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     _syncLoop();
     unawaited(_renewSignIn());
     unawaited(_loadDevices());
+    unawaited(_loadFingerprint());
+  }
+
+  Future<void> _loadFingerprint() async {
+    String? found;
+    try {
+      found = await widget.machineFingerprint?.call(_remoteMachineId);
+    } catch (_) {
+      // Without it the QR still pairs; the phone just cannot cross-check the key.
+    }
+    if (!mounted) return;
+    setState(() {
+      _fingerprint = found;
+      _fingerprintAsked = true;
+    });
   }
 
   @override
@@ -418,6 +472,10 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         });
         // The phone that just joined is on the list now.
         unawaited(_loadDevices());
+        if (widget.groupMachines case final group?) {
+          await _watchGroup(group);
+          return; // Stays up to be read; Esc or Done closes it.
+        }
         if (await _sleep(_connectedHold) && mounted) {
           Navigator.of(context).pop();
         }
@@ -468,6 +526,43 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       }
       if (!await _sleep(wait)) return;
     }
+  }
+
+  /// Watches the trust group settle after a phone linked, then says which machines this computer
+  /// now reaches — the other half of what the scan did.
+  Future<void> _watchGroup(GroupMachinesCall group) async {
+    setState(() => _syncing = true);
+    // Time is counted in polls, not read off the clock: the waits are the polls.
+    var elapsed = Duration.zero;
+    var steady = Duration.zero;
+    var machines = <({String machineId, String label})>[];
+    while (true) {
+      List<({String machineId, String label})>? next;
+      try {
+        next = await group();
+      } catch (_) {
+        next = null;
+      }
+      if (_closed) return;
+      if (next != null && next.length != machines.length) {
+        machines = next;
+        steady = Duration.zero;
+      }
+      if (machines.isNotEmpty && steady >= _groupSettle) break;
+      if (machines.isEmpty && elapsed >= _groupEmpty) break;
+      if (elapsed >= _groupWait) break;
+      if (!await _sleep(_poll)) return;
+      elapsed += _poll;
+      steady += _poll;
+    }
+    setState(() {
+      _syncing = false;
+      _reaches = [
+        for (final m in machines)
+          app.stateOf(m.machineId)?.machine.displayName ??
+              (m.label.isNotEmpty ? m.label : m.machineId.substring(0, 8)),
+      ];
+    });
   }
 
   /// Ask for a sign-in code, put it in the QR, and ask again before it runs
@@ -662,12 +757,22 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     }
     // A moment's wait for the sign-in code, in the QR's own space: a QR that
     // changed right after it appeared would be one scanned without it.
-    if (!_signInAsked) return [SizedBox(height: qrSide + row * 2)];
+    if (!_signInAsked || !_fingerprintAsked) {
+      return [SizedBox(height: qrSide + row * 2)];
+    }
     final link = phonePairLink(
       email: target.email,
       machineId: target.machineId,
       code: _code,
       signIn: _signIn,
+      fingerprint: _fingerprint,
+      // Beside the fingerprint, and only where the app asks for one: the
+      // phone's confirm screen names the machine by it.
+      hostname: widget.machineFingerprint == null
+          ? null
+          : _remoteMachineId != null
+          ? app.stateOf(_remoteMachineId)?.machine.hostname
+          : localHostnameOrNull(),
     ).toString();
     return [
       Center(
@@ -689,7 +794,46 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       // One line, and it is the status too: what to do, then that it worked.
       // The phone's own screen says the rest (Yes — scan to connect).
       _status(),
+      ..._groupLines(row),
       ..._devicesList(row),
+    ];
+  }
+
+  /// Under "Connected": the trust group the phone brought — being added to it, then who this
+  /// computer reaches — and a way out once there is nothing left to wait for.
+  List<Widget> _groupLines(double row) {
+    if (_connected == null || widget.groupMachines == null) return const [];
+    final reaches = _reaches;
+    final String text;
+    if (_syncing || reaches == null) {
+      text = 'Adding this ${_thisComputer()} to your devices…';
+    } else if (reaches.isEmpty) {
+      text = 'Computers you link later reach it too.';
+    } else {
+      text =
+          'Reaches ${reaches.length} '
+          '${reaches.length == 1 ? 'machine' : 'machines'}: ${reaches.join(' · ')}';
+    }
+    return [
+      Semantics(
+        liveRegion: true,
+        child: Text(
+          text,
+          key: const ValueKey('add-phone-group'),
+          textAlign: TextAlign.center,
+          style: _ink(reaches == null ? _faint : null),
+        ),
+      ),
+      if (reaches != null) ...[
+        SizedBox(height: row),
+        Center(
+          child: TerminalTextAction(
+            key: const ValueKey('add-phone-done'),
+            label: 'Done',
+            onPressed: _close,
+          ),
+        ),
+      ],
     ];
   }
 

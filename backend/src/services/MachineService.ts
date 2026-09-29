@@ -625,6 +625,10 @@ export const machineService = {
       await publishDeviceMachineListChanged(binding.userId, { reason: 'deleted' }).catch(() => { /* best effort */ })
     }
 
+    // A machine signed in by a phone's approval holds a daemon session of its own; it ends with the machine.
+    const { revokeMachineSessions } = await import('../lib/harnessSession.js')
+    await revokeMachineSessions(machineId).catch(() => { /* best effort — the socket is refused anyway */ })
+
     if (binding.managerId === '') {
       // Remote agents have no node/container — just drop presence so the list goes offline immediately.
       // Also PUSH a machine_revoked down-frame so a LIVE adapter clears its saved token and stops now,

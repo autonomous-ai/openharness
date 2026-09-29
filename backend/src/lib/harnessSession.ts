@@ -76,23 +76,75 @@ export async function redeemHandoff(code: string, label: string): Promise<Harnes
   if (!read || read[0]) throw read?.[0] ?? new Error('handoff redeem: no reply from Redis')
   const userId = read[1]
   if (typeof userId !== 'string' || !userId) return null
-  const user = await userService.get(userId)
+  return createViewerSession({ userId, label })
+}
+
+/**
+ * Sign a VIEWER in — a phone or a browser: the session a handoff redeem mints, and the one a phone's
+ * approval of a browser's sign-in QR hands that browser (`/api/device-auth/approve`, kind `viewer`).
+ * It reads and drives through the relay; it never opens a machine socket. Null for a user gone since.
+ */
+export async function createViewerSession(p: { userId: string; label: string }): Promise<HarnessTokens | null> {
+  const user = await userService.get(p.userId)
   if (!user) return null
   const refreshToken = newHarnessToken(HARNESS_REFRESH_PREFIX)
   const session = await prisma.harnessSession.create({
     data: {
-      userId,
+      userId: p.userId,
       refreshHash: harnessTokenHash(refreshToken),
-      label,
+      label: p.label.slice(0, 80),
       expiresAt: sessionExpiry(),
     },
   })
   return {
-    token: await issueAccess(session.id, userId),
+    token: await issueAccess(session.id, p.userId),
     refreshToken,
     expiresIn: HARNESS_ACCESS_TTL_SEC,
     autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
   }
+}
+
+/**
+ * Sign a MACHINE in: the session a phone's approval of a machine's QR hands that machine
+ * (`/api/device-auth/approve`, lib/deviceAuth.ts). Unlike a phone's, it may open the machine socket —
+ * but only for [computerId], the computer the approval was for (see `authenticateAccessToken`'s
+ * `allowDaemonSessionFor`). Deleting the machine revokes it ([revokeMachineSessions]).
+ */
+export async function createDaemonSession(p: {
+  userId: string
+  machineId: string
+  computerId: string
+  label: string
+}): Promise<HarnessTokens> {
+  const user = await userService.get(p.userId)
+  if (!user) throw new Error('daemon session: no such user')
+  const refreshToken = newHarnessToken(HARNESS_REFRESH_PREFIX)
+  const session = await prisma.harnessSession.create({
+    data: {
+      userId: p.userId,
+      refreshHash: harnessTokenHash(refreshToken),
+      label: p.label.slice(0, 80),
+      expiresAt: sessionExpiry(),
+      kind: 'daemon',
+      machineId: p.machineId,
+      computerId: p.computerId,
+    },
+  })
+  return {
+    token: await issueAccess(session.id, p.userId),
+    refreshToken,
+    expiresIn: HARNESS_ACCESS_TTL_SEC,
+    autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
+  }
+}
+
+/** A deleted machine's daemon sessions stop at once: its access tokens are checked against the row. */
+export async function revokeMachineSessions(machineId: string): Promise<number> {
+  const out = await prisma.harnessSession.updateMany({
+    where: { machineId, kind: 'daemon', revokedAt: null },
+    data: { revokedAt: new Date() },
+  })
+  return out.count
 }
 
 /**
@@ -154,6 +206,8 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
   const invalid = (): SsoAuthError => new SsoAuthError('Invalid or expired access token', 'INVALID_TOKEN')
   let user: Awaited<ReturnType<typeof userService.get>>
   let sessionId: string
+  let kind: 'viewer' | 'daemon' = 'viewer'
+  let computerId: string | undefined
   try {
     const raw = await pub.get(accessKey(harnessTokenHash(token)))
     if (!raw) throw invalid()
@@ -162,6 +216,10 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
     sessionId = held.sessionId
     const session = await prisma.harnessSession.findUnique({ where: { id: sessionId } })
     if (!session || session.revokedAt || session.userId !== held.userId) throw invalid()
+    if (session.kind === 'daemon') {
+      kind = 'daemon'
+      computerId = session.computerId ?? undefined
+    }
     user = await userService.get(held.userId)
   } catch (err) {
     if (err instanceof SsoAuthError) throw err
@@ -174,5 +232,7 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
     role: user.role,
     autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
     harnessSessionId: sessionId,
+    // Only a machine's session says what it is: a phone's reads exactly as it always has.
+    ...(kind === 'daemon' ? { harnessSessionKind: 'daemon' as const, harnessComputerId: computerId } : {}),
   }
 }

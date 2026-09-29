@@ -68,8 +68,9 @@ class _Sink implements WebSocketSink {
 /// manager.ts `onHello` + `wrapRpcReply`, for one session.
 Future<_Socket> _machine(
   E2eeIdentity identity,
-  Map<String, Object?> Function(Map<String, dynamic> request) reply,
-) async {
+  Map<String, Object?> Function(Map<String, dynamic> request) reply, {
+  Future<void> Function()? beforeReply,
+}) async {
   SessionKeys? keys;
   var counter = 1;
   return _Socket((socket, frame) async {
@@ -120,6 +121,8 @@ Future<_Socket> _machine(
           'group_sync',
           null,
         )!;
+        final answer = reply(request);
+        await beforeReply?.call();
         socket.emit({
           'type': 'group_sync_result',
           'payload': wrapPayload(
@@ -128,7 +131,7 @@ Future<_Socket> _machine(
             counter++,
             'group_sync_result',
             null,
-            {'requestId': request['requestId'], ...reply(request)},
+            {'requestId': request['requestId'], ...answer},
           ),
         });
     }
@@ -174,6 +177,33 @@ void main() {
     },
   );
 
+  test('a member taken in while a swap is on the network survives the swap\'s write', () async {
+    final keys = ViewerKeyStore(storage: _Memory());
+    final machine = await E2eeIdentity.generate();
+    final browserPub = b64e((await E2eeIdentity.generate()).pub);
+    await keys.pin(_machineId, machine.pub);
+    // The approval lands while the machine is still answering this swap.
+    final socket = await _machine(
+      machine,
+      (_) => {'members': [], 'removed': []},
+      beforeReply: () => admitGroupMember(
+        keys,
+        GroupMember(pub: browserPub, kind: 'viewer', label: 'Chrome on macOS', at: 99),
+      ),
+    );
+    await syncTrustGroup(
+      machineId: _machineId,
+      keys: keys,
+      accessToken: 't',
+      wsBaseUrl: 'wss://relay.test',
+      autonomousEnv: 'prod',
+      label: 'Studio PC',
+      socket: socket.factory,
+    );
+    final stored = GroupRoster.parse(await keys.groupRoster());
+    expect(stored.members.map((m) => m.pub), contains(browserPub));
+  });
+
   test('the merge matches the CLI: tombstones beat older entries, newer links beat tombstones', () async {
     final self = b64e((await E2eeIdentity.generate()).pub);
     final pub = b64e((await E2eeIdentity.generate()).pub);
@@ -204,5 +234,99 @@ void main() {
       self,
     );
     expect(back.roster.members.single.at, 11);
+  });
+
+  group('a browser signing in by phone', () {
+    test(
+      'the phone hands it its group, sealed so only the QR\'s code opens it',
+      () async {
+        final phone = ViewerKeyStore(storage: _Memory());
+        final browser = ViewerKeyStore(storage: _Memory());
+        final machinePub = Uint8List.fromList(List.generate(32, (i) => i + 7));
+        await phone.pin('a' * 32, machinePub, label: 'studio');
+
+        final roster = await handoffRoster(phone, selfLabel: 'iPhone');
+        final sealed = sealHandedRoster(
+          roster,
+          code: 'ABCDEFGHJKMNPQRS',
+          userCode: 'U1',
+        );
+        // Another code, or the same code for another request, opens nothing.
+        expect(
+          openHandedRoster(sealed, code: 'ABCDEFGHJKMNPQRT', userCode: 'U1'),
+          isNull,
+        );
+        expect(
+          openHandedRoster(sealed, code: 'ABCDEFGHJKMNPQRS', userCode: 'U2'),
+          isNull,
+        );
+        final tampered = b64d(sealed)..[3] ^= 1;
+        expect(
+          openHandedRoster(
+            b64e(tampered),
+            code: 'ABCDEFGHJKMNPQRS',
+            userCode: 'U1',
+          ),
+          isNull,
+        );
+
+        final raw = openHandedRoster(
+          sealed,
+          code: 'abcdefghjkmnpqrs',
+          userCode: 'U1',
+        );
+        final outcome = await adoptHandedRoster(browser, raw);
+        expect(outcome.pinned, ['a' * 32]);
+        expect((await browser.peer('a' * 32))!.pub, machinePub);
+        // The phone is in the browser's roster too: the two trust each other from the start.
+        final stored = GroupRoster.parse(await browser.groupRoster());
+        expect(
+          stored.members.map((m) => m.pub),
+          contains(b64e((await phone.identity()).pub)),
+        );
+      },
+    );
+
+    test(
+      'the phone takes the browser into its own roster, for its next sync',
+      () async {
+        final phone = ViewerKeyStore(storage: _Memory());
+        final browserPub = b64e((await E2eeIdentity.generate()).pub);
+        await admitGroupMember(
+          phone,
+          GroupMember(
+            pub: browserPub,
+            kind: 'viewer',
+            label: 'Chrome on macOS',
+            at: 5,
+          ),
+        );
+        final stored = GroupRoster.parse(await phone.groupRoster());
+        expect(stored.members.map((m) => m.pub), [browserPub]);
+      },
+    );
+  });
+
+  test('a handed roster seals to the bytes the CLI opens', () {
+    // The same vector as cli/src/lib/e2ee/handedRoster.spec.ts: the CLI opens what the phones seal.
+    const vector =
+        'MCsWzwhdskkULflZqvr/unR+ynpfBWQdAE3GXwh+/8m83dSl5Ec/JCojguagCCL91gghdXqGphL7tgaRHbJO11qaAJAvrguTW6XwhFjtK3V785T2LWibIeRWCjBsrJ+FCPGtbK+6qTS0dmFWPNyB41Jm7Qc1ICGuXKVLNort+YXR3uMh+sx16TlHddBqkbn1rkZE7O+MiYfFSiwjAw2+hTwIiBmSzZAi7wEn99u/22/yMpp83cH6a8tZzVZvyKBSZ0hIVfE=';
+    final roster = GroupRoster([
+      GroupMember(
+        pub: '${'A' * 43}=',
+        kind: 'machine',
+        label: 'studio',
+        at: 1700000000000,
+        machineId: 'a' * 32,
+      ),
+    ], const []);
+    expect(
+      sealHandedRoster(
+        roster,
+        code: 'ABCDEFGHJKMNPQRS',
+        userCode: 'VECTORUSERCODE',
+      ),
+      vector,
+    );
   });
 }

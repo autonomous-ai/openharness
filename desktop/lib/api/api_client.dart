@@ -255,6 +255,97 @@ class ApiClient {
     }
   }
 
+  // -- a machine asking to be signed in (`harness login`'s QR, /api/device-auth) --
+
+  /// What the sign-in request [userCode] is: the asking computer, its fingerprint, where it asked
+  /// from, and whether the account already has a machine for that computer.
+  Future<MachineSignInRequest> lookupMachineSignIn(String userCode) async {
+    final res = await _dio.get(
+      '/api/device-auth/lookup',
+      queryParameters: {'userCode': userCode},
+    );
+    return MachineSignInRequest.fromJson(
+      unwrapApiResponse(res) as Map<String, dynamic>,
+    );
+  }
+
+  /// Sign that machine in to this account. Answers the machine id it is now.
+  ///
+  /// [sealedRoster]: this device's trust group, sealed under the QR's pairing code
+  /// (`viewer/group_sync.dart` `sealHandedRoster`), for the machine to open — it joins the group
+  /// without either side dialling the other first.
+  Future<String> approveMachineSignIn(
+    String userCode, {
+    String? sealedRoster,
+  }) async {
+    final res = await _dio.post(
+      '/api/device-auth/approve',
+      data: {'userCode': userCode, 'sealedRoster': ?sealedRoster},
+    );
+    return (unwrapApiResponse(res) as Map<String, dynamic>)['machineId']
+        as String;
+  }
+
+  /// Sign a BROWSER in to this account (its sign-in QR, `k=v`), handing it this device's trust
+  /// group sealed under the QR's pairing code (`viewer/group_sync.dart` `sealHandedRoster`).
+  Future<void> approveBrowserSignIn(
+    String userCode, {
+    required String sealedRoster,
+  }) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/device-auth/approve',
+        data: {'userCode': userCode, 'sealedRoster': sealedRoster},
+      ),
+    );
+  }
+
+  /// "Not me": the request is refused, and the machine is told so.
+  Future<void> denyMachineSignIn(String userCode) async {
+    unwrapApiResponse(
+      await _dio.post('/api/device-auth/deny', data: {'userCode': userCode}),
+    );
+  }
+
+  /// This computer's E2EE identity fingerprint (`GET /api/status`), which the
+  /// Add Phone QR carries so the phone can refuse a machine that proves a
+  /// different key. Null when the daemon cannot say.
+  Future<String?> machineFingerprint() async {
+    try {
+      final res = await _dio.get('/api/status');
+      final data = res.data;
+      final fp = data is Map ? data['fingerprint'] : null;
+      return res.statusCode == 200 && fp is String && fp.isNotEmpty ? fp : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The other machines in this computer's trust group (`GET /api/group`), as the daemon's
+  /// roster has them: each one this computer now reaches, and that reaches it. Null when the
+  /// daemon cannot say.
+  Future<List<({String machineId, String label})>?> groupMachines() async {
+    try {
+      final res = await _dio.get('/api/group');
+      final data = res.data;
+      final members = data is Map ? data['members'] : null;
+      if (res.statusCode != 200 || members is! List) return null;
+      return [
+        for (final m in members)
+          if (m is Map &&
+              m['kind'] == 'machine' &&
+              m['machineId'] is String &&
+              (m['machineId'] as String).isNotEmpty)
+            (
+              machineId: m['machineId'] as String,
+              label: m['label'] is String ? m['label'] as String : '',
+            ),
+      ];
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// What this computer trusts to read and drive its terminals — every phone
   /// paired by QR or password, and every computer linked to it — as the
   /// daemon keeps them (`GET /api/pairs`, the list `harness pairings` prints).
@@ -538,6 +629,42 @@ class PairedDevice {
           ? DateTime.fromMillisecondsSinceEpoch(pairedAt.toInt())
           : DateTime.fromMillisecondsSinceEpoch(0),
       online: raw['online'] == true,
+    );
+  }
+}
+
+/// `GET /api/device-auth/lookup`: a machine asking this account to sign it in.
+class MachineSignInRequest {
+  const MachineSignInRequest({
+    required this.label,
+    this.viewer = false,
+    this.pub,
+    this.fingerprint,
+    this.country,
+    this.existingMachineName,
+  });
+
+  final String label;
+
+  /// A browser asking (kind `viewer`), not a machine.
+  final bool viewer;
+
+  /// A browser's E2EE public key (base64), to check against its QR and take into the group.
+  final String? pub;
+  final String? fingerprint;
+  final String? country;
+  final String? existingMachineName;
+
+  factory MachineSignInRequest.fromJson(Map<String, dynamic> json) {
+    final existing = json['existingMachine'];
+    final label = json['label'];
+    return MachineSignInRequest(
+      viewer: json['kind'] == 'viewer',
+      pub: json['pub'] is String ? json['pub'] as String : null,
+      label: label is String && label.trim().isNotEmpty ? label : 'computer',
+      fingerprint: json['fingerprint'] as String?,
+      country: json['country'] as String?,
+      existingMachineName: existing is Map ? existing['name'] as String? : null,
     );
   }
 }

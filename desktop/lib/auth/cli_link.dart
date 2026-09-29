@@ -150,6 +150,18 @@ class CliLink implements PeerLinkClient {
   /// `verifying`) as the handshake proceeds; best-effort UI feedback only, never required for
   /// correctness. [displayName], when given, is how the CLI's error messages name the machine —
   /// otherwise they show the raw [machineId], which is all a terminal user would have.
+  /// A CLI-backed build is a machine: it shows the QR (`harness link qr`), it does not scan one.
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => const CliLinkConnectResult(
+    error: 'Scan the code with Harness on your phone or in a browser.',
+  );
+
   @override
   Future<CliLinkConnectResult> connect(
     String machineId,

@@ -25,7 +25,7 @@ class WorkspaceAccountLogin extends CliLogin {
   @override
   Future<void> logout() async {}
   @override
-  Future<void> login({required void Function(String) onAuthorizeUrl}) async {
+  Future<void> login({required void Function(String) onAuthorizeUrl, SignInQrListener? qr}) async {
     logins++;
   }
 

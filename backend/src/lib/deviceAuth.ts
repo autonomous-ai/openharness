@@ -1,40 +1,67 @@
 import { randomBytes, createHash } from 'crypto'
 import { pub } from './bus.js'
 import { logger } from '../utils/logger.js'
+import type { HarnessTokens } from './harnessSession.js'
 
 /**
- * Device-authorization grant (RFC 8628-shaped) for the `harness` CLI and the desktop app.
+ * Machine sign-in approved from a phone (RFC 8628-shaped): `harness login` and the desktop app's
+ * sign-in show a QR; a phone already signed in scans it, sees which computer is asking, and approves.
  *
- * Neither can do a browser OAuth redirect: `/api/auth/authorize` pins `redirect_uri` to the WEB
- * callback page, and registering a native/loopback redirect with the SSO client is not something this
- * repo controls. So instead of inventing a second auth path, the client never sees a credential of the
- * user's at all — it shows a short code, the user approves it in a browser where they are ALREADY
- * signed in, and the client polls until a machine key comes back.
+ *   machine → POST /api/device-auth/start   (no auth)  → { userCode, deviceCode }   userCode → the QR
+ *   phone   → GET  /api/device-auth/lookup  (signed in) → what is asking, for the confirm screen
+ *   phone   → POST /api/device-auth/approve (signed in) → the machine is bound, a DAEMON session minted
+ *   machine → POST /api/device-auth/poll    (no auth)  → that session's tokens, handed over once
  *
- * What the client receives is a machine apiKey, not an SSO token: it is a machine, and that is the only
- * credential a machine ever needs. Nothing user-scoped is minted for it.
+ * The machine receives a Harness daemon session (lib/harnessSession.ts `createDaemonSession`): a
+ * sign-in of its own, bound to the computer that asked, which `/api/adapter-ws` accepts for that
+ * computer only. It never sees the phone's credential.
  *
- * Redis, not Mongo: every record here is dead within ten minutes and a crashed worker losing one costs
- * the user a retry, not data.
+ * The user code travels in the QR, not a person's typing, so it is long (128 bits) and dies in
+ * [TTL_SEC]. The QR also carries the machine's E2EE pairing code and fingerprint, which never reach
+ * this server: it can sign a machine in, but not join the machine's end-to-end link.
+ *
+ * Redis, not Mongo: every record here is dead within minutes and a crashed worker losing one costs
+ * the user a rescan, not data.
  */
 
-const TTL_SEC = 600            // 10 minutes to walk to a browser and type six characters
+const TTL_SEC = 180            // a QR on a screen: long enough to find the phone, short enough to go stale
 const POLL_MIN_INTERVAL_SEC = 2
+const USER_CODE_LENGTH = 26    // 26 × 5 bits = 130 bits
 
-// Crockford base32 minus I/L/O/U — same alphabet the device pairing code uses, for the same reason:
-// these get read off one screen and typed into another.
+// Crockford base32 minus I/L/O/U, so a code read off a screen by hand still normalises.
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
 export type DeviceAuthState = 'pending' | 'approved' | 'denied'
 
+/**
+ * Who is asking. `machine`: a computer (`harness login`, the desktop app) — approval binds it to a
+ * machine and mints a daemon session. `viewer`: a browser's sign-in page — approval mints a viewer
+ * session, and the phone names one of its machines for the browser to E2EE-link through.
+ */
+export type DeviceAuthKind = 'machine' | 'viewer'
+
 export interface DeviceAuthRecord {
   state: DeviceAuthState
+  /** Absent on records from before viewers could ask: a machine. */
+  kind?: DeviceAuthKind
+  /** The asking computer; empty for a viewer. */
   computerId: string
   label: string
-  /** Set once approved: the machine the user chose for this computer. */
+  /** The asking machine's E2EE identity fingerprint, for the phone to compare with its screen. */
+  fingerprint?: string
+  /** Where the request came from (Cloudflare country), for the phone's "requested from" line. */
+  country?: string
+  requestedAt?: number
+  /** Set once approved: the machine bound to this computer, and the sign-in minted for it. */
   machineId?: string
-  apiKey?: string
   userId?: string
+  session?: HarnessTokens
+  /** A viewer's E2EE public key (base64), which the approving phone checks against the QR's
+   *  fingerprint before it takes the browser into its trust group. */
+  pub?: string
+  /** A viewer's approval: the phone's trust-group roster, sealed under the QR's pairing code — which
+   *  never reaches this server, so it can neither read nor alter what the browser is handed. */
+  sealedRoster?: string
   error?: string
 }
 
@@ -45,8 +72,9 @@ const claimKey = (deviceHash: string): string => `devauth:claim:${deviceHash}`
 /** The device code is a bearer secret, so only its hash is stored — a Redis dump must not be a key store. */
 const hash = (s: string): string => createHash('sha256').update(s).digest('hex')
 
+/** 256 is a multiple of 32, so `byte % 32` is unbiased. */
 function newUserCode(): string {
-  const b = randomBytes(6)
+  const b = randomBytes(USER_CODE_LENGTH)
   return Array.from(b, (x) => ALPHABET[x % ALPHABET.length]).join('')
 }
 
@@ -57,13 +85,24 @@ export interface StartResult {
   intervalSec: number
 }
 
-export async function startDeviceAuth(computerId: string, label: string): Promise<StartResult> {
+export async function startDeviceAuth(
+  computerId: string,
+  label: string,
+  extra: { fingerprint?: string; country?: string; kind?: DeviceAuthKind; pub?: string } = {},
+): Promise<StartResult> {
   const deviceCode = randomBytes(32).toString('hex')
-  // One retry on collision; the space is 32^6 and records live ten minutes, so a second clash is noise.
-  let userCode = newUserCode()
-  if (await pub.exists(codeKey(userCode))) userCode = newUserCode()
+  const userCode = newUserCode() // 130 bits: a collision is not a case worth code
 
-  const record: DeviceAuthRecord = { state: 'pending', computerId, label }
+  const record: DeviceAuthRecord = {
+    state: 'pending',
+    ...(extra.kind === 'viewer' ? { kind: 'viewer' as const } : {}),
+    ...(extra.pub ? { pub: extra.pub } : {}),
+    computerId,
+    label,
+    requestedAt: Date.now(),
+    ...(extra.fingerprint ? { fingerprint: extra.fingerprint } : {}),
+    ...(extra.country ? { country: extra.country } : {}),
+  }
   const payload = JSON.stringify(record)
   await pub.set(deviceKey(hash(deviceCode)), payload, 'EX', TTL_SEC)
   // The user-facing code maps to the device record, so approving by code can find it.
@@ -120,8 +159,8 @@ export async function releaseDeviceAuthClaim(deviceHash: string): Promise<void> 
 }
 
 /**
- * Poll. A successful read is DESTRUCTIVE — the apiKey is handed over exactly once, so a leaked device
- * code cannot be replayed later to fetch the same machine key again.
+ * Poll. A settled read is DESTRUCTIVE — the session is handed over exactly once, so a leaked device
+ * code cannot be replayed later to fetch the same sign-in again.
  */
 export async function pollDeviceAuth(deviceCode: string): Promise<DeviceAuthRecord | null> {
   const dh = hash(deviceCode)

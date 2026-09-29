@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/services.dart';
 
+import '../core/test_run.dart';
+import '../core/web_form_factor.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
+import '../widgets/add_phone_dialog.dart' show PhonePairQr;
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
 import '../widgets/web_download_button.dart';
@@ -44,7 +49,16 @@ class LoginScreen extends StatelessWidget {
   /// 2026-09-23).
   final VoidCallback? onClose;
 
-  const LoginScreen({super.key, required this.notifier, this.onClose});
+  /// A machine's QR was opened here by a phone's camera (`/pair#…`) before signing in: the page
+  /// says what signing in is for — adding that machine — and shows its fingerprint to compare.
+  final ({String name, String? fingerprint})? pairingWith;
+
+  const LoginScreen({
+    super.key,
+    required this.notifier,
+    this.onClose,
+    this.pairingWith,
+  });
 
   /// Matches `EnvironmentSetupScreen` (560) and `LinkMachineScreen` (460) —
   /// wide enough for the diagram to breathe, still centred at the 880×560
@@ -64,8 +78,17 @@ class LoginScreen extends StatelessWidget {
     final gap = compact ? 16.0 : 24.0;
     // Preserve room for the primary action and its explanation at the minimum
     // window size with enlarged text. The illustration is supplementary.
+    // The QR of a sign-in by phone takes the illustration's place: at the minimum window both do not fit.
+    final linking = notifier.phoneLink != null;
+    final byPhone =
+        (notifier.signingInByPhone &&
+            (notifier.pendingSignInQr != null ||
+                notifier.pendingAuthorizeUrl == null)) ||
+        notifier.pendingSignInQr != null ||
+        linking;
     final showFleet =
-        !compact || MediaQuery.textScalerOf(context).scale(16) <= 20;
+        !byPhone &&
+        (!compact || MediaQuery.textScalerOf(context).scale(16) <= 20);
 
     return CallbackShortcuts(
       bindings: {
@@ -84,7 +107,12 @@ class LoginScreen extends StatelessWidget {
         // themes, which is the same trick the app plays everywhere else.
         backgroundColor: grid.AppPalette.panelBg,
         body: kIsWeb
-            ? _webPage(context, waiting: waiting)
+            ? _webPage(
+                context,
+                waiting: waiting,
+                byPhone: byPhone,
+                linking: linking,
+              )
             : Stack(
                 children: [
                   const Positioned.fill(child: LoginAurora()),
@@ -128,14 +156,25 @@ class LoginScreen extends StatelessWidget {
                                   const _AppMark(),
                                   SizedBox(height: gap),
                                   Text(
-                                    'Your agents, wherever they run',
+                                    linking
+                                        ? 'Adding this computer to your devices'
+                                        : byPhone
+                                        ? 'Sign in with your phone'
+                                        : 'Your agents, wherever they run',
+                                    key: const Key('login-title'),
                                     textAlign: TextAlign.center,
                                     style: grid.AppType.title(),
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'At home, at the office, in the cloud — every machine you '
-                                    'sign in to becomes part of one desk, here.',
+                                    linking
+                                        ? 'Your phone approved it. Linking the two, then every machine '
+                                              'you have — this closes when it is done.'
+                                        : byPhone
+                                        ? 'Scan this code with your phone and approve. This computer '
+                                              'joins your devices — no password.'
+                                        : 'At home, at the office, in the cloud — every machine you '
+                                              'sign in to becomes part of one desk, here.',
                                     textAlign: TextAlign.center,
                                     style: Theme.of(context)
                                         .textTheme
@@ -146,7 +185,11 @@ class LoginScreen extends StatelessWidget {
                                     const LoginFleetMap(),
                                     SizedBox(height: gap),
                                   ],
-                                  _Action(notifier: notifier, waiting: waiting),
+                                  _Action(
+                                    notifier: notifier,
+                                    waiting: waiting,
+                                    onClose: onClose,
+                                  ),
                                   if (notifier.lastError != null &&
                                       !notifier.sessionExpired) ...[
                                     const SizedBox(height: 16),
@@ -171,7 +214,12 @@ class LoginScreen extends StatelessWidget {
     );
   }
 
-  Widget _webPage(BuildContext context, {required bool waiting}) => Stack(
+  Widget _webPage(
+    BuildContext context, {
+    required bool waiting,
+    required bool byPhone,
+    required bool linking,
+  }) => Stack(
     children: [
       const Positioned.fill(child: LoginAurora()),
       SafeArea(
@@ -216,7 +264,14 @@ class LoginScreen extends StatelessWidget {
                                   maxWidth: 820,
                                 ),
                                 child: Text(
-                                  'Your agents, wherever they run',
+                                  pairingWith != null
+                                      ? 'Sign in to add ${pairingWith!.name} to your devices'
+                                      : linking
+                                      ? 'Adding this browser to your devices'
+                                      : byPhone
+                                      ? 'Sign in with your phone'
+                                      : 'Your agents, wherever they run',
+                                  key: const Key('login-title'),
                                   textAlign: TextAlign.center,
                                   style: grid.AppType.display().copyWith(
                                     fontSize:
@@ -233,8 +288,17 @@ class LoginScreen extends StatelessWidget {
                                   maxWidth: 650,
                                 ),
                                 child: Text(
-                                  'At home, at the office, in the cloud — every machine you '
-                                  'sign in to becomes part of one desk, here.',
+                                  pairingWith != null
+                                      ? 'Then approve it, and it reaches your other machines — no password.'
+                                            '${pairingWith!.fingerprint != null ? '\nFingerprint ${pairingWith!.fingerprint}' : ''}'
+                                      : linking
+                                      ? 'Your phone approved it. Linking this browser to your machines — '
+                                            'this page moves on when it is done.'
+                                      : byPhone
+                                      ? 'Scan this code with your phone and approve. This browser joins '
+                                            'your devices — no password.'
+                                      : 'At home, at the office, in the cloud — every machine you '
+                                            'sign in to becomes part of one desk, here.',
                                   textAlign: TextAlign.center,
                                   style: grid.AppType.body().copyWith(
                                     fontSize: 16,
@@ -242,13 +306,16 @@ class LoginScreen extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                              SizedBox(height: gap),
-                              ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  maxWidth: compact ? 560 : 960,
+                              // The QR takes the illustration's place, as on the desktop card.
+                              if (!byPhone) ...[
+                                SizedBox(height: gap),
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: compact ? 560 : 960,
+                                  ),
+                                  child: const LoginFleetMap(seamless: true),
                                 ),
-                                child: const LoginFleetMap(seamless: true),
-                              ),
+                              ],
                               SizedBox(height: gap),
                               ConstrainedBox(
                                 constraints: const BoxConstraints(
@@ -258,6 +325,7 @@ class LoginScreen extends StatelessWidget {
                                   notifier: notifier,
                                   waiting: waiting,
                                   prominent: true,
+                                  onClose: onClose,
                                 ),
                               ),
                               if (notifier.lastError != null &&
@@ -302,11 +370,15 @@ class _Action extends StatefulWidget {
     required this.notifier,
     required this.waiting,
     this.prominent = false,
+    this.onClose,
   });
 
   final AppNotifier notifier;
   final bool waiting;
   final bool prominent;
+
+  /// The sheet's close, for the link steps' own button once there is nothing left to wait for.
+  final VoidCallback? onClose;
 
   @override
   State<_Action> createState() => _ActionState();
@@ -315,6 +387,9 @@ class _Action extends StatefulWidget {
 class _ActionState extends State<_Action> {
   AppNotifier get notifier => widget.notifier;
   final _signInFocus = FocusNode(debugLabel: 'Sign in');
+
+  /// The QR link last copied, so the button says so for that code and not a fresh one.
+  String? _qrLinkCopied;
   String? _copiedUrl;
   String? _copyFailureUrl;
   bool _copying = false;
@@ -369,6 +444,12 @@ class _ActionState extends State<_Action> {
           )
         : null;
 
+    // Signed in by phone: the same scan goes on to link that phone and bring this computer into its
+    // trust group. The sheet stays up through it and closes itself once it is done.
+    if (notifier.phoneLink case final link?) {
+      return _PhoneLinkSteps(link: link, onClose: widget.onClose);
+    }
+
     if (!widget.waiting) {
       final signingOutFailed = notifier.signOutError != null;
       return Column(
@@ -390,12 +471,133 @@ class _ActionState extends State<_Action> {
             child: Text(
               notifier.signOutError ??
                   (notifier.sessionExpired ? notifier.lastError : null) ??
-                  (kIsWeb
-                      ? 'Sign in to open your workspace.'
-                      : 'Sign in through your browser to continue.'),
+                  (kIsWeb && isMobileWeb
+                      // The phone's own browser approves others; it cannot scan its own screen.
+                      ? 'Sign in to open your workspace. Signing in a computer or '
+                            'another browser? Sign in here first, then scan its code with '
+                            'your camera — or in the Harness app: ⋯ → Scan a QR code.'
+                      : 'Sign in with your phone — scan a QR, no password.'),
+              key: const Key('login-idle-hint'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
+          ),
+          // A web desktop without a phone to hand keeps the SSO page one click away.
+          if (kIsWeb && !isMobileWeb && !signingOutFailed) ...[
+            const SizedBox(height: 4),
+            TextButton(
+              key: const Key('login-sso'),
+              onPressed: () => notifier.login(qr: false),
+              child: const Text('Continue with SSO'),
+            ),
+          ],
+        ],
+      );
+    }
+
+    // Signing in by phone: the QR is the whole screen's job — scan, approve on the phone. Its
+    // square is held from the first frame, so the code lands in place rather than pushing in.
+    final qr = notifier.pendingSignInQr;
+    // A CLI that predates the QR sign-in ignores `--qr` and opens the browser's SSO instead: once
+    // its page is out, this is a browser sign-in, and the wait below says so.
+    final browserInstead = qr == null && notifier.pendingAuthorizeUrl != null;
+    if (!browserInstead &&
+        (notifier.signingInByPhone && !notifier.signingOut || qr != null)) {
+      final approved = notifier.signInQrStage == 'approved';
+      return Column(
+        key: const Key('login-qr'),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: qr == null
+                ? const SizedBox(
+                    width: 220,
+                    height: 220,
+                    child: Center(
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black54,
+                        ),
+                      ),
+                    ),
+                  )
+                : Opacity(
+                    opacity: approved ? .25 : 1,
+                    child: PhonePairQr(data: qr.url, side: 220),
+                  ),
+          ),
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              qr == null
+                  ? 'Preparing your code…'
+                  : approved
+                  ? 'Approved on your phone — signing in…'
+                  : 'Waiting for your phone…',
+              key: const Key('login-qr-status'),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+          if (qr?.fingerprint case final fp?) ...[
+            const SizedBox(height: 6),
+            Text(
+              'fingerprint  $fp — check your phone shows the same',
+              textAlign: TextAlign.center,
+              style: grid.AppType.monoMeta(),
+            ),
+          ],
+          if (!approved) ...[const SizedBox(height: 14), const _ScanSteps()],
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              // The link the QR encodes, for a phone that cannot scan it — sent to it by message
+              // or AirDrop and opened there.
+              if (qr != null && !approved)
+                TextButton.icon(
+                  key: const Key('login-copy-link'),
+                  onPressed: () async {
+                    try {
+                      await Clipboard.setData(ClipboardData(text: qr.url));
+                    } catch (_) {
+                      return;
+                    }
+                    if (!mounted) return;
+                    setState(() => _qrLinkCopied = qr.url);
+                  },
+                  icon: Icon(
+                    _qrLinkCopied == qr.url ? Icons.check : Icons.link,
+                    size: 16,
+                  ),
+                  label: Text(
+                    _qrLinkCopied == qr.url ? 'Link copied' : 'Copy link',
+                  ),
+                ),
+              TextButton.icon(
+                key: const Key('login-use-browser'),
+                onPressed: approved ? null : notifier.useBrowserSignIn,
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: Text(
+                  kIsWeb ? 'Continue with SSO' : 'Use browser instead',
+                ),
+              ),
+              if (notifier.canCancelLogin)
+                TextButton(
+                  onPressed: notifier.cancelLogin,
+                  child: const Text('Cancel'),
+                ),
+            ],
           ),
         ],
       );
@@ -672,6 +874,11 @@ class _SignInSheet extends StatefulWidget {
   State<_SignInSheet> createState() => _SignInSheetState();
 }
 
+/// Whether the sign-in sheet opens straight onto its phone QR. Off under `flutter test`, where
+/// a sign-in nobody asked for would spawn the fake CLI's login in every sheet test.
+@visibleForTesting
+bool signInSheetStartsQr = !kUnderTest;
+
 class _SignInSheetState extends State<_SignInSheet> {
   AppNotifier get notifier => widget.notifier;
   bool _popped = false;
@@ -680,6 +887,18 @@ class _SignInSheetState extends State<_SignInSheet> {
   void initState() {
     super.initState();
     notifier.addListener(_onChange);
+    // The sheet opens on the QR — there is nothing to press first. A phone that is signed in
+    // scans it and approves; "Use browser instead" is one click away for anyone without one.
+    if (signInSheetStartsQr &&
+        notifier.viewer == null &&
+        !notifier.signingIn &&
+        !notifier.signingOut) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !notifier.signedIn && !notifier.signingIn) {
+          unawaited(notifier.login(qr: true));
+        }
+      });
+    }
   }
 
   @override
@@ -694,6 +913,30 @@ class _SignInSheetState extends State<_SignInSheet> {
   /// keeps the person from clicking into a grid that is being rebuilt.
   void _onChange() {
     if (_popped || !mounted || !notifier.signedIn) return;
+    // Signed in by phone: stay up while the two exchange keys, then hold the result a moment so it
+    // can be read — a little longer for a problem, which Add Phone can still fix from the desk.
+    final link = notifier.phoneLink;
+    if (link != null) {
+      if (!link.settled || _holding) return;
+      _holding = true;
+      final failed = link.stage == PhoneLinkStage.failed;
+      Future<void>.delayed(failed ? _failedHold : _doneHold, () {
+        if (mounted && !_popped) _pop();
+        // A timer, not a build: nothing else may schedule the frame the pop waits for.
+        WidgetsBinding.instance.scheduleFrame();
+      });
+      return;
+    }
+    _pop();
+  }
+
+  /// How long "reaches N machines" stays up before the sheet goes.
+  static const _doneHold = Duration(milliseconds: 2500);
+  static const _failedHold = Duration(seconds: 4);
+  bool _holding = false;
+
+  void _pop() {
+    if (_popped) return;
     _popped = true;
     // ⚠️ AFTER the frame. The account arrives in the middle of a rebuild — the
     // notification that carries it comes from work started during one — and
@@ -703,6 +946,7 @@ class _SignInSheetState extends State<_SignInSheet> {
     // cleanly.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      notifier.dismissPhoneLink();
       Navigator.of(context).pop(true);
     });
   }
@@ -722,12 +966,242 @@ class _SignInSheetState extends State<_SignInSheet> {
         const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
             _dismiss,
       },
-      child: LoginScreen(notifier: notifier, onClose: _dismiss),
+      // A route is not rebuilt by the shell beneath it: it listens for itself, or the QR that
+      // arrives after the sheet opened never reaches the screen.
+      child: ListenableBuilder(
+        listenable: notifier,
+        builder: (_, _) => LoginScreen(notifier: notifier, onClose: _dismiss),
+      ),
     );
   }
 
   void _dismiss() {
+    if (_popped) return;
+    if (notifier.signedIn) {
+      // Closed mid-link: the link goes on behind the desk, nothing left to show it.
+      _pop();
+      return;
+    }
+    _popped = true;
     if (notifier.canCancelLogin) notifier.cancelLogin();
     Navigator.of(context).pop(false);
+  }
+}
+
+/// After a sign-in by phone: what the same scan is still doing — linking that phone, then bringing
+/// this computer into its trust group — one line per step, ticked off as the CLI reports them.
+class _PhoneLinkSteps extends StatelessWidget {
+  const _PhoneLinkSteps({required this.link, this.onClose});
+
+  final PhoneLinkStatus link;
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final phone = link.phone ?? 'your phone';
+    final stage = link.stage;
+    final linked =
+        stage == PhoneLinkStage.linking || stage == PhoneLinkStage.done;
+    final failed = stage == PhoneLinkStage.failed;
+    final n = link.machines.length;
+    return Column(
+      key: const Key('login-phone-link'),
+      children: [
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _Step(
+                state: _StepState.done,
+                text: 'Approved on your phone',
+              ),
+              const _Step(state: _StepState.done, text: 'Signed in'),
+              _Step(
+                state: linked
+                    ? _StepState.done
+                    : failed && link.phone == null
+                    ? _StepState.failed
+                    : _StepState.busy,
+                text: linked || link.phone != null
+                    ? 'Linked with $phone'
+                    : failed
+                    ? (kIsWeb ? 'Link to your machines' : 'Link your phone')
+                    : (kIsWeb
+                          ? 'Linking to your machines…'
+                          : 'Linking your phone…'),
+              ),
+              if (linked || (failed && link.phone != null))
+                _Step(
+                  state: stage == PhoneLinkStage.done
+                      ? _StepState.done
+                      : failed
+                      ? _StepState.failed
+                      : _StepState.busy,
+                  text: stage != PhoneLinkStage.done
+                      ? 'Adding this ${kIsWeb ? 'browser' : 'computer'} to your devices…'
+                      : n == 0
+                      ? 'Added — machines you link later join too'
+                      : 'Reaches $n ${n == 1 ? 'machine' : 'machines'}: '
+                            '${link.machines.join(' · ')}',
+                ),
+            ],
+          ),
+        ),
+        if (failed) ...[
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              "Couldn't finish linking${link.error == null ? '' : ' (${link.error})'}. "
+              '${kIsWeb ? 'You are signed in — link your machines from Machines.' : 'You are signed in — add your phone again from Harness ▸ Add Phone….'}',
+              key: const Key('login-phone-link-error'),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: grid.AppPalette.warn),
+            ),
+          ),
+        ],
+        if (link.settled && onClose != null) ...[
+          const SizedBox(height: 12),
+          TextButton(
+            key: const Key('login-phone-link-close'),
+            onPressed: onClose,
+            child: Text(failed ? 'Close' : 'Done'),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+enum _StepState { done, busy, failed }
+
+class _Step extends StatelessWidget {
+  const _Step({required this.state, required this.text});
+
+  final _StepState state;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (state) {
+      _StepState.done => grid.AppPalette.accentOnSurface,
+      _StepState.busy => grid.AppPalette.textSecondary,
+      _StepState.failed => grid.AppPalette.warn,
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: state == _StepState.busy
+                ? Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: color,
+                    ),
+                  )
+                : Icon(
+                    state == _StepState.done
+                        ? Icons.check_circle
+                        : Icons.error_outline,
+                    size: 18,
+                    color: color,
+                  ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: state == _StepState.busy
+                    ? grid.AppPalette.textSecondary
+                    : grid.AppPalette.textPrimary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// How to scan a sign-in QR, spelled out: nobody should have to guess which app does it.
+///
+/// ```
+/// Scan it with your phone, either:
+///  1  Camera — point it at the code and tap the link. Harness opens in
+///     your phone's browser: sign in if asked, then tap Approve.
+///  2  The Harness app — ⋯ → Scan a QR code, then Approve.
+/// ```
+class _ScanSteps extends StatelessWidget {
+  const _ScanSteps();
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final body = Theme.of(context).textTheme.bodySmall;
+    Widget step(String n, String title, String text) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 22,
+            child: Text(
+              n,
+              style: grid.AppType.monoLabel(
+                color: grid.AppPalette.accentOnSurface,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  TextSpan(text: ' — $text'),
+                ],
+              ),
+              style: body,
+            ),
+          ),
+        ],
+      ),
+    );
+    return ConstrainedBox(
+      key: const Key('login-scan-steps'),
+      constraints: const BoxConstraints(maxWidth: 420),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        decoration: BoxDecoration(
+          color: grid.AppPalette.textPrimary.withValues(alpha: .05),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Scan it with your phone, either:', style: body),
+            const SizedBox(height: 4),
+            step(
+              '1',
+              'Camera',
+              'point it at the code and tap the link. Harness opens in your '
+                  "phone's browser: sign in if asked, then tap Approve.",
+            ),
+            step('2', 'The Harness app', '⋯ → Scan a QR code, then Approve.'),
+          ],
+        ),
+      ),
+    );
   }
 }

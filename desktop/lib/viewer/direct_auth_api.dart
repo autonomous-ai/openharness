@@ -117,6 +117,93 @@ class DirectAuthApi {
     return (authorizeUrl: url, tx: tx);
   }
 
+  /// A one-time code a signed-in machine put in its QR (`h`) — `harness link qr` or Add Phone — traded
+  /// for a session of this browser's own: scan to sign in, no SSO page. [label] is what this browser
+  /// calls itself in the account's list of devices. A spent or expired code is the backend's 401.
+  Future<IssuedTokens> redeemHandoff(
+    String code, {
+    required String label,
+  }) async {
+    final Response<dynamic> res;
+    try {
+      res = await _dio.post(
+        '/api/auth/handoff/redeem',
+        data: {'code': code, 'label': label},
+      );
+    } on DioException {
+      throw const DirectAuthException(
+        'Could not reach Harness. Check your connection and scan again.',
+      );
+    }
+    final body = res.data is Map ? res.data as Map : const {};
+    final tokens = body['success'] == true
+        ? IssuedTokens.fromData(body['data'])
+        : null;
+    if (tokens != null) return tokens;
+    throw const DirectAuthException('That code didn’t work. Scan the new one.');
+  }
+
+  /// This browser asks to be signed in by a phone (`POST /api/device-auth/start`, kind `viewer`):
+  /// [label] and [fingerprint] are what the phone's confirm screen shows. The user code goes in the
+  /// QR; the device code is this browser's alone, for [pollSignInRequest].
+  Future<SignInRequest> startSignInRequest({
+    required String label,
+    required String fingerprint,
+    required String pub,
+  }) async {
+    final data = unwrapApiResponse(
+      await _dio.post(
+        '/api/device-auth/start',
+        data: {
+          'kind': 'viewer',
+          'label': label,
+          'fingerprint': fingerprint,
+          'pub': pub,
+        },
+      ),
+    );
+    final user = data is Map ? data['userCode'] : null;
+    final device = data is Map ? data['deviceCode'] : null;
+    final expires = data is Map ? data['expiresIn'] : null;
+    if (user is! String || device is! String) {
+      throw const DirectAuthException('Could not start a sign-in. Try again.');
+    }
+    return SignInRequest(
+      userCode: user,
+      deviceCode: device,
+      expiresIn: Duration(
+        seconds: expires is int && expires > 0 ? expires : 180,
+      ),
+    );
+  }
+
+  /// Where [deviceCode]'s request stands. Approved hands the session over — once.
+  Future<SignInRequestAnswer> pollSignInRequest(String deviceCode) async {
+    final data = unwrapApiResponse(
+      await _dio.post(
+        '/api/device-auth/poll',
+        data: {'deviceCode': deviceCode},
+      ),
+    );
+    final status = data is Map ? data['status'] : null;
+    switch (status) {
+      case 'pending':
+        return const SignInRequestAnswer.pending();
+      case 'denied':
+        return const SignInRequestAnswer.denied();
+      case 'approved':
+        final tokens = IssuedTokens.fromData(data);
+        if (tokens == null) return const SignInRequestAnswer.expired();
+        final roster = (data as Map)['sealedRoster'];
+        return SignInRequestAnswer.approved(
+          tokens,
+          sealedRoster: roster is String && roster.isNotEmpty ? roster : null,
+        );
+      default:
+        return const SignInRequestAnswer.expired();
+    }
+  }
+
   Future<IssuedTokens> exchange({
     required String code,
     required String state,
@@ -162,4 +249,44 @@ class DirectAuthApi {
         : IssuedTokens.fromData(body['data']);
     return tokens ?? (throw const DirectAuthException(_unavailable));
   }
+}
+
+/// A browser's sign-in request, as started — see [DirectAuthApi.startSignInRequest].
+class SignInRequest {
+  const SignInRequest({
+    required this.userCode,
+    required this.deviceCode,
+    required this.expiresIn,
+  });
+
+  final String userCode;
+  final String deviceCode;
+  final Duration expiresIn;
+}
+
+enum SignInRequestStatus { pending, approved, denied, expired }
+
+/// One poll's answer. Approved carries the session and the approving phone's trust-group roster,
+/// sealed under the QR's pairing code (`viewer/group_sync.dart` `openHandedRoster`).
+class SignInRequestAnswer {
+  const SignInRequestAnswer.pending()
+    : status = SignInRequestStatus.pending,
+      tokens = null,
+      sealedRoster = null;
+  const SignInRequestAnswer.denied()
+    : status = SignInRequestStatus.denied,
+      tokens = null,
+      sealedRoster = null;
+  const SignInRequestAnswer.expired()
+    : status = SignInRequestStatus.expired,
+      tokens = null,
+      sealedRoster = null;
+  const SignInRequestAnswer.approved(
+    IssuedTokens this.tokens, {
+    this.sealedRoster,
+  }) : status = SignInRequestStatus.approved;
+
+  final SignInRequestStatus status;
+  final IssuedTokens? tokens;
+  final String? sealedRoster;
 }

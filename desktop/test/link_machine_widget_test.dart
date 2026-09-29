@@ -13,6 +13,15 @@ import 'package:harness/widgets/link_machine_screen.dart';
 import 'keymap_host_test.dart' show key;
 
 class _FakeCliLink implements CliLink {
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => const CliLinkConnectResult(error: 'not used');
+
   final Future<CliLinkConnectResult> Function(String machineId, String password)
   onConnect;
   _FakeCliLink(this.onConnect);

@@ -1,11 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 
-import '../auth/cli_login.dart' show CliAuthStatus;
+import '../auth/cli_login.dart' show CliAuthStatus, SignInQrListener;
 import '../auth/sign_in_client.dart';
+import '../core/web_form_factor.dart';
+import '../e2ee/bytes.dart' show b64e;
+import '../e2ee/keys.dart' show fingerprint;
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
 import '../sharing/shared_agent_location.dart';
+import 'pending_pair_store.dart';
+import 'qr_sign_in.dart';
+import 'viewer_key_store.dart';
 
 /// Browser-only operations behind a seam so OAuth can be tested without a
 /// browser, a real account, or opening an authorization page.
@@ -23,11 +29,15 @@ class BrowserLogin implements SignInClient {
   BrowserLogin({
     required this.auth,
     required this.browser,
+    this.keys,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
   final DirectAuth auth;
   final LoginBrowser browser;
+
+  /// This browser's E2EE identity, whose fingerprint a sign-in by phone shows. Null: no QR sign-in.
+  final ViewerKeyStore? keys;
   final DateTime Function() _clock;
   int _revision = 0;
   Completer<void>? _departing;
@@ -96,6 +106,25 @@ class BrowserLogin implements SignInClient {
         throw const DirectAuthException('This sign-in expired. Sign in again.');
       }
     }
+    // A machine's QR opened by a phone's camera may carry a one-time sign-in code (`h`): with no
+    // session yet, it signs this browser in — no SSO page, which a local or LAN-addressed build
+    // could not use anyway. The pair itself is asked about once signed in (`app_shell.dart`).
+    if (!await auth.hasSession()) {
+      final pending = const PendingPairStore().capture(_clock());
+      final handoff = pending?.code.signIn;
+      if (handoff != null && !pending!.isExpired(_clock())) {
+        try {
+          final tokens = await auth.api.redeemHandoff(
+            handoff,
+            label: 'Harness web',
+          );
+          _requireCurrent(revision);
+          await auth.signIn(tokens, stillCurrent: () => revision == _revision);
+        } on DirectAuthException {
+          // Spent or expired: the sign-in page is the way on, and the pair still waits.
+        }
+      }
+    }
     final loggedIn = await auth.hasSession();
     _requireCurrent(revision);
     return CliAuthStatus(loggedIn: loggedIn);
@@ -104,10 +133,14 @@ class BrowserLogin implements SignInClient {
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
   }) async {
     cancel();
     final revision = _revision;
     final location = browser.uri;
+    if (qr != null && keys != null) {
+      return _loginByPhone(qr, revision, location);
+    }
     final origin = location.origin;
     final callbackPath = _callbackPath(location);
     // Local previews need their own callback, just like the native app's
@@ -156,6 +189,36 @@ class BrowserLogin implements SignInClient {
       cancel();
       throw const DirectAuthException('Sign-in timed out. Try again.');
     }
+  }
+
+  /// A web desktop signed in by a phone: the QR, the phone's approval, then the session installed
+  /// here. The phone's sealed roster goes to the listener (`approved`), for `AppNotifier` to join
+  /// this browser to the group once the workspace is up.
+  Future<void> _loginByPhone(
+    SignInQrListener qr,
+    int revision,
+    Uri location,
+  ) async {
+    final identity = await keys!.identity();
+    _requireCurrent(revision);
+    final result = await WebQrSignIn(
+      api: auth.api,
+      fingerprint: fingerprint(identity.pub),
+      pub: b64e(identity.pub),
+      label: browserLabel(),
+      linkBase:
+          _isLoopback(location) || location.host != 'harness.autonomous.ai'
+          ? Uri.parse(location.origin)
+          : null,
+    ).run(onQr: qr.onQr, current: () => revision == _revision);
+    _requireCurrent(revision);
+    await auth.signIn(result.tokens, stillCurrent: () => revision == _revision);
+    _requireCurrent(revision);
+    qr.onProgress?.call('approved', {
+      'code': result.code,
+      'userCode': result.userCode,
+      'sealedRoster': ?result.sealedRoster,
+    });
   }
 
   void _requireCurrent(int revision) {

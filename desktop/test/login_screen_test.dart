@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/screens/login_screen.dart';
+import 'package:harness/widgets/add_phone_dialog.dart' show PhonePairQr;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/login_fleet_map.dart';
@@ -42,9 +45,47 @@ class _FailingCliLogin extends CliLogin {
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
   }) async {
     throw CliNotAvailableException('Could not run the harness CLI');
   }
+}
+
+/// A sign-in by phone that shows its QR and then waits for the phone — never for a process.
+class _QrCliLogin extends CliLogin {
+  final attempts = <SignInQrListener?>[];
+  @override
+  Future<void> login({
+    required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
+  }) {
+    attempts.add(qr);
+    qr?.onQr(
+      const SignInQr(
+        url: 'https://harness.autonomous.ai/pair#s=ABC&c=DEF&f=0763ADD9&n=box',
+        fingerprint: '0763·ADD9·1F78·F90D',
+      ),
+    );
+    return Completer<void>().future;
+  }
+
+  @override
+  void cancel() {}
+}
+
+class _SlowQrCliLogin extends CliLogin {
+  SignInQrListener? listener;
+  @override
+  Future<void> login({
+    required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
+  }) {
+    listener = qr;
+    return Completer<void>().future;
+  }
+
+  @override
+  void cancel() {}
 }
 
 AppNotifier _notifier(AppStatus status, {CliLogin? cliLogin}) {
@@ -73,6 +114,134 @@ double _contrast(Color a, Color b) {
 }
 
 void main() {
+  testWidgets(
+    'signing in by phone shows the QR, its fingerprint, and a way to the browser',
+    (tester) async {
+      final login = _QrCliLogin();
+      final app = _notifier(AppStatus.unauthenticated, cliLogin: login);
+      await tester.pumpWidget(_host(app));
+      await tester.tap(find.text('Sign in'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        login.attempts.single,
+        isNotNull,
+      ); // a CLI-backed window asks for the QR by default
+      expect(find.byKey(const Key('login-qr')), findsOneWidget);
+      expect(find.byType(PhonePairQr), findsOneWidget);
+      expect(find.textContaining('0763·ADD9·1F78·F90D'), findsOneWidget);
+      expect(find.text('Waiting for your phone…'), findsOneWidget);
+      // How to scan, spelled out: the camera (Harness in the phone's browser) or the app.
+      expect(find.byKey(const Key('login-scan-steps')), findsOneWidget);
+      expect(find.textContaining('Scan a QR code'), findsOneWidget);
+
+      // The link the QR encodes, for a phone that cannot scan it.
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await tester.ensureVisible(find.byKey(const Key('login-copy-link')));
+      await tester.tap(find.byKey(const Key('login-copy-link')));
+      await tester.pump();
+      expect(copied, startsWith('https://harness.autonomous.ai/pair#s=ABC'));
+      expect(find.text('Link copied'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const Key('login-use-browser')));
+      await tester.tap(find.byKey(const Key('login-use-browser')));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(login.attempts, hasLength(2));
+      expect(login.attempts.last, isNull); // the browser's SSO this time
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a sign-in started for the phone holds the QR square before the code arrives',
+    (tester) async {
+      final login = _SlowQrCliLogin();
+      final app = _notifier(AppStatus.unauthenticated, cliLogin: login);
+      await tester.pumpWidget(_host(app));
+      unawaited(app.login(qr: true));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Sign in with your phone'), findsOneWidget);
+      expect(find.byKey(const Key('login-qr')), findsOneWidget);
+      expect(find.byType(PhonePairQr), findsNothing);
+      expect(find.text('Preparing your code…'), findsOneWidget);
+      expect(find.byType(LoginFleetMap), findsNothing);
+
+      login.listener!.onQr(
+        const SignInQr(
+          url:
+              'https://harness.autonomous.ai/pair#s=ABC&c=DEF&f=0763ADD9&n=box',
+          fingerprint: '0763·ADD9·1F78·F90D',
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byType(PhonePairQr), findsOneWidget);
+      expect(find.text('Waiting for your phone…'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('the sign-in sheet opens straight onto the phone QR', (
+    tester,
+  ) async {
+    signInSheetStartsQr = true;
+    addTearDown(() => signInSheetStartsQr = false);
+    final login = _SlowQrCliLogin();
+    final app = _notifier(AppStatus.authenticated, cliLogin: login)
+      ..signedIn = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showSignInSheet(context, app),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(login.listener, isNotNull); // nothing pressed but the door
+    expect(find.text('Sign in with your phone'), findsOneWidget);
+    expect(find.text('Preparing your code…'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'a CLI that predates the QR sign-in opens the browser, and the screen follows',
+    (tester) async {
+      // `harness login --qr` on an older CLI: it ignores the flag and prints the SSO page instead.
+      final app = _notifier(AppStatus.unauthenticated)
+        ..signingIn = true
+        ..signingInByPhone = true;
+      await tester.pumpWidget(_host(app));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byKey(const Key('login-qr')), findsOneWidget);
+
+      app.pendingAuthorizeUrl = 'https://auth.example/authorize';
+      await tester.pumpWidget(_host(app));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byKey(const Key('login-qr')), findsNothing);
+      expect(find.text('Sign in with your phone'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('idle offers the action and says what it costs', (tester) async {
     final app = _notifier(AppStatus.unauthenticated);
     await tester.pumpWidget(_host(app));
@@ -99,7 +268,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.textContaining('Sign in through your browser'), findsOneWidget);
+    expect(find.textContaining('Sign in with your phone'), findsOneWidget);
     expect(find.textContaining('End-to-end encrypted'), findsOneWidget);
   });
 

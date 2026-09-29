@@ -29,7 +29,7 @@ class SignOutFixture extends CliLogin {
   }
 
   @override
-  Future<void> login({required void Function(String) onAuthorizeUrl}) async {
+  Future<void> login({required void Function(String) onAuthorizeUrl, SignInQrListener? qr}) async {
     logins++;
     throw StateError('Fixture login stopped before any external work.');
   }

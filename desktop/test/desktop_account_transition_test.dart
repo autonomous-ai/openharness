@@ -22,7 +22,7 @@ class _Login extends CliLogin {
   Future<void> logout() async {}
 
   @override
-  Future<void> login({required void Function(String) onAuthorizeUrl}) async {
+  Future<void> login({required void Function(String) onAuthorizeUrl, SignInQrListener? qr}) async {
     logins++;
     await pending?.future;
     if (fail) throw StateError('Fixture sign-in failed.');

@@ -25,6 +25,8 @@ import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
 import 'widgets/flash_firmware_dialog.dart';
 import 'core/startup.dart';
+import 'core/test_run.dart';
+import 'core/web_form_factor.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
@@ -34,6 +36,9 @@ import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
 import 'sharing/shared_agent_page.dart';
+import 'viewer/pending_pair.dart';
+import 'viewer/pending_pair_store.dart';
+import 'widgets/add_machine_dialog.dart';
 
 /// The screen an app puts up once someone is signed in — the desktop's swarm of
 /// panes, or the phone's one-agent-at-a-time shell. It is the only thing the two
@@ -182,12 +187,85 @@ class _RootShellState extends ConsumerState<RootShell>
   bool _menuDialogOpen = false;
   SharedAgentLocation? _sharedLocation;
 
+  /// A machine's QR opened here by a phone's camera (`/pair#…`), held across sign-in
+  /// (`viewer/pending_pair_store.dart`) and asked about once this tab is signed in.
+  PendingPair? _pendingPair;
+  bool _pendingPairAsked = false;
+
   @override
   void initState() {
     super.initState();
+    if (kIsWeb) {
+      // Before anything else reads the URL: the code leaves the address bar here.
+      _pendingPair = const PendingPairStore().capture(DateTime.now());
+    }
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+  }
+
+  ({String name, String? fingerprint})? _pairingWith() {
+    final pending = _pendingPair;
+    if (pending == null || pending.isExpired(DateTime.now())) return null;
+    final fp = pending.code.fingerprint;
+    return (
+      name: pending.code.hostname ?? 'this machine',
+      fingerprint: fp == null ? null : spacedFingerprint(fp),
+    );
+  }
+
+  /// Whether this visit to the web sign-in page already began a sign-in by phone. Once per visit:
+  /// someone who cancels, or picks SSO, is not sent back to the QR behind their back.
+  bool _webQrStarted = false;
+
+  /// A web desktop's sign-in page opens on its QR — nothing to press first. Not a phone's browser
+  /// (it approves, and cannot scan itself), not a tab opened by a machine's QR or a shared link
+  /// (those arrive to do something else), and never under `flutter test`.
+  void _startWebQr(AppNotifier app) {
+    if (_webQrStarted || !kIsWeb || isMobileWeb || kUnderTest) return;
+    if (_pairingWith() != null || _sharedLocation != null) return;
+    if (app.signingIn || app.signingOut || app.lastError != null) return;
+    _webQrStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && app.status == AppStatus.unauthenticated) {
+        unawaited(app.login(qr: true));
+      }
+    });
+  }
+
+  /// The group join after a web sign-in by phone has settled: the page moves on to home by itself —
+  /// a moment to read "reaches N machines", a little longer for a problem, which the Machines list
+  /// can still fix from there.
+  bool _phoneLinkHolding = false;
+  void _holdPhoneLink(AppNotifier app) {
+    final link = app.phoneLink;
+    if (_phoneLinkHolding || link == null || !link.settled) return;
+    _phoneLinkHolding = true;
+    final failed = link.stage == PhoneLinkStage.failed;
+    Timer(Duration(milliseconds: failed ? 4000 : 1500), () {
+      _phoneLinkHolding = false;
+      if (mounted) app.dismissPhoneLink();
+    });
+  }
+
+  /// Signed in (or just back from SSO) with a scanned machine code waiting: ask about it, once.
+  void _askAboutPendingPair(AppNotifier app) {
+    final pending = _pendingPair;
+    if (pending == null || _pendingPairAsked) return;
+    _pendingPairAsked = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      const PendingPairStore().clear();
+      _pendingPair = null;
+      unawaited(
+        showAddMachineDialog(
+          context,
+          app,
+          pending.code,
+          expired: pending.isExpired(DateTime.now()),
+        ),
+      );
+    });
   }
 
   @override
@@ -271,7 +349,7 @@ class _RootShellState extends ConsumerState<RootShell>
             // the user's own screen away twice per sign-in: once on the click
             // and again on success.
             screen = app.signingIn
-                ? LoginScreen(notifier: app)
+                ? LoginScreen(notifier: app, pairingWith: _pairingWith())
                 : BootstrappingScreen(statusMessage: app.bootStatusMessage);
           case AppStatus.checkingEnvironment:
             screen = EnvironmentPreflightScreen(
@@ -280,9 +358,17 @@ class _RootShellState extends ConsumerState<RootShell>
           case AppStatus.preparingEnvironment:
             screen = EnvironmentSetupScreen(notifier: app);
           case AppStatus.unauthenticated:
-            screen = LoginScreen(notifier: app);
+            screen = LoginScreen(notifier: app, pairingWith: _pairingWith());
+            _startWebQr(app);
+          case AppStatus.authenticated when kIsWeb && app.phoneLink != null:
+            // Signed in by phone: the sign-in page stays up through the link that follows and
+            // moves on once it is done — as the desktop app's sign-in sheet does.
+            screen = LoginScreen(notifier: app, onClose: app.dismissPhoneLink);
+            _holdPhoneLink(app);
           case AppStatus.authenticated:
+            _webQrStarted = false;
             screen = widget.authenticatedScreen(app);
+            _askAboutPendingPair(app);
         }
         // Preserve the fragment pin while dialogs navigate; an OAuth callback can restore it later.
         if (kIsWeb) _sharedLocation ??= SharedAgentLocation.parse(Uri.base);

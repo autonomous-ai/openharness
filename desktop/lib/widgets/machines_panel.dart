@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
@@ -7,6 +8,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth/cli_link.dart';
+import '../viewer/qr_scanner.dart';
+import 'add_machine_dialog.dart' show scanToAddMachine;
 import '../core/models.dart';
 import '../core/machine_resources.dart';
 import '../screens/login_screen.dart';
@@ -574,6 +577,21 @@ class _MachinesPanelState extends State<_MachinesPanel>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (kIsWeb && qrScanSupported) ...[
+          const Text('Harness already running there? Scan its code:'),
+          const SizedBox(height: 4),
+          const _Detail(
+            'On it: harness link qr, or Add Phone in the desktop app.',
+          ),
+          const SizedBox(height: 8),
+          _button(
+            'Scan its code',
+            () => unawaited(scanToAddMachine(context, app)),
+            key: const ValueKey('scan-add-machine'),
+            primary: true,
+          ),
+          const SizedBox(height: 14),
+        ],
         const Text('1. Open Harness on your other computer.'),
         const SizedBox(height: 6),
         _Detail(
@@ -1548,6 +1566,26 @@ class _MachinePasswordState extends State<_MachinePassword> {
         if (_error case final error?) ...[
           const SizedBox(height: 8),
           _Feedback(error, error: true),
+        ],
+        // In a phone's browser the machine's QR is the easier way in: no password to type.
+        if (kIsWeb && !_local && qrScanSupported) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _button(
+              'Scan its code',
+              _busy
+                  ? null
+                  : () => unawaited(
+                      scanToAddMachine(
+                        context,
+                        widget.app,
+                        machineId: widget.machine.machine.machineId,
+                      ),
+                    ),
+              key: ValueKey('scan-code-${widget.machine.machine.machineId}'),
+            ),
+          ),
         ],
         if (_showHelp) ...[
           const SizedBox(height: 8),

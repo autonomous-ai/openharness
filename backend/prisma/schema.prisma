@@ -715,8 +715,15 @@ model HarnessSession {
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.
   expiresAt   DateTime
   revokedAt   DateTime?
+  /// "viewer" (a phone, signed in by a handoff) or "daemon" (a machine, signed in by a phone approving
+  /// its QR). Only a daemon session may open `/api/adapter-ws`, and only for its own computer.
+  kind        String    @default("viewer")
+  /// Daemon sessions only: the machine the approval bound, and the computer it was approved for.
+  machineId   String?
+  computerId  String?
 
   @@index([userId])
+  @@index([machineId])
   @@map("harness_sessions")
 }
 

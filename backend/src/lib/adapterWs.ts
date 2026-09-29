@@ -170,7 +170,7 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
   const countryCode = countryCodeFromHeaders(req.headers)
   void (async () => {
     let user
-    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: false }) } catch (err) {
+    try { user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: false, allowDaemonSessionFor: computerId }) } catch (err) {
       if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
         try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()

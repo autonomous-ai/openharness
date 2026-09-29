@@ -63,7 +63,7 @@ vi.mock('../services/UserService.js', () => ({
 vi.mock('../services/index.js', () => ({ userService: { get: fakes.get, toPublic: (u: unknown) => u } }))
 
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
-import { HANDOFF_TTL_SEC, redeemHandoff, startHandoff } from './harnessSession.js'
+import { HANDOFF_TTL_SEC, createDaemonSession, redeemHandoff, revokeMachineSessions, startHandoff } from './harnessSession.js'
 import { authRoutes } from '../routes/auth.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
@@ -133,6 +133,40 @@ describe('scan to sign in — the handoff', () => {
 
   it('an access token nobody issued is simply invalid', async () => {
     await expect(authenticateAccessToken(`hna_${'B'.repeat(43)}`)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+})
+
+describe('a machine signed in by a phone — the daemon session', () => {
+  const COMPUTER = 'c'.repeat(32)
+  const MACHINE = 'm'.repeat(32)
+
+  it('opens the machine socket for its own computer, and only that one', async () => {
+    const { token, refreshToken } = await createDaemonSession({ userId: USER.id, machineId: MACHINE, computerId: COMPUTER, label: 'box' })
+    expect(token).toMatch(/^hna_/)
+    expect(refreshToken).toMatch(/^hnr_/)
+    expect(fakes.sessions[0]).toMatchObject({ kind: 'daemon', machineId: MACHINE, computerId: COMPUTER })
+    await expect(authenticateAccessToken(token, 'prod', { allowHarnessSession: false, allowDaemonSessionFor: COMPUTER }))
+      .resolves.toMatchObject({ sub: USER.id, harnessSessionKind: 'daemon', harnessComputerId: COMPUTER })
+    await expect(authenticateAccessToken(token, 'prod', { allowHarnessSession: false, allowDaemonSessionFor: 'd'.repeat(32) }))
+      .rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+    await expect(authenticateAccessToken(token, 'prod', { allowHarnessSession: false }))
+      .rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+    // The relay and REST still take it, as any Harness session.
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ sub: USER.id })
+  })
+
+  it("a phone's session is still refused on a machine socket, whatever computer it names", async () => {
+    const { code } = await startHandoff(USER.id)
+    const { token } = (await redeemHandoff(code, 'phone'))!
+    await expect(authenticateAccessToken(token, 'prod', { allowHarnessSession: false, allowDaemonSessionFor: COMPUTER }))
+      .rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('deleting the machine ends its sign-in at once', async () => {
+    const { token } = await createDaemonSession({ userId: USER.id, machineId: MACHINE, computerId: COMPUTER, label: 'box' })
+    expect(await revokeMachineSessions(MACHINE)).toBe(1)
+    await expect(authenticateAccessToken(token, 'prod', { allowHarnessSession: false, allowDaemonSessionFor: COMPUTER }))
+      .rejects.toMatchObject({ code: 'INVALID_TOKEN' })
   })
 })
 

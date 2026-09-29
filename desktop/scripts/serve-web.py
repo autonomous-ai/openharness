@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 class WebPreview(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path in {"/callback", "/auth/callback"} or path.startswith("/s/"):
+        if path in {"/callback", "/auth/callback", "/pair"} or path.startswith("/s/"):
             self.path = "/index.html"
         super().do_GET()
 

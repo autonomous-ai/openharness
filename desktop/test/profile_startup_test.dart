@@ -38,7 +38,7 @@ class _Cli extends CliLogin {
       const CliAuthStatus(loggedIn: true);
 
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl}) async {}
+  Future<void> login({void Function(String url)? onAuthorizeUrl, SignInQrListener? qr}) async {}
 
   @override
   Future<void> logout() async {}

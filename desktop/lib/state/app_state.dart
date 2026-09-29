@@ -20,7 +20,18 @@ import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/viewer_services.dart';
-import '../viewer/group_sync.dart' show GroupSyncOutcome;
+import '../e2ee/bytes.dart' show b64d;
+import '../e2ee/keys.dart' show fingerprint;
+import '../viewer/group_sync.dart'
+    show
+        GroupMember,
+        GroupRoster,
+        GroupSyncOutcome,
+        adoptHandedRoster,
+        admitGroupMember,
+        handoffRoster,
+        openHandedRoster,
+        sealHandedRoster;
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
 import '../auth/sign_in_client.dart';
@@ -38,6 +49,7 @@ import '../core/engine_availability.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
+import '../core/web_form_factor.dart';
 import '../core/models.dart';
 import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
@@ -3534,6 +3546,7 @@ class AppNotifier extends ChangeNotifier {
   }) async {
     _guestDeskRestorePending = true;
     signedIn = false;
+    phoneLink = null;
     currentUser = null;
     analyticsAccount.clear();
     if (banner != null) {
@@ -4234,16 +4247,86 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  Future<void> login() async {
+  /// The QR a sign-in by phone is showing (`harness login --qr`), or null. See [login].
+  SignInQr? pendingSignInQr;
+
+  /// The sign-in in progress was started for the phone (`login(qr: true)`), so its QR square is
+  /// held before the code arrives.
+  bool signingInByPhone = false;
+
+  /// Where a sign-in by phone is: `approved`, then (after the window is signed in) `linked`,
+  /// `synced`. Null otherwise.
+  String? signInQrStage;
+
+  /// Once signed in by phone, the link that follows it: the phone joining this computer and this
+  /// computer joining the phone's trust group. The sign-in sheet shows its steps and closes once
+  /// it is done (`showSignInSheet`); null otherwise.
+  PhoneLinkStatus? phoneLink;
+
+  void dismissPhoneLink() {
+    if (phoneLink == null) return;
+    phoneLink = null;
+    notifyListeners();
+  }
+
+  /// One event of a sign-in by phone's link leg (`harness login --qr --json` after its first result).
+  void _phoneLinkProgress(String stage, Map<String, dynamic> event) {
+    final now = phoneLink;
+    switch (stage) {
+      case 'linked':
+        final label = event['label'];
+        phoneLink = PhoneLinkStatus.linking(
+          label is String && label.trim().isNotEmpty ? label.trim() : null,
+        );
+      case 'synced':
+        final machines = event['machines'];
+        phoneLink = PhoneLinkStatus.done(now?.phone, [
+          if (machines is List)
+            for (final m in machines)
+              if (m is Map && m['name'] is String) m['name'] as String,
+        ]);
+      case 'result' when event['status'] != 'success':
+        final message = event['message'];
+        phoneLink = PhoneLinkStatus.failed(
+          now?.phone,
+          message is String && message.isNotEmpty ? message : null,
+        );
+      case 'ended' when now != null && !now.settled:
+        phoneLink = PhoneLinkStatus.failed(now.phone, null);
+      default:
+        return;
+    }
+    notifyListeners();
+  }
+
+  /// Switch a sign-in by phone to the browser's SSO page instead.
+  Future<void> useBrowserSignIn() async {
+    if (signingIn) cancelLogin();
+    await login(qr: false);
+  }
+
+  /// Signs in. A CLI-backed build signs in **by phone** unless [qr] is false: the CLI shows a QR
+  /// ([pendingSignInQr]) that a phone already signed in scans and approves — no browser — and the
+  /// same scan links the phone and brings this computer into its trust group. A viewer build (web,
+  /// mobile) signs in with SSO; it is the thing that approves, not the thing approved.
+  Future<void> login({bool? qr}) async {
     if (_disposed || signingIn || signingOut || signOutError != null) return;
+    // By phone: a CLI-backed window, and a web desktop. A phone's own browser (web mobile) is the
+    // approver, and signs itself in by SSO.
+    final byPhone = qr ?? (viewer == null || (kIsWeb && !isMobileWeb));
     final wasGuest = isGuest;
+    ({String code, String userCode, String? sealedRoster})? browserJoin;
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _monitorHarnesses.clear();
     _lastError = null;
     status = AppStatus.bootstrapping;
     signingIn = true;
+    signingInByPhone = qr == true; // the QR square is held from the start
     pendingAuthorizeUrl = null;
+    pendingSignInQr = null;
+    signInQrStage = null;
+    phoneLink = null;
     notifyListeners();
     try {
       if (_workspaceCleanup case final cleanup?) {
@@ -4251,6 +4334,35 @@ class AppNotifier extends ChangeNotifier {
         if (!_authWorkCurrent(revision)) return;
       }
       await cliLogin.login(
+        qr: byPhone
+            ? SignInQrListener(
+                onQr: (shown) {
+                  if (!_authWorkCurrent(revision)) return;
+                  pendingSignInQr = shown;
+                  notifyListeners();
+                },
+                onProgress: (stage, event) {
+                  if (_disposed || !_authWorkCurrent(revision)) return;
+                  // A browser's approval carries the phone's group, sealed under the QR's code.
+                  if (stage == 'approved' &&
+                      event['code'] is String &&
+                      event['userCode'] is String) {
+                    final sealed = event['sealedRoster'];
+                    browserJoin = (
+                      code: event['code'] as String,
+                      userCode: event['userCode'] as String,
+                      sealedRoster: sealed is String ? sealed : null,
+                    );
+                  }
+                  if (stage == 'approved') {
+                    signInQrStage = stage;
+                    notifyListeners();
+                  } else {
+                    _phoneLinkProgress(stage, event);
+                  }
+                },
+              )
+            : null,
         onAuthorizeUrl: (url) {
           if (!_authWorkCurrent(revision)) return;
           if (pendingAuthorizeUrl == url) return;
@@ -4266,7 +4378,15 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       _loginAuthorized = true;
+      // Signed in by phone: the CLI goes on to link that phone and join its group (see
+      // [_phoneLinkProgress]) — unless it already reported, which a fast phone can.
+      if (byPhone && phoneLink == null) {
+        phoneLink = viewer == null || browserJoin != null
+            ? const PhoneLinkStatus.waiting()
+            : null;
+      }
       pendingAuthorizeUrl = null;
+      pendingSignInQr = null;
       _resetLoginBrowser();
       notifyListeners();
       // The CLI has just restarted its daemon onto the account's machineId, so a
@@ -4280,6 +4400,9 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       _guestDeskRestorePending = false;
+      if (browserJoin case final join?) {
+        unawaited(_joinGroupFromPhone(join, revision));
+      }
       analytics.signedIn();
       // Restarts the clock even if `_trackAppOpened` already started one: this
       // person met the login screen, so their wait begins where the launch's
@@ -4311,6 +4434,8 @@ class AppNotifier extends ChangeNotifier {
         _resetLoginBrowser();
         _loginAuthorized = false;
         pendingAuthorizeUrl = null;
+        pendingSignInQr = null;
+        signingInByPhone = false;
         signingIn = false;
       }
     }
@@ -4373,7 +4498,11 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || !canCancelLogin) return;
     final revision = _invalidateAuthWork();
     signingIn = false;
+    signingInByPhone = false;
     pendingAuthorizeUrl = null;
+    pendingSignInQr = null;
+    signInQrStage = null;
+    phoneLink = null;
     status = isGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
     _lastError = null;
     _lastErrorRetryable = false;
@@ -5350,6 +5479,123 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Pairs with [machineId] by the one-time code in its QR (`harness link qr`, or Add Phone) — no
+  /// password — then reconnects it and brings it into the trust group. Viewer builds only: a
+  /// CLI-backed build shows the QR rather than scanning one. Null on success, or what to show.
+  Future<String?> connectWithCode(
+    String machineId,
+    String code, {
+    String? expectedFingerprint,
+  }) async {
+    final result = await peerLinks.connectWithCode(
+      machineId,
+      code,
+      label: kIsWeb ? browserLabel() : (localHostnameOrNull() ?? 'Harness'),
+      displayName: machineStates[machineId]?.machine.displayName,
+      expectedFingerprint: expectedFingerprint,
+    );
+    if (result.error != null) return result.error;
+    final targetId = result.linkedMachineId ?? machineId;
+    final state = machineStates[targetId];
+    if (state != null) {
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      notifyListeners();
+      await _pool?.closeMachine(targetId);
+      _connectMachine(state);
+    }
+    unawaited(_syncGroup(targetId, spread: true));
+    return null;
+  }
+
+  /// A web desktop just signed in by phone: it and the phone now hold each other's keys — the phone
+  /// took this browser into its roster, and handed back its own, sealed under the QR's code. Opening
+  /// that is the whole join: every machine is pinned here, and the sign-in page is done. Telling the
+  /// machines is background work ([_spreadGroup]), which the phone is doing too.
+  Future<void> _joinGroupFromPhone(
+    ({String code, String userCode, String? sealedRoster}) join,
+    int revision,
+  ) async {
+    final keys = viewer?.keys;
+    final sealed = join.sealedRoster;
+    final raw = keys == null || sealed == null
+        ? null
+        : openHandedRoster(sealed, code: join.code, userCode: join.userCode);
+    if (raw == null) {
+      phoneLink = const PhoneLinkStatus.failed(
+        null,
+        'your phone sent no devices — update Harness there',
+      );
+      notifyListeners();
+      return;
+    }
+    try {
+      await adoptHandedRoster(keys!, raw);
+    } catch (_) {
+      if (_disposed || !_authWorkCurrent(revision)) return;
+      phoneLink = const PhoneLinkStatus.failed(
+        null,
+        "this browser's keys could not be saved",
+      );
+      notifyListeners();
+      return;
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    final machines = await _groupMachines();
+    for (final id in machines) {
+      // The inventory can change under these awaits: a machine gone from it is skipped, not dialled.
+      final state = machineStates[id];
+      if (state == null || !state.needsLink) continue;
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      await _pool?.closeMachine(id);
+      _connectMachine(state);
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    phoneLink = PhoneLinkStatus.done('your phone', [
+      for (final id in machines)
+        if (machineStates[id] case final state?) state.machine.displayName,
+    ]);
+    notifyListeners();
+    unawaited(_spreadGroup(retry: true, revision: revision));
+  }
+
+  /// The account's machines this device holds a key for: the group members it can reach. A roster
+  /// can still name machines from another account; those are not dialled.
+  Future<List<String>> _groupMachines() async {
+    final keys = viewer?.keys;
+    if (keys == null) return const [];
+    return [
+      for (final p in await keys.peers())
+        if (machineStates.containsKey(p.machineId)) p.machineId,
+    ];
+  }
+
+  /// Background: swap rosters with the group machines that are online, so what this device just
+  /// learned — or just became — reaches the whole group. With [retry] (a device that just joined) it
+  /// tries again a few times: a machine refuses a key it has not heard of yet, and hears of it from
+  /// the approving device's own round moments later.
+  Future<void> _spreadGroup({bool retry = false, int? revision}) async {
+    const waits = [
+      Duration.zero,
+      Duration(seconds: 3),
+      Duration(seconds: 10),
+      Duration(seconds: 30),
+    ];
+    for (final wait in retry ? waits : waits.take(1)) {
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+      if (_disposed || (revision != null && !_authWorkCurrent(revision))) {
+        return;
+      }
+      final online = [
+        for (final id in await _groupMachines())
+          if (machineStates[id]?.nodeOnline != false) id,
+      ];
+      if (online.isEmpty) continue;
+      await _syncGroup(online.first, spread: true);
+    }
+  }
+
   final Map<String, DateTime> _groupSyncedAt = {};
   static const _groupResync = Duration(minutes: 5);
 
@@ -5370,7 +5616,9 @@ class AppNotifier extends ChangeNotifier {
     // Fire-and-forget from the connection handler: a state file that is locked for a moment must not
     // surface as an unhandled error. The next session retries.
     try {
-      final label = localHostnameOrNull() ?? 'Desktop';
+      final label = kIsWeb
+          ? browserLabel()
+          : (localHostnameOrNull() ?? 'Desktop');
       final GroupSyncOutcome outcome = await links.syncGroup(
         machineId,
         label: label,
@@ -7624,6 +7872,104 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     _connectMachine(machine);
     await _loadMachineData(machine, force: true);
+  }
+
+  /// Approves a sign-in QR — a browser's (`k=v`), or a machine's with [machine] — and takes the asker
+  /// into this device's trust group:
+  ///
+  /// 1. the browser's key, as the backend has it ([pub]), must be the one the QR's fingerprint names
+  ///    — the camera is the channel the server cannot touch;
+  /// 2. the approval hands the browser this device's roster, sealed under the QR's [code], so it can
+  ///    pin every machine without dialling one first;
+  /// 3. the browser joins this device's roster. That exchange is the approval; telling the
+  ///    machines follows in the background ([_spreadGroup]).
+  ///
+  /// Returns the machines the browser will reach, or an error code: `FINGERPRINT` (a different
+  /// key), `UNSUPPORTED` (no trust group here), `STORAGE` (this device's keys could not be read or
+  /// written), or the backend's refusal. Never throws.
+  Future<({String? error, int machines, String? machineId})> approveSignInByQr({
+    required String userCode,
+    required String code,
+    required String pub,
+    required String label,
+    String? qrFingerprint,
+    bool machine = false,
+  }) async {
+    final keys = viewer?.keys;
+    if (keys == null) {
+      return (error: 'UNSUPPORTED', machines: 0, machineId: null);
+    }
+    final List<int> pubBytes;
+    try {
+      pubBytes = b64d(pub);
+    } on FormatException {
+      return (error: 'FINGERPRINT', machines: 0, machineId: null);
+    }
+    String plain(String v) =>
+        v.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+    if (pubBytes.length != 32 ||
+        (qrFingerprint != null &&
+            plain(fingerprint(pubBytes)) != plain(qrFingerprint))) {
+      return (error: 'FINGERPRINT', machines: 0, machineId: null);
+    }
+    final GroupRoster roster;
+    try {
+      roster = await handoffRoster(
+        keys,
+        selfLabel: kIsWeb
+            ? browserLabel()
+            : (localHostnameOrNull() ?? 'Harness'),
+      );
+    } catch (_) {
+      return (error: 'STORAGE', machines: 0, machineId: null);
+    }
+    String? machineId;
+    try {
+      final sealed = sealHandedRoster(roster, code: code, userCode: userCode);
+      if (machine) {
+        machineId = await api.approveMachineSignIn(
+          userCode,
+          sealedRoster: sealed,
+        );
+      } else {
+        await api.approveBrowserSignIn(userCode, sealedRoster: sealed);
+      }
+    } catch (e) {
+      return (error: '$e', machines: 0, machineId: null);
+    }
+    try {
+      await admitGroupMember(
+        keys,
+        GroupMember(
+          pub: pub,
+          kind: machine ? 'machine' : 'viewer',
+          label: label,
+          at: DateTime.now().millisecondsSinceEpoch,
+          machineId: machine ? machineId : null,
+        ),
+      );
+      // A machine is one this device dials: pinned now, by the key the QR vouched for.
+      if (machine && machineId != null) {
+        await keys.pin(machineId, pubBytes, label: label);
+      }
+    } catch (_) {
+      // Signed in all the same; the browser's own round tells the machines, and this device hears
+      // of it from them on its next sync.
+    }
+    // The two now hold each other's keys: done. Telling the rest of the group is background work —
+    // after a machine list that has the new machine on it.
+    unawaited(() async {
+      if (machine) {
+        try {
+          await refreshMachines();
+        } catch (_) {}
+      }
+      await _spreadGroup();
+    }());
+    final reach = (await _groupMachines())
+        .where((id) => id != machineId)
+        .length;
+    return (error: null, machines: reach, machineId: machineId);
   }
 
   /// Arm the selected owner's daemon through an already linked browser. Never queue a QR code
@@ -13083,3 +13429,36 @@ final appStateProvider = Provider<AppNotifier>((ref) {
   app.bootstrap();
   return app;
 });
+
+/// Where the link after a sign-in by phone stands — see [AppNotifier.phoneLink].
+class PhoneLinkStatus {
+  const PhoneLinkStatus.waiting()
+    : stage = PhoneLinkStage.waiting,
+      phone = null,
+      machines = const [],
+      error = null;
+  const PhoneLinkStatus.linking(this.phone)
+    : stage = PhoneLinkStage.linking,
+      machines = const [],
+      error = null;
+  const PhoneLinkStatus.done(this.phone, this.machines)
+    : stage = PhoneLinkStage.done,
+      error = null;
+  const PhoneLinkStatus.failed(this.phone, this.error)
+    : stage = PhoneLinkStage.failed,
+      machines = const [];
+
+  final PhoneLinkStage stage;
+
+  /// The phone's name as it sealed it in the link, once linked.
+  final String? phone;
+
+  /// The other machines this computer now reaches, by name.
+  final List<String> machines;
+  final String? error;
+
+  bool get settled =>
+      stage == PhoneLinkStage.done || stage == PhoneLinkStage.failed;
+}
+
+enum PhoneLinkStage { waiting, linking, done, failed }

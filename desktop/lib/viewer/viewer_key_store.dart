@@ -136,8 +136,30 @@ class ViewerKeyStore {
     }
   }
 
-  Future<void> writeGroupRoster(Map<String, Object> roster) =>
+  /// Only through [updateGroupRoster]: a write that skipped its queue could undo one in flight.
+  Future<void> _writeGroupRoster(Map<String, Object> roster) =>
       _storage.write(_groupKey, jsonEncode(roster));
+
+  /// Reads, changes and writes the stored roster as one step. Two changes that overlap — a roster
+  /// swap still waiting on the network, and a member taken in meanwhile — must not lose either:
+  /// whichever runs second starts from what the first wrote.
+  Future<T> updateGroupRoster<T>(
+    Future<(Map<String, Object>, T)> Function(Object? current) change,
+  ) {
+    // In order within this runtime, and under the store's own lock across runtimes (browser tabs).
+    final run = _groupChanges.then(
+      (_) => _storage.synchronized('viewer_group', () async {
+        final (next, out) = await change(await groupRoster());
+        await _writeGroupRoster(next);
+        return out;
+      }),
+    );
+    // The queue survives a failed change: the next one still runs.
+    _groupChanges = run.then<void>((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  Future<void> _groupChanges = Future<void>.value();
 
   Future<void> _write(List<MachinePeer> peers) => _storage.write(
     _peersKey,

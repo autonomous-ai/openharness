@@ -3,7 +3,8 @@ import 'package:web/web.dart' as web;
 import 'browser_login.dart';
 
 class DirectLogin extends BrowserLogin {
-  DirectLogin({required super.auth}) : super(browser: _WebLoginBrowser());
+  DirectLogin({required super.auth, super.keys})
+    : super(browser: _WebLoginBrowser());
 }
 
 class _WebLoginBrowser implements LoginBrowser {

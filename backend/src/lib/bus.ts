@@ -574,6 +574,22 @@ export async function consumeNewIdQuota(kind: NewIdKind, userId: string): Promis
   }
 }
 
+/**
+ * A plain fixed-window limiter: at most [limit] calls per [windowSec] for [key]. Fails OPEN — a Redis
+ * blip must not lock people out of signing in — and says so in the log.
+ */
+export async function consumeRateLimit(key: string, limit: number, windowSec: number): Promise<boolean> {
+  if (limit <= 0) return true
+  try {
+    const k = `rl:${key}:${Math.floor(Date.now() / 1000 / windowSec)}`
+    const [[, n]] = (await pub.multi().incr(k).expire(k, windowSec).exec()) as [[unknown, number], [unknown, number]]
+    return n <= limit
+  } catch (err) {
+    logger.error('[bus] consumeRateLimit failed — allowing', err, { key })
+    return true
+  }
+}
+
 // ── device presence (is a paired device's socket currently connected?) ─────────────────────────────
 // One key PER DEVICE (`device:{deviceId}:conn`) — a user with many devices has one independent key,
 // refresh loop and supersede scope per device. The VALUE is the connection's own token so that when

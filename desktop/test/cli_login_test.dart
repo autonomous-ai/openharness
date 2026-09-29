@@ -78,7 +78,107 @@ class _TimeoutProcess extends _Process {
   }
 }
 
+/// The runner for a sign-in by phone: asks for `--qr` and hands out one scripted process.
+class _QrRunner extends HarnessCliRunner {
+  _QrRunner(this.process);
+  final _Process process;
+  List<String>? arguments;
+  @override
+  Future<Process> start(List<String> arguments) async {
+    this.arguments = arguments;
+    return process;
+  }
+}
+
 void main() {
+  test('a sign-in by phone shows each QR, resolves at the result, and keeps reporting the link', () async {
+    final process = _Process();
+    final runner = _QrRunner(process);
+    final login = CliLogin(runner: runner);
+    final qrs = <SignInQr>[];
+    final stages = <String>[];
+    var done = false;
+    final signingIn = login
+        .login(
+          onAuthorizeUrl: (_) => fail('no browser for a sign-in by phone'),
+          qr: SignInQrListener(
+            onQr: qrs.add,
+            onProgress: (stage, _) => stages.add(stage),
+          ),
+        )
+        .then((_) => done = true);
+    await pumpEventQueue();
+    expect(runner.arguments, [
+      'login',
+      '--force',
+      '--json',
+      '--entry-point=desktop',
+      '--qr',
+    ]);
+    process.emit({
+      'type': 'qr',
+      'url': 'https://x/pair#s=A&c=B',
+      'fingerprint': '0763·ADD9',
+      'expiresAt': 1790000000000,
+    });
+    process.emit({
+      'type': 'qr',
+      'url': 'https://x/pair#s=C&c=B',
+      'fingerprint': '0763·ADD9',
+    });
+    await pumpEventQueue();
+    expect(qrs.map((q) => q.url), [
+      'https://x/pair#s=A&c=B',
+      'https://x/pair#s=C&c=B',
+    ]);
+    expect(
+      qrs.first.expiresAt,
+      DateTime.fromMillisecondsSinceEpoch(1790000000000),
+    );
+    expect(done, isFalse);
+
+    process.emit({'type': 'approved', 'machineId': 'm'});
+    process.emit({'type': 'result', 'status': 'success'});
+    await signingIn;
+    expect(
+      done,
+      isTrue,
+    ); // signed in: the app goes on while the CLI links the phone
+
+    process.emit({'type': 'linked', 'label': "Dee's iPhone"});
+    process.emit({'type': 'synced', 'machines': []});
+    process.finish();
+    await pumpEventQueue();
+    expect(stages, ['approved', 'linked', 'synced', 'ended']);
+  });
+
+  test('a declined sign-in by phone fails with its message', () async {
+    final process = _Process();
+    final login = CliLogin(runner: _QrRunner(process));
+    final signingIn = login.login(
+      onAuthorizeUrl: (_) {},
+      qr: SignInQrListener(onQr: (_) {}),
+    );
+    await pumpEventQueue();
+    process.emit({
+      'type': 'result',
+      'status': 'error',
+      'code': 'DENIED',
+      'message': 'Declined on your phone. Nothing was signed in.',
+    });
+    process.finish(1);
+    await expectLater(
+      signingIn,
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('Declined'),
+        ),
+      ),
+    );
+  });
+
   test('logout reports a nonzero CLI exit as a failure', () async {
     final process = _Process()..finish(1);
     final runner = _LogoutRunner(process);

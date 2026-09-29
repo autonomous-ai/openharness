@@ -73,6 +73,7 @@ Future<void> _open(
   VoidCallback? onConnectMachine,
   PairedDevicesCall? listDevices,
   RemovePairedDeviceCall? removeDevice,
+  GroupMachinesCall? groupMachines,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(1280, 800);
@@ -93,6 +94,7 @@ Future<void> _open(
       onConnectMachine: onConnectMachine,
       listDevices: listDevices ?? () async => null,
       removeDevice: removeDevice ?? (_) async => false,
+      groupMachines: groupMachines,
     ),
   );
   await tester.pump();
@@ -107,6 +109,23 @@ String _status(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const ValueKey('add-phone-status'))).data!;
 
 void main() {
+  test(
+    'the link carries the fingerprint (separators dropped) and the hostname',
+    () {
+      final link = phonePairLink(
+        email: 'dee@x.ai',
+        machineId: 'm',
+        code: 'ABCDEFGHJKMNPQRS',
+        fingerprint: 'b18e·5F33·8400·69CB',
+        hostname: 'Studio Mac',
+      );
+      final fields = Uri.splitQueryString(link.fragment);
+      expect(fields['f'], 'B18E5F33840069CB');
+      expect(fields['n'], 'Studio Mac');
+      expect(link.query, isEmpty);
+    },
+  );
+
   AppNotifier browserApp() {
     final storage = MemoryStore();
     final session = AuthSession(storage: storage);
@@ -474,6 +493,47 @@ void main() {
       expect(find.byType(AddPhoneDialog), findsNothing);
       expect(daemon.codes, hasLength(3));
     });
+
+    testWidgets(
+      'once paired, it watches the group settle and says who this computer reaches',
+      (tester) async {
+        final app = _signedInApp();
+        addTearDown(app.dispose);
+        final daemon = _FakeDaemon([
+          () => const PhonePairAnswer.paired('Dee’s iPhone'),
+        ]);
+        var asks = 0;
+        await _open(
+          tester,
+          app,
+          daemon.call,
+          groupMachines: () async {
+            asks++;
+            // The phone's machines arrive a moment after the link.
+            return [
+              if (asks > 1) (machineId: 'a' * 32, label: 'studio'),
+              if (asks > 2) (machineId: 'b' * 32, label: 'box-2'),
+            ];
+          },
+        );
+        await tester.pump();
+        expect(_status(tester), '✓ Connected Dee’s iPhone');
+        String group() => tester
+            .widget<Text>(find.byKey(const ValueKey('add-phone-group')))
+            .data!;
+        expect(group(), startsWith('Adding this'));
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 1500));
+        }
+        expect(group(), 'Reaches 2 machines: studio · box-2');
+        // It stays up to be read, and Done closes it.
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('add-phone-done')));
+        await tester.pump();
+        await tester.pump();
+        expect(find.byType(AddPhoneDialog), findsNothing);
+      },
+    );
 
     testWidgets('a code that did not match is replaced, QR and all', (
       tester,

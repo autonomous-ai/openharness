@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart' show immutable;
+
 import 'dart:io';
 
 import '../core/harness_cli_runner.dart';
@@ -76,6 +79,7 @@ class CliLogin implements SignInClient {
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
   }) async {
     // A cancelled spawn can finish after a replacement login has started.
     // Each process owns only its attempt, including its eventual cleanup.
@@ -89,6 +93,9 @@ class CliLogin implements SignInClient {
         '--force',
         '--json',
         '--entry-point=desktop',
+        // By phone: the CLI shows a QR instead of opening SSO, and once signed in links the phone
+        // and joins its trust group in the same process.
+        if (qr != null) '--qr',
       ]);
     } catch (error) {
       throw CliNotAvailableException('Could not run the harness CLI: $error');
@@ -110,25 +117,65 @@ class CliLogin implements SignInClient {
       var gotResult = false;
       var success = false;
       String? message;
-      await for (final raw in lines) {
-        if (revision != _loginRevision) continue;
-        final line = raw.trim();
-        if (line.isEmpty) continue;
-        Map<String, dynamic> json;
-        try {
-          json = jsonDecode(line) as Map<String, dynamic>;
-        } catch (_) {
-          continue;
+      // A sign-in by phone is done at its `result`: the process stays on to link the phone and
+      // join the trust group, reporting that through [SignInQrListener.onProgress] — the app does
+      // not wait for it.
+      final signedIn = Completer<void>();
+      final reading = () async {
+        await for (final raw in lines) {
+          if (revision != _loginRevision) continue;
+          final line = raw.trim();
+          if (line.isEmpty) continue;
+          Map<String, dynamic> json;
+          try {
+            json = jsonDecode(line) as Map<String, dynamic>;
+          } catch (_) {
+            continue;
+          }
+          switch (json['type']) {
+            case 'authorize_url':
+              final url = json['url'];
+              if (url is String) onAuthorizeUrl(url);
+            case 'qr':
+              final url = json['url'], expires = json['expiresAt'];
+              if (url is String && qr != null) {
+                qr.onQr(
+                  SignInQr(
+                    url: url,
+                    fingerprint: json['fingerprint'] as String?,
+                    expiresAt: expires is int
+                        ? DateTime.fromMillisecondsSinceEpoch(expires)
+                        : null,
+                  ),
+                );
+              }
+            case 'result' when !gotResult:
+              gotResult = true;
+              success = json['status'] == 'success';
+              message = json['message'] as String?;
+              if (qr != null && success && !signedIn.isCompleted) {
+                signedIn.complete();
+              }
+            case final String type:
+              qr?.onProgress?.call(type, json);
+          }
         }
-        switch (json['type']) {
-          case 'authorize_url':
-            final url = json['url'];
-            if (url is String) onAuthorizeUrl(url);
-          case 'result':
-            gotResult = true;
-            success = json['status'] == 'success';
-            message = json['message'] as String?;
+      }();
+      if (qr != null) {
+        await Future.any([signedIn.future, reading]);
+        if (signedIn.isCompleted) {
+          // Signed in; the rest belongs to the process, not to this attempt.
+          if (identical(_activeProcess, process)) _activeProcess = null;
+          // The link leg's end is news too: a process that stops before `synced` did not link.
+          unawaited(
+            reading
+                .catchError((Object _) {})
+                .whenComplete(() => qr.onProgress?.call('ended', const {})),
+          );
+          return;
         }
+      } else {
+        await reading;
       }
       final exitCode = await process.exitCode;
       if (revision != _loginRevision) {
@@ -201,4 +248,28 @@ class CliLogin implements SignInClient {
     final lines = stdout.trim().split('\n').where((l) => l.trim().isNotEmpty);
     return lines.isEmpty ? null : lines.last.trim();
   }
+}
+
+/// The QR a sign-in by phone shows (`harness login --qr --json`'s `qr` event).
+@immutable
+class SignInQr {
+  const SignInQr({required this.url, this.fingerprint, this.expiresAt});
+
+  /// The link the QR encodes (`…/pair#s=…&c=…&f=…&n=…`).
+  final String url;
+
+  /// This computer's E2EE fingerprint, for the phone to compare with.
+  final String? fingerprint;
+  final DateTime? expiresAt;
+}
+
+/// Asks [SignInClient.login] for a sign-in by phone rather than the browser: [onQr] gets each QR to
+/// show (a fresh one replaces an expired one), [onProgress] the stages after it — `approved`, then,
+/// once signed in and in the background, `waiting`, `linked`, `syncing`, `synced`, the link leg's
+/// own `result`, and `ended` when the process is gone.
+class SignInQrListener {
+  const SignInQrListener({required this.onQr, this.onProgress});
+
+  final void Function(SignInQr qr) onQr;
+  final void Function(String stage, Map<String, dynamic> event)? onProgress;
 }

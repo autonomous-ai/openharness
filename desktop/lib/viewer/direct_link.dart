@@ -5,6 +5,7 @@ import '../core/config.dart';
 import '../e2ee/keys.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
+import 'code_link.dart';
 import 'group_sync.dart';
 import 'password_link.dart';
 import 'viewer_key_store.dart';
@@ -65,6 +66,78 @@ class DirectLink implements PeerLinkClient {
     }
   }
 
+  /// The QR's one-time code in place of the password (`harness link qr`, or Add Phone): the
+  /// same pin, from [linkWithCode], refused when the machine's key is not the fingerprint the QR
+  /// named. Answers with a result, never an exception.
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async {
+    final String token;
+    try {
+      token = await auth.accessToken();
+    } on DirectAuthException catch (error) {
+      return CliLinkConnectResult(error: error.message);
+    } catch (_) {
+      return const CliLinkConnectResult(error: 'Not signed in.');
+    }
+    final PasswordLinkResult result;
+    try {
+      result = await linkWithCode(
+        machineId: machineId,
+        code: code,
+        label: label,
+        identity: await keys.identity(),
+        accessToken: token,
+        wsBaseUrl: config.wsBaseUrl,
+        autonomousEnv: config.autonomousEnv,
+        socket: socket,
+      );
+    } catch (_) {
+      return const CliLinkConnectResult(
+        error: 'This browser couldn’t read its own keys. Try again.',
+      );
+    }
+    final name = displayName == null || displayName.isEmpty
+        ? 'the machine'
+        : displayName;
+    switch (result) {
+      case PasswordLinked(:final peerPub, :final fingerprint):
+        if (expectedFingerprint != null &&
+            !sameFingerprint(fingerprint, expectedFingerprint)) {
+          return const CliLinkConnectResult(
+            error: 'That machine’s fingerprint doesn’t match its code. Nothing was linked.',
+          );
+        }
+        try {
+          await keys.pin(machineId, peerPub);
+        } catch (_) {
+          return const CliLinkConnectResult(
+            error: 'Linked, but this browser couldn’t save it. Try again.',
+          );
+        }
+        return CliLinkConnectResult(
+          linkedMachineId: machineId,
+          fingerprint: fingerprint,
+        );
+      case PasswordLinkFailed(:final code):
+        return CliLinkConnectResult(
+          error: switch (code) {
+            'CODE_MISMATCH' =>
+              'That code didn’t match. Scan the new one on $name.',
+            'TIMEOUT' => 'Keep the QR open on $name, then scan again.',
+            'PAIRING_BUSY' =>
+              '$name is pairing with something else. Try again.',
+            _ => 'Couldn’t connect to $name ($code).',
+          },
+        );
+    }
+  }
+
   /// Swaps trust-group rosters with [machineId] ([syncTrustGroup]): the machines this device learns
   /// of are pinned — no password for them — and the machine learns this device and whatever it
   /// linked. [label] is this device's name for itself. Never throws.
@@ -110,4 +183,11 @@ class DirectLink implements PeerLinkClient {
 String _asCliPrints(DateTime at) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '${at.year}-${two(at.month)}-${two(at.day)} ${two(at.hour)}:${two(at.minute)}';
+}
+
+/// Two fingerprints as the same key, however they are written (`5F80·61C4…`, `5f8061c4…`).
+bool sameFingerprint(String a, String b) {
+  String norm(String v) => v.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+  final x = norm(a), y = norm(b);
+  return x.isNotEmpty && x == y;
 }

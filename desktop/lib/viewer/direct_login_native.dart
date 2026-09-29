@@ -5,6 +5,7 @@ import '../auth/cli_login.dart';
 import '../auth/sign_in_client.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
+import 'viewer_key_store.dart';
 
 /// Signing in with no harness CLI — cli.ts `loginCommand`, run by the app: a loopback listener for
 /// the SSO redirect, `authorize-native` for the page to show, `exchange` for the tokens.
@@ -12,7 +13,7 @@ import 'direct_auth_api.dart';
 /// It deliberately skips the CLI's closing `resolve-computer`, which registers the computer as a
 /// Harness machine. A viewer is not one.
 class DirectLogin implements SignInClient {
-  DirectLogin({required this.auth});
+  DirectLogin({required this.auth, ViewerKeyStore? keys});
 
   final DirectAuth auth;
   _LoopbackCallback? _pending;
@@ -27,6 +28,7 @@ class DirectLogin implements SignInClient {
   @override
   Future<void> login({
     required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
   }) async {
     cancel();
     final revision = _loginRevision;

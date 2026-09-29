@@ -5,6 +5,15 @@ import 'package:harness/auth/cli_link.dart';
 /// In-memory CLI for password UI/native fixtures. Never invokes a process or
 /// reads a Harness home. Every password used with this fake is fixture text.
 class PasswordCli implements CliLink {
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => const CliLinkConnectResult(error: 'not used');
+
   RemotePasswordStatus status = const RemotePasswordStatus();
   RemotePasswordSetResult setResult = const RemotePasswordSetResult(
     fingerprint: '1535·C035·9474·FE9D',

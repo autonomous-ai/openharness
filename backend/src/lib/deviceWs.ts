@@ -339,7 +339,7 @@ export function handleDeviceUpgrade(req: IncomingMessage, socket: Duplex, head: 
   void (async () => {
     let user
     try {
-      user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: false })
+      user = await authenticateAccessToken(accessToken, autonomousEnv, { allowHarnessSession: false, allowDaemonSessionFor: computerId })
     } catch (err) {
       if (err instanceof SsoAuthError && (err.code === 'AUTONOMOUS_ENV_MISMATCH' || err.code === 'AUTONOMOUS_ENV_NOT_ALLOWED')) {
         denyWith(403, 'Forbidden')

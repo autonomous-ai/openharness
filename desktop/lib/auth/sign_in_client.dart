@@ -8,7 +8,11 @@ abstract interface class SignInClient {
   Future<CliAuthStatus> checkStatus();
 
   /// Resolves once signed in; throws on failure or [cancel]. [onAuthorizeUrl] gets the SSO page.
-  Future<void> login({required void Function(String url) onAuthorizeUrl});
+  /// With [qr], a sign-in by phone instead (a CLI-backed build only; others ignore it).
+  Future<void> login({
+    required void Function(String url) onAuthorizeUrl,
+    SignInQrListener? qr,
+  });
 
   void cancel();
 

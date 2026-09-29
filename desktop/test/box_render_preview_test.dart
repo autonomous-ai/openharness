@@ -40,6 +40,15 @@ import 'support/restart_connection.dart';
 import 'terminal_find_test.dart' show findField, finishFind, output;
 
 class _PreviewLink implements PeerLinkClient {
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => const CliLinkConnectResult(error: 'not used');
+
   final result = Completer<CliLinkConnectResult>();
   @override
   Future<CliLinkConnectResult> connect(

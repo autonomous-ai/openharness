@@ -19,6 +19,15 @@ import 'package:harness/widgets/pane_grid.dart';
 import 'swarm_screen_test.dart' show terminal;
 
 class _Link implements CliLink {
+  @override
+  Future<CliLinkConnectResult> connectWithCode(
+    String machineId,
+    String code, {
+    required String label,
+    String? displayName,
+    String? expectedFingerprint,
+  }) async => const CliLinkConnectResult(error: 'not used');
+
   _Link(this.onConnect);
   final Future<CliLinkConnectResult> Function(String machineId, String password)
   onConnect;
