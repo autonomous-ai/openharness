@@ -809,6 +809,7 @@ class _DaemonPanelState extends State<DaemonPanel> with _PairSections {
       PlateSize.portrait,
       viewing.version,
       mood,
+      performance: isPair && face.livingTim ? face.feeling.emotion.name : null,
     );
     final cardArt = plates?.art(
       viewing,

@@ -2205,3 +2205,63 @@ describe('spoken output search purpose', () => {
     } finally {await session.stop()}
   })
 })
+
+
+describe('desktop companion USB lifecycle', () => {
+  const initial = () => ({v:1,window:'desktop',epoch:1,revision:1,serial:1,enabled:true,foreground:true,
+    motion:true,phase:'egg',egg:{kind:'first',stage:'p4',uid:'egg'},
+    feeling:{emotion:'content',reason:'ready',intensity:1}})
+  it('sends art only to capable firmware, repeats it after an account change and clears off', async () => {
+    let state:Record<string,unknown>=initial()
+    const art=vi.fn(async () => ({key:'egg:first:p4:reveal',frames:[{rows:'oo',mats:'pp'}],frameMs:190,loop:true,palette:Array(8).fill(65535)}))
+    const {session,port}=await connect(makeHost({companion:()=>state,companionArt:art}))
+    try {
+      port.say({t:'hello',product:'harness',mac:'legacy'})
+      await vi.waitFor(()=>expect(port.types()).toContain('agents.end'))
+      await session.syncCompanion();expect(art).not.toHaveBeenCalled()
+      port.say({t:'hello',product:'harness',mac:'new',companion:1})
+      await vi.waitFor(()=>expect(port.types()).toContain('companion.art.end'))
+      expect(art).toHaveBeenCalledTimes(1)
+      await session.syncCompanion();expect(art).toHaveBeenCalledTimes(1)
+      state={...state,epoch:2,revision:2,serial:2};await session.syncCompanion()
+      expect(art).toHaveBeenCalledTimes(2)
+      state={...state,enabled:false,revision:3,serial:3};await session.syncCompanion()
+      expect(port.sent.at(-1)).toMatchObject({t:'companion.state',enabled:false,art:null})
+    } finally {await session.stop()}
+  })
+  it('a late clip never commits after the experiment turns off', async () => {
+    let finish!: (v:never)=>void
+    let state:Record<string,unknown>=initial()
+    const art=vi.fn(()=>new Promise<never>(resolve=>{finish=resolve}))
+    const {session,port}=await connect(makeHost({companion:()=>state,companionArt:art}))
+    try {
+      port.say({t:'hello',product:'harness',mac:'new',companion:1})
+      await vi.waitFor(()=>expect(art).toHaveBeenCalledTimes(1))
+      state={...state,enabled:false,serial:2,revision:2};await session.syncCompanion()
+      finish({key:'egg:first:p4:reveal',frames:[{rows:'oo',mats:'pp'}],frameMs:190,loop:true,palette:Array(8).fill(65535)} as never)
+      await settle()
+      expect(port.types()).not.toContain('companion.art.begin')
+    } finally {await session.stop()}
+  })
+})
+
+it('never delivers an old companion action receipt to a replacement USB connection', async () => {
+  let finish!: (v:{ok:boolean})=>void
+  const action=vi.fn(()=>new Promise<{ok:boolean}>(resolve=>{finish=resolve}))
+  const {session,port}=await connect(makeHost({companionAction:action}))
+  try {
+    port.say({t:'hello',product:'harness',mac:'old',companion:1})
+    await vi.waitFor(()=>expect(port.types()).toContain('agents.end'))
+    port.say({t:'companion.action',requestId:'tap',action:'pet'})
+    await vi.waitFor(()=>expect(action).toHaveBeenCalledTimes(1))
+    await port.close('unplugged')
+    const clock=vi.spyOn(Date,'now').mockReturnValue(Date.now()+2100)
+    try {await session['tryOpen']()} finally {clock.mockRestore()}
+    const replacement=session['link'] as LoopbackPort
+    expect(replacement).not.toBe(port)
+    replacement.say({t:'hello',product:'harness',mac:'new',companion:1})
+    await vi.waitFor(()=>expect(replacement.types()).toContain('agents.end'))
+    finish({ok:true});await settle()
+    expect(replacement.types()).not.toContain('companion.action.result')
+  } finally {await session.stop()}
+})

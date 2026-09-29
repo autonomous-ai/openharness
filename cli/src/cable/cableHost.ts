@@ -1,3 +1,5 @@
+import { companionArt } from './companionArt.js'
+import type { CompanionState } from './companionState.js'
 // Everything the cable session needs from the rest of the daemon, in one place.
 //
 // The session owns the protocol and nothing else; this owns the answers. Keeping them apart is what lets
@@ -36,6 +38,8 @@ export interface RecentTurn {
 }
 
 export interface CableHostWiring {
+  companion?: () => Record<string, unknown>
+  companionAction?: (raw: Record<string, unknown>) => Promise<{ok:boolean;error?:string}>
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
@@ -152,6 +156,19 @@ export class DaemonCableHost implements CableHost {
 
   /** `undefined` = no lane to any other machine exists; the wheel is the local row and nothing else. */
   constructor(private readonly wiring: CableHostWiring, private readonly fleet?: MachineFleet) {}
+
+  async companionAction(raw: Record<string, unknown>) {
+    return this.wiring.companionAction?.(raw) ?? {ok:false,error:'Open Harness to continue.'}
+  }
+
+  async companionArt(state: Record<string, unknown>) {
+    return companionArt(state as unknown as CompanionState)
+  }
+
+  companion(): Record<string, unknown> {
+    return this.wiring.companion?.() ?? { v: 1, window: 'none', epoch: 0,
+      revision: 0, serial: 0, foreground: false, enabled: false }
+  }
 
   /** The identity of the computer at the other end of the cable. */
   localMachine(): { id: string; name: string } {

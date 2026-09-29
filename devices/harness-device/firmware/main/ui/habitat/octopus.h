@@ -18,7 +18,7 @@ enum { HT_OCTOPUS_BRIEF_Y = 126, HT_OCTOPUS_READING_Y = 126,
 enum { HT_OCTOPUS_BRIEF_Y = 96, HT_OCTOPUS_READING_Y = 92,
        HT_OCTOPUS_BRIEF_TEXT_Y = 284, HT_OCTOPUS_READING_TEXT_Y = 224 };
 #endif
-extern const ht_font_t ht_octopus_font_2, ht_octopus_font_4, ht_octopus_font_6, ht_octopus_font_8, ht_octopus_font_10;
+extern const ht_font_t ht_octopus_font_2, ht_octopus_font_4, ht_octopus_font_6, ht_octopus_font_8, ht_octopus_font_10, ht_octopus_font_12;
 #if HT_FACE_PX >= 720
 // The Pro's two rungs. 27*16 = 432 px of companion on a 720 face, and 27*14 = 378 for the state that
 // has to share the page with a detail line. See the ladder note in scripts/gen_octopus.py.

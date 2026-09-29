@@ -155,6 +155,9 @@ static void send_hello(void)
     // Named before anything else about this dial is believed. See CABLE_PRODUCT.
     msg_string(&root, "product", CABLE_PRODUCT);
     msg_number(&root, "proto", CABLE_PROTO_VERSION);
+#ifdef DEVICE_DESKTOP_COMPANION
+    msg_number(&root, "companion", 1);
+#endif
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -1040,6 +1043,12 @@ static void handle_message(const cJSON *root)
 #endif
         return;
     }
+#ifdef DEVICE_DESKTOP_COMPANION
+    if (!strcmp(t, "companion.state") || !strncmp(t, "companion.art.", 14) || !strcmp(t, "companion.action.result")) {
+        ui_companion_message(p);
+        return;
+    }
+#endif
     if (strcmp(t, "turn.done") == 0) {
         // `done` stops the spinner and deliberately does NOT ring: a turn's completion is announced by
         // the summary that follows, which is the thing a person can act on. Ringing here as well is how
@@ -1293,3 +1302,13 @@ void cable_client_counters(uint32_t *bad, uint32_t *unknown)
     if (bad) *bad = s_bad;
     if (unknown) *unknown = s_unknown;
 }
+
+#ifdef DEVICE_DESKTOP_COMPANION
+void cable_client_companion_action(const char *request,const char *window,uint32_t epoch,const char *target,const char *action)
+{
+    cJSON *root=msg("companion.action");if(!root)return;
+    msg_string(&root,"requestId",request);msg_string(&root,"window",window);
+    msg_number(&root,"epoch",epoch);msg_string(&root,"target",target);msg_string(&root,"action",action);
+    send_json(root);
+}
+#endif

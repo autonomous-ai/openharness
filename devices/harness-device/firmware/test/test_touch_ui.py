@@ -1083,7 +1083,7 @@ static void tab_frame_checks(void) {
     static uint16_t full[466*466], delta[466*466], patch[466*466];
     ht_scene_t previous={0};
     workspace_setup();
-    strcpy(s.tabs[1].name,"Device firmware and voice interaction experiments");
+    COPY(s.tabs[1].name,"Device firmware and voice interaction experiments");
     strcpy(s.tabs[2].name,"Caf\xc3\xa9 / infrastructure");
     dispatch((action_t){.kind=A_TABS});
     for(int position=-80;position<=3*HT_TAB_PITCH+80;position+=17) {
@@ -1471,7 +1471,7 @@ int main(int argc, char **argv) {
     workspace_setup(); s.connected=false; dispatch((action_t){.kind=A_TABS}); scene_take();
     assert(!action_enabled(A_TAB)); tap(32000,233,233); assert(!tab_switches && !starts);
     // Long names wrap without painting into the rim. The only footer is Back.
-    workspace_setup(); strcpy(s.tabs[1].name,"A workspace with a longer name for device development");
+    workspace_setup(); COPY(s.tabs[1].name,"A workspace with a longer name for device development");
     dispatch((action_t){.kind=A_TABS}); scene_take(); portrait(dir,"tabs-long-name");
     tap(33000,233,420); assert(s.view==HOME && !tab_switches && !starts);
     reset(); s.view=INBOX; dispatch((action_t){.kind=A_NOTICE,.id="off-tab-agent"});
@@ -1867,6 +1867,13 @@ int main(int argc, char **argv) {
 '''
 extra_sources = []
 extra_includes = ['-DDEVICE_HABITAT_ORANGE=1'] if os.environ.get('HABITAT_TEST_ORANGE') else []
+if os.environ.get('HABITAT_COMPANION_TEST'):
+    assert not os.environ.get('HABITAT_BRIDGE_TRACE'), 'Run the two specialized replays separately'
+    from companion_touch_replay import instrument
+    code = instrument(code, source)
+    json_dir = Path(os.environ['IDF_PATH']) / 'components/json/cJSON'
+    extra_sources = [str(native / 'companion.c'), str(json_dir / 'cJSON.c')]
+    extra_includes += ['-DDEVICE_DESKTOP_COMPANION=1', '-I', str(json_dir), '-Wno-deprecated-declarations']
 if os.environ.get('HABITAT_BRIDGE_TRACE'):
     from bridge_flow_replay import instrument
     code = instrument(code, os.environ['HABITAT_BRIDGE_TRACE'], native.parent.parent)

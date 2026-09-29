@@ -8,8 +8,8 @@ import '../core/viewer_mode.dart';
 enum ExperimentalFeature {
   focusBarCreature(
     'focus_bar_creature',
-    'Focus-bar creature',
-    'Start with an egg in the focus bar. Your collection and progress are saved to your account.',
+    'Companion',
+    'Start with an egg and grow your companion in Harness and on your connected device. Your collection and progress are saved to your account.',
   ),
   shareButton(
     'share_button',

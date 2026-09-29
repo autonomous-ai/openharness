@@ -1,0 +1,77 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tim · a whole life</title>
+<style>
+@font-face{font-family:Jgs;src:url(data:font/ttf;base64,FONT_DATA)}
+:root{color-scheme:dark;font:14px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:#e8e7ed;background:#111115;--muted:#a5a2b1;--accent:#daa8fa}
+*{box-sizing:border-box}body{margin:0}main{max-width:1140px;margin:auto;padding:44px 30px 28px}h1{font:500 clamp(29px,4vw,46px)/1.1 ui-monospace,monospace;letter-spacing:-2px;margin:13px 0 18px}p{color:var(--muted);max-width:74ch}small{color:var(--muted)}.eyebrow{color:var(--accent);letter-spacing:2px;font-size:11px}.workspace{display:grid;grid-template-columns:minmax(330px,1fr) minmax(290px,.9fr);gap:50px;align-items:center;margin:34px 0}.device{border-radius:50%;background:#101010;box-shadow:0 0 0 1px #45434c,0 18px 65px #0007;width:100%;aspect-ratio:1;max-width:466px;display:block;cursor:pointer}.focus{border-top:1px solid #39383d;border-bottom:1px solid #39383d;background:#232326;padding:11px 14px;display:flex;align-items:center;gap:16px;white-space:nowrap;overflow:auto;margin:18px 0}.focus .repo{color:#9cb8f4}.focus #mini{margin-left:auto;color:var(--accent);font-weight:600;white-space:pre}label{display:block;color:var(--muted);margin:12px 0 5px}select,button,input{font:inherit}select{background:#1b1a21;border:1px solid #514b5a;color:#ece7f5;padding:9px 10px;width:100%;border-radius:0}button{background:none;color:#e3dded;border:1px solid #45404f;padding:7px 12px;cursor:pointer}button:hover,button[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:#2e2336}button:focus-visible,select:focus-visible,input:focus-visible,canvas:focus-visible{outline:2px solid #e6b4ff;outline-offset:3px}.buttons{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.row{display:grid;grid-template-columns:1fr 1fr;gap:18px}.checks{display:flex;gap:20px;flex-wrap:wrap}.checks label{color:#d5ccdf;display:flex;gap:9px;align-items:center}.story{min-height:76px;margin-top:20px;color:#ded3e7}.story strong{color:var(--accent);font-weight:500}#traits{font-size:12px;min-height:42px}.timeline{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}.timeline button{font-size:12px;padding:6px 8px}.moods{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}.moods button{font-size:12px}.divider{border-top:1px solid #36333e;padding-top:24px;margin-top:24px}.legend{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}.legend p{margin:0;font-size:12px}footer{margin-top:34px;border-top:1px solid #36333e;padding-top:18px;color:var(--muted);font-size:12px}#live{font-size:12px;color:var(--accent)}@media(max-width:760px){main{padding:28px 20px}.workspace{grid-template-columns:1fr;gap:20px}.device{max-width:400px;margin:auto}h1{letter-spacing:-1px}.controls{max-width:500px}.focus{font-size:12px;gap:8px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+.skip{position:absolute;left:-10000px}.skip:focus{left:20px;top:8px;background:#111115;color:#e6b4ff;padding:8px}nav{margin-bottom:22px}a{color:var(--accent)}
+.preview{position:relative;max-width:466px}.hatch{position:absolute;left:50%;top:75.1%;transform:translateX(-50%);width:41.2%;height:11.6%;padding:0;font-size:20px}.hatch[hidden]{display:none}@media(max-width:760px){.preview{max-width:400px;margin:auto}.hatch{font-size:17px}}
+</style>
+<a class="skip" href="#main">Skip to Tim review</a><main id="main"><nav aria-label="Review pages"><a href="index.html">← All daemon reviews</a></nav><div class="eyebrow">HARNESS / EXPERIMENTAL</div><h1>Tim. A whole life.</h1>
+<p>An egg that grows with your work. A tiny octopus with eight busy arms. The same individual on your desktop and the device beside it.</p>
+<div class="focus" aria-label="Desktop focus bar preview"><span>Harness</span><span class="repo">openharness</span><span id="mini">\_(  )_/</span></div>
+<div class="workspace"><div><div class="preview"><canvas class="device" id="screen" width="466" height="466" tabindex="0" role="button" aria-label="Preview voice. Tap the egg or Tim to speak; tap again to finish."></canvas><button class="hatch" id="hatch" hidden>Hatch</button></div>
+<div class="buttons"><button id="life">Play egg → Tim</button><button id="day">Play a workday</button><button id="pause" aria-pressed="false">Pause</button></div><div id="live" aria-live="polite"></div></div>
+<div class="controls"><div class="row"><div><label for="age">Life stage</label><select id="age"><option value="egg">Egg</option><option value="0.1">Baby Tim</option><option value="1.0">Growing Tim</option><option value="2.0">Mature Tim</option></select></div><div><label for="seed">Individual</label><select id="seed"><option value="0">Tim · original</option><option value="1363">Tim · 1363</option><option value="84">Tim · 84</option><option value="27">Tim · 27</option></select></div></div>
+<p id="traits"></p><label for="egg">Egg kind</label><select id="egg"></select><div class="timeline" id="stages" aria-label="Egg development"></div>
+<div class="checks"><label><input id="enabled" type="checkbox" checked>Experiment on</label><label><input id="still" type="checkbox">Reduce motion</label></div>
+<p class="story" id="story"></p><small>Tap the egg or Tim to preview voice; tap again to finish. A ready egg has a separate Hatch button at the bottom. On the device, hold to open tabs.</small></div></div>
+<div class="divider"><div class="legend"><span>21 performances, one personality</span><small>Choose a feeling to inspect its full loop.</small></div><div class="moods" id="moods"></div></div>
+<footer><div class="legend"><p>Local review · production artwork and seeded traits · no server required</p><p>Preview only. No account or device changes.</p></div><p>The app saves actual egg progress and growth. This page lets you move through them freely. A real reconnect resumes the saved stage.</p></footer></main>
+<script>
+/*DATA*/
+const $=id=>document.getElementById(id), ctx=$('screen').getContext('2d');
+let phase='egg',stage='p0',emotion='content',start=performance.now(),paused=false,freeze=0,sequence=[],next=0,step=0,listening=false;
+const stages=['p0','p1','p2','p3','p4','rock','burst','tumble','open'];
+const stageLabels=['Whole','Hairline crack','Cracking','Light inside','Ready','Wobble','Burst','Shells tumble','Open'];
+const stories={content:'A small breath. A slow curl. All is well.',curious:'Something caught his eye. One arm investigates.',bored:'Nothing needs him. He looks around and fidgets.',playful:'A little stretch turns into a game.',working:'Eight arms, eight things to keep an eye on.',focused:'Several agents are working. He leans in.',happy:'A good result deserves a little bounce.',excited:'The PR merged. Arms up. A leap, then a soft landing.',proud:'Growing into himself. Standing a little taller.',relieved:'The retry worked. He can finally loosen up.',frustrated:'Another failure. A shake and a tightly curled arm.',angry:'Repeated failures have him wound up. It passes.',sad:'That last turn still needs a fix. He droops for a while.',tired:'A long stretch of work is showing in his posture.',exhausted:'Even eight arms get heavy. Rest restores his energy.',attentive:'An agent needs you. Tim pays attention.',asleep:'A quiet desk. Eyes closed, arms tucked in.',offline:'He has lost the connection. No made-up work or reactions.',listening:'The microphone is open. He is paying attention.',affectionate:'A small hello back to the person at his desk.',hatching:'The world is new. So much to look at.'};
+for(const kind of Object.keys(DATA.eggs))$('egg').add(new Option(kind,kind));
+for(const [i,s] of stages.entries()){const b=document.createElement('button');b.textContent=stageLabels[i];b.dataset.stage=s;b.onclick=()=>{sequence=[];choose('egg',s)};$('stages').append(b)}
+for(const mood of Object.keys(DATA.tim[0]['2.0'])){const b=document.createElement('button');b.textContent=mood;b.dataset.mood=mood;b.onclick=()=>{sequence=[];choose(phase==='egg'?'2.0':phase,null,mood)};$('moods').append(b)}
+function choose(age,eggStage=stage,mood=emotion){phase=age;stage=eggStage||stage;emotion=mood;listening=false;start=performance.now();freeze=0;$('age').value=phase;update()}
+function update(){
+ $('traits').textContent=DATA.traits[$('seed').value];
+ $('story').replaceChildren();const strong=document.createElement('strong');strong.textContent=phase==='egg'?stageLabels[stages.indexOf(stage)]:(phase==='0.1'?'Baby Tim':phase==='1.0'?'Growing Tim':'Mature Tim')+' · '+emotion;
+ $('story').append(strong,document.createElement('br'),phase==='egg'?['A whole little world, waiting to begin.','The first sign that something is changing.','More real work, a little more light.','A glimpse of the life inside.','Ready when you are. Choose Hatch below the egg.','A determined wobble.','The shell lifts.','Two halves, one little surprise.','A place for a baby octopus to sit.'][stages.indexOf(stage)]:stories[emotion]);
+ for(const b of document.querySelectorAll('[data-stage]'))b.setAttribute('aria-pressed',phase==='egg'&&stage===b.dataset.stage);
+ for(const b of document.querySelectorAll('[data-mood]'))b.setAttribute('aria-pressed',phase!=='egg'&&emotion===b.dataset.mood);
+ $('hatch').hidden=!$('enabled').checked||phase!=='egg'||stage!=='p4'||listening;
+ $('live').textContent=$('enabled').checked?((phase==='egg'?`Egg · ${stageLabels[stages.indexOf(stage)]}`:`Tim · ${phase==='0.1'?'baby':phase==='1.0'?'growing':'mature'} · ${emotion}`)+(listening?' · listening · tap again to finish':'')):'Companion hidden. The saved life stays intact.';
+}
+$('age').onchange=()=>{sequence=[];choose($('age').value)};$('seed').onchange=()=>{start=performance.now();update()};$('egg').onchange=()=>{sequence=[];choose('egg','p0')};$('enabled').onchange=()=>{listening=false;update()};
+$('still').checked=matchMedia('(prefers-reduced-motion:reduce)').matches;
+$('pause').onclick=()=>{paused=!paused;if(paused)freeze=performance.now()-start;else start=performance.now()-freeze;$('pause').textContent=paused?'Resume':'Pause';$('pause').setAttribute('aria-pressed',paused)};
+function play(items){sequence=items;step=0;next=0;paused=false;listening=false;$('pause').textContent='Pause';$('pause').setAttribute('aria-pressed',false)}
+const hatch=[['egg','rock','content',1100],['egg','burst','content',900],['egg','tumble','content',700],['egg','open','content',500],['0.1',null,'hatching',2500]];
+$('life').onclick=()=>play([...stages.slice(0,5).map(s=>['egg',s,'content',1800]),...hatch,['0.1',null,'content',2200],['1.0',null,'proud',2400],['2.0',null,'proud',3000]]);
+$('day').onclick=()=>play(['content','curious','working','focused','frustrated','angry','relieved','excited','proud','bored','playful','tired','exhausted','asleep'].map(m=>['2.0',null,m,3200]));
+function tap(){if(!$('enabled').checked)return;sequence=[];listening=!listening;start=performance.now();freeze=0;update()}
+$('hatch').onclick=()=>{if($('enabled').checked&&phase==='egg'&&stage==='p4'&&!listening)play(hatch)};
+$('screen').onclick=tap;$('screen').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();tap()}};
+const color=n=>[(n>>11)*255/31,((n>>5)&63)*255/63,(n&31)*255/31];
+function tick(now){
+ if(document.hidden){requestAnimationFrame(tick);return}
+ if(sequence.length&&!paused&&$('enabled').checked&&now>=next){const item=sequence[step++];if(item){choose(...item);next=now+($('still').checked?Math.max(item[3],1800):item[3])}else sequence=[]}
+ ctx.fillStyle='#101010';ctx.fillRect(0,0,466,466);ctx.fillStyle='#dad9df';ctx.font='20px ui-monospace,monospace';ctx.textAlign='center';ctx.fillText('openharness',233,48);
+ if($('enabled').checked){
+  const feeling=listening?'listening':emotion;
+  const clip=phase==='egg'?DATA.eggs[$('egg').value][stage]:DATA.tim[$('seed').value][phase][feeling];
+  const elapsed=paused?freeze:now-start;let f=$('still').checked?0:Math.floor(elapsed/clip.frameMs);f=clip.loop?f%clip.frames.length:Math.min(f,clip.frames.length-1);
+  const frame=clip.frames[f],rows=frame.rows.split('\n'),mats=frame.mats.split('\n'),width=rows[0].length,top=rows.length>24?52:92;
+  ctx.font='12px Jgs';ctx.textAlign='left';ctx.textBaseline='top';
+  for(let y=0;y<rows.length;y++)for(let x=0;x<width;x++){
+   const ch=rows[y][x];if(ch===' ')continue;const m=mats[y][x],which={m:2,a:3,e:4,g:5,s:6,p:7}[m];
+   let c=which?color(clip.palette[which]):color(clip.palette[0]).map((v,i)=>v+(color(clip.palette[1])[i]-v)*y/Math.max(1,rows.length-1));
+   const shade={'.':.42,',':.42,':':.5,';':.56,o:.78,x:.82,'@':1.35}[ch]||1;c=c.map(v=>shade>1?v+(255-v)*(shade-1):16+(v-16)*shade);
+   if(feeling==='asleep'&&phase!=='egg')c=c.map(v=>16+(v-16)*.55);
+   ctx.fillStyle=`rgb(${c.map(Math.round).join(',')})`;ctx.fillText(ch,(466-width*6)/2+x*6,top+y*12);
+  }
+  $('mini').textContent=phase==='egg'?DATA.eggLines[$('egg').value][stage]:DATA.sprites[$('seed').value][phase][feeling][$('still').checked?0:Math.floor(elapsed/300)%4];
+  ctx.font='20px ui-monospace,monospace';ctx.textAlign='center';ctx.fillStyle='#a5a2b1';
+  if(listening)ctx.fillText('Listening · tap to finish',233,410);
+  else if(phase==='egg'&&stages.indexOf(stage)<4)ctx.fillText('tap egg to speak',233,365);
+ } else {$('mini').textContent='';ctx.font='20px ui-monospace,monospace';ctx.textAlign='center';ctx.fillStyle='#8e8a98';ctx.fillText('Harness',233,223)}
+ ctx.textBaseline='alphabetic';requestAnimationFrame(tick);
+}
+document.fonts.ready.then(()=>{update();requestAnimationFrame(tick)});
+</script></html>

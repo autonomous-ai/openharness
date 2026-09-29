@@ -27,7 +27,8 @@ import 'zoo.dart';
 /// (`m` a marking, `a` its extra, `e` the odd eye), and how long each shows.
 @immutable
 class DaemonIndividualArt {
-  const DaemonIndividualArt(this.frames, this.frameMs);
+  const DaemonIndividualArt(this.frames, this.frameMs, {this.performance});
+  final String? performance;
   final List<PlateFrame> frames;
   final int frameMs;
 }
@@ -70,7 +71,9 @@ class DaemonPlateClient extends ChangeNotifier {
     PlateSize size,
     String version,
     DaemonMood mood,
-  ) => '${d.uid} ${d.id} ${d.seed} ${size.name} $version ${mood.name}';
+    String? performance,
+  ) =>
+      '${d.uid} ${d.id} ${d.seed} ${size.name} $version ${mood.name} ${performance ?? '-'}';
 
   /// [daemon]'s own plate at [size], [version] and [mood], when the harness
   /// process has drawn it; otherwise null, and it is asked for once (again
@@ -80,12 +83,13 @@ class DaemonPlateClient extends ChangeNotifier {
     ZooDaemon daemon,
     PlateSize size,
     String version,
-    DaemonMood mood,
-  ) {
-    if (_disposed || daemon.seed == 0) return null;
+    DaemonMood mood, {
+    String? performance,
+  }) {
+    if (_disposed || (daemon.seed == 0 && performance == null)) return null;
     final def = roster.byId(daemon.id);
     if (def == null || !def.plate || def.traits == null) return null;
-    final key = _key(daemon, size, version, mood);
+    final key = _key(daemon, size, version, mood, performance);
     final have = _art.remove(key);
     if (have != null) {
       _art[key] = have; // most recently used last
@@ -94,7 +98,7 @@ class DaemonPlateClient extends ChangeNotifier {
     if (_asked.containsKey(key)) return null;
     final failed = _failedAt[key];
     if (failed != null && _now().difference(failed) < retryAfter) return null;
-    _ask(key, daemon, size, version, mood);
+    _ask(key, daemon, size, version, mood, performance);
     return null;
   }
 
@@ -112,6 +116,7 @@ class DaemonPlateClient extends ChangeNotifier {
     PlateSize size,
     String version,
     DaemonMood mood,
+    String? performance,
   ) {
     final requestId = 'plate-${++_next}';
     _pending[requestId] = key;
@@ -128,6 +133,7 @@ class DaemonPlateClient extends ChangeNotifier {
       'size': size.name,
       'version': version,
       'mood': mood.name,
+      'performance': ?performance,
     });
     if (!sent) {
       _pending.remove(requestId);
@@ -165,7 +171,8 @@ class DaemonPlateClient extends ChangeNotifier {
     if (payload['uid'] != parts[0] ||
         payload['size'] != parts[3] ||
         payload['version'] != parts[4] ||
-        payload['mood'] != parts[5]) {
+        payload['mood'] != parts[5] ||
+        (payload['performance'] ?? '-') != parts[6]) {
       return null;
     }
     final raw = payload['frames'];
@@ -206,6 +213,7 @@ class DaemonPlateClient extends ChangeNotifier {
     return DaemonIndividualArt(
       frames,
       ms is int && ms >= 40 && ms <= 2000 ? ms : daemonPlates.frameMs,
+      performance: parts[6] == '-' ? null : parts[6],
     );
   }
 

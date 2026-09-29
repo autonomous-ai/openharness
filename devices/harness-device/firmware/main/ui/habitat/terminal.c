@@ -563,8 +563,8 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
                             qc = font_codepoint(old->font, qc);
                         }
                         if (pc != qc || (pc != ' ' &&
-                            (old->colors ? old->colors[cell] : old->fg) !=
-                            (next->colors ? next->colors[cell] : next->fg))) {
+                            ht_run_ink(old, cell) !=
+                            ht_run_ink(next, cell))) {
                             if (first < 0)
                                 first = cell;
                             last = cell;
@@ -920,7 +920,7 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 fill(out + (y - clip.y) * clip.w + x1 - clip.x, (size_t)(x2 - x1), panel16(r->bg));
         uint16_t palette[4] = {panel16(r->bg), blend(r->fg, r->bg, 1), blend(r->fg, r->bg, 2),
                                panel16(r->fg)};
-        bool cached = !r->colors && glyph_cache_prepare(f, r->fg, r->bg);
+        bool cached = !r->colors && !r->cell_color_count && glyph_cache_prepare(f, r->fg, r->bg);
         bool ascii = f->first == 32 && f->last >= 126;
 #ifdef DEVICE_LAYOUT_BENCH
         ascii = ascii && raster_fast_ascii;
@@ -937,8 +937,8 @@ void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
                 c = font_codepoint(f, c);
             }
             if (gx + f->width > x1 && c != ' ') {
-                if (r->colors) {
-                    uint16_t fg = r->colors[cell];
+                if (r->colors || r->cell_color_count) {
+                    uint16_t fg = ht_run_ink(r, cell);
                     palette[1] = blend(fg, r->bg, 1);
                     palette[2] = blend(fg, r->bg, 2);
                     palette[3] = panel16(fg);

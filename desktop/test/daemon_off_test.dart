@@ -53,6 +53,7 @@ void main() {
   late MemoryStore preferences;
   late ExperimentalFeaturesStore experiments;
   late List<(String, Map<String, dynamic>)> frames;
+  late List<Map<String, dynamic>> companionFrames;
 
   setUp(() {
     app = createApp();
@@ -68,8 +69,13 @@ void main() {
       terminalProtocolVersion: 3,
     );
     frames = [];
+    companionFrames = [];
     app.daemonFrameSenderForTest = (type, payload) {
-      frames.add((type, payload));
+      if (type == 'app_companion') {
+        companionFrames.add(payload);
+      } else {
+        frames.add((type, payload));
+      }
       return true;
     };
     preview = ValueNotifier(false);
@@ -167,6 +173,22 @@ void main() {
     await tester.pump();
     expect(experimentSwitch, findsOneWidget);
   }
+
+  testWidgets(
+    'Experimental off clears the device without erasing its individual',
+    (tester) async {
+      await mount(tester, on: true);
+      final uid = zoo.paired!.uid;
+      expect(companionFrames.last['enabled'], true);
+      await setCreature(tester, false);
+      expect(companionFrames.last['enabled'], false);
+      await setCreature(tester, true);
+      expect(companionFrames.last['enabled'], true);
+      expect(zoo.paired!.uid, uid);
+      await unmount(tester);
+      expect(companionFrames.last['enabled'], false);
+    },
+  );
 
   testWidgets(
     'Settings switches the creature on and off without leaving Settings',

@@ -782,14 +782,18 @@ void main() {
     await tester.pump();
     app.adoptSessionForTest(terminal('a0', []));
     app.adoptSessionForTest(terminal('a1', []));
-    await tester.pump();
-    final beforeTurns = tester.getRect(slot);
-    // a1 is in front: its turn is seen already; a0's is not.
+    // Establish the live pane/model context before comparing completion. The
+    // bottom bar now puts that model control beside the companion.
     for (final id in ['a0', 'a1']) {
       await app.handleMachineEventForTest('m', {
         'type': 'turn_started',
         'agentId': id,
       });
+    }
+    await tester.pump();
+    final beforeTurns = tester.getRect(slot);
+    // a1 is in front: its turn is seen already; a0's is not.
+    for (final id in ['a0', 'a1']) {
       await app.handleMachineEventForTest('m', {
         'type': 'turn_ended',
         'agentId': id,
@@ -982,6 +986,9 @@ void main() {
     setUp(() {
       frames = [];
       // This computer's own harnessd: the only socket daemon_* frames use.
+      app.stateOf('m')!
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
       app.stateOf('m')!.localEndpoint = LocalCliEndpoint(
         computerId: 'test-computer',
         wsUri: Uri.parse('ws://fixture.invalid'),
@@ -989,7 +996,9 @@ void main() {
         terminalProtocolVersion: 3,
       );
       app.daemonFrameSenderForTest = (type, payload) {
-        frames.add((type, payload));
+        // Device presentation has its own off/lifecycle tests. These assertions
+        // describe the pair brain's independent presence and work protocol.
+        if (type != 'app_companion') frames.add((type, payload));
         return true;
       };
     });

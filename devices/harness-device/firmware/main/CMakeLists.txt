@@ -194,6 +194,10 @@ if(DEVICE_HABITAT)
         "ui/habitat/command_face.c"
         "ui/habitat/fonts.c"
     )
+    # Desktop Companion currently has the round dial's artwork and touch layout.
+    if(IDF_TARGET STREQUAL "esp32s3")
+        list(APPEND BOARD_SRCS "ui/habitat/companion.c")
+    endif()
 endif()
 
 idf_component_register(
@@ -263,6 +267,9 @@ endif()
 
 if(DEVICE_HABITAT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT=1)
+    if(IDF_TARGET STREQUAL "esp32s3")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_DESKTOP_COMPANION=1)
+    endif()
     if(DEVICE_HABITAT_ORANGE)
         target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_ORANGE=1)
     endif()

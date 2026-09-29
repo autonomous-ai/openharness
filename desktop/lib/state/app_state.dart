@@ -539,6 +539,10 @@ class _AgentStop {
 enum AttachIntent { person, automatic }
 
 class AppNotifier extends ChangeNotifier {
+  /// Stable across this window's per-machine sockets, never an account id.
+  final desktopWindowId = _newCreationId();
+  VoidCallback? companionReconnect;
+  void Function(String, String, Map<String, dynamic>)? companionTool;
   final AuthSession session;
 
   /// The noise this window makes when an agent finishes or gets stuck.
@@ -2507,6 +2511,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _announceAppFocus() {
+    companionReconnect?.call();
     final pane = focusedPane;
     // A viewer is its agent's, so focusing it is focusing that agent: the dial
     // and the daemon see one agent at this desk, not a tile they cannot name.
@@ -2528,6 +2533,7 @@ class AppNotifier extends ChangeNotifier {
         ? send(machineId, agentId)
         : _pool?[machineId]?.sendTerminalFrame('app_focus', {
             'agentId': agentId,
+            'window': desktopWindowId,
             if (_deviceFocusRevision != null)
               'focusRevision': _deviceFocusRevision,
           });
@@ -12852,6 +12858,21 @@ class AppNotifier extends ChangeNotifier {
           streamingText: agent.engine == 'opencode' || agent.engine == 'kilo',
         );
       }
+      if (agent != null &&
+          machine.liveTurnAgents.contains(agent.id) &&
+          !machine.machine.isShared &&
+          !isTerminalEngine(agent.engine) &&
+          (type == 'tool_start' || type == 'tool_end')) {
+        companionTool?.call(
+          '$machineId/${agent.id}/${sessionId ?? agent.sessionId}',
+          type,
+          {
+            'id': payload['id'],
+            'tool': payload['tool'],
+            'isError': payload['isError'],
+          },
+        );
+      }
       // Content belongs to the preview's notifier. It must not invalidate the
       // entire workspace and catalog for every token or tool event.
       if (type != 'turn_started' && type != 'turn_ended') return;
@@ -13011,6 +13032,7 @@ class AppNotifier extends ChangeNotifier {
       case 'daemon_talk_result':
       case 'pair_result':
       case 'daemon_plate':
+      case 'dial_companion':
         // Only from the loopback socket bound to this computer's harnessd.
         if (machine.usesLocalTransport) {
           _daemonFrames.add((type: type, payload: payload));
@@ -13292,6 +13314,16 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
           final live = machine.liveTurnAgents.remove(agentId);
+          if (live &&
+              payload['aborted'] != true &&
+              !machine.machine.isShared &&
+              machine.agents.any(
+                (a) => a.id == agentId && !isTerminalEngine(a.engine),
+              )) {
+            companionTool?.call('$machineId/$agentId', 'turn_ended', {
+              'failed': event['error'] != null || payload['error'] != null,
+            });
+          }
           // A SUB-AGENT'S turn end is not news — an Orchestrator specialist, or
           // its Director while specialists are still out. The dial has always
           // known (`silent` on its summary card) and this window never did, so a

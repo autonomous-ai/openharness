@@ -116,6 +116,9 @@ import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
 import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
+import '../daemons/companion_life.dart';
+import '../daemons/companion_observers.dart';
+import '../daemons/companion_publisher.dart';
 import '../daemons/daemon_plate_client.dart';
 import '../daemons/daemon_habits.dart';
 import '../daemons/daemon_settings.dart';
@@ -258,6 +261,120 @@ class _SwarmScreenState extends State<SwarmScreen> {
     now: widget.daemonClock,
     settings: _daemonSettings,
   );
+  late final _companion = CompanionPublisher(
+    window: app.desktopWindowId,
+    now: widget.daemonClock,
+    send: (payload) =>
+        app.viewer == null &&
+        !_zoo.isPreview &&
+        app.sendDaemonFrame('app_companion', payload),
+  );
+  Timer? _companionTimer;
+  late final _companionTools = CompanionTools(_face.react);
+  late final _companionPrs = CompanionPullRequests(
+    sources: () => [
+      for (final session in _sessions)
+        if (session.open &&
+            session.online &&
+            !session.machine.machine.isShared &&
+            session.project?.shownBranch != null)
+          (
+            key:
+                '${session.machineId}/${session.project?.remote}/${session.project?.cwd}/${session.project?.shownBranch}',
+            machine: session.machineId,
+            agent: session.agent.id,
+          ),
+    ],
+    read: app.readAgentPullRequest,
+    merged: (pr) => _face.react(CompanionEvent.merged, 'merge:${pr.url.path}'),
+  );
+  int _companionTurn = 0;
+  void _companionTool(String owner, String type, Map<String, dynamic> payload) {
+    if (type == 'turn_ended') {
+      if (_creatureEnabled && _face.livingTim) {
+        _face.react(
+          payload['failed'] == true
+              ? CompanionEvent.failed
+              : CompanionEvent.completed,
+          'turn:${++_companionTurn}',
+        );
+      }
+      return;
+    }
+    if (_creatureEnabled && _face.livingTim) {
+      _companionTools.observe(owner, type, payload);
+    }
+  }
+
+  final _knownCompanionPrs = <String, String>{};
+
+  void _publishCompanion({bool force = false}) {
+    if (!mounted) return;
+    _companion.publish(
+      _face.companionPresentation,
+      scope: _accountScope,
+      foreground: app.inForeground,
+      force: force,
+    );
+  }
+
+  Future<void> _companionAction(Map<String, dynamic> request) async {
+    final id = request['requestId'];
+    if (id is! String || id.length > 64) return;
+    var ok = false;
+    if (_creatureEnabled &&
+        !_zoo.isPreview &&
+        _zoo.loaded &&
+        _companion.owns(request)) {
+      final action = request['action'];
+      if (action == 'hatch' &&
+          _zoo.paired == null &&
+          _zoo.readyEgg?.id == request['target'] &&
+          _hatchOverlay == null &&
+          _zoo.hatchingEgg == null) {
+        await revealWindow();
+        if (mounted &&
+            _creatureEnabled &&
+            _companion.owns(request) &&
+            _zoo.readyEgg?.id == request['target']) {
+          _hatch(_zoo.readyEgg!);
+          ok = true; // Accepted; the server result drives the actual reveal.
+        }
+      } else if (_face.livingTim && _zoo.paired?.uid == request['target']) {
+        switch (action) {
+          case 'pet':
+            _face.boop();
+            ok = true;
+          case 'nap':
+            _face.nap();
+            ok = true;
+          case 'wake':
+            _face.wake();
+            ok = true;
+        }
+      }
+    }
+    if (mounted) {
+      app.sendDaemonFrame('app_companion_result', {'requestId': id, 'ok': ok});
+    }
+  }
+
+  void _companionReconnect() => _publishCompanion(force: true);
+
+  void _companionPrChanged() {
+    final pr = _pullRequest.value;
+    if (!_creatureEnabled || !_face.livingTim || pr == null) return;
+    final key = pr.url.toString();
+    final before = _knownCompanionPrs[key];
+    _knownCompanionPrs[key] = pr.state;
+    if (_knownCompanionPrs.length > 128) {
+      _knownCompanionPrs.remove(_knownCompanionPrs.keys.first);
+    }
+    if ((before == 'Open' || before == 'Draft') && pr.state == 'Merged') {
+      _face.react(CompanionEvent.merged, 'merge:${pr.url.path}');
+    }
+  }
+
   late final ValueListenable<bool>? _daemonsPreview = widget.daemonsPreview;
 
   late final _experimentalFeatures =
@@ -442,6 +559,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.deviceNavigationAllowed = _allowDeviceNavigation;
     app.deviceFormCommand = _deviceFormCommand;
     _pullRequest = WorkspacePullRequest(app)..addListener(_statusPrefsChanged);
+    _pullRequest.addListener(_companionPrChanged);
+    app.companionReconnect = _companionReconnect;
+    app.companionTool = _companionTool;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -510,6 +630,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _brainSubscriptions.addAll([
       app.daemonFrames.listen((f) {
         if (_zoo.isPreview || !_zoo.loaded) return;
+        if (f.type == 'dial_companion') {
+          unawaited(_companionAction(f.payload));
+          return;
+        }
         if (f.type == 'daemon_plate') {
           _plates.receive(f.type, f.payload);
           return;
@@ -621,6 +745,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   @override
   void dispose() {
+    _companion.publish(
+      {'enabled': false},
+      scope: _accountScope,
+      foreground: false,
+      force: true,
+    );
     _closeDaemonHint();
     app.foreground.removeListener(_daemonEnvironmentChanged);
     if (app.deviceNavigationAllowed == _allowDeviceNavigation) {
@@ -649,6 +779,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.agentPulse.removeListener(_face.pulse);
     _face.voiceLine.removeListener(_voiceChanged);
     _face.removeListener(_faceChanged);
+    app.companionReconnect = null;
+    app.companionTool = null;
+    _companionPrs.dispose();
+    _companionTimer?.cancel();
     _face.dispose();
     _daemonSettings.dispose();
     _zoo.removeListener(_zooChanged);
@@ -677,6 +811,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     terminalThemeStore.removeListener(_paletteChanged);
     appearancePrefsStore.removeListener(_statusPrefsChanged);
     _pullRequest.removeListener(_statusPrefsChanged);
+    _pullRequest.removeListener(_companionPrChanged);
     _pullRequest.dispose();
     terminalFontStore.removeListener(_fontChanged);
     app.removeListener(_recordNavigation);
@@ -1102,6 +1237,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
       enabled: app.isGuest ? _daemonsPreview?.value == true : _creatureEnabled,
     );
     _zoo.recheckIfDue();
+    _face.setLiving(_creatureEnabled || _daemonsPreview?.value == true);
+    _companionPrs.bind(
+      enabled: _creatureEnabled && !kUnderTest && !_zoo.isPreview,
+      scope: _accountScope,
+    );
+    if (!_creatureEnabled) _companionTools.reset();
+    if (_creatureEnabled) {
+      _companionTimer ??= Timer.periodic(
+        const Duration(seconds: 10),
+        (_) => _publishCompanion(force: true),
+      );
+    } else {
+      _companionTimer?.cancel();
+      _companionTimer = null;
+    }
+    _publishCompanion();
     final backendOnline = app.backendOnline;
     // A reconnect asks again, on or off.
     if (backendOnline == true && _backendWasOnline == false) _zoo.refresh();
@@ -1179,6 +1330,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final paired = _brain.paired;
     _face.sync(
       DaemonWatch(
+        connected:
+            _zoo.isPreview ||
+            app.machineStates.values.any(
+              (m) => m.connectionStatus == ConnectionStatus.connected,
+            ),
         working: working > 0 || brain?.working == true,
         workingCount: working,
         needIds: needs.keys.toSet(),
@@ -3384,6 +3540,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   void _faceChanged() {
+    _publishCompanion();
     // Two lines can read the same (the same command asked twice): the line's
     // id, not its words, decides whether it is new.
     if (mounted && _zoo.loaded) _voiceChanged();
@@ -3773,6 +3930,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   void _zooChanged() {
     if (!mounted) return;
     if (!_zoo.loaded || _lastZooScope != _zoo.scope) {
+      _knownCompanionPrs.clear();
+      _companionTools.reset();
       _closeDaemonHint();
       _closeDaemon(restoreFocus: false);
       _lastHabits = null;

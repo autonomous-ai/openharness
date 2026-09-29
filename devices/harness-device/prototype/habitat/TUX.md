@@ -1,9 +1,13 @@
 # Characters in Habitat
 
 Tim and Tux run the same Habitat application. Tap the character to talk; hold
-to open Tabs. The simplified picker has no Controls entry. The existing character
-preference is saved on the dial and survives a restart. Swapping artwork keeps
-the current pane, voice session, unread results, preferences and navigation.
+to open Tabs. The device no longer exposes a Controls menu. With the desktop
+Companion experiment enabled, Harness owns the egg and selected Tim. Tapping
+the egg also starts voice; a ready egg has a separate bottom Hatch button.
+Pet, nap and wake remain in the desktop companion UI. The dial retains its
+character preference for use with hosts without companion support or with the
+desktop experiment turned off. Off restores the ordinary portrait, recaps and
+controls; the desktop collection and growth progress are preserved.
 
 `firmware/main/ui/habitat/character.h` is the application interface. Characters
 implement the same eight moods: idle, working, attention, done, offline, asleep,
@@ -56,11 +60,11 @@ Tim and text actions use saturated orange `#ff6d00` on the existing charcoal, wi
 neutral text and a matching monochrome bell. This is a compile-time palette;
 normal builds keep purple.
 
-Notifications use a separate bottom bell with a broad 300 × 84 px target,
-starting below the central voice target. When empty, the bell is absent and has
-no hit target. New unread messages make it visible with the unread count
-alongside. Tapping it opens the inbox, which retains cards that were already
-read until the host removes them. Opening the inbox
+Notifications use a separate bottom bell with a broad target below voice. A
+ready egg reserves a separate row above the bell for Hatch. When empty, the bell
+is hidden. New unread messages make it visible with the unread count alongside.
+Tapping it opens the inbox, which retains cards that were already read until
+the host removes them. Opening the inbox
 chooses its first unread message. Completed and question messages use the same
 read-count rule, separate from whether a question remains unresolved. Tim and Tux no longer hold an envelope on any daily screen.
 The old letter art stays available to historical experiment renders.
@@ -376,7 +380,8 @@ Movement is classified before the hold deadline, including a delayed final sampl
 Tabs is a horizontal name carousel: drag with the finger, flick to advance, then
 tap the centered name to open. It has no row numbers, pane counts or list boxes.
 Long names wrap in the center. The active desktop tab uses the companion accent;
-other names use neutral text. Back and controls remain in a separate bottom row.
+other names use neutral text. Back occupies a separate bottom row; the companion
+integration removes the Controls link shown in the earlier reference image.
 The top home caption still opens panes, and the bell still opens unread messages.
 
 A 360 px page follows the finger directly, with soft bounded ends and a 224 ms

@@ -9,6 +9,9 @@
 #include "draft.h"
 #include "gestures.h"
 #include "character.h"
+#ifdef DEVICE_DESKTOP_COMPANION
+#include "companion.h"
+#endif
 #include "perf_bench.h"
 #include "command_face.h"
 #include "theme.h"
@@ -23,6 +26,9 @@ static ht_gallery_t gallery;
 #include "config_store.h"
 #include "cable_client.h"
 #include "esp_attr.h"
+#ifdef DEVICE_DESKTOP_COMPANION
+static EXT_RAM_BSS_ATTR ht_companion_t desktop_companion;
+#endif
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
@@ -96,6 +102,9 @@ typedef enum {
     A_VOICE_STOP,
     A_VOICE_ABORT,
     A_PET,
+#ifdef DEVICE_DESKTOP_COMPANION
+    A_DESKTOP_COMPANION,
+#endif
     A_COMPANION,
     A_CHARACTER, A_CHARACTER_SAVE,
     A_NAP,
@@ -681,6 +690,9 @@ static bool pro_written_control(action_kind_t a)
 #endif
 static bool home_footer(action_kind_t action)
 {
+#ifdef DEVICE_DESKTOP_COMPANION
+    if (action == A_DESKTOP_COMPANION) return true;
+#endif
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN || action == A_CARRY_DROP;
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
@@ -715,16 +727,62 @@ static void heading(ht_scene_t *f, const char *title)
     control(f, 87, 67, 48, "<", A_HOME, 0, true);
     text(f, 147, 67, 252, title, FG);
 }
+#ifdef DEVICE_DESKTOP_COMPANION
+static void companion_request(int op)
+{
+    ht_companion_t *c=&desktop_companion;
+    if(!s.connected||!c->enabled||c->pending||op<0||op>3)return;
+    const char *target=op==1?c->egg_uid:c->uid;
+    if(!target[0]||(op==1&&(strcmp(c->phase,"egg")||strcmp(c->stage,"p4"))))return;
+    action_t a={.kind=A_DESKTOP_COMPANION,.value=op,.revision=c->epoch};
+    COPY(a.id,target);copy(a.text,81,c->window);
+    snprintf(a.text+81,49,"companion-%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
+    if(!queue(a))return;
+    copy(c->action_id,sizeof c->action_id,a.text+81);c->pending=true;c->action_deadline=ms()+6000;c->action_error[0]=0;
+    change();
+}
+static void companion_dispatch(action_t a)
+{
+    const ht_companion_t *c=&desktop_companion;
+    const char *target=a.value==1?c->egg_uid:c->uid;
+    // Preserve the owner and egg/individual the user actually touched. A new
+    // desktop state arriving under a held finger must not retarget the action.
+    if(a.revision!=c->epoch||strcmp(a.text,c->window)||strcmp(a.id,target))return;
+    companion_request(a.value);
+}
+#endif
 static void render_companion(ht_scene_t *f)
 {
     heading(f, "companion");
     char label[48];
     snprintf(label, sizeof label, "Character  %s", ht_character_name(character.id));
+#ifdef DEVICE_DESKTOP_COMPANION
+    if(desktop_companion.enabled) {
+        snprintf(label,sizeof label,"%s in Harness",desktop_companion.name[0]?desktop_companion.name:"Egg");
+        control(f,71,129,324,label,A_CHARACTER,0,false);
+    } else
+#endif
     control(f, 71, 129, 324, label, A_CHARACTER, (character.id + 1) % HT_CHARACTER_COUNT, true);
     control(f, 71, 193, 324, s.straight_title ? "Edge text  Straight" : "Edge text  Curved", A_FACE, 0, true);
     control(f, 71, 257, 324, s.rim_enabled ? "[x] Rim scrolling" : "[ ] Rim scrolling", A_RIM, 0, true);
     control(f, 71, 321, 324, s.quiet ? "[x] Still character" : "[ ] Still character", A_QUIET, 0, true);
+#ifdef DEVICE_DESKTOP_COMPANION
+    if(desktop_companion.enabled) {
+        bool napping=!strcmp(desktop_companion.emotion,"asleep");
+        bool can_nap=s.connected&&!desktop_companion.pending&&
+            !strcmp(desktop_companion.phase,"creature")&&desktop_companion.uid[0];
+        control(f, 95, 381, 120, napping ? "[wake]" : "[nap]", A_NAP, 0, can_nap);
+    } else
+#endif
     control(f, 95, 381, 120, s.nap ? "[wake]" : "[nap]", A_NAP, 0, true);
+#ifdef DEVICE_DESKTOP_COMPANION
+    if(desktop_companion.enabled) {
+        bool egg=!strcmp(desktop_companion.phase,"egg");
+        bool ready=egg?!strcmp(desktop_companion.stage,"p4")&&desktop_companion.egg_uid[0]:
+            !strcmp(desktop_companion.phase,"creature")&&desktop_companion.uid[0];
+        control(f,251,381,120,egg?"[hatch]":"[pet]",A_DESKTOP_COMPANION,egg?1:0,s.connected&&!desktop_companion.pending&&ready);
+    } else
+#endif
     control(f, 251, 381, 120, "[home]", A_HOME, 0, true);
 }
 static bool choose_character(int id)
@@ -809,6 +867,9 @@ static void surface_tick(uint32_t now)
         tabs_open();
         return;
     }
+#ifdef DEVICE_DESKTOP_COMPANION
+    if (ht_companion_tick(&desktop_companion, now, s.quiet, visible && main)) change();
+#endif
     ht_character_mood_t mood = s.view == VOICE ?
         (!s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING) :
         character_mood();
@@ -961,7 +1022,18 @@ static void render_workspace_preview(ht_scene_t *f)
 static void render_home(ht_scene_t *f)
 {
     s.caption_arc = (ht_rect_t){0};
-    if (!s.connected || s.loading) { render_brand(f); return; }
+    if (!s.connected || s.loading) {
+#ifdef DEVICE_DESKTOP_COMPANION
+        if (!s.connected && desktop_companion.enabled) {
+            const ht_character_face_t offline = {.recipient="Harness offline",.status="",.hint="reconnect",
+                .foreground=FG,.dim=DIM,.ink=DIM,.mood=HT_CHARACTER_OFFLINE,.primary_title=true};
+            desktop_companion.brightness=s.brightness;
+            ht_companion_face(f,&desktop_companion,&offline,NULL);
+            return;
+        }
+#endif
+        render_brand(f); return;
+    }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
 #if HT_FACE_PX >= 720
     pro_tab_strip(f);   // the first line is the whole switcher on this face
@@ -971,6 +1043,11 @@ static void render_home(ht_scene_t *f)
     // a recap. The bell has its own lower target, outside the voice surface.
     const char *recap = a && !a->busy && a->recap_ready && s.connected && !s.loading &&
         !s.nap && !s.voice_retry_until && !carry.active && !carry.error[0] ? a->preview : NULL;
+#ifdef DEVICE_DESKTOP_COMPANION
+    // In this experiment Tim owns the home stage. Completed results keep their
+    // separate bell/inbox; an explicit reading visit still gets its recap.
+    if (desktop_companion.enabled && !visit.available) recap=NULL;
+#endif
     // A live turn can outlast its terminal footer (or have no readable footer).
     // Keep its busy state visible while more specific activity is unavailable.
     const char *activity = a && a->busy && s.connected && !s.loading && !s.nap ?
@@ -1006,6 +1083,13 @@ static void render_home(ht_scene_t *f)
         f_.status="Text expired"; f_.detail="Select it again or drop text"; f_.hint=""; f_.focus=true;
     }
     if (visit.available) f_.hint = "";
+#ifdef DEVICE_DESKTOP_COMPANION
+    desktop_companion.brightness=s.brightness;
+    // A disabled snapshot still owns its serial baseline, not the device UI.
+    // Restore the saved character and its ordinary layout when the experiment is off.
+    if (desktop_companion.enabled) ht_companion_face(f, &desktop_companion, &f_, recap);
+    else
+#endif
     ht_character_face(f, &character, &f_, ACCENT, recap);
     if (bell) ht_notification_bell(f, unread, f_.ink);
     s.status_phase = status_animated() ? ht_shimmer_phase(ms()) : 0;
@@ -1042,20 +1126,33 @@ static void render_home(ht_scene_t *f)
             break;
         }
     }
+#if HT_FACE_PX < 720
+    int voice_bottom=382, bell_top=382;
+#ifdef DEVICE_DESKTOP_COMPANION
+    if(!s.voice_retry_until&&!carry.active&&!carry.error[0]&&!visit.available&&
+        desktop_companion.enabled&&!strcmp(desktop_companion.phase,"egg")&&
+        !strcmp(desktop_companion.stage,"p4")) {
+        voice_bottom=HT_COMPANION_HATCH_TOP;
+        bell_top=HT_COMPANION_HATCH_BOTTOM;
+        s.hits[s.hit_count++] = (hit_t){{137,voice_bottom,192,bell_top-voice_bottom},
+            A_DESKTOP_COMPANION,1,!desktop_companion.pending&&desktop_companion.egg_uid[0]};
+    }
+#endif
+#endif
     if (bell)
 #if HT_FACE_PX >= 720
         // Under the bell at HT_NOTIFICATION_Y, in the row the hint leaves empty on this face.
         s.hits[s.hit_count++] = (hit_t){{144, 646, 432, 66}, A_INBOX, 0, unread > 0};
 #else
-        s.hits[s.hit_count++] = (hit_t){{83, 382, 300, 84}, A_INBOX, 0, unread > 0};
+        s.hits[s.hit_count++] = (hit_t){{83, bell_top, 300, 466-bell_top}, A_INBOX, 0, unread > 0};
 #endif
-    // The bell and the creature never share a target, even when the bell is
-    // hidden or its count changes under a finger. Centre always starts voice.
+    // Egg or Tim, the portrait always starts voice. Hatch and inbox each own
+    // their entire, separate contact, including while a command is pending.
 #if HT_FACE_PX >= 720
     // The font_16 companion exactly: 54*8 x 27*16 at x=(720-432)/2, y=140.
     s.hits[s.hit_count++] = (hit_t){{144, 140, 432, 432}, A_PET, 0, true};
 #else
-    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{33, 66, 400, voice_bottom-66}, A_PET, 0, true};
 #endif
 }
 #if HT_FACE_PX >= 720
@@ -1557,6 +1654,11 @@ static void render_voice(ht_scene_t *f)
             s.voice_carry ? carry.excerpt : selection.active ? selection.excerpt : NULL,
         .carrying = s.voice_carry};
     f_.focus = f_.detail && *f_.detail;
+#ifdef DEVICE_DESKTOP_COMPANION
+    desktop_companion.brightness=s.brightness;
+    if(desktop_companion.enabled)ht_companion_face(f,&desktop_companion,&f_,NULL);
+    else
+#endif
     ht_character_face(f, &character, &f_, ACCENT, NULL);
     s.status_phase = status_animated() ? ht_shimmer_phase(ms() * status_speed()) : 0;
     for (int i = 0; i < f->count; i++)
@@ -1880,6 +1982,16 @@ static bool carry_emit(const ht_carry_command_t *c, void *ctx)
 static action_t make_action(hit_t h)
 {
     action_t a = {.kind = h.action, .value = h.value, .revision = s.q.revision};
+#ifdef DEVICE_DESKTOP_COMPANION
+    if(h.action==A_DESKTOP_COMPANION||(h.action==A_NAP&&desktop_companion.enabled)) {
+        a.kind=A_DESKTOP_COMPANION;
+        if(h.action==A_NAP)a.value=!strcmp(desktop_companion.emotion,"asleep")?3:2;
+        a.revision=desktop_companion.epoch;
+        COPY(a.id,a.value==1?desktop_companion.egg_uid:desktop_companion.uid);
+        copy(a.text,81,desktop_companion.window);
+        return a;
+    }
+#endif
     if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
         a.revision = draft.page.revision; a.dy = (int)draft.page.revision;
         copy(a.text, sizeof draft.page.id, draft.page.id);
@@ -2273,6 +2385,11 @@ static void dispatch(action_t a)
         view(s.voice_return == DRAFT && draft.page.active ? DRAFT : s.voice_return == FORM && form.id[0] ? FORM : question_view(s.voice_return) && s.q.valid ? s.voice_return : HOME);
         if (s.view == DRAFT) ht_draft_command(&draft, HT_DRAFT_STATE, draft.page.revision, 0, ms());
         break;
+#ifdef DEVICE_DESKTOP_COMPANION
+    case A_DESKTOP_COMPANION:
+        companion_dispatch(a);
+        break;
+#endif
     case A_PET:
         s.nap = false;
         s.pet_pose = 1;
@@ -2313,6 +2430,9 @@ static void dispatch(action_t a)
         choose_character(a.value);
         break;
     case A_NAP:
+#ifdef DEVICE_DESKTOP_COMPANION
+        if(desktop_companion.enabled) {companion_request(!strcmp(desktop_companion.emotion,"asleep")?3:2);break;}
+#endif
         s.nap = !s.nap;
         s.nap_until = ms() + 15 * 60 * 1000;
         change();
@@ -2468,6 +2588,13 @@ static void worker(void *unused)
     static EXT_RAM_BSS_ATTR question_submit_t packet;
     while (xQueueReceive(actions, &a, portMAX_DELAY) == pdTRUE) {
         switch (a.kind) {
+#ifdef DEVICE_DESKTOP_COMPANION
+        case A_DESKTOP_COMPANION: {
+            static const char *const operations[]={"pet","hatch","nap","wake"};
+            if(a.value>=0&&a.value<4)cable_client_companion_action(a.text+81,a.text,a.revision,a.id,operations[a.value]);
+            break;
+        }
+#endif
         case A_DRAFT_COMMAND: {
             static const char *ops[] = {"state", "move", "undo", "discard", "send"};
             if (a.value >= 0 && a.value <= HT_DRAFT_SEND)
@@ -2928,6 +3055,11 @@ uint32_t habitat_next_wake_ms(void)
     return display_is_asleep() ? 1000 : ht_gallery_wake(&gallery, ms());
 #endif
     uint32_t delay = 1000, now = ms();
+#ifdef DEVICE_DESKTOP_COMPANION
+    if (s.ready && !display_is_asleep() && !s.locked &&
+        desktop_companion.enabled && desktop_companion.motion && !s.quiet &&
+        (s.view == HOME || s.view == AGENT)) delay = 80;
+#endif
     if (!s.ready)
         return delay;
     if (s.voice_open)
@@ -3103,9 +3235,20 @@ void ui_set_brightness(uint8_t level)
 }
 
 // Protocol-facing adapter. The cable reader never waits for rendering or a DMA transaction.
+#ifdef DEVICE_DESKTOP_COMPANION
+void ui_companion_message(const cJSON *message)
+{
+    display_lock();
+    if (ht_companion_receive(&desktop_companion, message, ms())) change();
+    display_unlock();
+}
+#endif
 void ui_set_connected(bool value)
 {
     display_lock();
+#ifdef DEVICE_DESKTOP_COMPANION
+    if (!value) ht_companion_disconnect(&desktop_companion);
+#endif
     if (!value) {
         input_cancel();
         s.voice_retry_until = 0;

@@ -228,7 +228,14 @@ class _DaemonPortraitState extends State<DaemonPortrait> {
     // Only the plate repaints on each frame of its loop.
     return RepaintBoundary(
       child: Text.rich(
-        TextSpan(children: plateSpans(rows, ink, style, mats: own?.mats)),
+        TextSpan(
+          children: plateSpans(
+            rows,
+            w.art?.performance == null ? ink : _CompanionInk(ink),
+            style,
+            mats: own?.mats,
+          ),
+        ),
         key: w.textKey,
         semanticsLabel: label,
         style: style,
@@ -365,4 +372,18 @@ class _DaemonEggPlateState extends State<DaemonEggPlate> {
       ),
     );
   }
+}
+
+// Tim's expressive pupils, lids and mouth use the same material color as #.
+class _CompanionInk implements PlateCellInk {
+  const _CompanionInk(this.base);
+  final PlateCellInk base;
+  @override
+  Color get glow => base.glow;
+  @override
+  Color? cell(int rows, int r, String ch, String mat) => ch == ' '
+      ? null
+      : mat == 'p'
+      ? const Color(0xffffffff)
+      : (base.cell(rows, r, ch, mat) ?? base.cell(rows, r, '#', mat));
 }

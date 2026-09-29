@@ -334,3 +334,7 @@ bool cable_client_answer_reviewed(const char *agent_id, const char *request_id, 
                                   const uint8_t *choices, const char drafts[][48], int count);
 
 void cable_client_draft(const char *id, const char *op, uint32_t request, uint32_t revision, int delta);
+
+#ifdef DEVICE_DESKTOP_COMPANION
+void cable_client_companion_action(const char *request,const char *window,uint32_t epoch,const char *target,const char *action);
+#endif

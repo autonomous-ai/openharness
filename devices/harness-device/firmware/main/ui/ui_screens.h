@@ -14,6 +14,9 @@
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
 
 struct cJSON;
+#ifdef DEVICE_DESKTOP_COMPANION
+void ui_companion_message(const struct cJSON *message);
+#endif
 
 // Per-agent Mode/Model control chips: TEMPORARILY hidden (0) until the prod backend supports voice_start
 // "mode" + the agent_update model RPC. Flip to 1 to re-enable — this also re-narrows touch.c's notif

@@ -6,6 +6,7 @@ are the review pages. Keep future reviews local too.
 
 | Page | What to review |
 |---|---|
+| [tim-life.html](tim-life.html) | Desktop + USB companion: all egg stages, baby/growing/mature Tim, four seeded individuals and 21 emotions. Play a hatch or a workday; check pause, reduced motion, and Experimental off. |
 | [eggs.html](eggs.html) | All nine shell stages, including rocking; eight egg kinds; correct status sprites; progress and eligible rarities; a seekable opening with pause, resume, replay, and reset. |
 | [traits.html](traits.html) | Ten species, six examples each, with current art, trait odds, flags, sample seeds, and status sprites. Filter by species, trait, or text. |
 | [lookbook.html](lookbook.html) | The reviewed terminal world: zoo, moods, growth, twelve tims, and the same egg player. Current individual rules replace the old duplicate-to-XP simulator. Later voice/memory examples are labeled as illustrative. |
@@ -14,6 +15,19 @@ are the review pages. Keep future reviews local too.
 Motion follows the system preference, can be paused, stops while the page is hidden, and
 avoids repainting offscreen art. The art fits its available width using measured font cells.
 Each page has local navigation, a skip link, keyboard focus, and no external asset requests.
+
+The Tim integration page is built separately from the existing review set:
+
+```sh
+node daemons/companion/generate.mjs
+node daemons/companion/review.mjs
+node daemons/companion/check-review.mjs
+```
+
+It uses the CLI's production clip provider and embeds the Jgs font with its OFL
+notice. Its offline DOM check uses the same `tools/node_modules/linkedom` install
+as the checks below. Actual firmware pixel rendering and desktop-to-USB replay
+are documented in [the integration notes](../../docs/research/2026-09-28-desktop-device-companion.md).
 
 ## Editing and building
 

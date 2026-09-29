@@ -66,6 +66,10 @@ export interface LocalWsServerOptions {
   onAppDisconnect?: (machineId: string, connId: string) => void
   onDevicePrepareOpened?: (operationId: string, agentId: string) => void
   onAppFocus?: (machineId: string, agentId: string) => void
+  /** Companion presentation is accepted only from this user's local desktop socket. */
+  onAppCompanion?: (connId: string, payload: unknown) => void
+  onCompanionFocus?: (window: unknown) => void
+  onCompanionReply?: (conn: string, payload: Record<string, unknown>) => void
   /** Every agent the window currently has a tile for, across all its machines. */
   onAppPanes?: (agentIds: string[], foreground: boolean) => void
   /** The window has looked at this harness — see the `agent_seen` case below. */
@@ -495,6 +499,17 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // is connected to. That is deliberate: the dial is served by whichever
         // daemon owns the cable, and only a full picture lets that one decide
         // whether a finished turn is already in front of the person.
+        if (!isBinary && parsed?.type === 'app_companion_result') {
+          if (trusted && !tool && !relay && boundMachineId === options.machineId && parsed.payload && typeof parsed.payload === 'object')
+            options.onCompanionReply?.(connId, parsed.payload as Record<string, unknown>)
+          return
+        }
+        if (!isBinary && parsed?.type === 'app_companion') {
+          if (trusted && !tool && !relay && boundMachineId === options.machineId) {
+            options.onAppCompanion?.(connId, parsed.payload)
+          }
+          return
+        }
         if (!isBinary && options.onAppPanes) {
           if (parsed?.type === 'app_panes') {
             const payload = parsed.payload as Record<string, unknown> | undefined
@@ -684,6 +699,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
               if (options.onAppFocusState?.(boundMachineId, agentId, connId,
                 typeof revision === 'string' ? revision : undefined) === false) return
+              if (trusted && !tool && !relay && boundMachineId === options.machineId) options.onCompanionFocus?.(
+                (parsed.payload as Record<string, unknown>)?.window)
               if (agentId) options.onAppFocus?.(boundMachineId, agentId)
             }
             // Focus is local desk state and must never be forwarded to a remote machine.

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { CompanionActions } from './cable/companionActions.js'
+import { companionPortrait } from './cable/companionArt.js'
 import { ensureBundledModelManager } from './dsh/builtins.js'
 import { createDeviceStore, deviceStoreAgents } from './lib/autonomous-device/storeRuntime.js'
 import { mutateDsh } from './dsh/service.js'
@@ -43,6 +45,7 @@ import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
 import { CableFleet } from './cable/cableFleet.js'
+import { DesktopCompanion } from './cable/companionState.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
 import { terminalActivity } from './cable/terminalActivity.js'
 
@@ -4656,13 +4659,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     focus: () => appVoiceFocus,
     send: (connId, payload) => localWsServer.sendToWindow(connId, { type: 'dial_visit', payload }),
   })
+  const desktopCompanion = new DesktopCompanion(() => { void cableRef?.syncCompanion() })
+  const companionActions = new CompanionActions(desktopCompanion, (conn, payload) =>
+    localWsServer.sendToWindow(conn, {type:'dial_companion',payload}))
   const localWsServer = attachLocalWsServer(hookServer, {
+    onCompanionReply: (conn, payload) => companionActions.reply(conn, payload),
+    onAppCompanion: (connId, payload) => { desktopCompanion.update(connId, payload) },
+    onCompanionFocus: (window) => desktopCompanion.focus(window),
     localSocketServer: localSocket?.server ?? null,
     shareRelay,
     onSelectionReply: (connId, machineId, payload) => windowSelection.reply(connId, machineId, payload),
     onVisitReply: (connId, machineId, payload) => windowVisit.reply(connId, machineId, payload),
     onFormReply: (connId, machineId, payload) => windowForm.reply(connId, machineId, payload),
     onAppDisconnect: (machineId, connId) => {
+      companionActions.disconnect(connId)
+      desktopCompanion.disconnect(connId)
       if (appFormWindow?.connId === connId) appFormWindow = undefined
       if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
       windowForm.disconnected(connId)
@@ -4911,7 +4922,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // turns them on (guests keep working as before, but only when a window asks).
     // An individual's art, for any client on the socket: DAEMONS_OFF while off (the service says so).
     onDaemonPlate: (_connId, payload, reply) => {
-      void plates.get(payload).then((answer) => { reply({ type: 'daemon_plate', payload: { requestId: payload.requestId, ...answer } }) })
+      void (daemons.on() && payload.performance ? companionPortrait(payload) : plates.get(payload)).then((answer) => { reply({ type: 'daemon_plate', payload: { requestId: payload.requestId, ...answer } }) })
     },
     onDaemonPresence: (connId, payload, meta) => {
       zooPresence.presence(connId, payload)
@@ -6694,6 +6705,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const cableHost = new DaemonCableHost({
+    companion: () => ({ ...desktopCompanion.snapshot() }),
+    companionAction: (raw) => companionActions.command(raw),
     activityText: async (agentId) => {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null

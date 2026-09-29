@@ -2,7 +2,7 @@
 /// frames it steps through while agents work and the one line it says.
 ///
 /// The rules are the README's (`daemons/README.md`, Moods, Motion and blinks,
-/// Voice). Moods come from work, never from the clock: there is no idle timer.
+/// Voice). Work supplies reactions; experimental Tim also has an idle rhythm.
 ///
 /// - **Motion** is driven by work, not by time: while agents work, the work
 ///   frame steps once per real agent event ([pulse]), at most twice a second,
@@ -29,6 +29,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'daemon_brain.dart';
+import 'companion_life.dart';
 import 'daemon_lines.dart';
 import 'daemon_plate_client.dart';
 import 'daemon_settings.dart';
@@ -68,6 +69,7 @@ class DaemonTurnEnd {
 class DaemonWatch {
   const DaemonWatch({
     this.working = false,
+    this.connected = true,
     this.workingCount = 0,
     this.needIds = const {},
     this.needs = const {},
@@ -87,7 +89,7 @@ class DaemonWatch {
   });
 
   /// Any agent is working, and how many.
-  final bool working;
+  final bool working, connected;
   final int workingCount;
 
   /// Harnesses waiting on you, by a stable id per question
@@ -180,6 +182,101 @@ class DaemonFace extends ChangeNotifier {
   final DaemonRoster roster;
   final DateTime Function() _now;
 
+  late final life = CompanionLife(now: _now);
+  bool _living = false;
+  String? _lifeScope;
+  Timer? _lifeTimer;
+  String? _lifeKey;
+  int _lifeEvent = 0;
+
+  /// The richer experimental performance is authored for Tim first.
+  bool get livingTim => _living && daemon?.id == 'tim';
+
+  void setLiving(bool enabled) {
+    if (_living == enabled) return;
+    _living = enabled;
+    if (!enabled) life.reset();
+    _syncLifeTimer();
+    _update(force: true);
+  }
+
+  CompanionFeeling get feeling {
+    life.observe(
+      working: _working ? _workingCount.clamp(1, 1024) : 0,
+      needs: _needIds.length + _asks,
+      failures: _failing ? 1 : 0,
+      asleep: napping,
+      connected: _connected,
+    );
+    return life.feeling;
+  }
+
+  void react(CompanionEvent event, String id) {
+    if (_disposed || !_living || !visible) return;
+    life.record(event, id);
+    _update(force: true);
+  }
+
+  void _syncLifeTimer() {
+    if (!_living || !visible) {
+      _lifeTimer?.cancel();
+      _lifeTimer = null;
+      _lifeKey = null;
+      return;
+    }
+    _lifeTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_disposed) return;
+      final value = feeling;
+      final key = '${value.emotion}/${value.reason}/${value.reactionId}';
+      if (key == _lifeKey) return;
+      _lifeKey = key;
+      _update(force: true);
+    });
+  }
+
+  /// Complete presentation, independent of native titlebar visibility. The
+  /// publisher adds window epoch/revision; this carries no conversation text.
+  Map<String, dynamic> get companionPresentation {
+    final individual = zoo.paired;
+    final egg = nearestEgg;
+    final supported = individual == null || individual.id == 'tim';
+    if (!_living || !visible || !supported) return {'enabled': false};
+    return {
+      'enabled': true,
+      'phase': _revealing
+          ? 'hatching'
+          : individual != null
+          ? 'creature'
+          : 'egg',
+      'motion': !_reduceMotion && settings.motion && !settings.quiet,
+      'feeling': feeling.toJson(),
+      if (individual != null)
+        'creature': {
+          'uid': individual.uid,
+          'id': individual.id,
+          'seed': individual.seed,
+          'name': _companionName(individual.name),
+          'version': individual.version,
+          'shiny': individual.shiny,
+        },
+      if (_revealing || individual == null)
+        'egg': {
+          'kind': _revealing ? _revealKind : egg?.kind ?? 'first',
+          'stage': _revealing ? _revealStage ?? 'p4' : egg?.stage ?? 'p0',
+          if (!_revealing && egg?.egg != null) 'uid': egg!.egg!.id,
+        },
+    };
+  }
+
+  static String _companionName(String? name) {
+    final ascii = (name ?? 'Tim')
+        .replaceAll(RegExp(r'[^\x20-\x7e]'), '')
+        .trim();
+    return ascii.isEmpty
+        ? 'Tim'
+        : ascii.substring(0, ascii.length.clamp(0, 24));
+  }
+
   static const doneCooldown = Duration(seconds: 20);
   static const backAfter = Duration(minutes: 15);
   static const napLength = Duration(minutes: 15);
@@ -210,7 +307,7 @@ class DaemonFace extends ChangeNotifier {
   bool _revealing = false;
 
   // What it watches.
-  bool _working = false, _failing = false;
+  bool _working = false, _failing = false, _connected = true;
   int _workingCount = 0, _idleCount = 0;
   Set<String> _needIds = const {};
   Map<String, DaemonSubject> _needs = const {};
@@ -321,6 +418,28 @@ class DaemonFace extends ChangeNotifier {
     // A harness waiting on you, or the pair asking for your key.
     if (_needIds.isNotEmpty || _asks > 0) return DaemonMood.need;
     if (napping) return DaemonMood.nap;
+    if (livingTim) {
+      return switch (feeling.emotion) {
+        CompanionEmotion.working ||
+        CompanionEmotion.focused ||
+        CompanionEmotion.tired ||
+        CompanionEmotion.exhausted => DaemonMood.work,
+        CompanionEmotion.happy ||
+        CompanionEmotion.excited ||
+        CompanionEmotion.proud ||
+        CompanionEmotion.relieved ||
+        CompanionEmotion.hatching => DaemonMood.done,
+        CompanionEmotion.frustrated ||
+        CompanionEmotion.angry ||
+        CompanionEmotion.sad => DaemonMood.fail,
+        CompanionEmotion.attentive ||
+        CompanionEmotion.listening => DaemonMood.need,
+        CompanionEmotion.asleep => DaemonMood.nap,
+        CompanionEmotion.affectionate => DaemonMood.boop,
+        CompanionEmotion.playful => DaemonMood.back,
+        _ => DaemonMood.idle,
+      };
+    }
     if (_held case final held?) return held;
     if (_working) return DaemonMood.work;
     if (_failing) return DaemonMood.fail;
@@ -393,9 +512,7 @@ class DaemonFace extends ChangeNotifier {
   bool get showsDaemon => def != null && !_showsArrival;
 
   bool get _showsArrival =>
-      _arriving != null &&
-      mood != DaemonMood.need &&
-      mood != DaemonMood.boop;
+      _arriving != null && mood != DaemonMood.need && mood != DaemonMood.boop;
 
   /// The sprite or egg for the status slot (at most eight cells): the
   /// paired individual's one line (render.mjs `renderIndividualSprite`), or
@@ -545,8 +662,7 @@ class DaemonFace extends ChangeNotifier {
         // Above `suggest` it acts on its own for you: always said.
         if (daemonAutonomyAboveSuggest(_autonomy))
           'autonomy: ${daemonAutonomyLabel(_autonomy!)}',
-        if (_autonomyRequested case final asked?
-            when asked != _autonomy)
+        if (_autonomyRequested case final asked? when asked != _autonomy)
           'asks for ${daemonAutonomyLabel(asked)}: waiting for your yes',
         if (quiet) 'Quiet: it says nothing until you turn Quiet off.',
       ].join('\n');
@@ -685,6 +801,7 @@ class DaemonFace extends ChangeNotifier {
     final finished = _newEnds(_turns, watch.turns, watch.ended, failed: false);
     final failed = _newEnds(_fails, watch.fails, watch.ended, failed: true);
     _working = watch.working;
+    _connected = watch.connected;
     _workingCount = watch.workingCount;
     _failing = watch.failing;
     _failed = watch.failed;
@@ -776,8 +893,7 @@ class DaemonFace extends ChangeNotifier {
     }
     _update(
       before: before,
-      force:
-          finished.isNotEmpty || awayChanged || countsChanged || dialChanged,
+      force: finished.isNotEmpty || awayChanged || countsChanged || dialChanged,
     );
   }
 
@@ -874,6 +990,7 @@ class DaemonFace extends ChangeNotifier {
   void boop() {
     if (_disposed || def == null) return;
     wake(notify: false);
+    if (_living) life.record(CompanionEvent.pet, 'pet:${++_lifeEvent}');
     _booped = true;
     _boopTimer?.cancel();
     _boopTimer = Timer(roster.rules.hold(DaemonMood.boop), () {
@@ -934,6 +1051,9 @@ class DaemonFace extends ChangeNotifier {
     final d = def;
     if (d != null) {
       _pairKey = daemon?.uid;
+      if (_living) {
+        life.record(CompanionEvent.hatched, 'hatched:${daemon?.uid}');
+      }
       _blink('slow', delay: const Duration(milliseconds: 300));
       _say(d.first, mood: null, kind: _LineKind.reply);
     }
@@ -942,9 +1062,15 @@ class DaemonFace extends ChangeNotifier {
 
   void _zooChanged() {
     if (_disposed) return;
+    if (_lifeScope != zoo.scope) {
+      _lifeScope = zoo.scope;
+      life.reset();
+    }
+    _syncLifeTimer();
     final key = daemon?.uid;
     if (key != _pairKey) {
       // A different pair: what it watches starts again from a baseline.
+      life.reset();
       _pairKey = key;
       _baselined = false;
       _held = null;
@@ -984,6 +1110,12 @@ class DaemonFace extends ChangeNotifier {
         _update(force: true);
       case ZooDaemonGrew(:final daemon):
         if (d == null || daemon.uid != this.daemon?.uid) return;
+        if (_living) {
+          life.record(
+            CompanionEvent.grew,
+            'grew:${daemon.uid}:${daemon.version}:${daemon.bond}',
+          );
+        }
         // "I trust you": a slow blink.
         _blink('slow', delay: const Duration(milliseconds: 200));
         _update(force: true);
@@ -1005,6 +1137,7 @@ class DaemonFace extends ChangeNotifier {
   /// (or the panel) carries the facts; no line takes over the status line.
   void _back() {
     if (def == null || _needIds.isNotEmpty || napping) return;
+    if (_living) life.record(CompanionEvent.returned, 'return:${++_lifeEvent}');
     _hold(DaemonMood.back);
     _blink(
       'slow',
@@ -1066,8 +1199,7 @@ class DaemonFace extends ChangeNotifier {
     if (line.isEmpty || quiet) return;
     _dropExpired();
     // A reply never pushes aside an alert waiting to be said.
-    if (kind == _LineKind.reply &&
-        (_pendingVoice?.kind.unsolicited ?? false)) {
+    if (kind == _LineKind.reply && (_pendingVoice?.kind.unsolicited ?? false)) {
       return;
     }
     final now = _now();
@@ -1097,6 +1229,12 @@ class DaemonFace extends ChangeNotifier {
     final mood = say.mood;
     if (mood == DaemonSayMood.auto) {
       // It did something on its own: a moment of `done`, and an ack.
+      if (_living) {
+        life.record(
+          CompanionEvent.completed,
+          'auto:${say.id.hashCode.toUnsigned(32)}',
+        );
+      }
       _hold(DaemonMood.done);
       _blink('ack', delay: const Duration(milliseconds: 160));
       _update(force: true);
@@ -1152,8 +1290,7 @@ class DaemonFace extends ChangeNotifier {
     // A reply never pushes aside an alert waiting to be said (the talk keeps
     // it in the panel). A proposal does: its keys work only while it shows,
     // and the need it displaces stays on the face and in the panel.
-    if (kind == _LineKind.reply &&
-        (_pendingVoice?.kind.unsolicited ?? false)) {
+    if (kind == _LineKind.reply && (_pendingVoice?.kind.unsolicited ?? false)) {
       return;
     }
     _pendingVoice = line;
@@ -1320,6 +1457,7 @@ class DaemonFace extends ChangeNotifier {
     if (_ownsSettings) settings.dispose();
     unawaited(_events.cancel());
     for (final timer in [
+      _lifeTimer,
       _arrivingTimer,
       _holdTimer,
       _boopTimer,

@@ -655,6 +655,26 @@ describe('local CLI WebSocket', () => {
     return { unix: `ws+unix://${socketPath}:/api/local-ws`, tcp, open, cleanup }
   }
 
+  it('companion state and receipts stay on a trusted local UI socket', async () => {
+    const backend=new FakeBackend(),state=vi.fn(),reply=vi.fn(),focus=vi.fn()
+    const world=await unixWorld(backend,{onAppCompanion:state,onCompanionReply:reply,onCompanionFocus:focus})
+    try {
+      for(const [url,tool,accepted] of [[world.unix,false,true],[world.tcp,false,false],[world.unix,true,false]] as const) {
+        const ws=await world.open(url,{machineId,tool})
+        ws.send(JSON.stringify({type:'app_companion',payload:{enabled:true}}))
+        ws.send(JSON.stringify({type:'app_companion_result',payload:{requestId:'a',ok:true}}))
+        ws.send(JSON.stringify({type:'app_focus',payload:{window:'desktop',agentId:null}}))
+        // A harmless request behind both frames provides an ordering barrier.
+        const next=onceMessage(ws);ws.send(JSON.stringify({type:'daemon_act',payload:{requestId:'barrier'}}));await next
+        if(accepted){expect(state).toHaveBeenCalledTimes(1);expect(reply).toHaveBeenCalledTimes(1)}
+        ws.close()
+      }
+      expect(state).toHaveBeenCalledTimes(1);expect(reply).toHaveBeenCalledTimes(1)
+      expect(focus).toHaveBeenCalledTimes(1);expect(focus).toHaveBeenCalledWith('desktop')
+      expect(backend.frames.some(f=>typeof f.type === 'string' && f.type.startsWith('app_companion'))).toBe(false)
+    } finally {await world.cleanup()}
+  })
+
   it('takes the pair brain\'s frames only over its own socket, and keys, talk and confirmations only from a window', async () => {
     const backend = new FakeBackend()
     const relayed: Frame[] = []

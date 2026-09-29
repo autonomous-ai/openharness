@@ -52,7 +52,15 @@ typedef struct {
     // Optional immutable RGB565 foreground per text cell (straight runs only).
     // At least as many entries as text cells; storage outlives both scenes.
     const uint16_t *colors;
+    // Streaming companion art must survive replacement while the previous
+    // scene is still being rasterized. These colors travel with scene copies.
+    uint8_t cell_color_count;
+    uint16_t cell_colors[56];
 } ht_run_t;
+static inline uint16_t ht_run_ink(const ht_run_t *run, unsigned cell) {
+    return cell < run->cell_color_count ? run->cell_colors[cell] :
+        run->colors ? run->colors[cell] : run->fg;
+}
 typedef struct {
     uint16_t background;
     uint8_t count;

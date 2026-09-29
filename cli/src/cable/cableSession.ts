@@ -1,3 +1,5 @@
+import { companionArtKey } from './companionArt.js'
+import type { CompanionState } from './companionState.js'
 // The message layer: what the daemon and the dial SAY to each other, on top of the bytes serial.ts moves.
 //
 // Written twice — here and in devices/harness-device/firmware/main/cable_client.c — with no shared code, because one half
@@ -232,6 +234,9 @@ export interface RouteDecision {
  * and a network to prove that `hello` gets a `welcome`.
  */
 export interface CableHost {
+  companionAction?(raw: Record<string, unknown>): Promise<{ok:boolean;error?:string}>
+  companion?(): Record<string, unknown>
+  companionArt?(state: Record<string, unknown>): Promise<import('./companionArt.js').CompanionClip | null>
   /** The computer at the other end of the cable — its identity, not "the" machine's. */
   localMachine(): { id: string; name: string }
   /** Every machine the owner has, local row included. Never rejects: `source` explains a short list. */
@@ -669,6 +674,9 @@ export class CableSession {
     // Leftover bytes belong to a session that has ended; carrying them across would put a stale
     // half-frame in front of the first real frame of the new one.
     this.decoder.reset()
+    this.companionSupported = false
+    this.companionArtKey = ''
+    this.companionTransfer++
     this.greetedMac = null
     this.greetedFw = null
     this.appFocusGeneration += 1
@@ -778,6 +786,7 @@ export class CableSession {
           return
         }
         const mac = str('mac') ?? ''
+        this.companionSupported = msg.companion === 1
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
           t: 'welcome',
@@ -795,6 +804,7 @@ export class CableSession {
           features: [
             'voice.draft',
             'agents.refresh',
+            ...(this.host.companion ? ['companion.v1'] : []),
             ...(this.host.form ? ['form'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
@@ -823,6 +833,7 @@ export class CableSession {
           // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
           // which is the whole reason the branch exists.
           await this.pushAgents()
+          await this.syncCompanion()
         }
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
@@ -834,6 +845,18 @@ export class CableSession {
         return
       case 'agents.list':
         await this.pushAgents()
+        return
+      case 'companion.action': {
+        if (!this.companionSupported || !this.host.companionAction) return
+        const link = this.link
+        const result = await this.host.companionAction(msg)
+        if (this.link === link && this.isConnected) {
+          await this.send({t:'companion.action.result',requestId:msg.requestId,...result})
+        }
+        return
+      }
+      case 'companion.get':
+        await this.syncCompanion()
         return
       case 'agents.refresh':
         // A workspace receipt needs the roster, not machines, notices and history.
@@ -1821,6 +1844,38 @@ export class CableSession {
    * It travels because without it the dial gets a card with a state and nothing to render: the tile knows
    * a turn is live and shows the user nothing that says so.
    */
+  private companionSupported = false
+  private companionArtKey = ''
+  private companionOwner = ''
+  private companionTransfer = 0
+
+  async syncCompanion(): Promise<void> {
+    if (!this.companionSupported || !this.host.companion || !this.isConnected) return
+    const state = this.host.companion()
+    const key = companionArtKey(state as unknown as CompanionState)
+    const identity = state.creature as {uid?:string}|undefined
+    const owner = `${state.window}:${state.epoch}:${identity?.uid ?? ''}`
+    if (owner !== this.companionOwner) { this.companionOwner=owner; this.companionArtKey='' }
+    const transfer = ++this.companionTransfer
+    const link = this.link
+    // A future unsupported egg must clear the previous portrait, not leave it
+    // looking like the newly selected individual.
+    await this.send({ t: 'companion.state', ...state, enabled: !!state.enabled && key !== null, art: key })
+    if (!key) { this.companionArtKey = ''; return }
+    if (key === this.companionArtKey || !this.host.companionArt) return
+    const current = (): boolean => this.link === link && this.isConnected && this.companionTransfer === transfer
+    const clip = await this.host.companionArt(state).catch(() => null)
+    if (!clip || !current()) return
+    // A complete clip replaces the old one atomically on the device. Every
+    // frame names the transfer, so a late frame cannot revive a prior account.
+    if (!await this.send({t:'companion.art.begin', key, transfer, count:clip.frames.length,
+      frameMs:clip.frameMs, loop:clip.loop, palette:clip.palette})) return
+    for (let i=0;i<clip.frames.length;i++) {
+      if (!current() || !await this.send({t:'companion.art.frame',key,transfer,index:i,...clip.frames[i]})) return
+    }
+    if (current() && await this.send({t:'companion.art.end',key,transfer})) this.companionArtKey=key
+  }
+
   async turnStarted(agentId: string, text = ''): Promise<void> {
     this.activityEndedAt.delete(agentId)
     const read = {}

@@ -62,6 +62,28 @@ function fixture() {
 }
 
 describe('USB dial fleet', () => {
+  it('shares companion state across devices and keeps action receipts on the requesting one', async () => {
+    const f = fixture()
+    let enabled = true
+    f.host.companion = () => ({v:1,window:'desktop',epoch:1,revision:1,serial:1,enabled,foreground:true,
+      motion:true,phase:'egg',egg:{kind:'first',stage:'p4'},feeling:{emotion:'content',reason:'ready',intensity:1}})
+    f.host.companionArt = async () => ({key:'egg:first:p4:reveal',frames:[{rows:'oo',mats:'pp'}],
+      frameMs:190,loop:true,palette:Array(8).fill(65535)})
+    f.host.companionAction = vi.fn(async () => ({ok:true}))
+    try {
+      await f.start()
+      for (const p of f.ports) p.say({t:'hello',product:'harness',mac:p.path,fw:'fixture',companion:1})
+      await vi.waitFor(() => expect(f.ports.every(p=>p.sent.filter(m=>m.t==='welcome').length===2)).toBe(true))
+      await f.fleet.syncCompanion()
+      for (const p of f.ports) expect(p.sent.some(m=>m.t==='companion.art.end')).toBe(true)
+      f.ports[0].say({t:'companion.action',requestId:'tap',action:'hatch'})
+      await vi.waitFor(()=>expect(f.ports[0].sent).toContainEqual({t:'companion.action.result',requestId:'tap',ok:true}))
+      expect(f.ports[1].sent.some(m=>m.t==='companion.action.result')).toBe(false)
+      enabled=false;await f.fleet.syncCompanion()
+      for(const p of f.ports)expect(p.sent.at(-1)).toMatchObject({t:'companion.state',enabled:false})
+    } finally {await f.fleet.stop()}
+  })
+
   it('connects both dials, broadcasts work, and keeps the remaining dial attached', async () => {
     const f = fixture()
     try {
