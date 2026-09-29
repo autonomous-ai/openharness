@@ -56,6 +56,9 @@ module.exports = {
       beforeFiles: [
         { source: '/', destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
+        // A sign-in or pairing QR scanned with a phone's Camera app: the web app reads the code from
+        // the fragment (which never reaches this server), signs in if needed, and asks to approve.
+        { source: '/pair', destination: '/harness-web/index.html' },
         { source: '/auth/callback', destination: '/harness-web/index.html' },
         // Local website previews use the SSO service's native loopback callback.
         { source: '/callback', destination: '/harness-web/index.html' },

@@ -10,9 +10,8 @@ retired; only the host routes below were kept.
 
 | Route | What |
 |---|---|
-| `/`, `/s/:id`, `/auth/callback`, `/callback` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`) |
+| `/`, `/s/:id`, `/pair`, `/auth/callback`, `/callback` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`) |
 | `/download` (and `/install` → it) | Install page: CLI command and desktop downloads |
-| `/pair` | Phone setup guidance — the mobile app and the desktop "add phone" dialog link here |
 | `/desktop` | Desktop download page |
 | `/desktop/download-macos`, `/desktop/download/linux-{x64,arm64}` | Redirect to the latest build in the desktop manifest |
 | `/flash-circle.sh` | The dial firmware flasher script |
