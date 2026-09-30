@@ -238,8 +238,9 @@ impl Store {
     /// panes' title rows), where you have not set them yourself.
     pub fn tmux_look(&self) -> bool { self.get("@hn-look", "", None).as_deref() == Some("tmux") }
 
-    /// The normal hn presentation; classic keeps the earlier line borders.
-    pub fn pane_look(&self) -> bool { !matches!(self.get("@hn-look", "", None).as_deref(), Some("tmux" | "classic")) }
+    /// The normal hn presentation; the pane-surface look is opt-in (`@hn-look panes`), while
+    /// classic (the default) and `@hn-look tmux` keep the earlier line borders.
+    pub fn pane_look(&self) -> bool { self.get("@hn-look", "", None).as_deref() == Some("panes") }
 
     /// Reduce motion independently of the status/pane appearance.
     pub fn animations(&self) -> bool { !matches!(self.get("@hn-animations", "", None).as_deref(), Some("off" | "0" | "no")) }
@@ -591,6 +592,18 @@ mod tests {
     }
 
     #[test]
+    fn the_default_look_is_classic_line_borders() {
+        let mut s = Store::default();
+        let g = SetFlags { global: true, ..Default::default() };
+        assert!(!s.pane_look(), "default is the classic line-border look, not the pane surfaces");
+        // Unset means classic; only an explicit `@hn-look panes` opts into the pane surfaces.
+        s.set("@hn-look", Some("panes"), &g, "", 0).unwrap();
+        assert!(s.pane_look());
+        s.set("@hn-look", None, &SetFlags { global: true, unset: true, ..Default::default() }, "", 0).unwrap();
+        assert!(!s.pane_look());
+    }
+
+    #[test]
     fn hn_look_tmux_is_tmuxs_own() {
         let mut s = Store::default();
         let g = SetFlags { global: true, ..Default::default() };
@@ -611,6 +624,8 @@ mod tests {
         let mut s = Store::default();
         let g = SetFlags { global: true, ..Default::default() };
         let gw = SetFlags { global: true, window: true, ..Default::default() };
+        // The pane-surface look is opt-in; the default is the line-border (classic) look.
+        s.set("@hn-look", Some("panes"), &g, "", 0).unwrap();
         assert!(s.pane_look());
         assert!(s.get("window-style", "", None).unwrap().starts_with("fg=#"));
         s.set("window-style", Some("bg=blue"), &gw, "", 0).unwrap();
@@ -630,6 +645,8 @@ mod tests {
                   SetFlags { window: true, ..Default::default() },
                   SetFlags { pane: true, ..Default::default() }] {
             let mut s = Store::default();
+            // The pane-surface palette (distinct active/inactive styles) is opt-in.
+            s.set("@hn-look", Some("panes"), &SetFlags { global: true, ..Default::default() }, "", 1).unwrap();
             assert_ne!(s.get("window-style", "w", Some(1)), s.get("window-active-style", "w", Some(1)));
             s.set("window-style", Some("fg=red,bg=blue"), &f, "w", 1).unwrap();
             assert_eq!(s.get("window-active-style", "w", Some(1)).as_deref(), Some("default"));
