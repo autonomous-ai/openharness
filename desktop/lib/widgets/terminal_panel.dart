@@ -46,6 +46,7 @@ import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
 import 'pane_model_status.dart';
+import 'workspace_bar_control.dart';
 
 /// The pane header's own horizontal inset.
 const double _stripPadding = 14;
@@ -157,6 +158,17 @@ class TerminalPanel extends StatefulWidget {
   /// Flips [composerVisible]. Null where there is no composer to toggle.
   final VoidCallback? onToggleComposer;
 
+  /// What this harness's viewer is called ("Video Viewer"; see
+  /// viewerPaneName), or null when it has none to show.
+  final String? viewerName;
+
+  /// Whether that viewer is on the grid beside this terminal.
+  final bool viewerVisible;
+
+  /// Hides the viewer, or brings it back. The header draws its toggle only
+  /// with this and a [viewerName].
+  final VoidCallback? onToggleViewer;
+
   /// Lets the header be dragged to trade places with another tile. Null when
   /// this is the only tile — see [_TerminalHeader.paneDrag].
   final PaneDragHandle? paneDrag;
@@ -183,6 +195,9 @@ class TerminalPanel extends StatefulWidget {
     this.readOnly = false,
     this.notice,
     this.onToggleComposer,
+    this.viewerName,
+    this.viewerVisible = false,
+    this.onToggleViewer,
     this.onClose,
     this.onDelete,
     this.onToggleZoom,
@@ -2446,6 +2461,9 @@ class _TerminalPanelState extends State<TerminalPanel>
       delete: widget.onDelete != null,
       composer: widget.composerVisible,
       toggleComposer: widget.onToggleComposer != null,
+      viewerName: widget.viewerName,
+      viewerVisible: widget.viewerVisible,
+      toggleViewer: widget.onToggleViewer != null,
       zoomed: widget.zoomed,
       zoom: widget.onToggleZoom != null,
       dragId: widget.paneDrag?.ref.paneId,
@@ -2468,6 +2486,11 @@ class _TerminalPanelState extends State<TerminalPanel>
         onDelete: widget.onDelete == null
             ? null
             : () => widget.onDelete?.call(),
+        viewerName: widget.viewerName,
+        viewerVisible: widget.viewerVisible,
+        onToggleViewer: widget.onToggleViewer == null
+            ? null
+            : () => widget.onToggleViewer?.call(),
         onReconnect: () => unawaited(_takeControl()),
         paneDrag: widget.paneDrag,
         starting: _startPhase,
@@ -2546,6 +2569,11 @@ class _TerminalHeader extends StatelessWidget {
   /// where the pane cannot name a live agent to end.
   final VoidCallback? onDelete;
 
+  /// This harness's viewer and its toggle — see [TerminalPanel.viewerName].
+  final String? viewerName;
+  final bool viewerVisible;
+  final VoidCallback? onToggleViewer;
+
   /// Retakes a dead or taken-over stream — the panel's `_takeControl`, so the
   /// chip and the in-pane band drive one path.
   final VoidCallback onReconnect;
@@ -2578,6 +2606,9 @@ class _TerminalHeader extends StatelessWidget {
     this.readOnly = false,
     this.onClose,
     this.onDelete,
+    this.viewerName,
+    this.viewerVisible = false,
+    this.onToggleViewer,
     required this.onReconnect,
     this.compact = false,
     this.onToggleZoom,
@@ -2590,6 +2621,26 @@ class _TerminalHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader));
+
+  /// The viewer toggle's text and width in a header [headerWidth] wide: the
+  /// viewer's own name while it takes about a third of the header, the word
+  /// every viewer shares below that, and no toggle where even that would
+  /// crowd the name — View ▸ Toggle Viewer and its key still reach it there.
+  ({String text, double width})? _viewerToggleFor(
+    BuildContext context,
+    double headerWidth,
+  ) {
+    final name = viewerName;
+    if (onToggleViewer == null || name == null) return null;
+    final mark = viewerVisible ? '[x]' : '[ ]';
+    final padding = workspaceBarCellSizeOf(context).width * 2;
+    for (final label in {name, 'Viewer'}) {
+      final text = '$mark $label';
+      final width = workspaceBarTextSizeOf(context, text).width + padding;
+      if (width <= headerWidth * .35) return (text: text, width: width);
+    }
+    return null;
+  }
 
   Widget _buildHeader(BuildContext context) {
     TerminalFontScope.watch(context);
@@ -2701,6 +2752,12 @@ class _TerminalHeader extends StatelessWidget {
                 project?.shownBranch != null &&
                 constraints.maxWidth >= 360 * math.max(1, scale);
             final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
+            final viewerToggle = _viewerToggleFor(
+              context,
+              constraints.maxWidth,
+            );
+            final viewerWidth = viewerToggle?.width ?? 0.0;
+            final reservedWidth = actionsWidth + viewerWidth;
             // The room the left side needs: the mark, the whole name as it will be drawn, and
             // the status beside it — capped at 45% so a very long name still leaves the right
             // side most of the header.
@@ -2729,18 +2786,18 @@ class _TerminalHeader extends StatelessWidget {
 
             final desiredRightWidth = narrow
                 ? math.max(
-                    (showModelPicker ? 96.0 : 0.0) + badgeWidth,
+                    (showModelPicker ? 96.0 : 0.0) + badgeWidth + viewerWidth,
                     constraints.maxWidth * .36,
                   )
                 : math.max(
-                    actionsWidth + badgeWidth,
+                    reservedWidth + badgeWidth,
                     // Everything the name does not use. A fixed 55% left the folder and branch
                     // shortened to "…" beside a short name with half the header empty.
                     constraints.maxWidth - titleRoom(),
                   );
             // The name/status retain space while model and project text yield.
             final rightWidth = math.min(
-              compact ? closeWidth : desiredRightWidth,
+              compact ? closeWidth + viewerWidth : desiredRightWidth,
               math.max(0.0, constraints.maxWidth - 99),
             );
             return Row(
@@ -2812,7 +2869,7 @@ class _TerminalHeader extends StatelessWidget {
                               0,
                               math.min(
                                 constraints.maxWidth * .22,
-                                constraints.maxWidth - actionsWidth - 110,
+                                constraints.maxWidth - reservedWidth - 110,
                               ),
                             ),
                           ),
@@ -2874,7 +2931,7 @@ class _TerminalHeader extends StatelessWidget {
                               math.min(
                                 constraints.maxWidth * .45 - _headerFurniture,
                                 constraints.maxWidth -
-                                    actionsWidth -
+                                    reservedWidth -
                                     badgeWidth -
                                     _headerFurniture,
                               ),
@@ -2926,6 +2983,16 @@ class _TerminalHeader extends StatelessWidget {
                                   agent.id,
                                 ),
                               ),
+                            ),
+                          ),
+                        if (viewerToggle case final toggle?)
+                          Flexible(
+                            child: _ViewerToggle(
+                              text: toggle.text,
+                              width: toggle.width,
+                              name: viewerName!,
+                              visible: viewerVisible,
+                              onPressed: onToggleViewer!,
                             ),
                           ),
                         if (onClose != null)
@@ -3027,6 +3094,59 @@ class _TerminalHeader extends StatelessWidget {
       // _PaneCell, so what dims is the thing that is moving rather than one
       // strip of it.
       child: strip,
+    );
+  }
+}
+
+/// The pane header's way back to a harness's viewer: `[x] Video Viewer`.
+///
+/// It says the viewer's own name ("Video Viewer", "3D Viewer") rather than a
+/// generic word, because that is the exact title of the pane it shows and
+/// hides — the two read as one thing — and each harness already says what its
+/// viewer is. `[x]`/`[ ]` is the workspace's checkbox. It stays visible (not
+/// hover-only like the close `x`) and never moves or renames itself, so a
+/// viewer closed by hand is brought back from where it was last seen.
+class _ViewerToggle extends StatelessWidget {
+  const _ViewerToggle({
+    required this.text,
+    required this.width,
+    required this.name,
+    required this.visible,
+    required this.onPressed,
+  });
+
+  final String text, name;
+  final double width;
+  final bool visible;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final theme = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
+    final action = '${visible ? 'Hide' : 'Show'} $name';
+    final hint = KeymapTheme.of(context)?.hint('pane.toggle_viewer');
+    return WorkspaceBarControl(
+      label: action,
+      tooltip: [action, if (hint != null && hint.isNotEmpty) hint].join(' · '),
+      foreground: theme.foreground,
+      onPressed: onPressed,
+      builder: (context, emphasized) => SizedBox(
+        width: width,
+        height: workspaceBarControlHeight(context),
+        child: Center(
+          child: Text(
+            text,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.clip,
+            style: workspaceBarTextStyle(emphasized: emphasized),
+          ),
+        ),
+      ),
     );
   }
 }

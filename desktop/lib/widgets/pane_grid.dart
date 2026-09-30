@@ -1471,6 +1471,15 @@ class _PaneContent extends StatelessWidget {
       } else {
         notice = null;
       }
+      // The harness whose viewer the header can toggle: one with a viewer to
+      // show, on a machine of this person's own — the same rule as
+      // View ▸ Toggle Viewer.
+      final viewerOwner =
+          agent != null &&
+              machine?.machine.isShared == false &&
+              (agent.viewerUrl != null || agent.viewerError != null)
+          ? agent
+          : null;
       return LayoutBuilder(
         builder: (context, constraints) => TerminalPanel(
           notifier: notifier,
@@ -1496,6 +1505,21 @@ class _PaneContent extends StatelessWidget {
           readOnly: notice != null,
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
+          // The header's toggle hides the viewer or brings it back in this tab.
+          viewerName: viewerOwner == null
+              ? null
+              : viewerPaneName(viewerOwner, machine?.dsh.entries ?? const []),
+          // On screen, not merely in the tab: zoomed onto this terminal, the
+          // viewer beside it is out of sight and the toggle says so.
+          viewerVisible:
+              viewerOwner != null &&
+              notifier.zoomedPaneId != pane.id &&
+              notifier.viewerPaneShown(pane.machineId, viewerOwner.id),
+          onToggleViewer: viewerOwner == null
+              ? null
+              : () => unawaited(
+                  notifier.toggleViewerPane(pane.machineId, viewerOwner.id),
+                ),
           onClose: single && !swarmMode ? null : close,
           // The same confirmation the rail's row menu opens. Only for an
           // agent the machine still lists — a pane whose agent is already

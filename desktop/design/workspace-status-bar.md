@@ -145,6 +145,18 @@ far right. The `x` closes that pane view, keeps its harness running, and uses th
 shared bold hover treatment. Its tooltip names Close Pane and the current shortcut.
 Reserve its width so revealing it does not move the title.
 
+A harness with a viewer also shows `[x] Video Viewer` before the `x` — checked while
+the viewer is on screen beside it, `[ ] Video Viewer` once it is hidden or closed.
+It is the one way back to a closed viewer that people can see, so it is always
+visible, not hover-only, and keeps its name and place in both states. Its text is
+the viewer's own pane title (`Video Viewer`, `3D Viewer`, `Marp Viewer`), not a
+generic word: it names exactly the pane it shows and hides, so the two read as one
+thing. Where that takes more than about a third of the header it shortens to
+`[x] Viewer`, and where even that does not fit it is omitted; View ▸ Toggle Viewer
+and Cmd-Alt-V still work. The tooltip says `Show Video Viewer` or `Hide Video
+Viewer` with the current shortcut. It follows the owner-only rule of Toggle
+Viewer, and bringing a viewer back also leaves pane zoom so it is on screen.
+
 For the model label, prefer
 its local model ID or the daemon's observed subscription model (`selectedModel`),
 such as `GPT-6 Astra`, `Fable`, or `Opus`. Keep versions when reported; never infer
@@ -189,7 +201,8 @@ Flutter use the same command, labels, resolved colors, and availability.
 
 Restart Harness and Share Harness also belong in File. Fork remains available in
 command search. Viewer and message-composer toggles belong in View and command
-search. These actions apply to the focused pane; sharing and viewer visibility
+search; the viewer toggle is also in the owning pane's header (above) and on
+Cmd-Alt-V. These actions apply to the focused pane; sharing and viewer visibility
 follow a dependent viewer's owner.
 
 ## Notifications
@@ -403,7 +416,8 @@ References: [Zsh prompt parameters](https://zsh.sourceforge.io/Doc/Release/Param
 [Agnoster](https://github.com/agnoster/agnoster-zsh-theme), and
 [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 
-Pane headers keep task identity and the hover-only close action. The top bar
+Pane headers keep task identity, the viewer toggle when the harness has a viewer,
+and the hover-only close action. The top bar
 contains swarms, New Swarm, a plain search icon, the bell, and the Harness Store button.
 Search opens the existing unified picker; Store opens the existing Store tab.
 The Store restores its earlier rounded pill, colorful polymath mark, and quiet

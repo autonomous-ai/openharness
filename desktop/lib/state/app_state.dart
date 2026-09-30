@@ -7315,12 +7315,25 @@ class AppNotifier extends ChangeNotifier {
 
   // ── harness viewers ─────────────────────────────────────────────────────────
 
-  /// Viewer URLs the person closed, by `machine/agent`. A frame carrying the
-  /// same URL again leaves the tile closed; a different URL reopens it. Memory
-  /// only — a restart is a fresh look at whatever the agent is showing.
-  final _dismissedViewers = <String, String>{};
+  /// Viewers the person closed, by `machine/agent`: the page (URL, or the
+  /// error standing in for one) and the render it was showing then. A frame
+  /// carrying the same page again leaves the tile closed; a different URL, or
+  /// a newer render the harness calls ready, reopens it. Memory only — a
+  /// restart is a fresh look at whatever the agent is showing.
+  final _dismissedViewers = <String, ({String page, DateTime? render})>{};
 
   String _viewerKey(String machineId, String agentId) => '$machineId/$agentId';
+
+  /// Whether the harness finished a render after its viewer was closed on
+  /// [closedOn]: a newer verdict, and one it calls ready. A harness often
+  /// renders to the same file again (Manim's `?file=…/Intro.mp4`), so the URL
+  /// alone never changed and a closed viewer stayed closed until the app was
+  /// restarted. A verdict with no `updatedAt` says nothing about when.
+  bool _renderedSince(DateTime? closedOn, AgentVerdict? verdict) {
+    final updated = verdict?.updatedAt;
+    if (verdict == null || !verdict.ready || updated == null) return false;
+    return closedOn == null || updated.isAfter(closedOn);
+  }
 
   /// Keep [agent]'s viewer tile in step with its frame.
   ///
@@ -7334,9 +7347,12 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     final url = agent.viewerUrl;
     final viewerState = url ?? agent.viewerError;
+    final dismissal = _dismissedViewers[_viewerKey(machineId, agent.id)];
     final dismissed =
         viewerState != null &&
-        _dismissedViewers[_viewerKey(machineId, agent.id)] == viewerState;
+        dismissal != null &&
+        dismissal.page == viewerState &&
+        !_renderedSince(dismissal.render, agent.verdict);
     var changed = false;
     // Tab by tab: wherever this agent's terminal is, its viewer is beside it,
     // and nowhere else. A terminal opened in a second tab gets a second
@@ -7425,6 +7441,14 @@ class AppNotifier extends ChangeNotifier {
         )
         .firstOrNull;
     if (viewer != null) {
+      // In the tab but zoomed off screen: the person asking for it wants to
+      // see it, not to lose it to a dismissal they cannot see happen.
+      if (zoomedPaneId != null && zoomedPaneId != viewer.id) {
+        zoomedPaneId = null;
+        _persistLayout();
+        notifyListeners();
+        return;
+      }
       await closePane(viewer.id);
       return;
     }
@@ -7437,6 +7461,12 @@ class AppNotifier extends ChangeNotifier {
     }
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
     _syncViewerPane(machine, agent);
+    // Brought back to be looked at: a zoomed tile would keep it off screen
+    // while the header's toggle already says it is shown.
+    if (zoomedPaneId != null && viewerPaneShown(machineId, agentId)) {
+      zoomedPaneId = null;
+      _persistLayout();
+    }
     notifyListeners();
   }
 
@@ -11366,13 +11396,21 @@ class AppNotifier extends ChangeNotifier {
     final pane = panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
     if (pane.isWeb) {
-      // A viewer closed by hand stays closed for THIS page: the agent's next
-      // frame carries the same URL and must not reopen it. A different URL —
-      // a new artifact, a restarted viewer — is news, and opens again.
+      // A viewer closed by hand stays closed for THIS page and THIS render:
+      // the agent's next frame carries the same URL and must not reopen it.
+      // A different URL — a new artifact, a restarted viewer — or a newer
+      // finished render is news, and opens again.
       final owner = pane.ownerAgentId;
       final viewerState = pane.url ?? pane.viewerError;
       if (owner != null && viewerState != null) {
-        _dismissedViewers[_viewerKey(pane.machineId, owner)] = viewerState;
+        final verdict = stateOf(pane.machineId)?.agents
+            .where((agent) => agent.id == owner)
+            .firstOrNull
+            ?.verdict;
+        _dismissedViewers[_viewerKey(pane.machineId, owner)] = (
+          page: viewerState,
+          render: verdict?.updatedAt,
+        );
       }
     }
     final tab = activeSwarm;

@@ -385,10 +385,13 @@ final harnessCommands = <HarnessCommand>[
     keywords: ['link', 'public', 'private', 'invite', 'collaborate'],
     nativeAction: 'shareAgent',
   ),
+  // V for viewer. ⌘V is paste and ⌥ alone is the pty's Meta prefix, so the
+  // chord takes both; the pane header's `[x] Video Viewer` names this key.
   const HarnessCommand(
     'pane.toggle_viewer',
     'Toggle Viewer',
     ShortcutGroup.panes,
+    extraKeys: ['cmd+alt+v'],
     nativeAction: 'toggleViewer',
   ),
   const HarnessCommand(
