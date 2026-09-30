@@ -6,6 +6,8 @@ import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/http_log.dart';
+import '../viewer/device_log.dart';
+import '../viewer/device_log_sync.dart' show DeviceLogAppendAnswer, DeviceLogFetched;
 import 'access_token_source.dart';
 import 'bearer_auth_interceptor.dart';
 import 'multipart_body.dart';
@@ -87,6 +89,60 @@ class ApiClient {
       options: Options(headers: {'x-adapter-local': '1'}),
     );
     unwrapApiResponse(res);
+  }
+
+  // -- the account's device key log (viewer/device_log_sync.dart) --
+
+  /// `GET /api/device-keys?since=` — the log from [since]; null when there is none to read (an older
+  /// backend, signed out, or unreachable).
+  Future<DeviceLogFetched?> deviceKeys(int since) async {
+    try {
+      final res = await _dio.get('/api/device-keys', queryParameters: {'since': since});
+      if (res.statusCode != 200) return null;
+      final data = unwrapApiResponse(res);
+      if (data is! Map) return null;
+      final acct = data['acct'], head = DevLogHead.fromJson(data['head']), entries = data['entries'];
+      if (acct is! String || head == null || entries is! List) return null;
+      return (acct: acct, head: head, entries: entries.cast<Object?>());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `POST /api/device-keys` — append one entry this phone signed. Null when the backend could not
+  /// be reached; a refusal comes back as its code (`STALE_HEAD` with the current head).
+  Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) async {
+    try {
+      final res = await _dio.post('/api/device-keys', data: {'entry': entry.toJson()});
+      final body = res.data;
+      if (body is! Map) return null;
+      final data = body['data'];
+      final head = data is Map ? DevLogHead.fromJson(data['head']) : null;
+      if (res.statusCode == 200) return (head: head, error: null);
+      final error = body['error'];
+      final code = error is Map && error['code'] is String ? error['code'] as String : 'HTTP_${res.statusCode}';
+      return (head: head, error: code);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `GET /api/device-keys/seen` — when each key last opened a session, `{pub: ms}`; empty when it
+  /// cannot be read. A hint for offering to remove apps not used in a long while.
+  Future<Map<String, int>> deviceKeysSeen() async {
+    try {
+      final res = await _dio.get('/api/device-keys/seen');
+      if (res.statusCode != 200) return const {};
+      final data = unwrapApiResponse(res);
+      final seen = data is Map ? data['seen'] : null;
+      return {
+        if (seen is Map)
+          for (final e in seen.entries)
+            if (e.key is String && e.value is int) e.key as String: e.value as int,
+      };
+    } catch (_) {
+      return const {};
+    }
   }
 
   // -- the desk: the account's tabs, the same on every computer --

@@ -59,6 +59,8 @@ import 'session_content_search.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../phone/phone_name_store.dart';
+import '../viewer/device_log.dart';
+import '../viewer/device_log_sync.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
 
@@ -994,6 +996,7 @@ class AppNotifier extends ChangeNotifier {
     _groupSyncOverride = groupSync;
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
+    _initDeviceLog();
   }
 
   /// Straight to the backend, signed with this app's own session.
@@ -1465,6 +1468,13 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // Signing out takes this phone's key out of the account's devices, while the sign-in still works
+    // to say so. Best effort, and brief.
+    if (_deviceLog case final log?) {
+      try {
+        await log.leave().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
     final revision = _invalidateAuthWork();
     signingIn = false;
     // A scanned code belongs to the session it was scanned into. Held past this,
@@ -1524,6 +1534,9 @@ class AppNotifier extends ChangeNotifier {
   void _onLocalFailure(String machineId, int code, String reason) {
     final machine = machineStates[machineId];
     if (machine == null || code != 4404) return;
+    // A machine the account's device key log names may simply not have read it yet: read it again;
+    // a machine it pins is dialled again as soon as it lands.
+    if (_deviceLog case final log?) unawaited(log.refresh());
     // The relay found no linked trust for this machine: it waits for this phone's password form (or
     // a scanned code), which reconnects when it lands. Nothing is polled — the desktop retries every
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
@@ -1582,6 +1595,7 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     machine.connectionStatus = nextStatus;
     if (nextStatus == ConnectionStatus.connected) {
+      _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
       // A relay socket reports `connected` only after the machine's welcome
       // proved the link (`WsConn._markReady`), so a code held to pair this
@@ -1654,6 +1668,12 @@ class AppNotifier extends ChangeNotifier {
     }
     try {
       await _refreshMachines(revision);
+      // The account's device key log: this phone's key joins it (an existing sign-in too, from
+      // before the log existed), and every machine it names is reached with no password.
+      if (_authWorkCurrent(revision) && status == AppStatus.authenticated && _deviceLogRegistered != revision) {
+        _deviceLogRegistered = revision;
+        unawaited(_deviceLog?.register(freshSignIn: viewer.auth.consumeFreshSignIn()));
+      }
     } finally {
       // Said out loud: the list's own notify fires before this, so a flag
       // dropped silently here would leave the rail on its placeholders.
@@ -1956,6 +1976,104 @@ class AppNotifier extends ChangeNotifier {
     // One password, the whole group: this machine learns the phone's other machines, and they it.
     unawaited(_syncGroup(targetId, spread: true));
     return null;
+  }
+
+  // -- the account's devices: the device key log (viewer/device_log_sync.dart) --------------------
+
+  ViewerDeviceLog? _deviceLog;
+  int? _deviceLogRegistered;
+
+  /// Devices that joined the account and this phone had never trusted, not yet dismissed.
+  final List<DevLogMember> newDevices = [];
+
+  /// Bumped whenever the account's devices may have changed; the Devices page re-reads on it.
+  int devicesRevision = 0;
+
+  ViewerDeviceLog? get deviceLog => _deviceLog;
+
+  void _initDeviceLog() {
+    final log = _deviceLog = ViewerDeviceLog(
+      keys: viewer.keys,
+      fetch: (since) => api.deviceKeys(since),
+      append: (entry) => api.appendDeviceKey(entry),
+      label: () => phoneClientDescriptor().name,
+      onAnnounce: (m) {
+        if (newDevices.any((d) => d.pub == m.pub)) return;
+        newDevices.add(m);
+        devicesRevision++;
+        final name = m.label.isEmpty ? 'A device' : m.label;
+        unawaited(agentNotices.system.showAccountNotice(
+          key: m.pub,
+          title: 'New device on your account',
+          body: '$name ${m.kind == 'machine' ? 'joined' : 'signed in to'} your account and can reach '
+              'your machines. Not yours? Remove it in Settings ▸ Your devices.',
+        ));
+        if (!_disposed) notifyListeners();
+      },
+      onSignedOut: () async {
+        // Sign out first: it takes this phone's key out of the log, which needs the key it is about.
+        await logout();
+        await viewer.keys.forgetIdentity();
+      },
+      onChanged: () {
+        devicesRevision++;
+        unawaited(_redialNewlyTrusted());
+        if (!_disposed) notifyListeners();
+      },
+    );
+    final links = peerLinks;
+    if (links is DirectLink) links.deviceLog = log;
+  }
+
+  /// A machine waiting for its password that the device key log now vouches for: dial it again.
+  Future<void> _redialNewlyTrusted() async {
+    for (final state in [...machineStates.values]) {
+      if (!state.needsLink) continue;
+      if (await viewer.keys.peer(state.machine.machineId) == null) continue;
+      state.needsLink = false;
+      state.agentLoadStatus = AgentLoadStatus.idle;
+      await _pool?.closeMachine(state.machine.machineId);
+      _connectMachine(state);
+    }
+    if (!_disposed) notifyListeners();
+  }
+
+  /// When each of the account's keys last opened a session (`{pub: ms}`), for the Devices page.
+  Future<Map<String, int>> devicesLastSeen() => api.deviceKeysSeen();
+
+  DateTime? _deviceLogReadAt;
+
+  /// A socket came back: a `device_keys_changed` sent while this phone was offline reached nobody, so
+  /// read the log again — at most every half minute, since a reconnect is every machine at once.
+  void _refreshDeviceLogAfterReconnect() {
+    final log = _deviceLog;
+    if (log == null) return;
+    final now = DateTime.now();
+    if (_deviceLogReadAt case final last? when now.difference(last) < const Duration(seconds: 30)) return;
+    _deviceLogReadAt = now;
+    unawaited(log.refresh());
+  }
+
+  /// The devices list was opened: every device announced so far has been seen.
+  void seenNewDevices() {
+    if (newDevices.isEmpty) return;
+    newDevices.clear();
+    notifyListeners();
+  }
+
+  void dismissNewDevice(String pub) {
+    newDevices.removeWhere((d) => d.pub == pub);
+    notifyListeners();
+  }
+
+  /// Take [pub] out of the account on every device. Null when done, else why not.
+  Future<String?> removeDevice(String pub) async {
+    final log = _deviceLog;
+    final error = log == null ? 'UNAVAILABLE' : await log.remove(pub);
+    if (error == null) newDevices.removeWhere((d) => d.pub == pub);
+    devicesRevision++;
+    notifyListeners();
+    return error;
   }
 
   /// A code scanned from a desktop app's "Add phone" QR, held across sign-in: once its machine shows
@@ -5336,6 +5454,11 @@ class AppNotifier extends ChangeNotifier {
         final swarmId = payload['swarmId'];
         if (swarmId is String && swarmId.isNotEmpty) selectSwarm(swarmId);
         break;
+      case 'device_keys_changed':
+        // The account's device key log grew: read and verify it from this phone's head.
+        // Arrives once per machine socket, like desk_changed; concurrent reads share one.
+        unawaited(_deviceLog?.refresh());
+        return;
       case 'desk_changed':
         // The account's tabs changed — in a window on some computer, or on
         // another phone. The frame carries only the revision; the document
@@ -5678,6 +5801,8 @@ class AppNotifier extends ChangeNotifier {
     // whatever they were when the phone went into a pocket, until something
     // else happened to change them.
     unawaited(_desk.refresh());
+    // The device key log too: a `device_keys_changed` sent while the phone was away reached nobody.
+    if (status == AppStatus.authenticated) unawaited(_deviceLog?.refresh());
     // The zoo too, for the same reason: a `zoo_changed` sent while the phone
     // was in a pocket reached nobody.
     if (status == AppStatus.authenticated) unawaited(zoo.refresh());

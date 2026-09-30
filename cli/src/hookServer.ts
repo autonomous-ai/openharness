@@ -119,6 +119,11 @@ export interface HookServerHandlers {
   onGroupList?: () => PairOutcome
   onGroupSync?: () => PairOutcome
   onGroupRemove?: (selector: string) => PairOutcome
+  /** `harness devices list|remove|rebaseline` and the window's Devices list — the account's device key
+   *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
+  onDevicesList?: () => Promise<PairOutcome>
+  onDevicesRemove?: (pub: string) => Promise<PairOutcome>
+  onDevicesRebaseline?: (confirm: boolean) => Promise<PairOutcome>
   /** Local dashboard status snapshot (GET /api/status). */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** Recent adapter log tail (GET /api/logs). */
@@ -702,6 +707,31 @@ export function startHookServer(
         try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
         if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
         const out = handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
+      }
+
+      // `harness devices list` / the window's Devices list → the account's devices, as this machine's
+      // verified copy of the device key log has them. Read-only (public keys and labels).
+      if (req.method === 'GET' && url === '/api/devices') {
+        if (!handlers.onDevicesList) { json(503, { error: 'UNAVAILABLE' }); return }
+        const out = await handlers.onDevicesList(); json(out.status, out.body); return
+      }
+      // `harness devices remove <fp>` / Remove in the window → out of the log, signed by this machine.
+      if (req.method === 'POST' && url === '/api/devices/remove') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onDevicesRemove) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { pub?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        if (typeof body.pub !== 'string' || !body.pub) { json(400, { error: 'MISSING_PUB' }); return }
+        const out = await handlers.onDevicesRemove(body.pub); json(out.status, out.body); return
+      }
+      // `harness devices rebaseline` → what trusting the backend's log again would change; `confirm`
+      // does it (the only way out of a frozen log).
+      if (req.method === 'POST' && url === '/api/devices/rebaseline') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onDevicesRebaseline) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: { confirm?: unknown }
+        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
+        const out = await handlers.onDevicesRebaseline(body.confirm === true); json(out.status, out.body); return
       }
 
       // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same

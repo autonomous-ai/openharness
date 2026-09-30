@@ -1,4 +1,4 @@
-import { subscribeDeskChanged, subscribeZooChanged } from './bus.js'
+import { subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeZooChanged } from './bus.js'
 
 /**
  * The account documents a WEB socket hears about — the desk and the zoo — forwarded to the clients
@@ -9,13 +9,15 @@ import { subscribeDeskChanged, subscribeZooChanged } from './bus.js'
  *  - `desk_changed` — the account's tabs.
  *  - `zoo_changed`  — the account's daemons and eggs (routes/zoo.ts), its own frame: a desk change
  *    never re-fetches the zoo and the other way round.
+ *  - `device_keys_changed` — the account's device key log grew (lib/deviceKeyLog.ts): the app re-reads
+ *    from its own head and trusts the machines the log adds.
  *
  * ⚠️ A phone holds one of these sockets PER MACHINE, so it hears each change once per machine. The
  * revision is what makes that harmless: an app already at that revision fetches nothing.
  *
  * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, only the desk is listened on.
  *
- * Resolves to the unsubscribe for both.
+ * Resolves to the unsubscribe for all of them.
  */
 export async function relayWebDocumentPushes(userId: string, send: (frame: unknown) => unknown, opts: { zoo: boolean }): Promise<() => void> {
   const unsubs: Array<() => void> = []
@@ -23,6 +25,7 @@ export async function relayWebDocumentPushes(userId: string, send: (frame: unkno
   try {
     unsubs.push(await subscribeDeskChanged(userId, (msg) => { send({ type: 'desk_changed', payload: { revision: msg.revision } }) }))
     if (opts.zoo) unsubs.push(await subscribeZooChanged(userId, (msg) => { send({ type: 'zoo_changed', payload: { revision: msg.revision } }) }))
+    unsubs.push(await subscribeDeviceKeysChanged(userId, (msg) => { send({ type: 'device_keys_changed', payload: { seq: msg.seq, hash: msg.hash } }) }))
   } catch (err) {
     stop()
     throw err

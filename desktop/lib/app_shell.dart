@@ -33,6 +33,7 @@ import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
 import 'shortcuts/keyboard_practice.dart';
 import 'widgets/shortcuts_sheet.dart';
+import 'widgets/new_device_notice.dart';
 import 'widgets/update_notice.dart';
 import 'widgets/window_chrome.dart';
 import 'sharing/shared_agent_location.dart';
@@ -350,6 +351,8 @@ class _RootShellState extends ConsumerState<RootShell>
                 app.status != AppStatus.checkingEnvironment &&
                 app.status != AppStatus.preparingEnvironment)
               UpdateNotice(notifier: app),
+            if (app.newDevices.isNotEmpty && app.status == AppStatus.authenticated)
+              NewDeviceNotice(notifier: app),
             Expanded(child: framed),
           ],
         );

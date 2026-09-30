@@ -319,6 +319,41 @@ describe('GroupSyncer', () => {
     expect(spy).toHaveBeenCalledTimes(1)
     for (const n of f.nodes) n.syncer.stop()
   })
+
+  it('carries the device key log head both ways, and still works with a peer that has no log', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b] = [f.add('a'), f.add('b')]
+    f.link(a, b)
+    const heardByA = vi.fn(), heardByB = vi.fn(() => ({ head: { seq: 2, hash: 'hb' }, frozen: false }))
+    a.syncer.devlog = { gossip: () => ({ head: { seq: 1, hash: 'ha' }, frozen: false }), heard: heardByA }
+    b.syncer.devlog = { gossip: () => undefined, heard: heardByB }
+    await a.syncer.syncWith(b.machineId!)
+    expect(heardByB).toHaveBeenCalledWith(a.pub, { head: { seq: 1, hash: 'ha' }, frozen: false })
+    expect(heardByA).toHaveBeenCalledWith(b.pub, { head: { seq: 2, hash: 'hb' }, frozen: false })
+    // An older peer: nothing about the log on the wire, and the roster exchange is unchanged.
+    a.syncer.devlog = null
+    heardByB.mockClear()
+    expect(await a.syncer.syncWith(b.machineId!)).toBe(true)
+    expect(heardByB).toHaveBeenCalledWith(a.pub, undefined)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
+  it('a key the device key log holds joins the group, so a member that predates the log learns it', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b] = [f.add('a'), f.add('b')]
+    f.link(a, b)
+    const phonePub = C.b64e(C.newIdentity().pub)
+    a.syncer.adoptFromLog([{ pub: phonePub, kind: 'viewer', machineId: '', label: 'phone', addedAt: 500 }])
+    expect(a.trusted.has(phonePub)).toBe(true)
+    await a.syncer.syncWith(b.machineId!)
+    expect(b.trusted.has(phonePub)).toBe(true)
+    // A removal the group made first is not undone by the log.
+    a.syncer.remove(phonePub)
+    expect(a.syncer.tombstoned(phonePub)).toBe(true)
+    for (const n of f.nodes) n.syncer.stop()
+  })
 })
 
 describe('relayRequester', () => {
@@ -349,5 +384,20 @@ describe('relayRequester', () => {
     const silent = S.relayRequester({ acquireIsolated: async () => ({ send: async () => {}, sendBinary: async () => {}, detach: () => { detached++ } }) }, () => 'prod')
     expect(await silent('m', { type: 'group_sync', payload: { requestId: 'r2' } }, 20)).toBeNull()
     expect(detached).toBe(2)
+  })
+
+  it('a removal that arrives through the group is handed on (so the device key log hears of it)', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b, c] = [f.add('a'), f.add('b'), f.add('c')]
+    f.link(a, b)
+    f.link(a, c)
+    await a.syncer.syncAll()
+    const dropped: string[] = []
+    b.syncer.onDropped = (pub) => dropped.push(pub)
+    a.syncer.remove(c.pub)
+    await a.syncer.syncWith(b.machineId!)
+    expect(dropped).toEqual([c.pub])
+    for (const n of f.nodes) n.syncer.stop()
   })
 })

@@ -215,6 +215,8 @@ Future<GroupSyncOutcome> syncTrustGroup({
   required String label,
   RelaySocketFactory socket = defaultRelaySocket,
   Duration timeout = const Duration(seconds: 20),
+  Map<String, Object?>? devlog,
+  Future<void> Function(String machinePub, Object? devlog)? onDevlog,
 }) async {
   WebSocketChannel? channel;
   try {
@@ -243,9 +245,12 @@ Future<GroupSyncOutcome> syncTrustGroup({
         'requestId': b64e(secureRandomBytes(12)),
         'self': self.toJson(),
         ...local.toJson(),
+        // The device key log's head (device_log_sync.dart): the machine answers with its own.
+        'devlog': ?devlog,
       });
     }().timeout(timeout, onTimeout: () => null);
     if (reply == null || reply['error'] != null) return GroupSyncOutcome.none;
+    if (reply['devlog'] != null) await onDevlog?.call(b64e(pin.pub), reply['devlog']);
 
     final incoming = GroupRoster.parse(reply);
     final theirs = GroupMember.tryParse(reply['self']);

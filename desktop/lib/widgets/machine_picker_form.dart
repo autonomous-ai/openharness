@@ -715,10 +715,6 @@ class MachinePickerFormState extends State<MachinePickerForm> {
               line(
                 '2. Sign in ${email == null ? 'to the same account' : 'as $email'}.',
               ),
-              gap,
-              line(
-                '3. Set its password in Cmd P → @ → this computer → Password.',
-              ),
             ] else ...[
               line('1. Install the CLI (skip if installed).'),
               line(kLinkServerInstallCommand, selectable: true),
@@ -728,11 +724,12 @@ class MachinePickerFormState extends State<MachinePickerForm> {
               ),
               line(kLinkServerLoginCommand, selectable: true),
               gap,
-              line('3. Start Harness and set its password.'),
+              line('3. Start Harness.'),
               line(kLinkServerStartCommand, selectable: true),
             ],
             gap,
-            line('Then select the machine here and Connect.'),
+            // Signing in is what makes this app trust it (the device key log): no password to set.
+            line('It appears here and connects on its own.'),
           ] else if (widget.kind == MachinePickerFormKind.delete) ...[
             line('Delete this machine from your account?'),
             line('Its panes in this window will close.'),

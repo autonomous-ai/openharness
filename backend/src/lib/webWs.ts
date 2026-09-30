@@ -23,6 +23,7 @@ import { createWss, WS_LIMITS } from './wsServer.js'
 import { extractKey } from '../utils/crypto.js'
 import { machineIdFromKey } from '../utils/crypto.js'
 import { prisma, machineAlive } from './prisma.js'
+import { touchDeviceKey } from './deviceKeyLog.js'
 import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair } from './bus.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
 import { DAEMONS } from '../config/env.js'
@@ -361,6 +362,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser): void {
     // are never a web client's to send. Refused here, on the legacy key path and on device-ws alike; the
     // adapter also takes them only on the backend's own `connId: ''`, so each check stands on its own.
     if (isBackendOnlyDownType(type)) return
+    // The key opening this E2EE session was seen now (lib/deviceKeyLog.ts, a hint for the Devices list).
+    if (type === 'e2e_hello') touchDeviceKey(user.sub, (frame.payload as { identityPub?: unknown } | undefined)?.identityPub)
     const isTerminal = typeof type === 'string' && TERMINAL_DOWN_TYPES.has(type)
     const terminalNamespace = typeof type === 'string' && type.startsWith('terminal_')
     if (terminalNamespace && !isTerminal) {

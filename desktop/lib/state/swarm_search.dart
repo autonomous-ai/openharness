@@ -948,7 +948,7 @@ class SwarmSearchController extends ChangeNotifier {
       ? '[ Add ]'
       : 'New Harness';
   String get createDescription => isMachineMode
-      ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n3. Set its password.\n\nThen select it here and Connect.'
+      ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n\nIt appears here and connects on its own — no password.'
       : isModelMode
       ? 'Add an API key\n\n'
             'OpenRouter or a Custom API: Use its models to run a harness.\n'

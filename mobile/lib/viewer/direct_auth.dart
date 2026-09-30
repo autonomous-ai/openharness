@@ -30,10 +30,22 @@ class DirectAuth implements AccessTokenSource {
   /// session this device no longer has, and must not touch the one it has now (see [_refresh]).
   int _generation = 0;
 
+  /// Whether a sign-in by hand happened since this was last asked — the device key log reads it to
+  /// tell signing in again after a removal from an app opening under a removed key
+  /// (`device_log_sync.dart` `register`). Asking clears it.
+  bool consumeFreshSignIn() {
+    final fresh = _freshSignIn;
+    _freshSignIn = false;
+    return fresh;
+  }
+
+  bool _freshSignIn = false;
+
   Future<void> signIn(
     IssuedTokens tokens, {
     SessionIssuer issuer = SessionIssuer.sso,
   }) {
+    _freshSignIn = true;
     _generation++;
     return session.saveLogin(
       token: tokens.token,

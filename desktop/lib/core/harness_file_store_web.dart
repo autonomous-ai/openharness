@@ -18,6 +18,7 @@ class HarnessFileStore
     'auth_access_token_expires_at',
     'viewer_e2ee_identity_seed',
     'viewer_e2ee_machine_peers',
+    'viewer_e2ee_devlog',
   ];
   Future<void>? _migration;
 

@@ -26,6 +26,7 @@
     "@fastify/cors": "^10.1.0",
     "@fastify/multipart": "^9.4.0",
     "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "@prisma/client": "^5.22.0",
     "@types/ws": "^8.18.1",
     "dotenv": "^17.2.3",

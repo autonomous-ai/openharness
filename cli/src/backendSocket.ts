@@ -213,8 +213,12 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * `backend/src/services/MachineService.ts` — so there is nothing to stay compatible with. The
  * backend blocks its OWN `__`-prefixed control frames from web clients for the same reason; these
  * two escaped that rule because they are not `__`-prefixed.
+ *
+ * `device_keys_changed` and `devlog_append_result` are the backend's own too (the device key log,
+ * lib/e2ee/deviceLogSyncer.ts): forged, the first only makes this daemon re-read and verify the log,
+ * the second could fake an answer to its own append — neither is anything a client should be sending.
  */
-const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed'])
+const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'devlog_append_result'])
 
 /** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
  *  and escaped rather than trusted not to carry a newline that forges the next line. */
@@ -771,6 +775,14 @@ export class BackendSocket {
   pairControl: { verbs: ReadonlySet<string>; local: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>> } | null = null
   /** The account's zoo changed (a `zoo_changed` from the backend) — cli.ts re-reads which daemon is paired. */
   onZooChanged: ((revision: number) => void) | null = null
+  /** The account's device key log grew (lib/e2ee/deviceLogSyncer.ts): re-read it from this machine's head. */
+  onDeviceKeysChanged: (() => void) | null = null
+  /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
+  onDeviceRemoved: ((pub: string) => void) | null = null
+  /** The link to the backend just came up (each reconnect too). */
+  onLinkUp: (() => void) | null = null
+  /** Appends to the device key log waiting for the backend's answer, by requestId. */
+  private readonly devlogAppends = new Map<string, (payload: Record<string, unknown> | null) => void>()
   /**
    * Whether daemons run at all (lib/daemonsSwitch.ts). Off, the loopback `pair` request (`harness pair`, the
    * MCP server) is answered DAEMONS_OFF before any verb runs. Null: always on, as before the switch.
@@ -1071,6 +1083,7 @@ export class BackendSocket {
       console.log(`[backend] connected → ${this.url}`)
       this.onStatus(true)
       this.drainQueue()
+      this.onLinkUp?.()
 
       this.heartbeat = watchSocketLiveness(ws, {
         onIdle: (idleMs) => console.log(`[backend] no traffic for ${Math.round(idleMs / 1000)}s — terminating the link`),
@@ -1306,6 +1319,21 @@ export class BackendSocket {
     const packet = encodeTerminalHop(TerminalHopDirection.up, connId, clientFrame)
     if (!packet || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false
     try { this.ws.send(packet); return true } catch { return false }
+  }
+
+  /**
+   * Append one entry to the account's device key log, over this machine's own socket — the backend
+   * ties a machine's entries to the machine that sent them. Resolves to the backend's answer
+   * (`{head}` or `{error, head?}`), or null when it did not come in time.
+   */
+  appendDeviceLog(entry: Record<string, unknown>, timeoutMs = 15_000): Promise<Record<string, unknown> | null> {
+    const requestId = `dl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.devlogAppends.delete(requestId); resolve(null) }, timeoutMs)
+      timer.unref?.()
+      this.devlogAppends.set(requestId, (payload) => { clearTimeout(timer); resolve(payload) })
+      this.enqueue({ t: 'up', webEligible: false, frame: { type: 'devlog_append', payload: { requestId, entry } } })
+    })
   }
 
   /** Send a user-level notification to every logged-in browser that owns this machine. */
@@ -1845,7 +1873,16 @@ export class BackendSocket {
 
     // The machine was deleted/revoked from the web → stop for good (don't reconnect) and let the CLI
     // clear the saved token. `closed` blocks the reconnect that would otherwise fire on socket drop.
-    if (type === 'machine_revoked') { this.closed = true; this.onRevoked?.(); return }
+    if (type === 'machine_revoked') {
+      this.closed = true
+      // Removed from the account's device key log (not just signed out): the key itself is spent.
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as { reason?: unknown; pub?: unknown }
+      if (p.reason === 'device_removed' && typeof p.pub === 'string') {
+        try { this.onDeviceRemoved?.(p.pub) } catch { /* signing out still happens */ }
+      }
+      this.onRevoked?.()
+      return
+    }
 
     // The account's tabs changed on another computer (or in another window of this one): hand the
     // window the revision and let it fetch `/api/desk` through this daemon. Backend-only, like
@@ -1864,6 +1901,21 @@ export class BackendSocket {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.sendLocal({ type: 'zoo_changed', payload: { revision: typeof revision === 'number' ? revision : 0 } })
       this.onZooChanged?.(typeof revision === 'number' ? revision : 0)
+      return
+    }
+
+    // The account's device key log grew: this daemon re-reads and verifies it (deviceLogSyncer.ts), and
+    // the window re-reads its Devices list. Backend-only for the same reason as desk_changed.
+    if (type === 'device_keys_changed') {
+      this.onDeviceKeysChanged?.()
+      this.sendLocal({ type: 'device_keys_changed', payload: {} })
+      return
+    }
+    // The backend's answer to this machine's own append to the device key log.
+    if (type === 'devlog_append_result') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      const done = typeof p.requestId === 'string' ? this.devlogAppends.get(p.requestId) : undefined
+      if (done) { this.devlogAppends.delete(p.requestId as string); done(p) }
       return
     }
 

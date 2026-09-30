@@ -1,3 +1,5 @@
+import 'new_device_banner.dart';
+
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
@@ -198,23 +200,34 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             //
             // `MaterialApp` installs one controller for the ROOT navigator only; a nested
             // `Navigator` inherits nothing, so its routes have no observer to drive a flight.
-            body: HeroControllerScope(
-              controller: _heroController,
-              child: Navigator(
-                key: _navigator,
-                // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-                // `NavigatorState._updateEffectiveObservers` appends the scope's controller to
-                // `widget.observers` itself, so listing it here registers it twice and trips
-                // "A HeroController can not be shared by multiple Navigators" — which reads
-                // like a sharing bug and is really a double-subscription by one navigator.
-                onGenerateRoute: (_) => MaterialPageRoute<void>(
-                  builder: (_) => AgentHome(
-                    notifier: widget.notifier,
-                    openMachineId: _linkedMachineId,
-                    openAgent: _openAgentRequest,
+            body: Column(
+              children: [
+                // A device this phone had never trusted joined the account (device key log).
+                NewDeviceBanner(
+                  notifier: widget.notifier,
+                  navigator: _navigator,
+                ),
+                Expanded(
+                  child: HeroControllerScope(
+                    controller: _heroController,
+                    child: Navigator(
+                      key: _navigator,
+                      // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+                      // `NavigatorState._updateEffectiveObservers` appends the scope's controller to
+                      // `widget.observers` itself, so listing it here registers it twice and trips
+                      // "A HeroController can not be shared by multiple Navigators" — which reads
+                      // like a sharing bug and is really a double-subscription by one navigator.
+                      onGenerateRoute: (_) => MaterialPageRoute<void>(
+                        builder: (_) => AgentHome(
+                          notifier: widget.notifier,
+                          openMachineId: _linkedMachineId,
+                          openAgent: _openAgentRequest,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
           ),
         ),

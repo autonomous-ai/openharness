@@ -365,6 +365,24 @@ class SystemNotifications {
     );
   }
 
+  /// News about the ACCOUNT rather than an agent — a device joined it. The same switch and the same
+  /// rules as [post]; a click on it opens no agent.
+  void postNotice({required String id, required String title, required String body}) {
+    if (!store.value || !supported) return;
+    if (permission.value == NotificationPermission.unavailable) return;
+    _ordered(
+      id,
+      () => notifier
+          .show(id: id, title: title, body: body, machineId: '', agentId: '')
+          .then((answer) {
+            if (answer != NotificationPermission.unknown) {
+              permission.value = answer;
+            }
+          })
+          .catchError((_) {}),
+    );
+  }
+
   /// The person got to this agent some other way. Its notification is old news.
   void withdraw(String machineId, String agentId) {
     if (!supported) return;

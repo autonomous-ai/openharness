@@ -12,6 +12,7 @@ import '../logging/debug_surface.dart';
 /// be listed without a screen behind it or reachable without a row.
 enum SettingsSection {
   account(AppIcons.user, 'Account'),
+  accountDevices(AppIcons.shieldCheck, 'Your devices'),
   profiles(AppIcons.monitor, 'Profiles'),
   usage(AppIcons.chartNoAxesColumn, 'Usage'),
   customize(AppIcons.palette, 'Customize'),
@@ -96,6 +97,8 @@ const _kSettingsGroups = [
     SettingsSection.experimental,
     SettingsSection.devices,
     SettingsSection.account,
+    // Beside Account: the devices signed in to it, each trusted by the others because of that.
+    SettingsSection.accountDevices,
     SettingsSection.profiles,
   ]),
   // Debug sits between the two things it is most often reached from: the keys

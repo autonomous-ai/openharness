@@ -5,6 +5,7 @@ import '../core/config.dart';
 import '../e2ee/keys.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
+import 'device_log_sync.dart';
 import 'group_sync.dart';
 import 'password_link.dart';
 import 'viewer_key_store.dart';
@@ -23,6 +24,10 @@ class DirectLink implements PeerLinkClient {
   final DirectAuth auth;
   final AppConfig config;
   final RelaySocketFactory socket;
+
+  /// The account's device key log, once the app has one: its head rides every roster swap, so a
+  /// machine shown a different log than this app is found out (`device_log_sync.dart`).
+  ViewerDeviceLog? deviceLog;
 
   @override
   Future<CliLinkConnectResult> connect(
@@ -78,6 +83,7 @@ class DirectLink implements PeerLinkClient {
     } catch (_) {
       return GroupSyncOutcome.none;
     }
+    final log = deviceLog;
     return syncTrustGroup(
       machineId: machineId,
       keys: keys,
@@ -86,6 +92,8 @@ class DirectLink implements PeerLinkClient {
       autonomousEnv: config.autonomousEnv,
       label: label,
       socket: socket,
+      devlog: await log?.gossip(),
+      onDevlog: log?.heard,
     );
   }
 

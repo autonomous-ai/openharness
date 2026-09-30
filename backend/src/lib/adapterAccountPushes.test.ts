@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
-  desk: vi.fn(), zoo: vi.fn(), machines: vi.fn(),
-  deskUnsub: vi.fn(), zooUnsub: vi.fn(), machinesUnsub: vi.fn(),
+  desk: vi.fn(), zoo: vi.fn(), machines: vi.fn(), keys: vi.fn(),
+  deskUnsub: vi.fn(), zooUnsub: vi.fn(), machinesUnsub: vi.fn(), keysUnsub: vi.fn(),
 }))
-vi.mock('./bus.js', () => ({ subscribeDeskChanged: m.desk, subscribeZooChanged: m.zoo, subscribeDeviceMachineListChanged: m.machines }))
+vi.mock('./bus.js', () => ({
+  subscribeDeskChanged: m.desk, subscribeZooChanged: m.zoo, subscribeDeviceMachineListChanged: m.machines,
+  subscribeDeviceKeysChanged: m.keys,
+}))
 
 import { relayAccountPushes } from './adapterAccountPushes.js'
 
@@ -17,6 +20,7 @@ describe('account pushes on a daemon socket', () => {
     m.desk.mockResolvedValue(m.deskUnsub)
     m.zoo.mockResolvedValue(m.zooUnsub)
     m.machines.mockResolvedValue(m.machinesUnsub)
+    m.keys.mockResolvedValue(m.keysUnsub)
   })
 
   it('listens on the channels of the account that owns the socket', async () => {
@@ -24,6 +28,14 @@ describe('account pushes on a daemon socket', () => {
     expect(m.desk).toHaveBeenCalledWith('user-1', expect.any(Function))
     expect(m.zoo).toHaveBeenCalledWith('user-1', expect.any(Function))
     expect(m.machines).toHaveBeenCalledWith('user-1', expect.any(Function))
+    expect(m.keys).toHaveBeenCalledWith('user-1', expect.any(Function))
+  })
+
+  it('hands the daemon a device-key-log change with the new head, for the daemon itself to re-read', async () => {
+    const send = vi.fn()
+    await relayAccountPushes('user-1', send, on)
+    m.keys.mock.calls[0][1]({ seq: 4, hash: 'h' })
+    expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'device_keys_changed', payload: { seq: 4, hash: 'h' } } })
   })
 
   it('hands the daemon a desk change as a connection-less down frame carrying the revision', async () => {
@@ -54,6 +66,7 @@ describe('account pushes on a daemon socket', () => {
     expect(m.deskUnsub).toHaveBeenCalledOnce()
     expect(m.zooUnsub).toHaveBeenCalledOnce()
     expect(m.machinesUnsub).toHaveBeenCalledOnce()
+    expect(m.keysUnsub).toHaveBeenCalledOnce()
   })
 
   it('does not leave the earlier subscriptions behind when a later subscribe fails', async () => {

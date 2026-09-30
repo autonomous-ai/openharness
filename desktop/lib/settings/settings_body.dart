@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../state/app_state.dart';
 import 'experimental_features.dart';
 import 'sections/about_section.dart';
+import 'sections/account_devices_section.dart';
 import 'sections/account_section.dart';
 import 'sections/profiles_section.dart';
 import 'sections/debug_section.dart';
@@ -33,6 +34,7 @@ class SettingsBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final screen = switch (section) {
       SettingsSection.account => AccountSection(notifier: notifier),
+      SettingsSection.accountDevices => AccountDevicesSection(notifier: notifier),
       SettingsSection.profiles => ProfilesSection(notifier: notifier),
       SettingsSection.usage => const UsageSection(),
       SettingsSection.customize => throw StateError(

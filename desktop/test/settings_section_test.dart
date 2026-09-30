@@ -38,6 +38,7 @@ void main() {
       SettingsSection.experimental,
       if (!kIsWeb) SettingsSection.devices,
       SettingsSection.account,
+      SettingsSection.accountDevices,
       SettingsSection.profiles,
       SettingsSection.shortcuts,
       SettingsSection.about,

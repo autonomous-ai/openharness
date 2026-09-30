@@ -99,6 +99,8 @@ import '../notify/agent_alerts.dart';
 import '../notify/alert_sounds.dart';
 import '../notify/system_notifications.dart';
 import '../notify/system_notifications.dart' as notify_system;
+import 'account_devices.dart';
+import '../viewer/device_log_sync.dart';
 
 enum AppStatus {
   bootstrapping,
@@ -2159,6 +2161,7 @@ class AppNotifier extends ChangeNotifier {
     this.peerLinks = peerLinks ?? this.viewer?.links ?? this.cliLink;
     _autonomousEnv = this.config.autonomousEnv;
     api = _newApiClient();
+    _initDeviceLog();
     // `grid.AppTheme.palette`, not the prefs store: main.dart copies the saved
     // choice into the palette notifier while rebuilding, so the store fires
     // before the colours the panes actually use have moved.
@@ -3613,6 +3616,13 @@ class AppNotifier extends ChangeNotifier {
     // desk (`Desk{userId}`), so a guest has none — asking for one would earn a
     // 401 on every poll for a document that cannot exist.
     if (signedIn) _deskEnsure(revision);
+    // The account's device key log: this app's key joins it (an existing sign-in too, from before
+    // the log existed), and every machine it names is trusted with no password.
+    if (signedIn) {
+      if (_deviceLog case final log?) {
+        unawaited(log.register(freshSignIn: viewer?.auth.consumeFreshSignIn() ?? false));
+      }
+    }
     try {
       await refreshMachines();
     } catch (error) {
@@ -4604,6 +4614,13 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> _logout() async {
+    // Signing out takes this app's key out of the account's devices, while the sign-in still works
+    // to say so. Best effort, and brief: signing out must not wait on the network.
+    if (_deviceLog case final log?) {
+      try {
+        await log.leave().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
     final revision = _invalidateAuthWork();
     final previousMachineId = localMachineState?.machine.machineId;
     cliLogin.cancel();
@@ -4661,6 +4678,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (code != 4404) return;
+    // A machine the account's device key log names may simply not have read it yet: read it again,
+    // and the link retry below picks the machine up once it has.
+    if (_deviceLog case final log?) unawaited(log.refresh());
     // The local CLI's relay found no linked trust for this machine — it now owns E2EE entirely.
     // A `harness link connect` run in a terminal (or another app instance) has no way to notify
     // this one directly, so poll every few seconds until it's picked up instead of waiting for
@@ -4761,6 +4781,7 @@ class AppNotifier extends ChangeNotifier {
         machine.connectionStatus = nextStatus;
         if (nextStatus == ConnectionStatus.connected) {
           _onMachineConnected(machineId, machine);
+          _refreshDeviceLogAfterReconnect();
         } else if (nextStatus == ConnectionStatus.reconnecting ||
             nextStatus == ConnectionStatus.disconnected) {
           _stopAgentSyncTimer(machineId);
@@ -5561,6 +5582,125 @@ class AppNotifier extends ChangeNotifier {
       attempt.result.complete(error);
       if (_authWorkCurrent(attempt.authRevision)) notifyListeners();
     }
+  }
+
+  // -- the account's devices: the device key log (viewer/device_log_sync.dart) --------------------
+
+  /// Viewer builds only: this app's copy of the account's device key log. A desktop build's daemon
+  /// keeps its own (`harness devices`), and the Devices list reads it from there.
+  ViewerDeviceLog? _deviceLog;
+
+  /// Devices that joined the account and this end had never trusted, not yet dismissed.
+  final List<NewDeviceNotice> newDevices = [];
+
+  /// Bumped whenever the account's devices may have changed; the Devices list re-reads on it.
+  int devicesRevision = 0;
+
+  void _initDeviceLog() {
+    final services = viewer;
+    if (services == null) return;
+    final log = _deviceLog = ViewerDeviceLog(
+      keys: services.keys,
+      fetch: (since) => api.deviceKeys(since),
+      append: (entry) => api.appendDeviceKey(entry),
+      label: _deviceLabel,
+      onAnnounce: (m) => _announceDevice(NewDeviceNotice.fromMember(m)),
+      onSignedOut: _deviceRemovedHere,
+      onChanged: () {
+        devicesRevision++;
+        if (!_disposed) notifyListeners();
+      },
+    );
+    services.links.deviceLog = log;
+  }
+
+  /// How this app names itself in the account's devices.
+  String _deviceLabel() {
+    final host = localHostnameOrNull();
+    if (host != null && host.isNotEmpty) return host;
+    return kIsWeb ? 'Browser · ${defaultTargetPlatform.name}' : 'Desktop app';
+  }
+
+  DateTime? _deviceLogReadAt;
+
+  /// A socket came back: a `device_keys_changed` sent while this app was offline reached nobody, so
+  /// read the log again — at most every half minute, since a reconnect is every machine at once.
+  void _refreshDeviceLogAfterReconnect() {
+    final log = _deviceLog;
+    if (log == null) return;
+    final now = DateTime.now();
+    if (_deviceLogReadAt case final last? when now.difference(last) < const Duration(seconds: 30)) return;
+    _deviceLogReadAt = now;
+    unawaited(log.refresh());
+  }
+
+  void _announceDevice(NewDeviceNotice notice) {
+    if (newDevices.any((d) => d.pub == notice.pub)) return;
+    newDevices.add(notice);
+    devicesRevision++;
+    systemNotifications.postNotice(
+      id: 'harness-device:${notice.pub}',
+      title: 'New device on your account',
+      body: '${notice.sentence} Not yours? Remove it in Settings ▸ Devices.',
+    );
+    notifyListeners();
+  }
+
+  /// The devices list was opened: every device announced so far has been seen.
+  void seenNewDevices() {
+    if (newDevices.isEmpty) return;
+    newDevices.clear();
+    notifyListeners();
+  }
+
+  void dismissNewDevice(String pub) {
+    newDevices.removeWhere((d) => d.pub == pub);
+    notifyListeners();
+  }
+
+  /// This app's key was removed from the account: its identity is spent, and it signs out. The
+  /// next sign-in is a new device, which every other device announces.
+  Future<void> _deviceRemovedHere() async {
+    final services = viewer;
+    if (services == null) return;
+    // Sign out first: it takes this app's key out of the log, which needs the key it is about.
+    await logout();
+    await services.keys.forgetIdentity();
+  }
+
+  /// The account's devices, from whichever end verified the log. Null when it cannot be read.
+  Future<AccountDevices?> loadDevices() async {
+    if (_deviceLog case final log?) {
+      final listing = AccountDevices.fromListing(await log.list());
+      return listing.withLastSeen(await api.deviceKeysSeen());
+    }
+    return AccountDevices.fromDaemon(await api.daemonDevices());
+  }
+
+  /// Take [pub] out of the account on every device. Null when done, else why not.
+  Future<String?> removeDevice(String pub) async {
+    final error = _deviceLog != null ? await _deviceLog!.remove(pub) : await api.daemonRemoveDevice(pub);
+    if (error == null) newDevices.removeWhere((d) => d.pub == pub);
+    devicesRevision++;
+    notifyListeners();
+    return error;
+  }
+
+  /// What trusting the backend's device list again would change; [confirm] does it — the one way
+  /// out of a frozen list. Null when no valid list could be read.
+  Future<DevicesRebaseline?> rebaselineDevices({required bool confirm}) async {
+    final DevicesRebaseline? result;
+    if (_deviceLog case final log?) {
+      final r = await log.rebaseline(confirm: confirm);
+      result = r == null ? null : DevicesRebaseline.fromViewer(r);
+    } else {
+      result = DevicesRebaseline.fromDaemon(await api.daemonRebaselineDevices(confirm: confirm));
+    }
+    if (confirm) {
+      devicesRevision++;
+      notifyListeners();
+    }
+    return result;
   }
 
   final Map<String, DateTime> _groupSyncedAt = {};
@@ -13072,6 +13212,23 @@ class AppNotifier extends ChangeNotifier {
         // renamed or deleted, or a shared harness invited or taken back. The
         // payload is only a reason; the list itself is re-read.
         unawaited(_rereadMachinesInBackground(pushed: true));
+        break;
+      case 'device_keys_changed':
+        // The account's device key log grew. A viewer re-reads and verifies it itself; a desktop
+        // build's daemon already did, and the Devices list re-reads it from there.
+        if (_deviceLog case final log?) unawaited(log.refresh());
+        devicesRevision++;
+        notifyListeners();
+        break;
+      case 'device_key_added':
+        // Only this computer's own daemon says this (a viewer build has no daemon, and a machine's
+        // frame must not be able to raise a notice here).
+        if (viewer == null) {
+          final pub = payload['pub'], label = payload['label'], kind = payload['kind'];
+          if (pub is String && kind is String) {
+            _announceDevice(NewDeviceNotice(pub: pub, label: label is String ? label : '', kind: kind));
+          }
+        }
         break;
       case 'desk_changed':
         unawaited(experimentalFeatures.refresh());

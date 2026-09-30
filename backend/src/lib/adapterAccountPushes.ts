@@ -1,4 +1,4 @@
-import { subscribeDeskChanged, subscribeDeviceMachineListChanged, subscribeZooChanged } from './bus.js'
+import { subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeDeviceMachineListChanged, subscribeZooChanged } from './bus.js'
 
 /**
  * The pushes a daemon socket carries for its ACCOUNT rather than for its machine: something the
@@ -14,6 +14,8 @@ import { subscribeDeskChanged, subscribeDeviceMachineListChanged, subscribeZooCh
  *  - `machines_changed` — the account's machine list: a machine created / renamed / deleted, or a
  *    shared harness invited / taken back (routes/harnessShares.ts pokes the recipient). This is what
  *    lets the app discover invitations without polling `/api/machines` + `/api/harness-shares`.
+ *  - `device_keys_changed` — the account's device key log grew (lib/deviceKeyLog.ts). Unlike the rest it
+ *    is for the DAEMON itself, which trusts the keys the log holds: it re-reads from its own head.
  *
  * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, the zoo channel is not even listened
  * on, since nothing publishes it.
@@ -34,6 +36,9 @@ export async function relayAccountPushes(userId: string, send: (frame: unknown) 
     }
     unsubs.push(await subscribeDeviceMachineListChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: msg.reason } } })
+    }))
+    unsubs.push(await subscribeDeviceKeysChanged(userId, (msg) => {
+      send({ t: 'down', connId: '', frame: { type: 'device_keys_changed', payload: { seq: msg.seq, hash: msg.hash } } })
     }))
   } catch (err) {
     stop()

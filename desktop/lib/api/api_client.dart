@@ -6,6 +6,8 @@ import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/http_log.dart';
+import '../viewer/device_log.dart';
+import '../viewer/device_log_sync.dart' show DeviceLogAppendAnswer, DeviceLogFetched;
 import '../ws/local_daemon_transport.dart';
 import 'access_token_source.dart';
 import 'bearer_auth_interceptor.dart';
@@ -285,6 +287,107 @@ class ApiClient {
       return res.statusCode == 200 && !(data is Map && data['error'] != null);
     } catch (_) {
       return false;
+    }
+  }
+
+  // -- the account's device key log (viewer builds: straight to the backend, signed) --
+
+  /// `GET /api/device-keys?since=` — the log from [since]; null when there is none to read (an older
+  /// backend, signed out, or unreachable). See `viewer/device_log_sync.dart`.
+  Future<DeviceLogFetched?> deviceKeys(int since) async {
+    try {
+      final res = await _dio.get('/api/device-keys', queryParameters: {'since': since});
+      if (res.statusCode != 200) return null;
+      final data = unwrapApiResponse(res);
+      if (data is! Map) return null;
+      final acct = data['acct'], head = DevLogHead.fromJson(data['head']), entries = data['entries'];
+      if (acct is! String || head == null || entries is! List) return null;
+      return (acct: acct, head: head, entries: entries.cast<Object?>());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `POST /api/device-keys` — append one entry this app signed. Null when the backend could not be
+  /// reached; a refusal comes back as its code (`STALE_HEAD` with the current head).
+  Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) async {
+    try {
+      final res = await _dio.post('/api/device-keys', data: {'entry': entry.toJson()});
+      final body = res.data;
+      if (body is! Map) return null;
+      final data = body['data'];
+      final head = data is Map ? DevLogHead.fromJson(data['head']) : null;
+      if (res.statusCode == 200) return (head: head, error: null);
+      final error = body['error'];
+      final code = error is Map && error['code'] is String ? error['code'] as String : 'HTTP_${res.statusCode}';
+      return (head: head, error: code);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `GET /api/device-keys/seen` — when each key last opened a session, `{pub: ms}`; empty when it
+  /// cannot be read. A hint for offering to remove apps not used in a long while.
+  Future<Map<String, int>> deviceKeysSeen() async {
+    try {
+      final res = await _dio.get('/api/device-keys/seen');
+      if (res.statusCode != 200) return const {};
+      final data = unwrapApiResponse(res);
+      final seen = data is Map ? data['seen'] : null;
+      return {
+        if (seen is Map)
+          for (final e in seen.entries)
+            if (e.key is String && e.value is int) e.key as String: e.value as int,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  // -- the same list on a desktop build, as this computer's daemon verified it --
+
+  /// `GET /api/devices` — the account's devices as the daemon's copy of the log has them; null when
+  /// the daemon cannot say (an older CLI, signed out).
+  Future<Map<String, dynamic>?> daemonDevices() async {
+    try {
+      final res = await _dio.get('/api/devices');
+      final data = res.data;
+      return res.statusCode == 200 && data is Map<String, dynamic> ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `POST /api/devices/remove` — out of the account, signed by this computer. Null when done,
+  /// else the reason.
+  Future<String?> daemonRemoveDevice(String pub) async {
+    try {
+      final res = await _dio.post(
+        '/api/devices/remove',
+        data: {'pub': pub},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      );
+      if (res.statusCode == 200) return null;
+      final data = res.data;
+      return data is Map && data['error'] is String ? data['error'] as String : 'HTTP_${res.statusCode}';
+    } catch (_) {
+      return 'UNAVAILABLE';
+    }
+  }
+
+  /// `POST /api/devices/rebaseline` — what trusting the backend's list again changes; [confirm]
+  /// does it. Null when the daemon could not read a valid list.
+  Future<Map<String, dynamic>?> daemonRebaselineDevices({required bool confirm}) async {
+    try {
+      final res = await _dio.post(
+        '/api/devices/rebaseline',
+        data: {'confirm': confirm},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      );
+      final data = res.data;
+      return res.statusCode == 200 && data is Map<String, dynamic> ? data : null;
+    } catch (_) {
+      return null;
     }
   }
 

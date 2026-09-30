@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -565,6 +565,37 @@ describe('RemoteRelayPool drops a peer the responder no longer trusts', () => {
         pool.acquire(MACHINE_ID, 'prod', { type: 'machine_select', payload: { machineId: MACHINE_ID } }, sink, () => {}),
       ).rejects.toThrow('NO_PEER_LINK')
       expect(peers.get(MACHINE_ID)).toBeNull()
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()))
+    }
+  })
+
+  it('e2e_denied from a machine the device key log names keeps the pin for a few tries, then drops it', async () => {
+    const wss = new WebSocketServer({ port: 0 })
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        let frame: Frame
+        try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
+        if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId: MACHINE_ID } }))
+        // A machine that has not read the log yet, so does not know this identity.
+        if (frame.type === 'e2e_hello') ws.send(JSON.stringify({ type: 'e2e_denied', payload: { reason: 'unpaired' } }))
+      })
+    })
+    try {
+      const port = (wss.address() as AddressInfo).port
+      const peers = new MachinePeerStore()
+      const pinned = C.b64e(C.newIdentity().pub)
+      peers.pin(MACHINE_ID, pinned, 'box2')
+      const expectsTrust = vi.fn((machineId: string, pub: string) => machineId === MACHINE_ID && pub === pinned)
+      const pool = new RemoteRelayPool(fakeAuth, `ws://127.0.0.1:${port}`, C.newIdentity(), peers, { expectsTrust })
+      const sink = { sendFrame: () => true, sendBinary: () => true }
+      const dial = () => pool.acquire(MACHINE_ID, 'prod', { type: 'machine_select', payload: { machineId: MACHINE_ID } }, sink, () => {})
+      await expect(dial()).rejects.toThrow('NO_PEER_LINK')
+      await expect(dial()).rejects.toThrow('NO_PEER_LINK')
+      expect(peers.get(MACHINE_ID)?.pub).toBe(pinned)
+      await expect(dial()).rejects.toThrow('NO_PEER_LINK')
+      expect(peers.get(MACHINE_ID)).toBeNull()
+      expect(expectsTrust).toHaveBeenCalledTimes(3)
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()))
     }

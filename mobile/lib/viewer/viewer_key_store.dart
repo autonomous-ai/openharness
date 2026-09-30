@@ -78,6 +78,7 @@ class ViewerKeyStore {
   static const _seedKey = 'viewer_e2ee_identity_seed';
   static const _peersKey = 'viewer_e2ee_machine_peers';
   static const _groupKey = 'viewer_e2ee_group';
+  static const _devLogKey = 'viewer_e2ee_devlog';
 
   /// Minted on first use and kept: every linked machine has pinned it.
   Future<E2eeIdentity> identity() => _identity ??= _heldUnlessItFails(
@@ -180,6 +181,29 @@ class ViewerKeyStore {
 
   Future<void> writeGroupRoster(Map<String, Object> roster) =>
       _storage.write(_groupKey, jsonEncode(roster));
+
+  /// This device's verified copy of the account's device key log (`device_log_sync.dart`), as stored
+  /// JSON; null when there is none yet or it cannot be read.
+  Future<Object?> deviceLog() async {
+    final raw = await _storage.read(_devLogKey);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> writeDeviceLog(Map<String, Object?> log) =>
+      _storage.write(_devLogKey, jsonEncode(log));
+
+  /// This device was removed from the account's device key log: its identity is spent. The next one
+  /// minted is a new device, which every other device announces as one.
+  Future<void> forgetIdentity() async {
+    _identity = null;
+    await _storage.delete(_seedKey);
+    await _storage.delete(_devLogKey);
+  }
 
   /// The one path that changes the peer list, so the one place the cache is
   /// replaced.

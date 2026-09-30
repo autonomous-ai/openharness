@@ -2824,6 +2824,31 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
 
     await socket.stop()
   })
+
+  it('says whose key a device-key-log removal spent before signing out, and nothing for a plain revoke', async () => {
+    const socket = new BackendSocket('token')
+    const order: string[] = []
+    socket.onDeviceRemoved = (pub) => { order.push(`removed:${pub}`) }
+    socket.onRevoked = () => { order.push('revoked') }
+    socket.connect()
+    const ws = wsMock.instances.at(-1)!
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: { reason: 'device_removed', pub: 'PUB' } } })
+    await vi.waitFor(() => expect(order).toEqual(['removed:PUB', 'revoked']))
+    await socket.stop()
+
+    const plain = new BackendSocket('token')
+    let removed = 0
+    plain.onDeviceRemoved = () => { removed += 1 }
+    plain.onRevoked = () => {}
+    plain.connect()
+    const ws2 = wsMock.instances.at(-1)!
+    ws2.open()
+    ws2.message({ t: 'down', connId: '', frame: { type: 'machine_revoked', payload: {} } })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(removed).toBe(0)
+    await plain.stop()
+  })
 })
 
 /** The read-only hardware line for the run-a-harness-compute dialog, answered next to `grid_models_list`. */

@@ -31,6 +31,18 @@ void main() {
     notices = LocalSystemNotices(plugin);
   });
 
+  test('a new device on the account: its own channel, replaced by its own key, opening no agent', () async {
+    await notices.showAccountNotice(key: 'pub-1', title: 'New device on your account', body: 'iPad signed in.');
+    await notices.showAccountNotice(key: 'pub-1', title: 'New device on your account', body: 'iPad signed in.');
+    expect(plugin.shown.map((n) => n.id).toSet(), {accountNoticeIdFor('pub-1')});
+    expect(accountNoticeIdFor('pub-1'), isNot(noticeIdFor(ref)));
+    final shown = plugin.shown.first;
+    expect(shown.title, 'New device on your account');
+    expect(shown.details!.android!.channelId, 'account-device');
+    expect(shown.details!.iOS!.threadIdentifier, 'account-device');
+    expect(decodeAgentPayload(shown.payload), isNull);
+  });
+
   test('nothing starts until a notice is first needed', () {
     expect(plugin.initialized, 0);
     // The app's own, over the real plugin: building it reaches no platform.

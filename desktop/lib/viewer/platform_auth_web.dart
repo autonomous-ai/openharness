@@ -82,6 +82,9 @@ class BrowserAuth extends DirectAuth {
   Future<bool> hasSession() => _run(_delegate.hasSession);
 
   @override
+  bool consumeFreshSignIn() => _delegate.consumeFreshSignIn();
+
+  @override
   Future<void> signIn(IssuedTokens tokens, {bool Function()? stillCurrent}) {
     final revision = ++_revision;
     return _run(

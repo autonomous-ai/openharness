@@ -243,7 +243,17 @@ export interface RemoteRelayPoolOptions {
   /** A fresh E2EE session to `machineId` is up (the trust group compares rosters then). Not passed on
    *  to the background pools — the group's own exchange runs on one of those. */
   onSessionReady?: (machineId: string) => void
+  /** Whether a machine that just answered `e2e_denied` is one the account's device key log names, under
+   *  the key pinned for it: then it most likely has not read the log yet, and the pin is kept for a few
+   *  tries (DENIED_TRIES within DENIED_WINDOW_MS) instead of being dropped at once. Shared with the
+   *  background pools. */
+  expectsTrust?: (machineId: string, pub: string) => boolean
+  /** Shared record of recent denials per machine, for the above. */
+  denials?: Map<string, number[]>
 }
+
+const DENIED_TRIES = 3
+const DENIED_WINDOW_MS = 60_000
 
 export class RemoteRelayPool {
   private entries = new Map<string, Entry>()
@@ -254,6 +264,8 @@ export class RemoteRelayPool {
   private readonly lingerMs: number
   private readonly dialCooldownMs: number
   private readonly onSessionReady: ((machineId: string) => void) | null
+  private readonly expectsTrust: ((machineId: string, pub: string) => boolean) | null
+  private readonly denials: Map<string, number[]>
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
@@ -270,6 +282,23 @@ export class RemoteRelayPool {
     this.dialCooldownMs = opts.dialCooldownMs ?? 0
     this.onSessionReady = opts.onSessionReady ?? null
     this.lastDialFailure = opts.dialFailures ?? new Map()
+    this.expectsTrust = opts.expectsTrust ?? null
+    this.denials = opts.denials ?? new Map()
+  }
+
+  /** `machineId` denied this machine's key. Drop the pin — unless the device key log says it should
+   *  trust us, and it has not denied us DENIED_TRIES times within DENIED_WINDOW_MS yet. */
+  private denied(machineId: string): void {
+    const pub = this.peers.get(machineId)?.pub
+    if (pub && this.expectsTrust?.(machineId, pub)) {
+      const now = Date.now()
+      const recent = (this.denials.get(machineId) ?? []).filter((at) => now - at < DENIED_WINDOW_MS)
+      recent.push(now)
+      this.denials.set(machineId, recent)
+      if (recent.length < DENIED_TRIES) return
+    }
+    this.denials.delete(machineId)
+    this.peers.unlink(machineId)
   }
 
   /** Background CLI jobs (a monitor pane polling `agents_list`, a script) must not replace the
@@ -288,7 +317,8 @@ export class RemoteRelayPool {
   ): Promise<RelaySession> {
     const shelf = this.idleIsolated.get(machineId) ?? []
     const pool = shelf.pop() ?? new RemoteRelayPool(this.auth, this.backendWsBase, this.selfIdentity, this.peers,
-      { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure })
+      { p2p: false, lingerMs: ISOLATED_LINGER_MS, dialCooldownMs: ISOLATED_DIAL_COOLDOWN_MS, dialFailures: this.lastDialFailure,
+        ...(this.expectsTrust ? { expectsTrust: this.expectsTrust } : {}), denials: this.denials })
     const session = await pool.acquire(machineId, autonomousEnv, selectFrame, {
       ...sink,
       sendFrame: frame => sink.sendFrame(frame.type === 'connected'
@@ -534,7 +564,7 @@ export class RemoteRelayPool {
               // repeating a handshake that will only be denied again. The handshake never got as far
               // as being usable, so there is nothing more to read from this socket — close it rather
               // than leaving it dangling open.
-              this.peers.unlink(machineId)
+              this.denied(machineId)
               try { ws.close(1000, 'peer denied') } catch { ws.terminate() }
               reject(new RelayConnectError('NO_PEER_LINK'))
             }
@@ -570,7 +600,7 @@ export class RemoteRelayPool {
           // trust and close with the same 4404 the app already knows how to turn into "needs to be
           // linked": the `ws.on('close', ...)` handler below forwards this code verbatim to
           // `entry.onClosed`, which `localWsServer.ts` wires straight to the local client's own close.
-          this.peers.unlink(machineId)
+          this.denied(machineId)
           try { ws.close(4404, 'peer revoked trust') } catch { ws.terminate() }
           return
         }

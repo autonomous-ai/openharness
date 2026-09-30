@@ -21,6 +21,9 @@ class _RecordingNotices implements SystemNotices {
 
   @override
   Future<void> cancel(AgentRef agent) async => cancelled.add(agent);
+
+  @override
+  Future<void> showAccountNotice({required String key, required String title, required String body}) async {}
 }
 
 void main() {

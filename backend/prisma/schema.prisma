@@ -720,6 +720,28 @@ model HarnessSession {
   @@map("harness_sessions")
 }
 
+/// One entry of an account's device key log (lib/deviceKeyLog.ts): the identity keys its machines and
+/// viewer apps hold, append-only and hash-chained. Every device trusts the keys the log leaves active,
+/// so signing in is enough for an account's devices to reach each other end to end.
+///
+/// `entry` is the JSON the device sent, kept verbatim; its signature and hash cover a binary encoding
+/// of its fields, so nothing here depends on how Mongo orders keys. The unique `(userId, seq)` is what
+/// makes appending atomic: two devices appending at one head cannot both win.
+model DeviceKeyLogEntry {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String
+  seq       Int
+  hash      String
+  entry     String
+  /// The Harness session (a phone signed in by a QR) that added this key, so removing the key signs
+  /// that session out too. Null for anything else.
+  sessionId String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, seq])
+  @@map("device_key_log")
+}
+
 /// Public/private link metadata only. The owner daemon keeps the final policy and encrypted discussion.
 model HarnessLink {
   id             String    @id @map("_id")

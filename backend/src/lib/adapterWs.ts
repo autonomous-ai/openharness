@@ -38,6 +38,7 @@ import { relayAccountPushes } from './adapterAccountPushes.js'
 import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
+import { appendDeviceKey } from './deviceKeyLog.js'
 import { AppError } from '../errors/index.js'
 import {
   isEncryptedTerminalFrame,
@@ -224,6 +225,13 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     return ++turnWindowCount <= TURN_WRITES_PER_MINUTE
   }
   const p2pSignalRate = new P2pSignalRateGuard()
+  // A machine appends its own key once per sign-in, a removal when someone asks for one: a few a minute
+  // is generous, and it keeps a looping daemon from rebuilding the log on every frame.
+  const devlogRate = { windowStart: 0, count: 0, allow(): boolean {
+    const now = Date.now()
+    if (now - this.windowStart >= 60_000) { this.windowStart = now; this.count = 0 }
+    return ++this.count <= 10
+  } }
 
   // Buffer messages from RIGHT NOW, because the real handler cannot be installed until after the
   // `await attachNodeRole(...)` below — and `ws` drops any message emitted with no listener attached.
@@ -432,6 +440,26 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         const kind = (app.payload as { kind?: unknown } | undefined)?.kind
         if (typeof kind !== 'string' || !APP_PRESENCE_KINDS.has(kind)) return
         touchUserPresence(kind as 'open' | 'ping')
+        return
+      }
+      // The machine appending to its account's device key log (lib/deviceKeyLog.ts): its own key, or a
+      // removal it signs. Over THIS socket so the entry is tied to the machine that sent it — a
+      // machine can only register a key under its own id. Answered to the machine alone, never published.
+      if (app.type === 'devlog_append') {
+        const p = (app.payload ?? {}) as { requestId?: unknown; entry?: unknown }
+        const requestId = typeof p.requestId === 'string' ? p.requestId.slice(0, 64) : ''
+        if (!devlogRate.allow()) {
+          send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: { requestId, error: 'RATE_LIMITED' } } })
+          return
+        }
+        void appendDeviceKey(userId, p.entry, { kind: 'machine', machineId })
+          .then((r) => send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: r.ok
+            ? { requestId, head: r.head }
+            : { requestId, error: r.code, ...('head' in r ? { head: r.head } : {}) } } }))
+          .catch((err) => {
+            logger.warn('devlog append failed', { machineId, error: String(err) })
+            send({ t: 'down', connId: '', frame: { type: 'devlog_append_result', payload: { requestId, error: 'UNAVAILABLE' } } })
+          })
         return
       }
       // Hub tap (mirrors managerWs): keep `machine_agents` in sync from the adapter's agent
