@@ -120,7 +120,7 @@ async function signOut(userId: string, kind: string, machineId: string, pubKey: 
       // one; a daemon that predates the log reads only the type, as for a deleted machine.
       await publishDown(machineId, { connId: '', frame: { type: 'machine_revoked', payload: { reason: 'device_removed', pub: pubKey } } })
     } else if (sessionId) {
-      await prisma.harnessSession.updateMany({ where: { id: sessionId, userId, revokedAt: null }, data: { revokedAt: new Date() } })
+      await prisma.harnessSession.updateMany({ where: { id: sessionId, userId, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: new Date() } })
     }
   } catch (err) {
     logger.warn('device key removal sign-out failed', { userId, kind, error: String(err) })

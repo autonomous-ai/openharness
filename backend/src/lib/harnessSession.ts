@@ -1,4 +1,5 @@
 import { pub } from './bus.js'
+import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma.js'
 import { userService } from '../services/UserService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from './autonomousEnvironment.js'
@@ -122,11 +123,15 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
   }
 }
 
+// Not yet revoked. A session is created without `revokedAt`, and on MongoDB `revokedAt: null` alone
+// does not match a field that is absent — so a revoke filtered on it alone never revoked anything.
+const notRevoked: Prisma.HarnessSessionWhereInput = { OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }
+
 /** Sign out: the session's refresh token stops working, and so, at once, does its access token. */
 export async function revokeHarnessSession(refreshToken: string): Promise<void> {
   if (!isHarnessRefreshToken(refreshToken)) return
   await prisma.harnessSession.updateMany({
-    where: { refreshHash: harnessTokenHash(refreshToken), revokedAt: null },
+    where: { refreshHash: harnessTokenHash(refreshToken), ...notRevoked },
     data: { revokedAt: new Date() },
   })
 }

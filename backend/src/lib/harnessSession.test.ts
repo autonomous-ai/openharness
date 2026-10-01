@@ -33,7 +33,8 @@ const fakes = vi.hoisted(() => {
   }
   const harnessSession = {
     create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-      const row = { id: `s${sessions.length + 1}`, revokedAt: null, createdAt: new Date(), lastUsedAt: new Date(), ...data }
+      // Like MongoDB: a new row has no `revokedAt` at all, and `revokedAt: null` does not match that.
+      const row = { id: `s${sessions.length + 1}`, createdAt: new Date(), lastUsedAt: new Date(), ...data }
       sessions.push(row); return row
     }),
     findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
@@ -41,7 +42,11 @@ const fakes = vi.hoisted(() => {
       const row = pick(where)!; Object.assign(row, data); return row
     }),
     updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
-      const rows = sessions.filter((s) => Object.entries(where).every(([k, v]) => s[k] === v))
+      const field = (s: Record<string, unknown>, k: string, v: unknown): boolean =>
+        v !== null && typeof v === 'object' && 'isSet' in v ? (k in s) === (v as { isSet: boolean }).isSet : k in s && s[k] === v
+      const matches = (s: Record<string, unknown>, w: Record<string, unknown>): boolean => Object.entries(w).every(([k, v]) =>
+        k === 'OR' ? (v as Record<string, unknown>[]).some((o) => matches(s, o)) : field(s, k, v))
+      const rows = sessions.filter((s) => matches(s, where))
       rows.forEach((r) => Object.assign(r, data)); return { count: rows.length }
     }),
   }

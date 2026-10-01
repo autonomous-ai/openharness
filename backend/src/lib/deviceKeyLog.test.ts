@@ -138,7 +138,7 @@ describe('appendDeviceKey', () => {
     await appendDeviceKey(USER, await addEntry(phone, 'viewer', '', 'phone'), { kind: 'viewer', harnessSessionId: 'sess-1' })
     await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })
     await appendDeviceKey(USER, await removeEntry(phone.pub, box1), { kind: 'machine', machineId: MID1 })
-    expect(m.revoke).toHaveBeenCalledWith({ where: { id: 'sess-1', userId: USER, revokedAt: null }, data: { revokedAt: expect.any(Date) } })
+    expect(m.revoke).toHaveBeenCalledWith({ where: { id: 'sess-1', userId: USER, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: expect.any(Date) } })
     expect(m.publishDown).not.toHaveBeenCalled()
   })
 
