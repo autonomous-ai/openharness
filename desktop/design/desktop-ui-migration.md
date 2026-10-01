@@ -20,7 +20,7 @@ on 2026-09-30; the unmerged checkpoints below describe earlier review stages.
 | Sharing | Access/people/options, comments, observer sidebar, and viewer access/error states use desktop surfaces; existing sharing and authentication rules retained |
 | Add Phone | Desktop QR/device layout implemented; pairing lifecycle tests and light/dark enlarged-text renders pass |
 | Machine recovery/linking | Desktop linking/password layouts implemented; bounded selectable errors, fixed actions, and 32-point reveal controls tested/rendered |
-| Notifications | Native name/message rows share the tab/pane activity marks and colors. Working starts expanded; compact headers and clear icon replace repeated labels. Synthetic light/dark, collapsed, empty, long, selected and unavailable states inspected; live menu interaction still needs review |
+| Notifications | Native name/message rows share the tab/pane activity marks, with colors adapted to menu contrast. Ready and Working use compact headers; all working sessions stay visible. Synthetic light/dark, all-working, empty, long, selected and unavailable states inspected; live menu interaction still needs review |
 | Branches / pull requests | Desktop lists and shared modal veil implemented; colored icons, readable status words, honest load failures, Page Up/Down tested and rendered |
 | Settings / customization | Desktop status customization, natural-height controls, error contrast, keyboard focus and passive native footer preview implemented; actual status previews preserve the selected renderer |
 | Store | Existing graphical discovery/detail/launch routes retained; ordinary labels, search and counts use system typography; desktop and narrow/enlarged previews inspected |
@@ -43,29 +43,38 @@ counted as completed user journeys. Shared controls still serve their tests.
 The earlier overview repeated a status caption and tab/machine context under
 nearly every title. It now pairs the harness name directly with the message,
 uses the existing tab/pane activity marks and colors, and keeps full context
-in tooltips and accessibility. Working starts expanded as 28-point rows; the
-section disappears when empty. Clear is a quiet icon with a 32-point target.
+in tooltips and accessibility. The first section is Ready, which includes both
+completed replies and questions awaiting input. Working always shows all of its
+28-point rows, without a disclosure arrow or overflow submenu; the section
+disappears when empty. Clear is a quiet icon with a 32-point target.
 The menu keeps native actions, keyboard navigation and receipt validation.
+Status hues adapt to the menu's light or dark appearance independently of the
+terminal theme, so a bright yellow question mark remains legible on a light
+translucent menu. Monochrome status preferences remain monochrome.
 [Apple notification research](macos-design-research.md#notification-menu-refinement--2026-10-01)
 informed the hierarchy, not a claim of system Notification Center equivalence.
 
 Native captures use synthetic sessions and the production AppKit views:
 [light](images/notification-overview-light.png),
 [dark](images/notification-overview-dark.png), and
-[collapsed Working](images/notification-overview-collapsed.png). The six-session
-expanded sample is 360×465 points, down from 360×597. Empty is 360×184; long
+[all seven working sessions](images/notification-overview-all-working.png).
+The six-session sample is 360×465 points, down from 360×597. The all-working
+sample is 360×423. Empty is 360×184; long
 names preserve the 360-point menu width. These are view renders on neutral
 surfaces; they do not simulate window-server blur. The fixture also covers
 long/truncated, highlighted and offline rows. Reproduce with
 `tool/check_swarm_titlebar.sh <flutter-sdk> --status-menu-preview`.
 
-Validation: 15 targeted Flutter tests, 50 native menu checks, and 4,405 native
-tab/layout checks; changed-file static analysis and the icon audit pass. A
-signed Intel Skia debug build is ready for local review. Menu and tab bridge payloads match for glyph, label and
-color. Tests cover receipt-bound previews, stale clicks, snapshot clearing,
-tab moves, existing-pane navigation, expanded defaults, disclosure keys,
-shortcut hints, sign-out and the animation lifecycle. The native glyph drawing
-is shared without changing tab geometry. Physical pointer/keyboard tracking
+Validation for this refinement: 39 targeted Flutter tests and 48 native menu
+checks; changed-file static analysis and the icon audit pass. Menu and tab bridge
+payloads match for glyph, label and source color. Tests cover receipt-bound
+previews, stale clicks, snapshot clearing, tab moves, existing-pane navigation,
+all working rows, shortcut hints, sign-out, menu contrast and the animation
+lifecycle. Activity from stopped or replaced conversations is rejected, and a
+working row expires when its heartbeats stop. This does not suppress a machine
+that continues to send heartbeats for its current conversation; that upstream
+case still requires investigation. The native glyph drawing is shared without
+changing tab geometry. Physical pointer/keyboard tracking
 and VoiceOver in the user's running app remain manual review items; these
 fixtures are not that evidence.
 

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/status_menu.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
@@ -20,6 +21,61 @@ Future<void> _sync(AppNotifier app, Map<String, dynamic> raw) =>
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'old conversation activity cannot revive a replaced or stopped harness',
+    () async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      app.rememberOpenedHarness('m', 'a0');
+      await _sync(app, _snapshot);
+      Future<void> activity(String type, String session) =>
+          app.handleMachineEventForTest('m', {
+            'type': type,
+            'agentId': 'a0',
+            'payload': {'agentId': 'a0', 'sessionId': session},
+          });
+
+      await activity('turn_heartbeat', 'conversation');
+      expect(statusMenuWorkingEntries(app).single['agentId'], 'a0');
+      await _sync(app, {..._snapshot, 'sessionId': 'replacement'});
+      expect(statusMenuWorkingEntries(app), isEmpty);
+      await activity('turn_heartbeat', 'conversation');
+      await activity('turn_started', 'conversation');
+      expect(statusMenuWorkingEntries(app), isEmpty);
+
+      await activity('turn_started', 'replacement');
+      await activity('turn_ended', 'conversation');
+      expect(statusMenuWorkingEntries(app).single['sessionId'], 'replacement');
+      await _sync(app, {
+        ..._snapshot,
+        'sessionId': 'replacement',
+        'status': 'stopped',
+      });
+      expect(app.agentIsProcessing('m', 'a0'), isFalse);
+      await activity('turn_heartbeat', 'replacement');
+      expect(app.agentIsProcessing('m', 'a0'), isFalse);
+      expect(statusMenuWorkingEntries(app), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'a working row expires without fresh activity even if the terminal remains open',
+    (tester) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      app.rememberOpenedHarness('m', 'a0');
+      await _sync(app, _snapshot);
+      await app.handleMachineEventForTest('m', {
+        'type': 'turn_heartbeat',
+        'payload': {'agentId': 'a0', 'sessionId': 'conversation'},
+      });
+      expect(statusMenuWorkingEntries(app), hasLength(1));
+      await tester.pump(const Duration(seconds: 13));
+      expect(statusMenuWorkingEntries(app), isEmpty);
+      expect(app.stateOf('m')!.agents.first.terminalAvailable, isTrue);
+    },
+  );
 
   test('repeated discovery snapshots keep pane presentation stable', () async {
     final app = createApp();

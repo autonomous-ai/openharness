@@ -52,7 +52,7 @@ private extension HarnessStatusMenu {
     try check(activityTimer == nil && view.activity?.mark == "⠋", "Closed menus have the shared Working mark and no clock")
     menuWillOpen(menu)
     if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-      try check(activityTimer != nil, "Opening expanded Working starts the native clock")
+      try check(activityTimer != nil, "Opening Working starts the native clock")
     }
     let rect = view.frame
     let label = view.accessibilityLabel()
@@ -64,9 +64,6 @@ private extension HarnessStatusMenu {
     menuDidClose(menu)
     update(["enabled": true, "statusMenuEntries": [], "statusMenuWorkingEntries": [running]])
     menuWillOpen(menu)
-    click(item("toggleWorking"))
-    try check(activityTimer == nil && row("Running").isHidden, "Collapsing Working stops its clock")
-    click(item("toggleWorking"))
     menuDidClose(menu)
     try check(activityTimer == nil, "Closing the menu releases its clock")
     update([:])
@@ -80,6 +77,16 @@ let status = HarnessStatusMenu(installStatusItem: false, showWindow: { reveals +
                                emit: { emitted.append(($0, $1)) })
 do {
   try status.checkActivityLifecycle()
+  let yellow = NSColor(srgbRed: 0.9, green: 0.9, blue: 0.06, alpha: 1)
+  let lightQuestion = statusMenuActivityColor(yellow, appearance: NSAppearance(named: .aqua)!).usingColorSpace(.sRGB)!
+  let darkQuestion = statusMenuActivityColor(yellow, appearance: NSAppearance(named: .darkAqua)!).usingColorSpace(.sRGB)!
+  try check(lightQuestion.redComponent < 0.4 && lightQuestion.greenComponent < 0.4 &&
+            abs(darkQuestion.redComponent - yellow.redComponent) < 0.001,
+            "The same question hue darkens on a light menu and stays bright on a dark menu")
+  let monochrome = statusMenuActivityColor(.white, appearance: NSAppearance(named: .aqua)!).usingColorSpace(.sRGB)!
+  try check(abs(monochrome.redComponent - monochrome.greenComponent) < 0.001 &&
+            abs(monochrome.greenComponent - monochrome.blueComponent) < 0.001,
+            "Adapting menu contrast preserves the monochrome preference")
   var rows = [fixture("General chat conversation"),
               fixture("DeepSeek model", project: "No Project", unread: false),
               fixture("Math addition inquiry", project: "No Project", tabId: nil, offline: true)]
@@ -90,7 +97,7 @@ do {
             (status.row("General chat conversation").view?.frame.height ?? 0) <= 70 &&
             status.row("General chat conversation").view?.accessibilityLabel()?.contains("reconnect fix") == true,
             "Compact rows expose the actual message to accessibility")
-  try check(status.item("clearStatusNotifications").view?.accessibilityLabel()?.contains("Notifications (2)") == true &&
+  try check(status.item("clearStatusNotifications").view?.accessibilityLabel()?.contains("Ready (2)") == true &&
             !status.menu.items.contains { $0.title == "Build" }, "One notification section replaces tab headings")
   try check(!status.row("Math addition inquiry").isEnabled, "Offline conversations stay visible but disabled")
   try check(status.row("Math addition inquiry").toolTip?.contains("Offline") == true, "Unavailable state is explained")
@@ -145,9 +152,9 @@ do {
   status.click(status.item("openWindow"))
   try check(reveals == 3, "Show Harness remains available during a modal")
   status.update(["enabled": true, "statusMenuEntries": []])
-  try check(status.menu.items.contains { $0.title == "No unread notifications" } &&
+  try check(status.menu.items.contains { $0.title == "All caught up" } &&
             !status.item("clearStatusNotifications").isEnabled &&
-            !status.menu.items.contains { $0.identifier?.rawValue == "toggleWorking" },
+            !status.menu.items.contains { $0.identifier?.rawValue == "workingHeading" },
             "An empty inbox is explicit, cannot be cleared and has no empty Working section")
   let open = status.menu.items.first { $0.title == "Open Harness…" }!
   status.click(open)
@@ -215,37 +222,28 @@ do {
   var working = (0..<7).map { fixture("Working \($0)", unread: false) }
   status.update(["enabled": true, "statusMenuEntries": (0..<8).map { fixture("News \($0)") },
                  "statusMenuWorkingEntries": working])
-  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" && !$0.isHidden }.count == 10 &&
+  try check(status.menu.items.filter { $0.identifier?.rawValue == "openStatusHarness" && !$0.isHidden }.count == 12 &&
             status.item("notificationInbox").title == "View all 8 notifications…",
-            "The glance is bounded, with a route to every unread notification")
-  let toggle = status.item("toggleWorking")
-  try check(toggle.title == "Working (7)" && !status.row("Working 0").isHidden,
-            "Working starts expanded, including after an empty bootstrap")
+            "Every working session is inline, alongside the notification inbox route")
+  let heading = status.item("workingHeading")
+  try check(heading.title == "Working (7)" && !heading.isEnabled && heading.action == nil &&
+            heading.view?.accessibilityRole() == .staticText && heading.view?.accessibilityLabel() == "Working (7)" &&
+            heading.view?.accessibilityPerformPress() == false,
+            "Working is a static heading, with no disclosure action or accessibility hint")
+  try check(working.allSatisfy { !status.row($0["agentId"] as! String).isHidden } &&
+            status.menu.items.allSatisfy { $0.submenu == nil } &&
+            !status.menu.items.contains { ["toggleWorking", "moreWorking"].contains($0.identifier?.rawValue ?? "") },
+            "All working rows are visible with no overflow menu")
   status.menuWillOpen(status.menu)
-  try check(toggle.view?.accessibilityPerformPress() == true && status.row("Working 0").isHidden,
-            "Disclosure collapses inline through the accessible native control")
-  _ = toggle.view?.accessibilityPerformPress()
-  let overflow = status.item("moreWorking")
-  try check(overflow.submenu?.items.count == 2, "Additional work stays available without flooding the overview")
-  func keyEvent(_ code: UInt16) -> NSEvent {
-    NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-      windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code)!
-  }
-  try check(status.handleWorkingKey(keyEvent(123), item: toggle) && status.row("Working 0").isHidden &&
-            status.handleWorkingKey(keyEvent(124), item: toggle) && !status.row("Working 0").isHidden,
-            "Left and Right collapse and expand the working section")
-  try check(!status.handleWorkingKey(keyEvent(125), item: toggle), "Arrow navigation remains AppKit's")
   let workingRow = status.row("Working 0")
   let beforeWorking = emitted.count
   working.removeFirst()
   status.update(["enabled": true, "statusMenuEntries": [fixture("Newer news")], "statusMenuWorkingEntries": working])
   status.click(workingRow)
   try check(emitted.count == beforeWorking, "A session that stopped working cannot dispatch a stale working click")
-  _ = toggle.view?.accessibilityPerformPress()
-  _ = toggle.view?.accessibilityPerformPress()
   try check(status.menu.items.contains { $0.title == "News 0" } &&
             !status.menu.items.contains { $0.title == "Newer news" },
-            "Toggling Working preserves the open notification snapshot")
+            "Live updates preserve the open notification snapshot")
   let currentWorking = status.row("Working 1")
   try check(currentWorking.view?.accessibilityPerformPress() == true && emitted.last?.0 == "openStatusHarness" &&
             (emitted.last?.1 as? [String: Any])?["unread"] as? Bool == false,
@@ -253,7 +251,7 @@ do {
   status.menuDidClose(status.menu)
   status.menuNeedsUpdate(status.menu)
   status.update([:])
-  try check(!status.menu.items.contains { $0.identifier?.rawValue == "toggleWorking" },
+  try check(!status.menu.items.contains { $0.identifier?.rawValue == "workingHeading" },
             "Sign-out removes working data as well as unread messages")
   let bindings: [[String: Any]] = [
     ["keys": ["cmd+shift+k"], "command": "agent.open", "hint": "⇧⌘K", "repeatable": false, "menuAction": "addAgent"],

@@ -28,7 +28,7 @@ let bindings: [[String: Any]] = [
 ]
 let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
 
-func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String: Any]], expanded: Bool = true,
+func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String: Any]],
             highlight: Bool = false) {
   app.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
   let status = HarnessStatusMenu(installStatusItem: false, showWindow: {}, emit: { _, _ in })
@@ -38,16 +38,15 @@ func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String
     var row = row
     var activity = row["activity"] as? [String: Any] ?? ["mark": "⠋", "label": "Working", "working": true]
     let mark = activity["mark"] as? String
-    activity["color"] = mark == "?" ? (dark ? 0xffe5e510 : 0xff4d2d00)
-      : working ? (dark ? 0xff11a8cd : 0xff1b7c83) : (dark ? 0xff0dbc79 : 0xff116329)
+    // Terminal status colors may come from a dark theme even in a light menu.
+    // The native row adapts these same colors to its own effective appearance.
+    activity["color"] = mark == "?" ? 0xffe5e510
+      : working ? 0xff11a8cd : 0xff0dbc79
     row["activity"] = activity
     return row
   }
   status.update(["enabled": true, "statusMenuEntries": entries.map { styled($0) },
                  "statusMenuWorkingEntries": work.map { styled($0, working: true) }])
-  if !expanded, let toggle = status.menu.items.first(where: { $0.identifier?.rawValue == "toggleWorking" }) {
-    _ = toggle.view?.accessibilityPerformPress()
-  }
   var captured = false
   let timer = Timer(timeInterval: 0.2, repeats: false) { _ in
     if highlight {
@@ -87,7 +86,13 @@ func render(_ name: String, dark: Bool, entries: [[String: Any]], work: [[String
 
 render("notification-overview-light", dark: false, entries: notifications, work: working)
 render("notification-overview-dark", dark: true, entries: notifications, work: working)
-render("notification-overview-collapsed", dark: false, entries: notifications, work: working, expanded: false)
+let fullWorking = (0..<7).map { index -> [String: Any] in
+  var row = working[index % working.count]
+  row["agentId"] = "working-\(index)"
+  row["title"] = "\(row["title"] as! String) \(index + 1)"
+  return row
+}
+render("notification-overview-all-working", dark: false, entries: [], work: fullWorking)
 render("notification-overview-empty", dark: false, entries: [], work: [])
 let long = news("long", String(repeating: "Long session title ", count: 6),
                 String(repeating: "A lengthy question that must wrap and then truncate without covering its time or status mark. ", count: 8),

@@ -7540,6 +7540,7 @@ class AppNotifier extends ChangeNotifier {
     }
     machine.agents = agents;
     for (final agent in agents) {
+      _reconcileAgentActivity(machine, agent, previous[agent.id]);
       if (previous[agent.id]?.name != agent.name) {
         _recordAgentName(machine, agent);
       }
@@ -7577,6 +7578,25 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  void _reconcileAgentActivity(
+    MachineState machine,
+    Agent agent,
+    Agent? previous,
+  ) {
+    // Busy belongs to one conversation, not to the reusable harness ID. A
+    // stopped or replaced conversation cannot keep its old working signal.
+    if (agent.isStopped ||
+        (previous?.sessionId != null &&
+            previous!.sessionId != agent.sessionId)) {
+      _cancelTurnActivity(machine.machine.machineId, agent.id);
+      machine.liveTurnAgents.remove(agent.id);
+      machine.pendingProcessingSessions.remove(previous?.sessionId);
+      if (agent.isStopped) {
+        machine.pendingProcessingSessions.remove(agent.sessionId);
+      }
+    }
+  }
+
   bool _upsertAgent(MachineState machine, Agent agent) {
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
@@ -7598,6 +7618,7 @@ class AppNotifier extends ChangeNotifier {
     } else {
       machine.agents = [...machine.agents]..[index] = agent;
     }
+    _reconcileAgentActivity(machine, agent, previous);
     if (previous?.name != agent.name) _recordAgentName(machine, agent);
     _syncAgentName(machine, agent);
     sessionPreviews.retainAgent(
@@ -13259,6 +13280,24 @@ class AppNotifier extends ChangeNotifier {
         await pane.session?.handleFrame(type, payload);
       }
       return;
+    }
+    if (type == 'turn_started' ||
+        type == 'turn_heartbeat' ||
+        type == 'turn_ended') {
+      final agentId = _eventAgentId(machine, event, payload);
+      final agent = machine.agents
+          .where((agent) => agent.id == agentId)
+          .firstOrNull;
+      final sessionId = _eventSessionId(event, payload);
+      // Heartbeats need the same conversation check as transcript events.
+      // Late work from a previous conversation must neither revive this
+      // harness nor end a newer turn after it has been resumed or replaced.
+      if ((agent?.isStopped == true && type != 'turn_ended') ||
+          (sessionId != null &&
+              agent?.sessionId != null &&
+              sessionId != agent!.sessionId)) {
+        return;
+      }
     }
     // Before the preview's early returns: several first-output kinds (`thinking_delta`) are not
     // preview events at all.
