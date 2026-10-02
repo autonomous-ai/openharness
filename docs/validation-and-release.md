@@ -92,7 +92,11 @@ or authorizes a merge or release.
 
 A matching in-progress candidate may finish while release preflight waits, bounded
 by ten minutes from the candidate's creation. An absent, failed, expired or changed
-candidate falls back to the normal build. Once any promotion copy starts, failure
+candidate falls back to the normal build. If a matching candidate is still live at
+that deadline, preflight stops with its run link; follow that same build and retry
+the release after it passes. A deadline or failed status poll does not start another
+copy of a known live build.
+Once any promotion copy starts, failure
 stops the release rather than rebuilding over partially copied immutable objects.
 Do not launch repeated candidates while implementation is still changing. A new
 version published in the meantime also invalidates the planned version; prepare

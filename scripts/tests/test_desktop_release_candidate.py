@@ -143,11 +143,10 @@ class CandidateIdentityTests(unittest.TestCase):
                 self.read(artifact_change=lambda a: a.update({field: value}))
 
     def test_no_candidate_for_failed_incomplete_changed_or_old_build(self):
-        for change in ['failed', 'queued', 'different-tree', 'different-version', 'old']:
+        for change in ['failed', 'different-tree', 'different-version', 'old']:
             with self.subTest(change=change):
                 client = FakeGithub()
                 if change == 'failed': client.run['conclusion'] = 'failure'
-                if change == 'queued': client.run.update(status='queued', conclusion=None)
                 if change == 'different-tree': client.tree = 'd' * 40
                 if change == 'different-version': client.run['display_title'] = 'Desktop candidate 1.2.56'
                 if change == 'old': client.run['created_at'] = (NOW - timedelta(days=8)).isoformat()
@@ -180,8 +179,26 @@ class CandidateIdentityTests(unittest.TestCase):
         client = FakeGithub()
         client.run.update(status='in_progress', conclusion=None, created_at=(NOW - timedelta(minutes=11)).isoformat())
         with patch.object(candidate.time, 'sleep') as sleep:
-            self.assertIsNone(candidate.find_candidate(client, VERSION, TREE, BUCKET, 456))
+            with self.assertRaisesRegex(candidate.CandidatePendingError, 'actions/runs/123'):
+                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
         sleep.assert_not_called()
+
+    def test_pending_deadline_stops_release_without_dispatching_a_replacement(self):
+        client = FakeGithub()
+        client.run.update(status='queued', conclusion=None)
+        with patch.object(candidate.time, 'sleep') as sleep:
+            with self.assertRaises(candidate.CandidatePendingError):
+                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456, wait_seconds=0)
+        sleep.assert_not_called()
+        receipt = make_receipt()
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree']}
+        with patch.object(candidate, 'context', return_value=identity), \
+                patch.object(candidate, 'find_candidate', side_effect=candidate.CandidatePendingError('still live')), \
+                patch.object(candidate, 'output') as output, patch.object(candidate, 'promote') as promote:
+            with self.assertRaises(candidate.CandidatePendingError):
+                candidate.main(['reuse', '--version', VERSION, '--bucket', BUCKET])
+            output.assert_not_called()
+            promote.assert_not_called()
 
     def test_rerun_during_collection_cannot_reuse_an_old_receipt(self):
         client = FakeGithub()
@@ -194,6 +211,19 @@ class CandidateIdentityTests(unittest.TestCase):
         client.api = api
         with self.assertRaisesRegex(ValueError, 'changed while collecting'):
             candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+
+    def test_failed_observation_of_a_live_build_never_triggers_another_build(self):
+        client = FakeGithub()
+        client.run.update(status='in_progress', conclusion=None)
+        original = client.api
+        def api(path):
+            if path == 'actions/runs/123' and client.run_reads:
+                raise RuntimeError('temporary GitHub outage')
+            return original(path)
+        client.api = api
+        with patch.object(candidate.time, 'sleep'):
+            with self.assertRaisesRegex(candidate.CandidatePendingError, 'Cannot confirm'):
+                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
 
     def test_other_workflow_or_repository_cannot_produce_a_candidate(self):
         for field, value in [('path', '.github/workflows/desktop-internal-build.yml'), ('event', 'pull_request'),

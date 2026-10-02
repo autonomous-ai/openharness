@@ -41,6 +41,10 @@ RETENTION = timedelta(days=7)
 MAX_AGE_SECONDS = 600
 
 
+class CandidatePendingError(RuntimeError):
+    """The observed build is still live; a deadline is not a failed build."""
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -187,10 +191,19 @@ def find_candidate(client, version, tree, bucket, current_run, wait_seconds=MAX_
         while run['status'] != 'completed' and time.monotonic() < end:
             print(f'Waiting for matching candidate {run["id"]} ({run["status"]})', flush=True)
             time.sleep(min(10, max(0, end - time.monotonic())))
-            run = client.api(f'actions/runs/{run["id"]}')
-            check_run(run, client.repository, version)
-            require(run['head_sha'] == original_source and run['id'] == listed['id'], 'candidate source changed while waiting')
-        if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+            try:
+                run = client.api(f'actions/runs/{listed["id"]}')
+                check_run(run, client.repository, version)
+                require(run['head_sha'] == original_source and run['id'] == listed['id'], 'candidate source changed while waiting')
+            except (OSError, KeyError, TypeError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                raise CandidatePendingError(
+                    f'Cannot confirm the matching candidate has finished: https://github.com/{client.repository}/actions/runs/{listed["id"]}. '
+                    'Follow that same run; no duplicate build was started.') from error
+        if run.get('status') != 'completed':
+            raise CandidatePendingError(
+                f'Candidate is still {run["status"]}: https://github.com/{client.repository}/actions/runs/{run["id"]}. '
+                'Follow that run and retry release after it passes; no duplicate build was started.')
+        if run.get('conclusion') != 'success':
             continue
         jobs = client.api(f'actions/runs/{run["id"]}/jobs?filter=latest&per_page=100')
         require(jobs['total_count'] == len(jobs['jobs']), 'candidate job list is incomplete')
@@ -315,6 +328,8 @@ def main(argv=None):
         receipt = find_candidate(client, args.version, identity['source_tree'], args.bucket, identity['run_id'], args.wait_seconds)
         if receipt:
             check_sources(receipt)
+    except CandidatePendingError:
+        raise
     except (OSError, KeyError, TypeError, ValueError, RuntimeError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         print(f'Candidate unavailable; use a fresh build: {error}', flush=True)
         receipt = None
