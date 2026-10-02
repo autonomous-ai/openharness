@@ -78,6 +78,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # release-desktop.sh reads every tag and checks HEAD is on the branch
+          sparse-checkout: |
+            /desktop/scripts/release-desktop.sh
+            /.github/workflows/release-desktop.yml
+          sparse-checkout-cone-mode: false
 
       - id: plan
         # Through env, never `${{ }}` inline in run: — a ref name may carry quotes and $().
@@ -125,6 +129,15 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Match the release's complete Desktop source and packaging inputs.
+          sparse-checkout: |
+            /desktop/
+            /.github/actions/
+            /scripts/validate-change.py
+            /scripts/verify-desktop-release.py
+            /mobile/pubspec.lock
+          sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/desktop-flutter
         with:

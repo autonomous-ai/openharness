@@ -68,6 +68,13 @@ their own key, with the full SDK for the exact same version as a fallback. Cache
 preparation covers macOS and both Linux architectures. Signing, notarization and
 artifact checks remain required.
 
+Desktop build jobs check out the complete `desktop/` component, their local
+actions and shared packaging helpers. Keep these sparse checkout inputs current
+if a build starts using another component. The existing pub-cache key also reads
+`mobile/pubspec.lock`, which remains included so sparse and full checkouts restore
+the same dependency cache. Linux builders reuse a working Google Cloud CLI at or
+above the validated version, with the normal install path as a fallback.
+
 ### Package Desktop while final checks run
 
 When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`

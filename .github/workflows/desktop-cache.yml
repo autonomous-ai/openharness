@@ -39,6 +39,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /desktop/
+            /.github/actions/
+            /.github/workflows/release-desktop.yml
+            /mobile/pubspec.lock
+          sparse-checkout-cone-mode: false
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
