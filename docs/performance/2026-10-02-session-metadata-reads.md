@@ -24,7 +24,9 @@ keeps its existing character budget. Small background-only sessions remain rejec
 [Raw measurements](2026-10-02-session-metadata-reads.json) use the public
 `findLiveSession` path, one real synthetic transcript per scan, minified bundles,
 macOS ARM64 and Node 22.23.2. Three paired trials per size alternate order and run
-in fresh processes. The baseline is commit `4e4f8af23a0f294f4594fcbc0d176aceb4443bb8`.
+in fresh processes. The measurements used local commit `4e4f8af23a0f294f4594fcbc0d176aceb4443bb8`.
+Its `sessionRepair.ts` is byte-identical to published commit
+`5a0951b1c996b47ce1e819aa40429862d3581756`, used below for reproduction.
 
 | Transcript payload | Median elapsed, before → after | Peak worker RSS, before → after |
 | --- | ---: | ---: |
@@ -49,7 +51,7 @@ one, rather than equivalent useful work. The fixture exceeds this Node runtime's
 Reproduce with CLI dependencies installed and a new output directory:
 
 ```sh
-node cli/scripts/benchmark-session-metadata.mjs 4e4f8af23a0f294f4594fcbc0d176aceb4443bb8 /tmp/session-metadata-comparison-new
+node cli/scripts/benchmark-session-metadata.mjs 5a0951b1c996b47ce1e819aa40429862d3581756 /tmp/session-metadata-comparison-new
 ```
 
 Workers have 60-second deadlines and private data, runtime and authentication
@@ -75,6 +77,6 @@ rows were outside this change's scope. No model prompt or paid request was sent.
 The exact original user-request timestamp is unavailable. Initial local checks
 completed around 19:44:50 UTC. The Unicode correction passed its final affected
 checks at 20:13:33 UTC; the final benchmark timestamp is in the raw result. Source
-identity, CI and merge evidence are tracked separately in the PR. GitHub connectivity is currently blocking shipping. The full CLI CI scope is
-still required before merge. Publication and app/daemon updates are excluded by
+identity, CI and merge evidence are tracked separately in the PR. The full CLI CI
+scope is required before merge. Publication and app/daemon updates are excluded by
 the user's weekend hold.
