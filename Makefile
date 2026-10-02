@@ -36,6 +36,7 @@ release-backend:
 ## release-desktop: tag this commit vX.Y.Z_desktop and push the tag — CI builds both macOS builds
 ## and both Linux architectures, publishes to GCS, and cuts the GitHub Release. The version is bumped
 ## from max(last git tag, live harness/desktop/metadata.json). ARGS="--dry-run" to preview,
+## ARGS="--prepare" to package a pushed PR head during final checks, without publishing,
 ## ARGS="--minor" for a forced-update minor bump, ARGS="X.Y.Z" for an explicit version. The by-hand
 ## escape hatches (upload-desktop, upload-desktop-linux, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
 release-desktop:

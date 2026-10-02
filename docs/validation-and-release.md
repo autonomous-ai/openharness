@@ -68,6 +68,43 @@ their own key, with the full SDK for the exact same version as a fallback. Cache
 preparation covers macOS and both Linux architectures. Signing, notarization and
 artifact checks remain required.
 
+### Package Desktop while final checks run
+
+When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
+on that PR branch alongside its required tests and review. This chooses the next
+version using the same tags/live-manifest rules as a release, then dispatches a
+candidate build. Use an explicit version with `--prepare` when preparing a minor
+bump. The candidate uses the release's normal macOS and Linux build, signing and
+notarization steps and production updater settings. It writes only to a random
+candidate prefix, verifies all six downloads, and retains a small receipt in
+GitHub Actions. It neither tags nor updates the product manifest or Release page.
+
+After validation and review pass, merge and release that version normally. The
+workflow automatically looks for a candidate with the same version and complete
+Git source tree. A clean squash preserves that tree; any source, dependency,
+toolchain-pin or workflow change requires another build. The workflow checks the
+producer run's successful completion, repository, workflow, source, attempt and
+immutable receipt digest. Promotion copies only the exact object generations
+whose sizes and SHA-256 hashes were verified, with atomic no-overwrite conditions.
+The normal version check, serialized manifest publication and six public-download
+checks still apply. Candidate packaging never substitutes for application tests
+or authorizes a merge or release.
+
+A matching in-progress candidate may finish while release preflight waits, bounded
+by ten minutes from the candidate's creation. An absent, failed, expired or changed
+candidate falls back to the normal build. Once any promotion copy starts, failure
+stops the release rather than rebuilding over partially copied immutable objects.
+Do not launch repeated candidates while implementation is still changing. A new
+version published in the meantime also invalidates the planned version; prepare
+the newly selected version instead.
+
+Unused candidates expire after seven days; a daily job deletes only recognized
+old candidate objects at their listed generations. Failed candidates and consumed
+candidates are removed by their owning workflow. For process maintenance, dispatch
+`test_candidate_reuse=true` for the same branch/version after its candidate passes:
+it requires reuse, promotes to disposable paths, verifies all six downloads, then
+removes those objects and the consumed candidate. It cannot publish a product.
+
 Native TUI CI tests and builds the shipped musl target in the same Cargo output
 directory. Dependency caches are keyed by target, Rust toolchain, and Cargo inputs;
 cache hits still run every test. The ten native TUI fixtures run two at a time,
