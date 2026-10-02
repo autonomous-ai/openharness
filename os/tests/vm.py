@@ -320,7 +320,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         result['error'] = str(error)
         if vm.shell_ready:
             try:
-                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; ps -ef', timeout=20, check=False)
+                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; cat /home/programmer/.local/state/harness-os/display.log; ps -ef', timeout=20, check=False)
                 (folder / 'guest-diagnostics.log').write_text(diagnostics)
             except Exception:
                 pass

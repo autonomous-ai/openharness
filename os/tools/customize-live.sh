@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+# Validate with the exact terminal version being shipped, before compressing it.
+foot --check-config --config=/usr/share/harness-os/foot.ini
 echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
 locale-gen
 echo 'LANG=en_US.UTF-8' > /etc/locale.conf
