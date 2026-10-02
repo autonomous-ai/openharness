@@ -1,0 +1,928 @@
+{
+  "base": "4e4f8af23a0f294f4594fcbc0d176aceb4443bb8",
+  "baselineSourceSha256": "d8e219c7ce55d765c11ef2dd2ab4d4feb7c9e0fb737c7b847824502cf33cea0b",
+  "candidateSourceSha256": "653c72ddbb6434abe72af90af6fd9da7446ccd102a24b8fc3cd5cf2fe97f350f",
+  "dependencySha256": "5c69dffb1423173dfab75c0aa493b5c601784ff3efd16b9bfbb41ef9ad1c4d2b",
+  "finishedAt": "2026-10-02T19:52:18.505Z",
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "maxStringLength": 536870888,
+  "scope": "One public findLiveSession directory scan of a synthetic Claude transcript, fresh minified workers. Peak RSS includes startup/warmup; explicit GC is only before timing in disposable children. No whole-app energy claim.",
+  "rows": [
+    {
+      "sizeMiB": 0,
+      "fileBytes": 45,
+      "trial": 0,
+      "mode": "baseline",
+      "durationMs": 0.35591699999999094,
+      "cpuUs": 1445,
+      "before": {
+        "rss": 69271552,
+        "heapTotal": 19021824,
+        "heapUsed": 8995920,
+        "external": 2370389,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 69304320,
+        "heapTotal": 19021824,
+        "heapUsed": 9036808,
+        "external": 2338439,
+        "arrayBuffers": 26076
+      },
+      "maxRssKiB": 67680,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 0,
+      "fileBytes": 45,
+      "trial": 0,
+      "mode": "candidate",
+      "durationMs": 0.31091699999998923,
+      "cpuUs": 1362,
+      "before": {
+        "rss": 69386240,
+        "heapTotal": 18759680,
+        "heapUsed": 9001552,
+        "external": 2369344,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 69386240,
+        "heapTotal": 18759680,
+        "heapUsed": 9045208,
+        "external": 2338439,
+        "arrayBuffers": 26076
+      },
+      "maxRssKiB": 67760,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 0,
+      "fileBytes": 45,
+      "trial": 1,
+      "mode": "candidate",
+      "durationMs": 0.2923329999999993,
+      "cpuUs": 1432,
+      "before": {
+        "rss": 69140480,
+        "heapTotal": 19283968,
+        "heapUsed": 9001688,
+        "external": 2368744,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 69156864,
+        "heapTotal": 19283968,
+        "heapUsed": 9045344,
+        "external": 2338439,
+        "arrayBuffers": 26076
+      },
+      "maxRssKiB": 67536,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 0,
+      "fileBytes": 45,
+      "trial": 1,
+      "mode": "baseline",
+      "durationMs": 0.2839579999999984,
+      "cpuUs": 1387,
+      "before": {
+        "rss": 69484544,
+        "heapTotal": 19021824,
+        "heapUsed": 9006848,
+        "external": 2369544,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 69500928,
+        "heapTotal": 19021824,
+        "heapUsed": 9047736,
+        "external": 2338439,
+        "arrayBuffers": 26076
+      },
+      "maxRssKiB": 67872,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 0,
+      "fileBytes": 45,
+      "trial": 2,
+      "mode": "baseline",
+      "durationMs": 0.2875000000000014,
+      "cpuUs": 1445,
+      "before": {
+        "rss": 69238784,
+        "heapTotal": 19546112,
+        "heapUsed": 8995944,
+        "external": 2370789,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 69238784,
+        "heapTotal": 19546112,
+        "heapUsed": 9036496,
+        "external": 2338439,
+        "arrayBuffers": 26076
+      },
+      "maxRssKiB": 67616,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 0,
+      "fileBytes": 45,
+      "trial": 2,
+      "mode": "candidate",
+      "durationMs": 0.2811659999999989,
+      "cpuUs": 1274,
+      "before": {
+        "rss": 69517312,
+        "heapTotal": 19021824,
+        "heapUsed": 9003176,
+        "external": 2371634,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 69517312,
+        "heapTotal": 19021824,
+        "heapUsed": 9046832,
+        "external": 2338439,
+        "arrayBuffers": 26076
+      },
+      "maxRssKiB": 67888,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 1,
+      "fileBytes": 1049181,
+      "trial": 0,
+      "mode": "baseline",
+      "durationMs": 0.6741249999999965,
+      "cpuUs": 1789,
+      "before": {
+        "rss": 69206016,
+        "heapTotal": 19021824,
+        "heapUsed": 8998144,
+        "external": 2369344,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 71401472,
+        "heapTotal": 21168128,
+        "heapUsed": 11140504,
+        "external": 2863089,
+        "arrayBuffers": 550726
+      },
+      "maxRssKiB": 69728,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 1,
+      "fileBytes": 1049181,
+      "trial": 0,
+      "mode": "candidate",
+      "durationMs": 0.5489999999999995,
+      "cpuUs": 1722,
+      "before": {
+        "rss": 69304320,
+        "heapTotal": 19546112,
+        "heapUsed": 9002536,
+        "external": 2376414,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70418432,
+        "heapTotal": 20611072,
+        "heapUsed": 10094928,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68768,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 1,
+      "fileBytes": 1049181,
+      "trial": 1,
+      "mode": "candidate",
+      "durationMs": 0.5660000000000025,
+      "cpuUs": 1606,
+      "before": {
+        "rss": 69255168,
+        "heapTotal": 18759680,
+        "heapUsed": 9001400,
+        "external": 2371434,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 71401472,
+        "heapTotal": 19824640,
+        "heapUsed": 10093792,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 69728,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 1,
+      "fileBytes": 1049181,
+      "trial": 1,
+      "mode": "baseline",
+      "durationMs": 0.6929999999999978,
+      "cpuUs": 1827,
+      "before": {
+        "rss": 69107712,
+        "heapTotal": 19021824,
+        "heapUsed": 8996016,
+        "external": 2370389,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 71811072,
+        "heapTotal": 21168128,
+        "heapUsed": 11138376,
+        "external": 2863089,
+        "arrayBuffers": 550726
+      },
+      "maxRssKiB": 70128,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 1,
+      "fileBytes": 1049181,
+      "trial": 2,
+      "mode": "baseline",
+      "durationMs": 0.6606670000000037,
+      "cpuUs": 1799,
+      "before": {
+        "rss": 69238784,
+        "heapTotal": 19283968,
+        "heapUsed": 8995704,
+        "external": 2371434,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 71942144,
+        "heapTotal": 21430272,
+        "heapUsed": 11138064,
+        "external": 2863089,
+        "arrayBuffers": 550726
+      },
+      "maxRssKiB": 70256,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 1,
+      "fileBytes": 1049181,
+      "trial": 2,
+      "mode": "candidate",
+      "durationMs": 0.5009579999999971,
+      "cpuUs": 1522,
+      "before": {
+        "rss": 69369856,
+        "heapTotal": 18759680,
+        "heapUsed": 9002824,
+        "external": 2370789,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 71385088,
+        "heapTotal": 19824640,
+        "heapUsed": 10095216,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 69712,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 64,
+      "fileBytes": 67144749,
+      "trial": 0,
+      "mode": "baseline",
+      "durationMs": 21.552709000000007,
+      "cpuUs": 29492,
+      "before": {
+        "rss": 69369856,
+        "heapTotal": 18759680,
+        "heapUsed": 8995784,
+        "external": 2369544,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 207454208,
+        "heapTotal": 180289536,
+        "heapUsed": 143296152,
+        "external": 2866233,
+        "arrayBuffers": 551270
+      },
+      "maxRssKiB": 202592,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 64,
+      "fileBytes": 67144749,
+      "trial": 0,
+      "mode": "candidate",
+      "durationMs": 0.5474999999999994,
+      "cpuUs": 1652,
+      "before": {
+        "rss": 69124096,
+        "heapTotal": 19283968,
+        "heapUsed": 9001472,
+        "external": 2372879,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70221824,
+        "heapTotal": 20348928,
+        "heapUsed": 10093864,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68576,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 64,
+      "fileBytes": 67144749,
+      "trial": 1,
+      "mode": "candidate",
+      "durationMs": 0.5640000000000072,
+      "cpuUs": 1613,
+      "before": {
+        "rss": 69320704,
+        "heapTotal": 18759680,
+        "heapUsed": 9001088,
+        "external": 2373524,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70434816,
+        "heapTotal": 19824640,
+        "heapUsed": 10093480,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68784,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 64,
+      "fileBytes": 67144749,
+      "trial": 1,
+      "mode": "baseline",
+      "durationMs": 21.49737499999999,
+      "cpuUs": 29625,
+      "before": {
+        "rss": 69419008,
+        "heapTotal": 18759680,
+        "heapUsed": 8995832,
+        "external": 2369344,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 208109568,
+        "heapTotal": 180289536,
+        "heapUsed": 143296200,
+        "external": 2866233,
+        "arrayBuffers": 551270
+      },
+      "maxRssKiB": 203232,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 64,
+      "fileBytes": 67144749,
+      "trial": 2,
+      "mode": "baseline",
+      "durationMs": 21.957709,
+      "cpuUs": 29289,
+      "before": {
+        "rss": 69402624,
+        "heapTotal": 19021824,
+        "heapUsed": 8997808,
+        "external": 2374524,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 207667200,
+        "heapTotal": 180551680,
+        "heapUsed": 143298728,
+        "external": 2866233,
+        "arrayBuffers": 551070
+      },
+      "maxRssKiB": 202800,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 64,
+      "fileBytes": 67144749,
+      "trial": 2,
+      "mode": "candidate",
+      "durationMs": 0.4969170000000034,
+      "cpuUs": 1600,
+      "before": {
+        "rss": 69353472,
+        "heapTotal": 19021824,
+        "heapUsed": 9001400,
+        "external": 2371634,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70451200,
+        "heapTotal": 20086784,
+        "heapUsed": 10093528,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68800,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 256,
+      "fileBytes": 268578861,
+      "trial": 0,
+      "mode": "baseline",
+      "durationMs": 80.93079100000001,
+      "cpuUs": 96835,
+      "before": {
+        "rss": 69238784,
+        "heapTotal": 19546112,
+        "heapUsed": 8996016,
+        "external": 2368944,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 616906752,
+        "heapTotal": 589774848,
+        "heapUsed": 546182928,
+        "external": 2866833,
+        "arrayBuffers": 551270
+      },
+      "maxRssKiB": 602448,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 256,
+      "fileBytes": 268578861,
+      "trial": 0,
+      "mode": "candidate",
+      "durationMs": 0.6210410000000053,
+      "cpuUs": 1677,
+      "before": {
+        "rss": 69238784,
+        "heapTotal": 18759680,
+        "heapUsed": 9001208,
+        "external": 2369144,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70352896,
+        "heapTotal": 19824640,
+        "heapUsed": 10093600,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68704,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 256,
+      "fileBytes": 268578861,
+      "trial": 1,
+      "mode": "candidate",
+      "durationMs": 0.5346669999999989,
+      "cpuUs": 1666,
+      "before": {
+        "rss": 69386240,
+        "heapTotal": 19283968,
+        "heapUsed": 9001664,
+        "external": 2371034,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70483968,
+        "heapTotal": 20348928,
+        "heapUsed": 10094056,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68832,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 256,
+      "fileBytes": 268578861,
+      "trial": 1,
+      "mode": "baseline",
+      "durationMs": 82.579542,
+      "cpuUs": 97787,
+      "before": {
+        "rss": 69386240,
+        "heapTotal": 18759680,
+        "heapUsed": 8996440,
+        "external": 2367054,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 616972288,
+        "heapTotal": 589774848,
+        "heapUsed": 546184408,
+        "external": 2868033,
+        "arrayBuffers": 551470
+      },
+      "maxRssKiB": 602512,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 256,
+      "fileBytes": 268578861,
+      "trial": 2,
+      "mode": "baseline",
+      "durationMs": 82.22554200000002,
+      "cpuUs": 98429,
+      "before": {
+        "rss": 69140480,
+        "heapTotal": 18759680,
+        "heapUsed": 8997240,
+        "external": 2365009,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 616693760,
+        "heapTotal": 589512704,
+        "heapUsed": 546184808,
+        "external": 2866633,
+        "arrayBuffers": 551470
+      },
+      "maxRssKiB": 602240,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 256,
+      "fileBytes": 268578861,
+      "trial": 2,
+      "mode": "candidate",
+      "durationMs": 0.5602499999999964,
+      "cpuUs": 1464,
+      "before": {
+        "rss": 69337088,
+        "heapTotal": 19021824,
+        "heapUsed": 9001368,
+        "external": 2373079,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70434816,
+        "heapTotal": 20086784,
+        "heapUsed": 10093760,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68784,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 513,
+      "fileBytes": 538206813,
+      "trial": 0,
+      "mode": "baseline",
+      "durationMs": 117.36945800000001,
+      "cpuUs": 134389,
+      "before": {
+        "rss": 69173248,
+        "heapTotal": 19021824,
+        "heapUsed": 8995944,
+        "external": 2368944,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 624951296,
+        "heapTotal": 597835776,
+        "heapUsed": 545948672,
+        "external": 2869633,
+        "arrayBuffers": 557270
+      },
+      "maxRssKiB": 610304,
+      "identity": null
+    },
+    {
+      "sizeMiB": 513,
+      "fileBytes": 538206813,
+      "trial": 0,
+      "mode": "candidate",
+      "durationMs": 0.5667500000000132,
+      "cpuUs": 1717,
+      "before": {
+        "rss": 69337088,
+        "heapTotal": 19283968,
+        "heapUsed": 9010336,
+        "external": 2372034,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 71467008,
+        "heapTotal": 20348928,
+        "heapUsed": 10102728,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 69792,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 513,
+      "fileBytes": 538206813,
+      "trial": 1,
+      "mode": "candidate",
+      "durationMs": 0.4883749999999978,
+      "cpuUs": 1503,
+      "before": {
+        "rss": 69435392,
+        "heapTotal": 18759680,
+        "heapUsed": 9002664,
+        "external": 2368099,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70549504,
+        "heapTotal": 19824640,
+        "heapUsed": 10095056,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68896,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    },
+    {
+      "sizeMiB": 513,
+      "fileBytes": 538206813,
+      "trial": 1,
+      "mode": "baseline",
+      "durationMs": 117.954458,
+      "cpuUs": 135216,
+      "before": {
+        "rss": 69222400,
+        "heapTotal": 18759680,
+        "heapUsed": 8995480,
+        "external": 2370589,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 625426432,
+        "heapTotal": 597835776,
+        "heapUsed": 545948136,
+        "external": 2869633,
+        "arrayBuffers": 557270
+      },
+      "maxRssKiB": 610768,
+      "identity": null
+    },
+    {
+      "sizeMiB": 513,
+      "fileBytes": 538206813,
+      "trial": 2,
+      "mode": "baseline",
+      "durationMs": 120.13875,
+      "cpuUs": 137147,
+      "before": {
+        "rss": 69304320,
+        "heapTotal": 18759680,
+        "heapUsed": 8996032,
+        "external": 2367443,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 625147904,
+        "heapTotal": 597573632,
+        "heapUsed": 545948544,
+        "external": 2869433,
+        "arrayBuffers": 557070
+      },
+      "maxRssKiB": 610496,
+      "identity": null
+    },
+    {
+      "sizeMiB": 513,
+      "fileBytes": 538206813,
+      "trial": 2,
+      "mode": "candidate",
+      "durationMs": 0.5667079999999913,
+      "cpuUs": 1617,
+      "before": {
+        "rss": 69435392,
+        "heapTotal": 19283968,
+        "heapUsed": 9001400,
+        "external": 2368944,
+        "arrayBuffers": 24815
+      },
+      "after": {
+        "rss": 70533120,
+        "heapTotal": 20348928,
+        "heapUsed": 10093792,
+        "external": 3386970,
+        "arrayBuffers": 1074607
+      },
+      "maxRssKiB": 68880,
+      "identity": {
+        "sessionId": "session-id",
+        "transcript": "session-id.jsonl"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "sizeMiB": 0,
+      "metric": "durationMs",
+      "baseline": 0.2875000000000014,
+      "candidate": 0.2923329999999993,
+      "reductionPercent": -1.6810434782601247
+    },
+    {
+      "sizeMiB": 0,
+      "metric": "cpuUs",
+      "baseline": 1445,
+      "candidate": 1362,
+      "reductionPercent": 5.7439446366782
+    },
+    {
+      "sizeMiB": 0,
+      "metric": "maxRssKiB",
+      "baseline": 67680,
+      "candidate": 67760,
+      "reductionPercent": -0.11820330969267712
+    },
+    {
+      "sizeMiB": 1,
+      "metric": "durationMs",
+      "baseline": 0.6741249999999965,
+      "candidate": 0.5489999999999995,
+      "reductionPercent": 18.561097719265373
+    },
+    {
+      "sizeMiB": 1,
+      "metric": "cpuUs",
+      "baseline": 1799,
+      "candidate": 1606,
+      "reductionPercent": 10.728182323513058
+    },
+    {
+      "sizeMiB": 1,
+      "metric": "maxRssKiB",
+      "baseline": 70128,
+      "candidate": 69712,
+      "reductionPercent": 0.5932010038786184
+    },
+    {
+      "sizeMiB": 64,
+      "metric": "durationMs",
+      "baseline": 21.552709000000007,
+      "candidate": 0.5474999999999994,
+      "reductionPercent": 97.45971608487824
+    },
+    {
+      "sizeMiB": 64,
+      "metric": "cpuUs",
+      "baseline": 29492,
+      "candidate": 1613,
+      "reductionPercent": 94.53072019530721
+    },
+    {
+      "sizeMiB": 64,
+      "metric": "maxRssKiB",
+      "baseline": 202800,
+      "candidate": 68784,
+      "reductionPercent": 66.0828402366864
+    },
+    {
+      "sizeMiB": 256,
+      "metric": "durationMs",
+      "baseline": 82.22554200000002,
+      "candidate": 0.5602499999999964,
+      "reductionPercent": 99.31864237513935
+    },
+    {
+      "sizeMiB": 256,
+      "metric": "cpuUs",
+      "baseline": 97787,
+      "candidate": 1666,
+      "reductionPercent": 98.2962970538006
+    },
+    {
+      "sizeMiB": 256,
+      "metric": "maxRssKiB",
+      "baseline": 602448,
+      "candidate": 68784,
+      "reductionPercent": 88.58258306111067
+    },
+    {
+      "sizeMiB": 513,
+      "metric": "durationMs",
+      "baseline": 117.954458,
+      "candidate": 0.5667079999999913,
+      "reductionPercent": 99.51955355515263
+    },
+    {
+      "sizeMiB": 513,
+      "metric": "cpuUs",
+      "baseline": 135216,
+      "candidate": 1617,
+      "reductionPercent": 98.80413560525382
+    },
+    {
+      "sizeMiB": 513,
+      "metric": "maxRssKiB",
+      "baseline": 610496,
+      "candidate": 68896,
+      "reductionPercent": 88.71474997379181
+    }
+  ],
+  "limitations": [
+    "Component scan benchmark, not whole-app energy or retained daemon memory.",
+    "The 513 MiB baseline returns null despite a valid header; its time is a failed discovery and is not equivalent successful work.",
+    "Peak RSS includes worker startup/warmup; GC is explicit only before timing in disposable benchmark processes.",
+    "Tiny-file elapsed time is 4.8 microseconds higher (1.7%); no meaningful tiny-file improvement is claimed."
+  ]
+}

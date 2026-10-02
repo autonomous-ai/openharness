@@ -77,10 +77,14 @@ async function transcripts(root: string, depth = 0): Promise<TranscriptFile[]> {
  * line one; scanning a few lines covers all three without knowing which is which.
  */
 const CWD_SCAN_LINES = 20
+const CWD_SCAN_CHARS = 256 * 1024
 
 async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
   try {
-    const head = (await readFile(path, 'utf-8')).slice(0, 256 * 1024)
+    // Preserve the existing UTF-16 character budget, including non-ASCII paths. Four
+    // UTF-8 bytes per code unit is sufficient even when the cutoff splits a surrogate
+    // pair; a byte budget equal to the character budget would silently shrink the scan.
+    const head = (await headBytes(path, CWD_SCAN_CHARS * 4)).slice(0, CWD_SCAN_CHARS)
     for (const line of head.split('\n', CWD_SCAN_LINES)) {
       if (!line.trim()) continue
       let obj: Record<string, unknown>
@@ -417,8 +421,13 @@ async function headBytes(path: string, maxBytes: number): Promise<string> {
     const length = Math.min((await handle.stat()).size, maxBytes)
     if (length <= 0) return ''
     const buffer = Buffer.alloc(length)
-    await handle.read(buffer, 0, length, 0)
-    return buffer.toString('utf-8')
+    let read = 0
+    while (read < length) {
+      const { bytesRead } = await handle.read(buffer, read, length - read, read)
+      if (!bytesRead) break
+      read += bytesRead
+    }
+    return buffer.subarray(0, read).toString('utf-8')
   } finally {
     await handle.close()
   }
