@@ -7,6 +7,7 @@ to QEMU. Screenshots, serial logs, timings and checks survive every failure.
 from __future__ import annotations
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,7 @@ class VM:
         self.serial = None
         self.qmp = None
         self.qmp_file = None
+        self.shell_ready = False
         self.log = (folder / 'serial.log').open('ab', buffering=0)
         self.stderr = (folder / 'qemu.log').open('ab', buffering=0)
         self.disk = folder / 'target.qcow2'
@@ -37,6 +39,7 @@ class VM:
             shutil.copyfile('/usr/share/OVMF/OVMF_VARS_4M.fd', self.vars)
 
     def start(self, live):
+        self.shell_ready = False
         for name in ['serial.sock', 'qmp.sock']:
             (self.folder / name).unlink(missing_ok=True)
         self.started = time.monotonic()
@@ -44,7 +47,8 @@ class VM:
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
                 '-cpu', 'host' if acceleration == 'kvm' else 'max', '-device', 'virtio-vga',
                 '-display', 'none', '-no-reboot',
-                '-drive', f'file={self.disk},format=qcow2,if=virtio,serial=HN_OS_TEST',
+                '-drive', f'file={self.disk},format=qcow2,if=none,id=target',
+                '-device', 'virtio-blk-pci,drive=target,serial=HN_OS_TEST',
                 '-device', 'virtio-net-pci,netdev=net', '-netdev', 'user,id=net',
                 '-serial', f'unix:{self.folder / "serial.sock"},server=on,wait=off',
                 '-qmp', f'unix:{self.folder / "qmp.sock"},server=on,wait=off']
@@ -67,7 +71,8 @@ class VM:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
-                raise RuntimeError('QEMU exited before opening its control sockets.')
+                raise RuntimeError('QEMU exited before opening its control sockets: ' +
+                                   (self.folder / 'qemu.log').read_text()[-2000:])
             sock = socket.socket(socket.AF_UNIX)
             try:
                 sock.connect(str(self.folder / name))
@@ -117,6 +122,25 @@ class VM:
             raise RuntimeError(f'Guest command failed ({status}): {command}\n{output[-2000:]}')
         return output[:match.start()], status
 
+    def login_installed(self, config):
+        if config['encrypt']:
+            self.wait(r'(?:passphrase|Passphrase|Password)[^\r\n]*:', timeout=180)
+            self.send(config['password'] + '\n')
+        self.wait(r'login:', timeout=180)
+        self.send('programmer\n')
+        self.wait(r'Password:')
+        self.send(config['password'] + '\n')
+        self.wait(r'\$ ')
+        self.shell_ready = True
+        self.command('stty -echo')
+        if not config['encrypt']:
+            for word in ['programmer', config['password']]:
+                for char in word:
+                    self.keys('minus' if char == '-' else char)
+                self.keys('ret')
+                time.sleep(2)
+        self.command('for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -x "hn|harness-tui" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=110)
+
     def screenshot(self, name):
         ppm = self.folder / (name + '.ppm')
         self.monitor('screendump', filename=str(ppm))
@@ -156,17 +180,29 @@ def main():
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
               'started_at_unix': time.time(), 'checks': [], 'status': 'running'}
+    manifest = json.loads((args.iso.parent / 'manifest.json').read_text())
+    with args.iso.open('rb') as handle:
+        digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+    if digest != manifest['iso']['sha256']:
+        raise RuntimeError('ISO does not match its build manifest.')
+    result['iso_sha256'] = digest
+    result['image_source_commit'] = manifest['source_commit']
+    result['test_source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     vm = VM(folder, args.iso.resolve(), args.firmware, args.memory)
     user = lambda cmd: 'runuser -u programmer -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
     try:
         vm.start(live=True)
         vm.wait(r'root@[^\r\n]*[#] ')
+        vm.shell_ready = True
         vm.command('stty -echo')
         vm.command('foot --check-config --config=/usr/share/harness-os/foot.ini')
         vm.command(user("sh -c 'for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x \"hn|harness-tui\" >/dev/null && exit 0; sleep 1; done; systemctl --user --no-pager status hn-screen harness-daemon; exit 1'"), timeout=110)
         result['live_hn_ready_seconds'] = round(time.monotonic() - vm.started, 3)
         vm.command('! pgrep -x chromium')
         result['checks'].append('Live hn ready; browser absent at boot')
+        vm.command(user('systemd-run --user --quiet --wait --pipe --collect /bin/sh -c ' +
+                        shlex.quote('printf hn-clipboard-check | wl-copy; test "$(wl-paste --no-newline)" = hn-clipboard-check')))
+        result['checks'].append('Wayland clipboard round trip')
         vm.screenshot('01-live-hn')
         output, _ = vm.command(user('hn-os measure'))
         (folder / 'live-measurement.txt').write_text(output)
@@ -182,6 +218,10 @@ def main():
         survivor = "echo $$ > /tmp/hn-survivor.pid; exec sleep 1800"
         vm.command(user("hn new-window -n persistence " + shlex.quote(survivor)))
         vm.command('test -s /tmp/hn-survivor.pid')
+        vm.command('! ' + user('hn detach'))
+        vm.command('! ' + user('hn suspend-client'))
+        vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
+        result['checks'].append('OS surface refuses detach and suspend while work stays alive')
         vm.command(user('systemctl --user restart hn-screen'))
         vm.command('sleep 3; kill -0 "$(cat /tmp/hn-survivor.pid)"')
         result['checks'].append('Terminal process survives screen restart')
@@ -190,29 +230,14 @@ def main():
                       encrypt=args.encrypt, serial_console=True)
         encoded = base64.b64encode(json.dumps(config).encode()).decode()
         vm.command(f"printf %s {shlex.quote(encoded)} | base64 -d > /run/hn-install-test.json; chmod 600 /run/hn-install-test.json")
+        # Installation must work with the NIC down, using the ISO's immutable payload.
+        vm.command('nmcli networking off')
         vm.command('hn-os install --config /run/hn-install-test.json --yes-erase-disk', timeout=900)
         result['checks'].append('Offline installer completed on disposable disk')
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
-        if args.encrypt:
-            vm.wait(r'(?:passphrase|Passphrase|Password)[^\r\n]*:', timeout=180)
-            vm.send(config['password'] + '\n')
-        vm.wait(r'login:', timeout=180)
-        vm.send('programmer\n')
-        vm.wait(r'Password:')
-        vm.send(config['password'] + '\n')
-        vm.wait(r'\$ ')
-        vm.command('stty -echo')
-        # For plain installs, authenticate the graphical console by keyboard too.
-        if not args.encrypt:
-            # The root console shows login on tty1; serial authentication is separate.
-            for word in ['programmer', config['password']]:
-                for char in word:
-                    vm.keys('minus' if char == '-' else char)
-                vm.keys('ret')
-                time.sleep(2)
-        vm.command('for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && exit 0; sleep 1; done; exit 1', timeout=110)
+        vm.login_installed(config)
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         vm.command('test ! -e /etc/sudoers.d/10-live && ! sudo -n true')
         vm.command('! pgrep -x chromium')
@@ -222,10 +247,43 @@ def main():
         (folder / 'installed-measurement.txt').write_text(output)
         vm.screenshot('04-installed-hn')
         result['checks'].append('Installed disk boots to hn with intended account permissions and no browser')
+        # A disposable failure exercises actual root + boot restoration, including
+        # an encrypted root in the UEFI row. The project's separate subvolume survives.
+        vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+        output, _ = vm.command('sudo hn-os checkpoint', timeout=180)
+        checkpoint = re.search(r'Checkpoint ([A-Za-z0-9_-]+)', output).group(1)
+        vm.command('printf keep-my-project > ~/Projects/recovery-probe.txt')
+        vm.command("sudo sh -c 'printf broken > /etc/hn-os-recovery-probe; chmod 000 /usr/lib/harness/harness-tui'")
+        vm.command('sync')
+        vm.stop()
+        vm.start(live=True)
+        vm.wait(r'root@[^\r\n]*[#] ')
+        vm.shell_ready = True
+        vm.command('stty -echo')
+        root_device = '/dev/vda3'
+        if config['encrypt']:
+            vm.command('printf %s ' + shlex.quote(config['password']) + ' | cryptsetup open --key-file=- /dev/vda3 hn-recovery')
+            root_device = '/dev/mapper/hn-recovery'
+        vm.command('hn-os recover ' + root_device + ' ' + checkpoint, timeout=180)
+        if config['encrypt']:
+            vm.command('cryptsetup close hn-recovery')
+        result['checks'].append('Offline checkpoint restored root and verified matching boot files')
+        vm.stop()
+        vm.start(live=False)
+        vm.login_installed(config)
+        vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
+        vm.screenshot('05-recovered-hn')
+        result['checks'].append('Recovered disk boots to hn; changed system reverted and project preserved')
         result['status'] = 'passed'
     except Exception as error:
         result['status'] = 'failed'
         result['error'] = str(error)
+        if vm.shell_ready:
+            try:
+                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; ps -ef', timeout=20, check=False)
+                (folder / 'guest-diagnostics.log').write_text(diagnostics)
+            except Exception:
+                pass
         try:
             vm.screenshot('failure')
         except Exception:

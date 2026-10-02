@@ -9,6 +9,14 @@ spec.loader.exec_module(system)
 
 
 class RecoveryGuards(unittest.TestCase):
+    def test_recovery_rejects_wrong_filesystem_unsafe_boot_id_and_incomplete_checkpoint(self):
+        good = {'root_uuid': 'root-identity', 'boot_uuid': 'ABCD-1234',
+                'boot_sha256': {name: 'digest' for name in ['vmlinuz-linux-lts', 'initramfs-linux-lts.img', 'grub/grub.cfg']}}
+        system.validate_checkpoint(good, 'root-identity')
+        for bad in [dict(good, root_uuid='another-root'), dict(good, boot_uuid='../../sda1'), dict(good, boot_sha256={})]:
+            with self.assertRaises(ValueError):
+                system.validate_checkpoint(bad, 'root-identity')
+
     def test_snapshot_is_a_complete_real_date(self):
         self.assertEqual(system.snapshot_date('2026/10/01'), '2026/10/01')
         for date in ['2026/2/1', '2026/02/30', '2099/01/01', '../2026/01/01']:

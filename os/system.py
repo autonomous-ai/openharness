@@ -46,6 +46,29 @@ def checkpoint_name(value):
     return value
 
 
+def validate_checkpoint(meta, root_uuid):
+    if meta.get('root_uuid') != root_uuid:
+        raise ValueError('Checkpoint belongs to a different root filesystem.')
+    if not re.fullmatch(r'[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}', meta.get('boot_uuid', '')):
+        raise ValueError('Checkpoint has an invalid boot partition identifier.')
+    required = {'vmlinuz-linux-lts', 'initramfs-linux-lts.img', 'grub/grub.cfg'}
+    if not required.issubset(meta.get('boot_sha256', {})):
+        raise ValueError('Checkpoint is missing the kernel, initramfs or boot configuration.')
+
+
+def physical_disks(device):
+    data = json.loads(run('lsblk', '--inverse', '--json', '--paths', '--output', 'NAME,TYPE', device, capture=True))
+    def collect(node):
+        result = {node['name']} if node['type'] == 'disk' else set()
+        for child in node.get('children', []):
+            result.update(collect(child))
+        return result
+    result = set()
+    for node in data['blockdevices']:
+        result.update(collect(node))
+    return result
+
+
 @contextmanager
 def operation_lock():
     with open('/run/lock/hn-os.lock', 'w') as handle:
@@ -94,6 +117,7 @@ def checkpoint(reason='manual', pacman_hook=False):
         metadata = {'name': name, 'created_at': datetime.now(timezone.utc).isoformat(),
                     'reason': reason, 'root_uuid': info['root_uuid'], 'boot_uuid': info['boot_uuid'],
                     'boot_sha256': boot_hashes(pending / 'boot')}
+        validate_checkpoint(metadata, info['root_uuid'])
         write_json(pending / 'checkpoint.json', metadata)
         run('sync')
         pending.rename(base / name)
@@ -174,9 +198,13 @@ def recover(device, name=None):
             chosen = checkpoints / checkpoint_name(name)
             meta = read_json(chosen / 'checkpoint.json')
             actual_uuid = run('blkid', '-s', 'UUID', '-o', 'value', device, capture=True).strip()
-            if actual_uuid != meta['root_uuid'] or boot_hashes(chosen / 'boot') != meta['boot_sha256']:
-                raise ValueError('Checkpoint identity or boot-file checksums do not match. Nothing restored.')
+            validate_checkpoint(meta, actual_uuid)
+            if boot_hashes(chosen / 'boot') != meta['boot_sha256']:
+                raise ValueError('Checkpoint boot-file checksums do not match. Nothing restored.')
             boot_device = Path('/dev/disk/by-uuid') / meta['boot_uuid']
+            roots = physical_disks(device)
+            if len(roots) != 1 or roots != physical_disks(boot_device):
+                raise ValueError('Root and boot partitions must belong to the same installed disk.')
             if mounted_device(boot_device):
                 raise ValueError('The installed boot partition is mounted. Unmount it before recovery.')
             boot.mkdir()
