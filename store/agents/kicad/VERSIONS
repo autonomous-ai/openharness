@@ -1,10 +1,12 @@
 # KiCad — Autonomous Circuit's KiCad-native pipeline, wrapped here as it is on its main branch.
 # Since 2026-09-29 the v2 pipeline lives on `main` (PR #34 merged it; #39/#41 added the Firmware
-# tab, the firmware step and the Flash button); a newer KiCad tile is a bump of UPSTREAM_COMMIT to
-# a later commit on main. The fetch is by commit, so a branch commit would work too.
+# tab, the firmware step and the Flash button; #42/#43/#44 on 2026-10-01/02 made the Firmware phase
+# wait for a built binary, vendored the RP2040 toolchain with cmake + ninja, added the read / checker
+# / power-entry rules, the module cards and the Export Gerber button). A newer KiCad tile is a bump
+# of UPSTREAM_COMMIT to a later commit on main. The fetch is by commit, so a branch commit would work too.
 UPSTREAM_NAME="autonomous-circuit"
 UPSTREAM_REPO="https://github.com/autonomous-ai/autonomous-circuit.git"
-UPSTREAM_COMMIT="62869109ed889b717707f7c38f0b79782dfb285e"
+UPSTREAM_COMMIT="0e0ea33030658b10e724e19a6ef1d5b732f03284"
 # Everything but its product library and examples (118 MB a board build never reads).
 UPSTREAM_SPARSE_MODE="no-cone"
 UPSTREAM_SPARSE="/* !/products/ !/examples/"

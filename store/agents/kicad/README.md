@@ -19,7 +19,7 @@ examples) into `upstream/`, then runs the KiCad package's own setup there
 template; the doctor, workspace init and viewer are that package's own scripts, run against the copy.
 
 - `harness.json` — name, category, engine, and paths into `upstream/harness/kicad/`.
-- `VERSIONS` — the repository, the pinned commit (on its `feat/v2-kicad-native` branch), the sparse patterns.
+- `VERSIONS` — the repository, the pinned commit (on its `main`), the sparse patterns.
 - `toolchain/runtimes.sh` — the store's copy: a Node and a venv Python of the package's own.
 - `toolchain/kicad.sh` — KiCad vendored at the pin (macOS: the official DMG, copied without 3D models
   and help); `VERSIONS` carries its version, URL, checksum and size.
@@ -32,8 +32,11 @@ installed into its own folder and never onto the machine: a Node and a venv Pyth
 **KiCad itself** (`toolchain/kicad.sh` — on macOS the official unified DMG at the version and checksum
 `VERSIONS` pins, mounted and copied into `kicad/KiCad.app` without the 3D models and the offline help:
 a 1.4 GB download, 1.3 GB on disk; the manifest points the pipeline at it with `KICADPY_CLI`,
-`KICADPY_PYTHON`, `CIRCUIT_KICAD_CLI` and `KICAD_HARNESS_SHARE`), Freerouting with its JRE, and the built
-viewer. git is optional: without it the pinned commit arrives as GitHub's tarball. On Linux there is
+`KICADPY_PYTHON`, `CIRCUIT_KICAD_CLI` and `KICAD_HARNESS_SHARE`), Freerouting with its JRE, **the RP2040
+firmware toolchain** (Arm GNU 14.2, pico-sdk 2.2.0, picotool, plus cmake and ninja from PyPI wheels —
+~1.1 GB more; the manifest exports `PICO_SDK_PATH`, `PICO_TOOLCHAIN_PATH`, `CMAKE_PREFIX_PATH`,
+`KICAD_HARNESS_CMAKE`, `KICAD_HARNESS_NINJA`, because since 2026-10-01 the Firmware phase is done only
+when the recipe's binary exists), and the built viewer. git is optional: without it the pinned commit arrives as GitHub's tarball. On Linux there is
 no relocatable KiCad artifact, so KiCad stays a system install (apt/dnf/flatpak) named by
 `KICADPY_CLI` / `KICADPY_PYTHON`, and the doctor says so.
 

@@ -73,6 +73,17 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(env["CIRCUIT_PYTHON"], "${dsh}/toolchain/python")
         self.assertEqual(env["KICAD_HARNESS_ROOT"], "${dsh}/upstream")
         self.assertEqual(env["CIRCUIT_TOOLCHAIN"], "${dsh}/upstream/toolchain")
+        # The RP2040 firmware toolchain the package vendors under upstream/toolchain/pico (2026-10-01/02):
+        # pico-sdk's CMake reads the first three; the agent is told to use the last two.
+        self.assertEqual(env["PICO_SDK_PATH"], "${dsh}/upstream/toolchain/pico/pico-sdk")
+        self.assertEqual(env["PICO_TOOLCHAIN_PATH"], "${dsh}/upstream/toolchain/pico/arm-gnu-toolchain")
+        self.assertEqual(env["CMAKE_PREFIX_PATH"], "${dsh}/upstream/toolchain/pico/picotool")
+        self.assertEqual(env["KICAD_HARNESS_PICO_SDK"], env["PICO_SDK_PATH"])
+        self.assertEqual(env["KICAD_HARNESS_ARM_TOOLCHAIN"], env["PICO_TOOLCHAIN_PATH"])
+        self.assertEqual(env["KICAD_HARNESS_CMAKE"], "${dsh}/upstream/toolchain/pico/tools/bin/cmake")
+        self.assertEqual(env["KICAD_HARNESS_NINJA"], "${dsh}/upstream/toolchain/pico/tools/bin/ninja")
+        # setup hands the package its venv Python for the cmake/ninja wheels
+        self.assertIn('PICO_TOOLS_PYTHON="$PWD/.venv/bin/python"', (PACKAGE / "toolchain" / "setup.sh").read_text())
         expected = ".agents/skills" if manifest()["engine"] == "codex" else ".claude/skills"
         self.assertTrue(env["CIRCUIT_SKILLS_DIR"].endswith(expected))
 
