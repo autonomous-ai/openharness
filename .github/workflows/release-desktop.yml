@@ -280,6 +280,9 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
+        with:
+          # Avoid copying the SDK into a local cache this hosted job discards.
+          skip_tool_cache: ${{ runner.environment == 'github-hosted' }}
 
       # SIGN_IDENTITY is read twice here: by publish-macos-variant.sh, re-signing the Intel build once
       # it pins the renderer, and by upload-desktop.sh, signing the dmg.

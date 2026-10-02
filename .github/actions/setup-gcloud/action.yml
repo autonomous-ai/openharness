@@ -14,3 +14,6 @@ runs:
     - uses: google-github-actions/setup-gcloud@v2
       with:
         skip_install: ${{ steps.installed.outputs.reusable }}
+        # A hosted runner discards its local tool cache after this job. Use the
+        # extracted SDK directly when a missing/broken installation needs setup.
+        skip_tool_cache: ${{ runner.environment == 'github-hosted' }}

@@ -74,6 +74,9 @@ if a build starts using another component. The existing pub-cache key also reads
 `mobile/pubspec.lock`, which remains included so sparse and full checkouts restore
 the same dependency cache. Linux builders reuse a working Google Cloud CLI at or
 above the validated version, with the normal install path as a fallback.
+When installation is needed, hosted jobs use the extracted SDK directly instead
+of copying it into the runner's discarded local tool cache. Authentication still
+runs normally; self-hosted runners retain the upstream tool-cache behavior.
 
 ### Package Desktop while final checks run
 
