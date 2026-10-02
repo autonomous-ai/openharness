@@ -37,6 +37,14 @@ def inspect(iso):
         for path, expected in files.items():
             assert read(path) == expected.read_bytes(), f'Payload does not match source: {path}'
             checked.append(path)
+        listing = subprocess.check_output(['unsquashfs', '-lln', str(payload)], text=True)
+        owners = {}
+        for line in listing.splitlines():
+            fields = line.split(maxsplit=5)
+            if len(fields) == 6 and fields[1].count('/') == 1 and fields[5].startswith('squashfs-root'):
+                owners[fields[5].removeprefix('squashfs-root').lstrip('/')] = fields[1]
+        for path in [*files, '', 'etc', 'usr', 'usr/bin', 'usr/lib/harness-os', 'usr/share/harness-os']:
+            assert owners.get(path) == '0/0', f'Packaged system path is not owned by root: {path}'
         runtime = json.loads(read('usr/share/harness-os/runtime.json'))
         assert runtime == manifest['harness_inputs'] and runtime['source_commit'] == manifest['source_commit']
         assert not runtime['dirty'] and runtime['target'] == 'x86_64-unknown-linux-musl'

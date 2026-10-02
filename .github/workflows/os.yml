@@ -7,6 +7,10 @@ on:
         description: 'Optional: test an existing image artifact from this workflow run ID'
         required: false
         type: string
+      publish_run_id:
+        description: 'Publish a previously passed and visually reviewed machine-test run; image_run_id may identify its image build'
+        required: false
+        type: string
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -21,7 +25,7 @@ concurrency:
 
 jobs:
   image:
-    if: ${{ !inputs.image_run_id }}
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -93,7 +97,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -136,3 +140,38 @@ jobs:
             os/test-results/**/*.txt
             os/test-results/**/*.json
           retention-days: 14
+
+  publish:
+    if: ${{ inputs.publish_run_id != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/release-input/image
+          run-id: ${{ inputs.image_run_id || inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: programmer-os-vm-*
+          path: os/release-input/machines
+          run-id: ${{ inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify prior evidence, publish preview and verify public downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OS_TEST_RUN: ${{ inputs.publish_run_id }}
+          OS_IMAGE_RUN: ${{ inputs.image_run_id || inputs.publish_run_id }}
+        run: python3 os/tools/publish.py --input os/release-input --tests "$OS_TEST_RUN" --image "$OS_IMAGE_RUN" --repo "$GITHUB_REPOSITORY"
+      - name: Retain publication receipt
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-publication
+          path: os/release-input/publication.json
+          retention-days: 30

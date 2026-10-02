@@ -3,3 +3,4 @@ dist/
 test-results/
 __pycache__/
 *.pyc
+release-input/

@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Publish an already-tested preview; never turn an incomplete VM run into a release."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import time
+import zipfile
+
+REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
+                   'An hn terminal pane inherits', 'OS surface refuses detach',
+                   'Terminal process survives screen restart', 'Offline installer completed',
+                   'Installed disk boots to hn', 'A real offline package transaction',
+                   'Offline checkpoint restored', 'Recovered disk boots to hn']
+
+
+def digest(path):
+    with path.open('rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def gh(*args):
+    return subprocess.check_output(['gh', *map(str, args)], text=True, timeout=120).strip()
+
+
+def read(path):
+    return json.loads(path.read_text())
+
+
+def validate_receipts(manifest, receipts):
+    rows = {(r['firmware'], r['encrypted']): r for r in receipts}
+    if set(rows) != {('bios', False), ('uefi', True)} or len(receipts) != 2:
+        raise ValueError('Need one plain BIOS and one encrypted UEFI receipt.')
+    for receipt in receipts:
+        if receipt['status'] != 'passed' or receipt.get('scope') == 'live session only':
+            raise ValueError('Machine validation is incomplete or failed.')
+        if receipt['iso_sha256'] != manifest['iso']['sha256'] or receipt['image_source_commit'] != manifest['source_commit']:
+            raise ValueError('Machine receipt covers a different image or source.')
+        checks = receipt.get('checks', [])
+        if any(not any(check.startswith(prefix) for check in checks) for prefix in REQUIRED_CHECKS):
+            raise ValueError('A required live, installation or recovery check is absent.')
+    if not any(check.startswith('Real Claude Code, Codex, OpenCode and pi install') for check in rows[('bios', False)]['checks']):
+        raise ValueError('Real agent executable compatibility has not passed.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', type=Path, required=True)
+    parser.add_argument('--tests', type=int, required=True)
+    parser.add_argument('--image', type=int, required=True)
+    parser.add_argument('--repo', required=True)
+    args = parser.parse_args()
+    root = args.input.resolve()
+    folder = root / 'image'
+    manifest = read(folder / 'manifest.json')
+    version = manifest['version']
+    if not re.fullmatch(r'\d+\.\d+\.\d+-preview\.\d+', version):
+        raise ValueError('This publisher only creates explicitly versioned previews.')
+    iso = folder / manifest['iso']['name']
+    if iso.parent != folder or not iso.name.endswith('.iso') or iso.stat().st_size != manifest['iso']['bytes'] or digest(iso) != manifest['iso']['sha256']:
+        raise ValueError('ISO identity does not match its manifest.')
+    inspection = read(folder / 'inspection.json')
+    if inspection['status'] != 'passed' or inspection['iso_sha256'] != manifest['iso']['sha256'] or inspection['source_commit'] != manifest['source_commit']:
+        raise ValueError('The actual image payload has not passed inspection.')
+    receipts = [read(path) for path in (root / 'machines').rglob('receipt.json')]
+    validate_receipts(manifest, receipts)
+    run = json.loads(gh('api', f'repos/{args.repo}/actions/runs/{args.tests}'))
+    image = json.loads(gh('api', f'repos/{args.repo}/actions/runs/{args.image}'))
+    jobs = json.loads(gh('api', f'repos/{args.repo}/actions/runs/{args.image}/jobs?filter=latest&per_page=100'))
+    if run['conclusion'] != 'success' or run['status'] != 'completed' or run['path'] != '.github/workflows/os.yml':
+        raise ValueError('The machine workflow did not finish successfully.')
+    if image['head_sha'] != manifest['source_commit'] or not any(j['name'] == 'image' and j['conclusion'] == 'success' for j in jobs['jobs']):
+        raise ValueError('The image does not match a successful build job.')
+    limitations = ['Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.',
+                   'Agent installation/startup is tested; account-authenticated model turns remain unverified.',
+                   'Timing and memory measurements describe these VMs, not physical laptop power-on time.']
+    validation = {'status': 'passed', 'image_run': image['html_url'], 'machine_run': run['html_url'],
+                  'machines': receipts, 'limitations': limitations}
+    (folder / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
+    manifest['validation'] = {'status': 'passed', 'receipt': 'validation.json', 'machine_run': run['html_url'], 'limitations': limitations}
+    (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    with zipfile.ZipFile(folder / 'machine-evidence.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted((root / 'machines').rglob('*')):
+            if path.is_file() and path.suffix in {'.png', '.json', '.txt'}:
+                archive.write(path, path.relative_to(root / 'machines'))
+    assets = sorted(p for p in folder.iterdir() if p.is_file())
+    identities = {p.name: {'sha256': digest(p), 'bytes': p.stat().st_size} for p in assets}
+    tag = 'os-v' + version
+    notes = root / 'release-notes.md'
+    notes.write_text(f'''Boot directly into hn. Open agents with Ctrl+B, then N. Super+B opens Chromium or returns to hn.
+
+Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
+
+To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. In an hn Terminal pane, run `sudo hn-os install`. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+
+BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
+
+{chr(10).join('- ' + item for item in limitations)}
+
+Source: `{manifest['source_commit']}`. [Machine validation]({run['html_url']}).
+''')
+    subprocess.run(['gh', 'release', 'create', tag, '--repo', args.repo, '--target', manifest['source_commit'],
+                    '--draft', '--prerelease', '--title', 'Programmer OS ' + version, '--notes-file', str(notes),
+                    *map(str, assets)], check=True, timeout=900)
+    subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=false'], check=True, timeout=120)
+    release = json.loads(gh('api', f'repos/{args.repo}/releases/tags/{tag}'))
+    try:
+        def verify(asset):
+            expected = identities[asset['name']]
+            with tempfile.TemporaryDirectory(prefix='hn-release-check-') as temp:
+                downloaded = Path(temp) / asset['name']
+                subprocess.run(['curl', '--fail', '--location', '--retry', '2', '--max-time', '600', '--silent', '--show-error',
+                                asset['browser_download_url'], '--output', str(downloaded)], check=True, timeout=650)
+                if downloaded.stat().st_size != expected['bytes'] or digest(downloaded) != expected['sha256']:
+                    raise ValueError('Public asset checksum mismatch: ' + asset['name'])
+            return asset['name']
+        if {a['name'] for a in release['assets']} != set(identities):
+            raise ValueError('Published asset set differs from the verified build.')
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            checked = list(pool.map(verify, release['assets']))
+        receipt = {'status': 'passed', 'release_url': release['html_url'], 'source_commit': manifest['source_commit'],
+                   'finished_at_unix': time.time(), 'verified_public_assets': checked, 'files': identities}
+        (root / 'publication.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        print(release['html_url'])
+    except BaseException:
+        subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=true'], check=True, timeout=120)
+        raise
+
+
+if __name__ == '__main__':
+    main()

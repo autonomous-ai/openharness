@@ -68,6 +68,8 @@ Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
 PY
 find "$BUILD_DIR/package/usr/bin" "$BUILD_DIR/package/usr/lib/harness-os" -type f -exec chmod 755 {} +
 chmod 755 "$BUILD_DIR/package/usr/share/harness-os/labwc/"{autostart,shutdown}
+# Source files belong to the build runner; system package files must belong to root.
+chown -R 0:0 "$BUILD_DIR/package"
 cat > "$BUILD_DIR/package/.PKGINFO" <<EOF
 pkgname = harness-os
 pkgbase = harness-os
@@ -133,6 +135,7 @@ for d in ['syslinux', 'efiboot', 'grub']:
             s = re.sub(r'(?m)^MENU BACKGROUND .*\n', '', s)
             f.write_text(s)
 PY
+chown -R 0:0 "$PROFILE/airootfs"
 mkarchiso -v -w "$BUILD_DIR/archiso" -o "$OS_DIR/dist" "$PROFILE"
 python3 tools/manifest.py "$OS_DIR/dist" "$BUILD_DIR/archiso/x86_64/airootfs"
-python3 tools/inspect.py "$OS_DIR/dist/"*.iso
+python3 tools/inspect_image.py "$OS_DIR/dist/"*.iso

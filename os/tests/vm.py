@@ -182,10 +182,12 @@ def main():
     parser.add_argument('--memory', type=int, default=2048)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
+    parser.add_argument('--live-only', action='store_true', help='Development probe: stop after the live-session checks, without installing')
     args = parser.parse_args()
     folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
+              'scope': 'live session only' if args.live_only else 'live session, offline installation and recovery',
               'started_at_unix': time.time(), 'checks': [], 'status': 'running'}
     manifest = json.loads((args.iso.parent / 'manifest.json').read_text())
     with args.iso.open('rb') as handle:
@@ -195,6 +197,7 @@ def main():
     result['iso_sha256'] = digest
     result['image_source_commit'] = manifest['source_commit']
     result['test_source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    result['test_script_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     vm = VM(folder, args.iso.resolve(), args.firmware, args.memory)
     user = lambda cmd: 'runuser -u programmer -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
     try:
@@ -236,6 +239,9 @@ def main():
         vm.command(user('systemctl --user restart hn-screen'))
         vm.command('sleep 3; kill -0 "$(cat /tmp/hn-survivor.pid)"')
         result['checks'].append('Terminal process survives screen restart')
+        if args.live_only:
+            result['status'] = 'passed'
+            return
         config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                       username='programmer', hostname='hn-test', password='test-password-123',
                       encrypt=args.encrypt, serial_console=True)
