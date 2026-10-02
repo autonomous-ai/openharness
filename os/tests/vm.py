@@ -51,14 +51,15 @@ class VM:
                 '-cpu', 'host' if acceleration == 'kvm' else 'max', '-device', 'virtio-vga',
                 '-display', 'none', '-no-reboot',
                 '-drive', f'file={self.disk},format=qcow2,if=none,id=target',
-                '-device', 'virtio-blk-pci,drive=target,serial=HN_OS_TEST',
+                '-device', f'virtio-blk-pci,drive=target,serial=HN_OS_TEST,bootindex={2 if live else 1}',
                 '-device', 'virtio-net-pci,netdev=net', '-netdev', 'user,id=net',
                 '-serial', f'unix:{self.control_path / "serial.sock"},server=on,wait=off',
                 '-qmp', f'unix:{self.control_path / "qmp.sock"},server=on,wait=off']
         if live:
-            args += ['-cdrom', str(self.iso), '-boot', 'd']
-        else:
-            args += ['-boot', 'c']
+            # UEFI remembers the installed disk in NVRAM. Explicit device boot
+            # indices are needed to select the recovery ISO again on later boots.
+            args += ['-drive', f'file={self.iso},format=raw,media=cdrom,if=none,id=live',
+                     '-device', 'ide-cd,drive=live,bootindex=1']
         if self.firmware == 'uefi':
             args += ['-drive', f'if=pflash,format=raw,readonly=on,file={self.code}',
                      '-drive', f'if=pflash,format=raw,file={self.vars}']

@@ -71,13 +71,13 @@ def main():
                    '-cpu', 'max' if accel == 'tcg' else 'host', '-m', str(args.memory), '-smp', '2',
                    '-device', 'virtio-vga', '-display', display,
                    '-drive', f'file={path_arg(disk)},format=qcow2,if=none,id=target',
-                   '-device', 'virtio-blk-pci,drive=target,serial=HN_OS_VM',
+                   '-device', f'virtio-blk-pci,drive=target,serial=HN_OS_VM,bootindex={1 if args.installed else 2}',
                    '-device', 'virtio-net-pci,netdev=net', '-netdev', 'user,id=net',
                    '-serial', f'unix:{control / "serial.sock"},server=on,wait=off',
-                   '-qmp', f'unix:{control / "qmp.sock"},server=on,wait=off',
-                   '-boot', 'c' if args.installed else 'order=c,once=d']
+                   '-qmp', f'unix:{control / "qmp.sock"},server=on,wait=off']
         if iso:
-            command += ['-cdrom', str(iso)]
+            command += ['-drive', f'file={path_arg(iso)},format=raw,media=cdrom,if=none,id=live',
+                        '-device', 'ide-cd,drive=live,bootindex=1']
         if args.firmware == 'uefi':
             share = Path(qemu).resolve().parents[1] / 'share' / 'qemu'
             options = [(share / 'edk2-x86_64-code.fd', share / 'edk2-i386-vars.fd'),
