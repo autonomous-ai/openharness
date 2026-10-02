@@ -1,6 +1,7 @@
 """Exercise normal shallow tag notes and the legacy full-history fallback."""
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -41,12 +42,14 @@ class DesktopReleaseNotesTests(unittest.TestCase):
             git("tag", "-f", tag, "HEAD", cwd=checkout)
             workflow = (ROOT / ".github/workflows/release-desktop.yml").read_text()
             block = workflow.split("      - name: Take the release notes from the tag\n", 1)[1]
-            script = textwrap.dedent(block.split("        run: |\n", 1)[1].split("      - uses: softprops/", 1)[0])
+            script = textwrap.dedent(re.split(r"\n      - (?:name|uses):", block.split("        run: |\n", 1)[1], maxsplit=1)[0])
             env = dict(os.environ, REF_NAME=tag, VERSION="1.2.2")
             result = subprocess.run(["bash", "-e", "-c", script], cwd=checkout, env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("here-document", result.stderr)
             notes = (checkout / "RELEASE_NOTES.md").read_text()
             self.assertIn("## Downloads", notes)
+            self.assertNotIn('echo "::group::', notes)
             self.assertEqual(git("rev-parse", "--is-shallow-repository", cwd=checkout), "true" if annotated else "false")
             if annotated:
                 self.assertTrue(notes.startswith("Reviewed release notes"))

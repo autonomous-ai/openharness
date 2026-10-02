@@ -438,7 +438,9 @@ jobs:
   # disagree with the one the app actually installs. The notes link to the real ones instead.
   github-release:
     needs: [version, publish]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # success() also inspects skipped ancestors: an explicitly successful
+    # publisher must reach this job even when candidate reuse skipped builds.
+    if: ${{ always() && needs.version.result == 'success' && needs.publish.result == 'success' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.test_candidate_reuse) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write   # narrower than the workflow default only here, where a release is created
@@ -448,6 +450,7 @@ jobs:
           fetch-depth: 1
 
       - name: Take the release notes from the tag
+        if: github.event_name == 'push'
         env:
           REF_NAME: ${{ github.ref_name }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -505,7 +508,12 @@ jobs:
           EOF
           echo "::group::RELEASE_NOTES.md"; cat RELEASE_NOTES.md; echo "::endgroup::"
 
+      - name: Confirm promotion reaches the release-page stage
+        if: inputs.test_candidate_reuse
+        run: echo 'Promoted packages passed public verification; product Release creation is disabled for this disposable check.'
+
       - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
         with:
           # Three products release from this repo; a raw "v1.2.3_desktop" title reads worse than this.
           name: Harness Desktop ${{ needs.version.outputs.version }}
