@@ -5,11 +5,15 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 # Conservative floor: the Ubuntu runner SDK exercised by our real GCS publication
 # contract. Older installations take the existing latest-version install path.
 MIN_VERSION = (586, 0, 0)
-PROBE_TIMEOUT_SECONDS = 5
+# A cold runner can spend just over five seconds starting its existing SDK.
+# Killing that healthy probe made two jobs install another copy for 20-24s.
+# Keep the check bounded, but allow cold startup to finish before falling back.
+PROBE_TIMEOUT_SECONDS = 10
 
 
 def installed_version():
@@ -28,14 +32,16 @@ def installed_version():
 
 
 def main():
+    started = time.monotonic()
     version = installed_version()
+    elapsed = time.monotonic() - started
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         output.write(f"reusable={'true' if version else 'false'}\n")
     # Never forward raw SDK stdout/stderr into logs or Actions output commands.
     if version:
-        print(f"Reusing Google Cloud CLI {version}")
+        print(f"Reusing Google Cloud CLI {version} (probe {elapsed:.2f}s)")
     else:
-        print("Installing Google Cloud CLI: no working runner installation at or above 586.0.0")
+        print(f"Installing Google Cloud CLI: no working runner installation at or above 586.0.0 (probe {elapsed:.2f}s)")
 
 
 if __name__ == "__main__":

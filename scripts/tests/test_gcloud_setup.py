@@ -45,7 +45,7 @@ class GcloudSetupTests(unittest.TestCase):
         for error in (
             FileNotFoundError(), PermissionError(),
             subprocess.CalledProcessError(1, ["gcloud"], stderr="private diagnostic"),
-            subprocess.TimeoutExpired(["gcloud"], 5, stderr="private diagnostic"),
+            subprocess.TimeoutExpired(["gcloud"], 10, stderr="private diagnostic"),
             UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid encoding"),
         ):
             with self.subTest(error=type(error).__name__), patch.object(setup.subprocess, "run", side_effect=error):
@@ -56,7 +56,7 @@ class GcloudSetupTests(unittest.TestCase):
             setup.installed_version()
         run.assert_called_once_with(
             ["gcloud", "version", "--format=json"],
-            check=True, capture_output=True, text=True, timeout=5,
+            check=True, capture_output=True, text=True, timeout=10,
         )
 
     def test_action_output_is_boolean_and_preserves_other_outputs(self):
