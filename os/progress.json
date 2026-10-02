@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": null,
   "completion_utc": null,
-  "status": "building; network restored and CI resumed",
+  "status": "Image payload inspection passed; real UEFI boot found foot configuration incompatibility, corrected image rebuilding; Mac VM launcher prepared",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -48,6 +48,22 @@
       "result": "failed before guest boot",
       "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37044532366",
       "reason": "QEMU rejected the disk serial option on -drive. Corrected locally to a virtio-blk-pci device property; rerun pending."
+    },
+    {
+      "scope": "Actual ISO payload, boot entries, configuration, root ownership, runtime and offline kernel hashes",
+      "result": "passed",
+      "source_commit": "151572d6e76d5802aa53d7ef31b2008791cf44a2",
+      "run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37071830823",
+      "iso_sha256": "1b4026ee97ddd8b3b3bf38181c6a280ef6b1c14fa25b2ed562006008b8d64051",
+      "limitations": "Machine tests failed on the obsolete foot [colors] section. This artifact is not install-ready."
+    },
+    {
+      "scope": "Installer, recovery, publication guards and real-shell VM protocol",
+      "result": "passed",
+      "test_count": 15,
+      "command": "make -C os check",
+      "source_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9",
+      "limitations": "Portable guard/syntax checks only. Actual VM installation/recovery remains pending."
     }
   ],
   "waiting": [
@@ -61,16 +77,15 @@
     }
   ],
   "remaining": [
-    "Push later local commits when the authorized GitHub write connection works",
-    "Run workflow lint and rebuild/inspect the image from the final source",
+    "Finish the corrected image build and repeat BIOS/UEFI machine validation",
     "Pass BIOS and UEFI live boot, browser/clipboard/session, offline install and reboot tests",
     "Pass real offline root/boot recovery with project preservation",
     "Run real agent executable install/start checks; credential-dependent model turns remain separate",
     "Measure boot, install duration, idle RAM/CPU and disk footprint; optimize from those measurements",
     "Publish a verified preview with checksum and installation directions; physical ThinkPad/RTX verification remains separate"
   ],
-  "last_updated_utc": "2026-10-02T22:04:28Z",
-  "remote_build_commit": "e08de0d895771be891da676b331cca1ab2cf8e00",
+  "last_updated_utc": "2026-10-02T22:37:21.045939+00:00",
+  "remote_build_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
     {
@@ -96,6 +111,21 @@
       "run_id": 37070229186,
       "result": "failed",
       "reason": "All 14 Linux guard/protocol tests passed. Workflow lint rejected two unprefixed file globs; corrected with ./ prefixes."
+    },
+    {
+      "run_id": 37070493791,
+      "result": "ISO assembled; inspection failed",
+      "reason": "Python inspector shadowed the standard inspect module; renamed it and normalized packaged system ownership to root."
+    },
+    {
+      "run_id": 37071830823,
+      "result": "Image inspection passed; machine tests failed",
+      "reason": "Real UEFI boot reached Linux. Shipped foot rejected obsolete [colors] section; corrected to [colors-dark] and added validation by the packaged binary during construction."
+    },
+    {
+      "run_id": 37072955865,
+      "result": "in progress",
+      "source_commit": "1a71edc0dd2ece66781ff94073acdd17f30e1bf9"
     }
   ],
   "recent_implementation": [
@@ -103,6 +133,8 @@
     "Initialize a fresh package-verification keyring per machine and pin live-session repositories",
     "Start the agent runtime with the graphical environment; browser requests use the current user-service environment",
     "Exercise a real offline package transaction and clear its stale database lock during recovery",
-    "Inspect the actual ISO payload and shorten the USB boot-menu delay to one second"
+    "Inspect the actual ISO payload and shorten the USB boot-menu delay to one second",
+    "Guard preview publication with matching full machine evidence and verify all public assets after publishing",
+    "Add an interactive QEMU launcher for the full installation and reboot experience on macOS"
   ]
 }

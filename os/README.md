@@ -62,6 +62,23 @@ the normal Harness CLI/TUI update channels.
 
 ## Try and install
 
+For the full installation experience in a Mac window, install QEMU with
+`brew install qemu`, download the ISO and its `manifest.json` into `os/dist/`,
+then run from the repository root:
+
+```sh
+python3 os/tools/run-vm.py
+```
+
+The VM has 2 GiB RAM and its own sparse 24 GiB virtual disk in
+`os/work/interactive-vm/`. That disk consumes only the space actually written.
+Budget 6–8 GB total for the ISO, QEMU and an initial installation; agent downloads
+and projects add more. Run the same installer described below, selecting
+`/dev/vda`. After shutdown, use `python3 os/tools/run-vm.py --installed` to boot
+from the virtual disk. The left Command key supplies the Super shortcuts.
+Apple Silicon uses x86 emulation: this tests the PC image's behavior, while boot
+and application timings need separate native x86 measurements.
+
 After an image has passed the VM gates, write the **whole ISO** to a USB stick
 using an image writer such as Etcher, boot the USB, and try hn before installing.
 The initial image targets x86-64 PCs with Secure Boot disabled. TPM can remain
