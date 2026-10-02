@@ -29,8 +29,9 @@ branch, while the required tests and review run. It selects the next version by 
 as a release, builds/signs/notarizes all platforms in CI, and verifies all six downloads at an
 isolated candidate path. It creates neither a release tag nor a product manifest/Release page.
 After checks pass, merge and release that same version normally. CI reuses the candidate only
-when the complete source tree and version match; a clean squash is supported. Changed code,
-build inputs or version require a new build. Candidate packaging does not replace application
+when the Desktop build inputs and version match; unrelated component merges and a clean
+squash are supported. Changed build inputs or version require a new build.
+Candidate packaging does not replace application
 tests or authorize publication. See the [validation guide](../docs/validation-and-release.md#package-desktop-while-final-checks-run)
 for identity checks, bounded waiting, expiration and disposable promotion validation.
 

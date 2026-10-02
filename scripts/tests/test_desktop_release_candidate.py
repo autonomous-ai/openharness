@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import re
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -26,14 +28,28 @@ VERSION = '1.2.55'
 NOW = datetime.now(timezone.utc)
 
 
+def tree_entry(path, number, kind='tree'):
+    return dict(path=path, sha=str(number) * 40, type=kind, mode='040000' if kind == 'tree' else '100644')
+
+
+TREES = {
+    TREE: dict(sha=TREE, truncated=False, tree=[tree_entry('desktop', 1), tree_entry('scripts', 2),
+        tree_entry('.github', 3), tree_entry('mobile', 4)]),
+    '3' * 40: dict(sha='3' * 40, truncated=False, tree=[tree_entry('actions', 5), tree_entry('workflows', 6)]),
+    '6' * 40: dict(sha='6' * 40, truncated=False, tree=[tree_entry('release-desktop.yml', 7, 'blob')]),
+    '4' * 40: dict(sha='4' * 40, truncated=False, tree=[tree_entry('pubspec.lock', 8, 'blob')]),
+}
+INPUTS = candidate.build_inputs(TREE, lambda sha: TREES[sha])
+
+
 def make_receipt():
     entries = {}
     for index, (key, filename) in enumerate(candidate.FILES.items(), 1):
         payload = key.encode()
         entries[key] = dict(version=VERSION, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
                             generation=str(index), url=f'https://storage.googleapis.com/{BUCKET}/{PREFIX}/{filename}?generation={index}')
-    return dict(schema=1, status='passed', version=VERSION, bucket=BUCKET, prefix=PREFIX, repository=REPOSITORY,
-                run_id=123, run_attempt=1, source_sha=SHA, source_tree=TREE,
+    return dict(schema=2, status='passed', version=VERSION, bucket=BUCKET, prefix=PREFIX, repository=REPOSITORY,
+                run_id=123, run_attempt=1, source_sha=SHA, source_tree=TREE, build_inputs=copy.deepcopy(INPUTS),
                 created_at=(NOW - timedelta(seconds=10)).isoformat(), artifacts=entries)
 
 
@@ -68,6 +84,7 @@ class FakeGithub:
         self.receipt = make_receipt()
         self.artifact, self.archive = archive_receipt(self.receipt)
         self.tree = TREE
+        self.trees = copy.deepcopy(TREES)
         self.jobs = make_jobs()
         self.calls = []
         self.run_reads = 0
@@ -78,6 +95,8 @@ class FakeGithub:
             return dict(workflow_runs=[copy.deepcopy(self.run)])
         if path.startswith('git/commits/'):
             return dict(tree=dict(sha=self.tree))
+        if path.startswith('git/trees/'):
+            return copy.deepcopy(self.trees[path.rsplit('/', 1)[1]])
         if '/artifacts?' in path:
             return dict(artifacts=[copy.deepcopy(self.artifact)])
         if '/jobs?' in path:
@@ -98,7 +117,7 @@ class CandidateIdentityTests(unittest.TestCase):
         artifact, archive = archive_receipt(receipt)
         if artifact_change:
             artifact_change(artifact)
-        args = dict(run=make_run(), repository=REPOSITORY, version=VERSION, tree=TREE, bucket=BUCKET, now=NOW)
+        args = dict(run=make_run(), repository=REPOSITORY, version=VERSION, tree=TREE, inputs=INPUTS, bucket=BUCKET, now=NOW)
         args.update(overrides)
         return candidate.read_receipt(artifact, archive, **args)
 
@@ -106,9 +125,23 @@ class CandidateIdentityTests(unittest.TestCase):
         receipt = self.read()
         self.assertEqual(receipt['source_sha'], SHA)
         self.assertEqual(receipt['source_tree'], TREE)
-        # The release commit may differ; its complete tree is the contract.
+        # The producer commit/full tree remain authenticated; build inputs match.
         client = FakeGithub()
-        self.assertEqual(candidate.find_candidate(client, VERSION, TREE, BUCKET, 456), receipt)
+        self.assertEqual(candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456), receipt)
+
+    def test_unrelated_release_tree_can_reuse_but_cannot_relabel_the_producer(self):
+        client = FakeGithub()
+        release_tree = 'd' * 40
+        client.trees[release_tree] = copy.deepcopy(client.trees[TREE])
+        client.trees[release_tree]['sha'] = release_tree
+        client.trees[release_tree]['tree'].append(tree_entry('cli', 9))
+        release_inputs = candidate.build_inputs(release_tree, lambda sha: client.trees[sha])
+        receipt = candidate.find_candidate(client, VERSION, release_inputs, BUCKET, 456)
+        self.assertEqual(receipt['source_tree'], TREE)
+        self.assertEqual(receipt['source_sha'], SHA)
+        receipt['source_tree'] = release_tree
+        with self.assertRaisesRegex(ValueError, 'source/version/run'):
+            self.read(receipt)
 
     def test_source_version_and_repository_changes_cannot_reuse(self):
         for field, value in [('tree', 'd' * 40), ('version', '1.2.56'), ('repository', 'other/project'), ('bucket', 'other-bucket')]:
@@ -117,8 +150,10 @@ class CandidateIdentityTests(unittest.TestCase):
 
     def test_receipt_requires_all_six_verified_objects_with_exact_paths(self):
         mutations = [
-            lambda r: r.update(status='failed'), lambda r: r.update(schema=2),
+            lambda r: r.update(status='failed'), lambda r: r.update(schema=1),
             lambda r: r.update(run_attempt=2), lambda r: r.update(source_sha='e' * 40),
+            lambda r: r.pop('build_inputs'), lambda r: r['build_inputs'].pop('desktop'),
+            lambda r: r['build_inputs']['desktop'].update(sha='e' * 40),
             lambda r: r.update(prefix=PREFIX.replace('/123-', '/124-')),
             lambda r: r['artifacts'].pop('desktop-linux-arm64'),
             lambda r: r['artifacts'].update(extra=r['artifacts']['desktop-macos']),
@@ -136,6 +171,27 @@ class CandidateIdentityTests(unittest.TestCase):
                 change(receipt)
                 self.read(receipt)
 
+    def test_incomplete_or_forged_input_tree_response_cannot_reuse(self):
+        for change in ['truncated', 'missing-root', 'wrong-sha', 'duplicate', 'symlink', 'bad-child-sha']:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                client = FakeGithub()
+                data = client.trees[TREE]
+                if change == 'truncated': data['truncated'] = True
+                if change == 'missing-root': data['tree'].pop(0)
+                if change == 'wrong-sha': data['sha'] = 'e' * 40
+                if change == 'duplicate': data['tree'].append(copy.deepcopy(data['tree'][0]))
+                if change == 'symlink': data['tree'][0].update(mode='120000', type='blob')
+                if change == 'bad-child-sha': data['tree'][2]['sha'] = '../other/ref'
+                candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
+
+    def test_tree_lookup_is_nonrecursive_and_reads_shared_parents_once(self):
+        client = FakeGithub()
+        candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
+        paths = [path for path in client.calls if path.startswith('git/trees/')]
+        self.assertEqual(len(paths), 4)
+        self.assertEqual(len(paths), len(set(paths)))
+        self.assertTrue(all('?' not in path for path in paths))
+
     def test_github_artifact_provenance_and_digest_are_required(self):
         for field, value in [('name', 'unrelated'), ('expired', True), ('digest', 'sha256:' + 'f' * 64),
                              ('workflow_run', dict(id=456, head_sha=SHA)), ('workflow_run', dict(id=123, head_sha='f' * 40))]:
@@ -143,15 +199,15 @@ class CandidateIdentityTests(unittest.TestCase):
                 self.read(artifact_change=lambda a: a.update({field: value}))
 
     def test_no_candidate_for_failed_incomplete_changed_or_old_build(self):
-        for change in ['failed', 'different-tree', 'different-version', 'old']:
+        for change in ['failed', 'different-inputs', 'different-version', 'old']:
             with self.subTest(change=change):
                 client = FakeGithub()
                 if change == 'failed': client.run['conclusion'] = 'failure'
-                if change == 'different-tree': client.tree = 'd' * 40
+                if change == 'different-inputs': client.trees[TREE]['tree'][0]['sha'] = 'd' * 40
                 if change == 'different-version': client.run['display_title'] = 'Desktop candidate 1.2.56'
                 if change == 'old': client.run['created_at'] = (NOW - timedelta(days=8)).isoformat()
                 with patch.object(candidate.time, 'sleep') as sleep:
-                    self.assertIsNone(candidate.find_candidate(client, VERSION, TREE, BUCKET, 456, wait_seconds=0))
+                    self.assertIsNone(candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456, wait_seconds=0))
                     sleep.assert_not_called()
 
     def test_builds_and_verification_cannot_be_missing_skipped_or_failed(self):
@@ -162,7 +218,7 @@ class CandidateIdentityTests(unittest.TestCase):
                 if change == 'skipped': client.jobs[2]['conclusion'] = 'skipped'
                 if change == 'failed-step': client.jobs[2]['steps'][0]['conclusion'] = 'failure'
                 if change == 'wrong-source': client.jobs[2]['head_sha'] = 'f' * 40
-                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+                candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
 
     def test_wait_follows_one_live_run_without_starting_another(self):
         client = FakeGithub()
@@ -170,7 +226,7 @@ class CandidateIdentityTests(unittest.TestCase):
         def finish(seconds):
             client.run.update(status='completed', conclusion='success')
         with patch.object(candidate.time, 'sleep', side_effect=finish) as sleep:
-            result = candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+            result = candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
         self.assertEqual(result['run_id'], 123)
         self.assertEqual(sleep.call_count, 1)
         self.assertTrue(all(path.startswith(('actions/', 'git/')) for path in client.calls))
@@ -181,7 +237,7 @@ class CandidateIdentityTests(unittest.TestCase):
                           created_at=(NOW - timedelta(seconds=candidate.MAX_AGE_SECONDS + 1)).isoformat())
         with patch.object(candidate.time, 'sleep') as sleep:
             with self.assertRaisesRegex(candidate.CandidatePendingError, 'actions/runs/123'):
-                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+                candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
         sleep.assert_not_called()
 
     def test_pending_deadline_stops_release_without_dispatching_a_replacement(self):
@@ -189,10 +245,10 @@ class CandidateIdentityTests(unittest.TestCase):
         client.run.update(status='queued', conclusion=None)
         with patch.object(candidate.time, 'sleep') as sleep:
             with self.assertRaises(candidate.CandidatePendingError):
-                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456, wait_seconds=0)
+                candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456, wait_seconds=0)
         sleep.assert_not_called()
         receipt = make_receipt()
-        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree']}
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree', 'build_inputs']}
         with patch.object(candidate, 'context', return_value=identity), \
                 patch.object(candidate, 'find_candidate', side_effect=candidate.CandidatePendingError('still live')), \
                 patch.object(candidate, 'output') as output, patch.object(candidate, 'promote') as promote:
@@ -211,7 +267,7 @@ class CandidateIdentityTests(unittest.TestCase):
             return data
         client.api = api
         with self.assertRaisesRegex(ValueError, 'changed while collecting'):
-            candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+            candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
 
     def test_failed_observation_of_a_live_build_never_triggers_another_build(self):
         client = FakeGithub()
@@ -224,7 +280,7 @@ class CandidateIdentityTests(unittest.TestCase):
         client.api = api
         with patch.object(candidate.time, 'sleep'):
             with self.assertRaisesRegex(candidate.CandidatePendingError, 'Cannot confirm'):
-                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+                candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
 
     def test_other_workflow_or_repository_cannot_produce_a_candidate(self):
         for field, value in [('path', '.github/workflows/desktop-internal-build.yml'), ('event', 'pull_request'),
@@ -232,11 +288,11 @@ class CandidateIdentityTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 client = FakeGithub()
                 client.run[field] = value
-                candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)
+                candidate.find_candidate(client, VERSION, INPUTS, BUCKET, 456)
 
     def test_copy_failure_is_fatal_and_never_becomes_a_fresh_build(self):
         receipt = make_receipt()
-        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree']}
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree', 'build_inputs']}
         with patch.object(candidate, 'context', return_value=identity), \
                 patch.object(candidate, 'find_candidate', return_value=receipt), \
                 patch.object(candidate, 'check_sources'), \
@@ -248,7 +304,7 @@ class CandidateIdentityTests(unittest.TestCase):
 
     def test_lookup_failure_falls_back_but_disposable_check_requires_reuse(self):
         receipt = make_receipt()
-        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree']}
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree', 'build_inputs']}
         with patch.object(candidate, 'context', return_value=identity), \
                 patch.object(candidate, 'find_candidate', side_effect=RuntimeError('API unavailable')), \
                 patch.object(candidate, 'output') as output, patch.object(candidate, 'promote') as promote:
@@ -257,6 +313,100 @@ class CandidateIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'requires a matching'):
                 candidate.main(['reuse', '--version', VERSION, '--bucket', BUCKET, '--require-candidate'])
             promote.assert_not_called()
+
+
+class BuildInputTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.git('init', '-q')
+        self.files = {
+            'desktop/lib/main.dart': 'application', 'desktop/assets/icon.png': 'asset',
+            'desktop/pubspec.lock': 'dependencies', 'desktop/third_party/xterm/lib/terminal.dart': 'vendor',
+            'desktop/macos/Runner/native.swift': 'native', 'desktop/scripts/upload-desktop.sh': 'package',
+            'scripts/validate-change.py': 'shared helper',
+            '.github/actions/desktop-flutter/action.yml': 'setup',
+            candidate.WORKFLOW: 'toolchain and build flags',
+            'mobile/pubspec.lock': 'shared cache identity', '.gitattributes': '*.png binary\n',
+            '.gitignore': 'build/\n', 'cli/main.ts': 'CLI', 'devices/firmware.c': 'firmware',
+            'docs/guide.md': 'documentation',
+        }
+        for path, content in self.files.items():
+            file = self.root / path
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(content)
+        self.commit()
+        self.original = self.inputs()
+        self.original_tree = self.git('rev-parse', 'HEAD^{tree}')
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+            '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args],
+            cwd=self.root, text=True, stderr=subprocess.STDOUT, timeout=10).strip()
+
+    def commit(self):
+        self.git('add', '-A')
+        self.git('commit', '-qm', 'fixture')
+
+    def inputs(self):
+        return candidate.build_inputs(self.git('rev-parse', 'HEAD^{tree}'),
+                                      lambda sha: candidate.local_tree(sha, cwd=self.root))
+
+    def test_unrelated_components_change_the_tree_without_invalidating_inputs(self):
+        for path in ['cli/main.ts', 'devices/firmware.c', 'docs/guide.md']:
+            (self.root / path).write_text('unrelated new behavior')
+        self.commit()
+        self.assertNotEqual(self.git('rev-parse', 'HEAD^{tree}'), self.original_tree)
+        self.assertEqual(self.inputs(), self.original)
+
+    def test_every_source_dependency_toolchain_and_packaging_scope_invalidates(self):
+        for path in self.files:
+            if path.startswith(('cli/', 'devices/', 'docs/')):
+                continue
+            with self.subTest(path=path):
+                before = self.inputs()
+                (self.root / path).write_text('changed input')
+                self.commit()
+                self.assertNotEqual(self.inputs(), before)
+
+    def test_additions_deletions_executable_modes_and_optional_files_invalidate(self):
+        edits = [
+            lambda: (self.root / 'desktop/lib/new.dart').write_text('new source'),
+            lambda: (self.root / 'desktop/assets/icon.png').unlink(),
+            lambda: (self.root / 'scripts/validate-change.py').chmod(0o755),
+            lambda: (self.root / '.gitmodules').write_text('new submodule settings'),
+            lambda: (self.root / 'mobile/pubspec.lock').unlink(),
+            lambda: (self.root / '.gitattributes').unlink(),
+        ]
+        for index, edit in enumerate(edits):
+            with self.subTest(index=index):
+                before = self.inputs()
+                edit()
+                self.commit()
+                self.assertNotEqual(self.inputs(), before)
+
+    def test_sparse_checkout_preserves_identity_without_materializing_other_components(self):
+        self.git('sparse-checkout', 'set', '--no-cone', '/scripts/validate-change.py')
+        self.assertFalse((self.root / 'desktop').exists())
+        self.assertEqual(self.inputs(), self.original)
+        self.assertEqual(self.git('status', '--porcelain'), '')
+
+    def test_native_checkout_inputs_are_all_covered_by_the_reuse_contract(self):
+        for filename, jobs in [('release-desktop.yml', ['build-macos', 'build-linux']),
+                               ('desktop-internal-build.yml', ['build-macos'])]:
+            workflow = (ROOT / '.github/workflows' / filename).read_text()
+            for job in jobs:
+                with self.subTest(workflow=filename, job=job):
+                    body = re.search(rf'^  {job}:\n(.*?)(?=^  [\w-]+:|\Z)', workflow, re.M | re.S)[1]
+                    checkout = re.search(r'^          sparse-checkout: \|\n((?:            .+\n)+)', body, re.M)
+                    self.assertIsNotNone(checkout, 'native checkout must declare its complete inputs')
+                    for pattern in checkout[1].splitlines():
+                        path = pattern.strip().strip('/')
+                        self.assertRegex(path, r'^[A-Za-z0-9_./-]+$')
+                        self.assertTrue(any(path == scope or (kind == 'tree' and path.startswith(scope + '/'))
+                                            for scope, kind in candidate.BUILD_INPUTS.items()),
+                                        f'{path} is checked out but absent from the candidate input contract')
 
 
 class CandidatePromotionTests(unittest.TestCase):
@@ -314,7 +464,7 @@ class CandidatePromotionTests(unittest.TestCase):
 
     def test_sealing_rejects_missing_platform_or_wrong_source_url(self):
         receipt = make_receipt()
-        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree']}
+        identity = {key: receipt[key] for key in ['repository', 'run_id', 'run_attempt', 'source_sha', 'source_tree', 'build_inputs']}
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)
             for name, keys in candidate.publisher.PARTS.items():

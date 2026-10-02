@@ -30,4 +30,5 @@ validation and shipping, use [docs/validation-and-release.md](docs/validation-an
   from the final pushed PR branch alongside validation and review. It prepares
   verified packages without publishing; merge and release only after checks pass.
   Avoid starting candidates while implementation is still changing. The release
-  automatically reuses a matching source tree/version and otherwise builds normally.
+  automatically reuses matching Desktop build inputs/version and otherwise builds
+  normally; unrelated CLI, firmware or documentation merges do not force a rebuild.

@@ -39,6 +39,20 @@ FILES = dict(zip(verification.KEYS, (
 PREFIX = r'harness/desktop-candidates/([1-9][0-9]*)-([1-9][0-9]*)-[0-9a-f]{32}'
 RETENTION = timedelta(days=7)
 MAX_AGE_SECONDS = 1200
+# Whole component/helper trees include new files, removals and executable modes.
+# These cover every native sparse checkout, the workflow/toolchain pin, and the
+# root Git files that can affect materialization. Extend this contract whenever
+# a build starts reading another component; the checkout coverage test guards it.
+BUILD_INPUTS = {
+    'desktop': 'tree',
+    'scripts': 'tree',
+    '.github/actions': 'tree',
+    WORKFLOW: 'blob',
+    'mobile/pubspec.lock': None,  # included when present in the shared pub-cache key
+    '.gitattributes': None,
+    '.gitignore': None,
+    '.gitmodules': None,
+}
 
 
 class CandidatePendingError(RuntimeError):
@@ -60,6 +74,62 @@ def git(value):
     return subprocess.check_output(['git', 'rev-parse', value], text=True, timeout=10).strip()
 
 
+def local_tree(sha, cwd=None):
+    records = subprocess.check_output(['git', 'ls-tree', '--full-tree', '-z', sha], cwd=cwd, text=True, timeout=10)
+    entries = []
+    for record in records.split('\0'):
+        if record:
+            metadata, path = record.split('\t', 1)
+            mode, kind, object_sha = metadata.split()
+            entries.append(dict(path=path, mode=mode, type=kind, sha=object_sha))
+    return dict(sha=sha, tree=entries, truncated=False)
+
+
+def build_inputs(tree, read_tree):
+    """Read complete Git objects, including optional-file absence, without blobs."""
+    cache = {}
+    def entries(sha):
+        require(isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{40}', sha), 'invalid input tree')
+        if sha not in cache:
+            data = read_tree(sha)
+            require(isinstance(data, dict) and data.get('sha') == sha and data.get('truncated') is False
+                    and isinstance(data.get('tree'), list), 'incomplete input tree response')
+            indexed = {}
+            for entry in data['tree']:
+                require(isinstance(entry, dict), 'invalid input tree entry')
+                path = entry['path']
+                require(isinstance(path, str) and path and '/' not in path and path not in indexed,
+                        'invalid or duplicate input tree entry')
+                indexed[path] = entry
+            cache[sha] = indexed
+        return cache[sha]
+
+    result = {}
+    for path, required_type in BUILD_INPUTS.items():
+        parent = tree
+        parts = path.split('/')
+        for index, name in enumerate(parts):
+            entry = entries(parent).get(name)
+            if entry is None:
+                require(required_type is None, f'missing build input: {path}')
+                result[path] = None
+                break
+            kind = 'tree' if index < len(parts) - 1 else required_type or 'blob'
+            require(entry.get('type') == kind and entry.get('mode') in
+                    (('040000',) if kind == 'tree' else ('100644', '100755')),
+                    f'unsupported build input type: {path}')
+            require(isinstance(entry.get('sha'), str) and re.fullmatch(r'[0-9a-f]{40}', entry['sha']),
+                    f'invalid build input object: {path}')
+            parent = entry['sha']
+            if index == len(parts) - 1:
+                result[path] = {key: entry[key] for key in ('mode', 'type', 'sha')}
+    return result
+
+
+def input_fingerprint(inputs):
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
 def context():
     repository = os.environ['GITHUB_REPOSITORY']
     run, attempt = (int(os.environ[key]) for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'))
@@ -67,7 +137,9 @@ def context():
     require(run > 0 and attempt > 0, 'invalid run identity')
     sha = git('HEAD')
     require(sha == os.environ['GITHUB_SHA'], 'checkout differs from workflow source')
-    return dict(repository=repository, run_id=run, run_attempt=attempt, source_sha=sha, source_tree=git('HEAD^{tree}'))
+    tree = git('HEAD^{tree}')
+    return dict(repository=repository, run_id=run, run_attempt=attempt, source_sha=sha, source_tree=tree,
+                build_inputs=build_inputs(tree, local_tree))
 
 
 def check_prefix(prefix, run=None, attempt=None):
@@ -111,7 +183,7 @@ def seal(version, bucket, prefix, parts, identity):
     with ThreadPoolExecutor(max_workers=3) as pool:
         results = list(pool.map(lambda item: verification.verify_artifact(item, 90), pinned.items()))
     require(all(item['status'] == 'passed' for item in results), 'candidate downloads failed verification')
-    return dict(schema=1, status='passed', version=version, bucket=bucket, prefix=prefix,
+    return dict(schema=2, status='passed', version=version, bucket=bucket, prefix=prefix,
                 created_at=verification.utc_now(), **identity, artifacts=pinned)
 
 
@@ -124,7 +196,7 @@ def check_run(run, repository, version):
             'candidate has no run/attempt identity')
 
 
-def read_receipt(artifact, archive, run, repository, version, tree, bucket, now):
+def read_receipt(artifact, archive, run, repository, version, tree, inputs, bucket, now):
     name = f'desktop-release-candidate-{run["run_attempt"]}'
     provenance = artifact.get('workflow_run', {})
     require(artifact.get('name') == name and artifact.get('expired') is False
@@ -136,9 +208,9 @@ def read_receipt(artifact, archive, run, repository, version, tree, bucket, now)
         require(bundle.namelist() == ['desktop-release-candidate.json']
                 and bundle.infolist()[0].file_size <= 65536, 'unexpected candidate archive contents')
         receipt = json.loads(bundle.read('desktop-release-candidate.json'))
-    require(isinstance(receipt, dict) and receipt.get('schema') == 1 and receipt.get('status') == 'passed', 'candidate did not pass')
+    require(isinstance(receipt, dict) and receipt.get('schema') == 2 and receipt.get('status') == 'passed', 'candidate did not pass')
     expected = dict(repository=repository, run_id=run['id'], run_attempt=run['run_attempt'],
-                    source_sha=run['head_sha'], source_tree=tree, version=version, bucket=bucket)
+                    source_sha=run['head_sha'], source_tree=tree, build_inputs=inputs, version=version, bucket=bucket)
     require(all(receipt.get(key) == value for key, value in expected.items()), 'candidate source/version/run differs from release')
     created = timestamp(receipt['created_at'])
     require(timestamp(run['created_at']) <= created <= now and now - created < RETENTION, 'candidate is expired or has invalid timestamps')
@@ -167,10 +239,17 @@ def check_jobs(run, jobs):
         require(all(step.get('conclusion') in {'success', 'skipped'} for step in job.get('steps', [])), 'candidate contains a failed step')
 
 
-def find_candidate(client, version, tree, bucket, current_run, wait_seconds=MAX_AGE_SECONDS):
+def find_candidate(client, version, inputs, bucket, current_run, wait_seconds=MAX_AGE_SECONDS):
     """Look at a bounded recent set. Never wait past a candidate's build budget."""
     now = datetime.now(timezone.utc)
     runs = client.api('actions/workflows/release-desktop.yml/runs?event=workflow_dispatch&per_page=30')['workflow_runs']
+    # Unrelated commits often share these small parent trees. Keep immutable API
+    # responses for this lookup, without downloading whole recursive file lists.
+    trees = {}
+    def read_tree(sha):
+        if sha not in trees:
+            trees[sha] = client.api(f'git/trees/{sha}')
+        return trees[sha]
     # A completed candidate with identical bytes is immediately usable even if
     # someone has unnecessarily started another build of the same tree/version.
     runs.sort(key=lambda run: (run.get('conclusion') != 'success', -run['id']))
@@ -183,10 +262,11 @@ def find_candidate(client, version, tree, bucket, current_run, wait_seconds=MAX_
         if now - timestamp(run['created_at']) >= RETENTION:
             continue
         commit = client.api(f'git/commits/{run["head_sha"]}')
-        if commit.get('tree', {}).get('sha') != tree:
+        producer_tree = commit.get('tree', {}).get('sha')
+        if build_inputs(producer_tree, read_tree) != inputs:
             continue
-        # A clean squash changes the commit but preserves this complete tree,
-        # including the SDK pin, actions, packaging scripts and workflow itself.
+        # Producer provenance still names its actual full tree. Only unrelated
+        # components may differ from the release; every build input must match.
         end = time.monotonic() + max(0, min(wait_seconds, MAX_AGE_SECONDS - (now - timestamp(run['created_at'])).total_seconds()))
         while run['status'] != 'completed' and time.monotonic() < end:
             print(f'Waiting for matching candidate {run["id"]} ({run["status"]})', flush=True)
@@ -213,7 +293,8 @@ def find_candidate(client, version, tree, bucket, current_run, wait_seconds=MAX_
         require(len(selected) == 1 and selected[0].get('size_in_bytes', 65537) <= 65536, 'candidate receipt is missing or too large')
         artifact = selected[0]
         archive = client.command('api', f'repos/{client.repository}/actions/artifacts/{artifact["id"]}/zip', binary=True)
-        receipt = read_receipt(artifact, archive, run, client.repository, version, tree, bucket, datetime.now(timezone.utc))
+        receipt = read_receipt(artifact, archive, run, client.repository, version, producer_tree,
+                               inputs, bucket, datetime.now(timezone.utc))
         latest = client.api(f'actions/runs/{run["id"]}')
         require(all(latest.get(key) == run.get(key) for key in ('id', 'head_sha', 'run_attempt', 'status', 'conclusion')),
                 'candidate run changed while collecting it')
@@ -325,7 +406,7 @@ def main(argv=None):
     started = time.monotonic()
     client = Client(identity['repository'], started + args.wait_seconds + 90)
     try:
-        receipt = find_candidate(client, args.version, identity['source_tree'], args.bucket, identity['run_id'], args.wait_seconds)
+        receipt = find_candidate(client, args.version, identity['build_inputs'], args.bucket, identity['run_id'], args.wait_seconds)
         if receipt:
             check_sources(receipt)
     except CandidatePendingError:
@@ -342,7 +423,9 @@ def main(argv=None):
     promote(receipt, args.destination, args.scratch)
     output('reused', 'true')
     output('candidate_prefix', receipt['prefix'])
-    result = dict(status='passed', version=args.version, source_tree=identity['source_tree'],
+    result = dict(status='passed', version=args.version, source_sha=identity['source_sha'], source_tree=identity['source_tree'],
+                  candidate_source_sha=receipt['source_sha'], candidate_source_tree=receipt['source_tree'],
+                  build_inputs_sha256=input_fingerprint(identity['build_inputs']),
                   candidate_run=receipt['run_id'], candidate_attempt=receipt['run_attempt'],
                   duration_seconds=round(time.monotonic() - started, 3))
     Path('desktop-candidate-reuse.json').write_text(json.dumps(result, indent=2) + '\n')

@@ -587,7 +587,7 @@ jobs:
 
   # Same build/signing path and production updater settings. Only the storage
   # destination differs. A successful receipt binds six verified generations to
-  # this complete source tree, version, workflow run and attempt.
+  # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
     needs: [version, build-macos, build-linux]
     if: ${{ inputs.prepare_only }}

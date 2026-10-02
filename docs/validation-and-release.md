@@ -87,9 +87,21 @@ candidate prefix, verifies all six downloads, and retains a small receipt in
 GitHub Actions. It neither tags nor updates the product manifest or Release page.
 
 After validation and review pass, merge and release that version normally. The
-workflow automatically looks for a candidate with the same version and complete
-Git source tree. A clean squash preserves that tree; any source, dependency,
-toolchain-pin or workflow change requires another build. The workflow checks the
+workflow automatically looks for a candidate with the same version and Desktop
+build inputs. It compares Git objects for the whole `desktop/` and `scripts/`
+trees, `.github/actions/`, the release workflow (including its SDK/runner pins),
+`mobile/pubspec.lock` when present, and root `.gitattributes`, `.gitignore` and
+`.gitmodules` files. File contents, additions, removals and executable modes are
+covered. Extend this input contract before a build starts reading another component;
+the process suite checks that it covers every native builder's sparse checkout.
+
+Unrelated CLI, firmware and documentation merges, or a clean squash, can preserve
+those inputs even when the full repository tree changes. Any Desktop source, asset,
+dependency, native code, packaging helper, toolchain-pin or workflow change requires
+another build. The receipt still identifies the producer's actual commit/full tree;
+reuse records both source identities and the matching input fingerprint. GitHub's
+immutable tree objects must independently confirm the producer's inputs. Truncated
+or malformed responses cannot authorize reuse. The workflow checks the
 producer run's successful completion, repository, workflow, source, attempt and
 immutable receipt digest. Promotion copies only the exact object generations
 whose sizes and SHA-256 hashes were verified, with atomic no-overwrite conditions.
