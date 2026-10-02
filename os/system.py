@@ -218,20 +218,26 @@ def recover(device, name=None):
             boot_mounted = True
             suffix = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
             saved = checkpoints / ('before-recovery-' + suffix)
+            restoring = top / ('@restoring-' + suffix)
             saved.mkdir(mode=0o700)
             shutil.copytree(boot, saved / 'boot')
-            run('btrfs', 'subvolume', 'snapshot', chosen / 'root', top / '@restoring')
+            run('btrfs', 'subvolume', 'snapshot', chosen / 'root', restoring)
             try:
                 copy_contents(chosen / 'boot', boot)
                 run('sync')
-                (top / '@').rename(saved / 'root')
-                (top / '@restoring').rename(top / '@')
+                if boot_hashes(boot) != meta['boot_sha256']:
+                    raise ValueError('Restored boot files failed verification.')
+                # A previous interrupted recovery can have moved @ already.
+                # A fresh candidate also avoids colliding with its staging subvolume.
+                if (top / '@').exists():
+                    (top / '@').rename(saved / 'root')
+                restoring.rename(top / '@')
             except BaseException:
                 copy_contents(saved / 'boot', boot)
                 if (saved / 'root').exists() and not (top / '@').exists():
                     (saved / 'root').rename(top / '@')
-                if (top / '@restoring').exists():
-                    run('btrfs', 'subvolume', 'delete', top / '@restoring')
+                if restoring.exists():
+                    run('btrfs', 'subvolume', 'delete', restoring)
                 raise
             run('sync')
             print(f'Restored {name}; projects in @home were preserved. Remove the USB and reboot.')

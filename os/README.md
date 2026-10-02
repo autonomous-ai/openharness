@@ -24,7 +24,7 @@ is safe to recommend for installation. See the release's validation receipt.
   returns to hn. `Super+Enter` focuses hn; `Alt+Tab` switches available windows.
   Browser sandboxing and hardware acceleration remain enabled.
 - `Ctrl+B`, then `N` opens an existing hn agent/terminal entry. The normal session
-  has no parent shell to exit into. Shells remain available in hn panes. This is
+  has no interactive parent shell to exit into. Shells remain available in hn panes. This is
   an interface policy, not confinement against someone with shell/admin access.
 - NetworkManager, fonts, clipboard, audio, locking, firmware and zram provide
   the support needed by actual development machines. No IDEs, model weights,

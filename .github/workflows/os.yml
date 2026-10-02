@@ -102,8 +102,10 @@ jobs:
         include:
           - firmware: bios
             encryption: ''
+            agents: '--agents'
           - firmware: uefi
             encryption: '--encrypt'
+            agents: ''
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v6
@@ -118,7 +120,11 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Boot, operate, install and reboot the real image
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }}
+      - name: Show machine failure diagnostics
+        if: failure()
+        run: |
+          find os/test-results -type f \( -name receipt.json -o -name qemu.log -o -name guest-diagnostics.log \) -exec tail -c 14000 {} \;
       - name: Retain screenshots, measurements and serial diagnostics
         if: always()
         uses: actions/upload-artifact@v6

@@ -17,6 +17,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -29,6 +30,8 @@ class VM:
         self.qmp = None
         self.qmp_file = None
         self.shell_ready = False
+        self.control = tempfile.TemporaryDirectory(prefix='hn-os-vm-', dir='/tmp')
+        self.control_path = Path(self.control.name)
         self.log = (folder / 'serial.log').open('ab', buffering=0)
         self.stderr = (folder / 'qemu.log').open('ab', buffering=0)
         self.disk = folder / 'target.qcow2'
@@ -41,7 +44,7 @@ class VM:
     def start(self, live):
         self.shell_ready = False
         for name in ['serial.sock', 'qmp.sock']:
-            (self.folder / name).unlink(missing_ok=True)
+            (self.control_path / name).unlink(missing_ok=True)
         self.started = time.monotonic()
         acceleration = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
@@ -50,8 +53,8 @@ class VM:
                 '-drive', f'file={self.disk},format=qcow2,if=none,id=target',
                 '-device', 'virtio-blk-pci,drive=target,serial=HN_OS_TEST',
                 '-device', 'virtio-net-pci,netdev=net', '-netdev', 'user,id=net',
-                '-serial', f'unix:{self.folder / "serial.sock"},server=on,wait=off',
-                '-qmp', f'unix:{self.folder / "qmp.sock"},server=on,wait=off']
+                '-serial', f'unix:{self.control_path / "serial.sock"},server=on,wait=off',
+                '-qmp', f'unix:{self.control_path / "qmp.sock"},server=on,wait=off']
         if live:
             args += ['-cdrom', str(self.iso), '-boot', 'd']
         else:
@@ -75,7 +78,7 @@ class VM:
                                    (self.folder / 'qemu.log').read_text()[-2000:])
             sock = socket.socket(socket.AF_UNIX)
             try:
-                sock.connect(str(self.folder / name))
+                sock.connect(str(self.control_path / name))
                 return sock
             except (FileNotFoundError, ConnectionRefusedError):
                 sock.close()
@@ -150,6 +153,7 @@ class VM:
 
     def keys(self, *keys):
         self.monitor('send-key', keys=[{'type': 'qcode', 'data': key} for key in keys], **{'hold-time': 100})
+        time.sleep(0.12)  # Release each key, including repeated password characters.
 
     def stop(self):
         if self.process and self.process.poll() is None:
@@ -175,8 +179,9 @@ def main():
     parser.add_argument('--encrypt', action='store_true')
     parser.add_argument('--memory', type=int, default=2048)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
     args = parser.parse_args()
-    folder = (args.output or Path('os/test-results') / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
+    folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
               'started_at_unix': time.time(), 'checks': [], 'status': 'running'}
@@ -274,6 +279,16 @@ def main():
         vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
         vm.screenshot('05-recovered-hn')
         result['checks'].append('Recovered disk boots to hn; changed system reverted and project preserved')
+        if args.agents:
+            script = Path(__file__).with_name('agents.sh').read_bytes()
+            encoded = base64.b64encode(script).decode()
+            vm.command(f'printf %s {shlex.quote(encoded)} | base64 -d > /tmp/hn-os-agents.sh')
+            vm.command('hn new-window -n agent-compatibility ' + shlex.quote('bash /tmp/hn-os-agents.sh > "$HOME/.local/state/harness-os/agent-check.log" 2>&1'))
+            output, _ = vm.command('for n in $(seq 1 600); do test -s ~/.local/state/harness-os/agent-check/status && break; sleep 1; done; cat ~/.local/state/harness-os/agent-check.log; test "$(cat ~/.local/state/harness-os/agent-check/status)" = 0', timeout=630)
+            (folder / 'agent-installation.log').write_text(output)
+            output, _ = vm.command('cat ~/.local/state/harness-os/agent-check/packages.json')
+            (folder / 'agent-versions.txt').write_text(output)
+            result['checks'].append('Real Claude Code, Codex, OpenCode and pi install and report versions inside an hn terminal; model turns unverified')
         result['status'] = 'passed'
     except Exception as error:
         result['status'] = 'failed'
@@ -291,6 +306,7 @@ def main():
         raise
     finally:
         vm.stop()
+        vm.control.cleanup()
         result['finished_at_unix'] = time.time()
         (folder / 'receipt.json').write_text(json.dumps(result, indent=2) + '\n')
         # Large disposable disks are never uploaded with the small evidence set.

@@ -2,9 +2,11 @@
 
 The user works in hn agent panes. Keep the system small. Install the tools needed
 for the current task, and use terminal output, diffs and tests to review the work.
-Open `hn-browser URL` only when a browser helps. Do not add a desktop shell,
-launcher, panel, editor, model server, or background service without the user's
-request. Ordinary terminal panes remain available with Ctrl+B, then N → Terminal.
+Open `hn-browser URL` only when a browser helps. Add tools and services when the
+current task needs them; run extra services on demand unless the task needs them
+persistently. Keep the desktop shell, launcher and panels absent unless the user
+requests that interface. Ordinary terminal panes remain available with Ctrl+B,
+then N → Terminal.
 
 ## System operations
 
@@ -53,6 +55,7 @@ and `journalctl --user -u hn-screen -u harness-daemon` show the session state.
 Restarting `hn-screen` should reconnect to existing work. Do not restart or kill
 the agent runtime as the first response to a display problem.
 
-Source: https://github.com/autonomous-ai/openharness/tree/main/os
+Source: https://github.com/autonomous-ai/openharness (exact source commit in
+`/usr/share/harness-os/runtime.json`).
 NVIDIA package: https://archlinux.org/packages/extra/x86_64/nvidia-open-lts/
 NVIDIA support: https://github.com/NVIDIA/open-gpu-kernel-modules
