@@ -12,6 +12,9 @@ then N → Terminal.
 
 - This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
 - Use the ordinary package manager; no private package ecosystem is required.
+  On the live USB, `sudo systemctl start harness-keyring` waits for its one-time
+  key setup before the first package installation. Installed systems finish that
+  setup during installation. The hn screen does not wait for it at live boot.
   `sudo pacman -S --needed PACKAGE` installs from the system's complete dated
   repository snapshot. Never run `pacman -Sy` followed by individual installs.
 - `sudo hn-os update` makes a checkpoint, advances all Arch repositories to

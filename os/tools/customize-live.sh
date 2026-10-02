@@ -23,6 +23,7 @@ mkdir -p /var/lib/systemd/linger
 touch /var/lib/systemd/linger/programmer
 # Agent auth and browser downloads never block boot. No SSH listener by default.
 systemctl disable NetworkManager-wait-online.service || true
+systemctl disable archlinux-keyring-wkd-sync.timer
 systemctl mask systemd-networkd.service systemd-networkd-wait-online.service
 ln -sf /usr/lib/systemd/system/multi-user.target /etc/systemd/system/default.target
 printf '[Service]\nExecStart=\nExecStart=-/usr/bin/agetty --autologin programmer --noclear %%I $TERM\n' > /etc/systemd/system/getty@tty1.service.d/autologin.conf

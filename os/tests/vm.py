@@ -211,7 +211,7 @@ def main():
         result['live_hn_ready_seconds'] = round(time.monotonic() - vm.started, 3)
         vm.command('! pgrep -x chromium')
         result['checks'].append('Live hn ready; browser absent at boot')
-        vm.command('pacman -Si git chromium >/dev/null')
+        vm.command('systemctl start harness-keyring; pacman -Si git chromium >/dev/null', timeout=180)
         result['checks'].append('Dated package repositories are queryable before the first download')
         vm.command(user('systemd-run --user --quiet --wait --pipe --collect /bin/sh -c ' +
                         shlex.quote('printf hn-clipboard-check | wl-copy; test "$(wl-paste --no-newline)" = hn-clipboard-check')))
