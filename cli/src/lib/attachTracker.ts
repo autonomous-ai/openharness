@@ -64,15 +64,18 @@ export class AttachTracker<E> {
    */
   async attach(session: AttachSubject<E>, reset: boolean, start: () => Promise<boolean>): Promise<boolean> {
     // A loop, not an if: two resets waiting on the same attach would otherwise both start at once.
-    for (let pending = this.inFlight.get(session.sessionId); pending; pending = this.inFlight.get(session.sessionId)) {
+    // The key is read once: `session` is the registry's live object and unbinding blanks its sessionId
+    // mid-attach, so reading it again later would miss the entry and leave it behind for good.
+    const key = session.sessionId
+    for (let pending = this.inFlight.get(key); pending; pending = this.inFlight.get(key)) {
       if (!reset) return pending.run
       await pending.run.catch(() => false)
     }
     const entry = { run: Promise.resolve(false), subject: session, since: null as number | null }
     entry.run = this.runWhenFree(entry, start).finally(() => {
-      if (this.inFlight.get(session.sessionId) === entry) this.inFlight.delete(session.sessionId)
+      if (this.inFlight.get(key) === entry) this.inFlight.delete(key)
     })
-    this.inFlight.set(session.sessionId, entry)
+    this.inFlight.set(key, entry)
     return entry.run
   }
 

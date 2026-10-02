@@ -47,6 +47,21 @@ describe('AttachTracker', () => {
     expect(await b).toBe(true)
   })
 
+  it('forgets an attach even when the session loses its id while it runs', async () => {
+    // The registry hands out one live object and unbinding blanks its sessionId mid-attach. The entry
+    // must still be removed, or the next reset awaits an already-settled promise forever and starves
+    // the event loop.
+    const tracker = new AttachTracker<Engine>()
+    const live = subject('s1')
+    const first = deferred<boolean>()
+    const run = tracker.attach(live, false, () => first.promise)
+    live.sessionId = ''
+    first.resolve(true)
+    await run
+    expect(tracker.attaching()).toEqual([])
+    expect(await tracker.attach(subject('s1'), true, async () => true)).toBe(true)
+  })
+
   it('a start that throws synchronously frees the slot', async () => {
     const tracker = new AttachTracker<Engine>()
     await expect(tracker.attach(subject('s1'), false, () => { throw new Error('sync') })).rejects.toThrow('sync')
