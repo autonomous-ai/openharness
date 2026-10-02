@@ -564,6 +564,8 @@ export class BackendSocket {
   groupSync: { handle: (peerPub: string, payload: Record<string, unknown>) => Record<string, unknown> } | null = null
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
+  /** Read-only rows for sessions in terminals Harness did not start (lib/externalWatch.ts). */
+  externalAgentsProvider: (() => Promise<AgentFrame[]>) | null = null
   viewerTargetProvider: ((agentId: string) => string | null) | null = null
   readonly interactiveViewers = new InteractiveViewers(agentId => this.viewerTargetProvider?.(agentId) ?? null)
   readonly viewerForwarder = new ViewerForwarder({
@@ -2202,6 +2204,8 @@ export class BackendSocket {
           // explicitly asks for stopped work and receives no stale terminal routes.
           const savedSessions = payload.includeStopped === true && this.e2ee.sessionRole(connId) !== 'device' ? stoppedAgents.available(sessions) : []
           projects.push(...await Promise.all(savedSessions.map(s => this.toStoppedProject(s))))
+          // External rows go to the app and the web only; the dial keeps its live, actionable list.
+          if (this.e2ee.sessionRole(connId) !== 'device') projects.push(...await this.externalAgentsProvider?.().catch(() => []) ?? [])
           // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
           // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
           // order is TOTAL: without it two agents registered in the same millisecond fall through to array

@@ -1910,3 +1910,44 @@ describe('lastOpenedAt: when an app last opened the agent, on the daemon clock',
     expect(reloaded.byAgent(pending.agentId)).not.toHaveProperty('lastOpenedAt')
   })
 })
+
+describe('external sessions and the registry', () => {
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-'))
+  })
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    delete process.env.ADAPTER_DATA_DIR
+    delete process.env.CLAUDE_PROJECTS_DIR
+    delete process.env.CODEX_HOME
+    delete process.env.CURSOR_HOME
+  })
+
+  it('never writes an external row to registry.json and never duplicates a registered session', async () => {
+    const transcriptPath = join(dataDir, 'session-1.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    const { createExternalWatch, writeExternalSessionsSwitch } = await import('./externalWatch.js')
+    registry.load()
+    registerProcess(registry, { launcherId: 'h1', sessionId: 'session-1', transcriptPath, tmuxPane: '%1', cwd: '/tmp/demo' })
+    writeExternalSessionsSwitch(dataDir, true)
+    const published: string[] = []
+    const watch = createExternalWatch({
+      dataDir, env: {}, owned: (sessionId) => !!registry.bySession(sessionId), processes: async () => [],
+      isEngine: () => true, selfPid: 1, project: async () => null,
+      publish: (frame) => { published.push(frame.sessionId) }, remove: () => {}, log: () => {},
+    })
+    const external = '11111111-2222-4333-8444-555555555555'
+    expect(await watch.hook({ engine: 'claude', event: 'SessionStart', sessionId: external, cwd: '/tmp/elsewhere' })).toMatchObject({ ok: true })
+    expect(await watch.hook({ engine: 'claude', event: 'UserPromptSubmit', sessionId: external })).toMatchObject({ ok: true, state: 'working' })
+    // Any later save (here: another tmux agent registering) writes the registry; the external row stays out.
+    registerProcess(registry, { launcherId: 'h2', sessionId: 'session-2', transcriptPath, tmuxPane: '%2', cwd: '/tmp/demo2' })
+
+    const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<{ sessionId: string }>
+    expect(saved.map((row) => row.sessionId).sort()).toEqual(['session-1', 'session-2'])
+    expect(registry.bySession(external)).toBeUndefined()
+    expect(registry.list().map((row) => row.sessionId).sort()).toEqual(['session-1', 'session-2'])
+    expect(published).toEqual([external, external])
+  })
+})

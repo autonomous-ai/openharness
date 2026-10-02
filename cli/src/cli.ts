@@ -162,7 +162,8 @@ import { SessionSearchStore } from './lib/sessionSearch/store.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { sweepWorktrees } from './lib/worktreeSweep.js'
 import { nameBranchAfterSession } from './lib/branchNaming.js'
-import { forgetAgentProject } from './lib/agentProject.js'
+import { agentProject, forgetAgentProject } from './lib/agentProject.js'
+import { createExternalWatch, externalCommand } from './lib/externalWatch.js'
 import { createStopAgentService } from './lib/stopAgentService.js'
 import { createResumeAgentService } from './lib/resumeAgentService.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from './lib/launchOverrides.js'
@@ -189,6 +190,7 @@ import type { AgentDshContext } from './lib/agentFrame.js'
 import { basename } from 'node:path'
 import {
   bypassPermissionActive,
+  engineProcessMatchScore,
   permissionModeFromArgv,
   clearPaneRemainOnExit,
   resolvePaneEngineProcess,
@@ -459,6 +461,9 @@ Machine:
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness machines             list the machines on this account (this computer's is marked)
+  harness external on|off|status
+                               also list Claude Code and Codex sessions running in terminals Harness did
+                               not start, read-only (off by default; --json for status)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
   harness channel --help       consult agents in a swarm and read shared collaboration history
@@ -4184,8 +4189,24 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return { status: 200, body: withStaleMarker(cached.body, cached.fetchedAt) }
   }
 
+  // External sessions (lib/externalWatch.ts): read-only rows for Claude Code and Codex sessions in
+  // terminals Harness did not start. Off unless `harness external on`. App and web only, never the dial.
+  const externalWatch = createExternalWatch({
+    dataDir: env.ADAPTER_DATA_DIR,
+    owned: (sessionId) => !!registry.bySession(sessionId),
+    processes: () => processRows(),
+    isEngine: (row, engine) => engineProcessMatchScore(row, engine) > 0,
+    selfPid: process.pid,
+    project: (cwd) => agentProject(cwd),
+    publish: (agent) => backendRef?.send({ type: 'agent_synced', payload: { agent } }),
+    remove: (agentId) => backendRef?.send({ type: 'agent_deleted', payload: { agentId, retained: false } }),
+  })
+  backend.externalAgentsProvider = () => externalWatch.frames()
+  const externalSweep = setInterval(() => { void externalWatch.sweep().catch(() => {}) }, 20_000)
+  externalSweep.unref?.()
 
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
+    onExternalHook: (body) => externalWatch.hook(body),
     onPromptContext: async (agentId, prompt) => {
       const persona = companionPromptContext(agentId)
       const recalled = await codingMemory?.preparePromptRecall(agentId, { query: prompt })
@@ -9106,6 +9127,14 @@ switch (cmd) {
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       color: process.stdout.isTTY === true,
+    })
+    break
+  case 'external':
+    process.exitCode = externalCommand({
+      argv: rest,
+      dataDir: env.ADAPTER_DATA_DIR,
+      output: (line) => console.log(line),
+      error: (line) => console.error(line),
     })
     break
   case 'machines':

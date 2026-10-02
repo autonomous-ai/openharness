@@ -18,6 +18,7 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness status` · `harness version` · `harness update [--force]` | Running, pid, machine id, session count · version · update now. |
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
+| `harness external on\|off\|status [--json]` | Also list Claude Code and Codex sessions running in terminals Harness did not start, as read-only rows in the app and the web (never the dial). Off by default; `HARNESS_EXTERNAL_SESSIONS=1\|0` overrides. See [`lib/externalWatch.ts`](../cli/src/lib/externalWatch.ts). |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
 | `harness pair <verb> [--json]` · `harness pair talk <words…>` · `harness pair mcp` | Your paired daemon's control interface (below): read every harness on every machine; talk to the daemon. |
 | `harness remote-password set\|status\|clear` | This machine's persistent password for machine-to-machine links. |
@@ -57,7 +58,8 @@ over the relay.
 screen is no longer that question — nothing is typed then.
 
 Engines report in over HTTP on the same port: `POST /api/hook/session-start`, `session-end`,
-`turn-start`, `turn-stop`, `tool-start`, authenticated by a per-install token the daemon writes into
+`turn-start`, `turn-stop`, `tool-start`, and `external` (a session outside tmux, only while
+`harness external` is on), authenticated by a per-install token the daemon writes into
 the hook it installs.
 
 `harness new` makes a session from a shell, in the words the app's box uses, over this same socket:

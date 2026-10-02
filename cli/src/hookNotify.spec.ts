@@ -1169,3 +1169,35 @@ describe('hook notify Command Code re-registration', () => {
     expect(requests.map((r) => r.url)).toEqual(['/api/hook/turn-stop'])
   })
 })
+
+describe('hook notify external sessions', () => {
+  const input = { hook_event_name: 'Notification', session_id: '0f8fad5b-d9cb-469f-a165-70867728950e', cwd: '/work/app',
+    message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt', transcript_path: '/home/x/t.jsonl' }
+
+  it('posts nothing outside tmux while the switch is off', async () => {
+    const { port, requests } = await collect({ ok: true })
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-external-'))
+    tmpDirs.push(dataDir)
+    await runHook({ port, dataDir, input })
+    await runHook({ port, dataDir, input, env: { HARNESS_EXTERNAL_SESSIONS: '0' } })
+    expect(requests).toEqual([])
+  })
+
+  it.each(['file', 'env'] as const)('reports a session outside tmux when switched on (%s)', async (how) => {
+    const { port, requests } = await collect({ ok: true })
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-external-'))
+    tmpDirs.push(dataDir)
+    if (how === 'file') writeFileSync(join(dataDir, 'external-sessions.json'), '{"enabled":true}\n')
+    await runHook({ port, dataDir, input, env: how === 'env' ? { HARNESS_EXTERNAL_SESSIONS: '1' } : {} })
+    expect(requests).toEqual([{ url: '/api/hook/external', body: {
+      engine: 'claude', event: 'Notification', sessionId: input.session_id, cwd: '/work/app',
+      message: input.message, notificationType: 'permission_prompt', model: null, callerPid: process.pid,
+    } }])
+  })
+
+  it('leaves a tmux pane on its own path and drops its Notification', async () => {
+    const { port, requests } = await collect({ ok: true })
+    await runHook({ port, tmuxPane: '%42', input, env: { HARNESS_EXTERNAL_SESSIONS: '1' } })
+    expect(requests).toEqual([])
+  })
+})

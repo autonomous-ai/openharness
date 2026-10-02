@@ -121,6 +121,11 @@ export type AgentFrame = {
   /** The engine's named agent (`agent_create`'s `agent`); `namedAgent` on the wire so an agent
    *  object never carries a key called `agent`. */
   namedAgent: string | null
+  /**
+   * Present only on a session running in a terminal Harness did not start (lib/externalWatch.ts):
+   * read-only, with no terminal to open and nothing to close. Absent on every other agent.
+   */
+  external?: { state: 'idle' | 'working' | 'done' | 'failed' | 'needsYou' | 'offline'; detail?: string }
 }
 
 /** What the daemon knows about an agent's DSH — looked up by the caller, never here. */

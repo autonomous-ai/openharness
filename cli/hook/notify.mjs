@@ -1285,6 +1285,40 @@ async function fallbackRegister(input, engine, tmuxPane) {
   })
 }
 
+// ── External sessions (src/lib/externalWatch.ts) ───────────────────────────────────────────────
+// A Claude Code or Codex session outside tmux used to be dropped above. With the switch on it is
+// reported to the daemon, which shows it as a read-only row. Off by default: nothing is posted unless
+// `harness external on` wrote the switch file, or HARNESS_EXTERNAL_SESSIONS=1.
+const EXTERNAL_EVENTS = new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'SessionEnd'])
+
+function externalSessionsOn() {
+  const forced = (process.env.HARNESS_EXTERNAL_SESSIONS || '').trim().toLowerCase()
+  if (['0', 'false', 'off', 'no'].includes(forced)) return false
+  if (['1', 'true', 'on', 'yes'].includes(forced)) return true
+  try {
+    const raw = readFileSync(join(paths().dataDir, 'external-sessions.json'), 'utf8')
+    return raw.length < 4096 && JSON.parse(raw)?.enabled === true
+  } catch { return false }
+}
+
+async function postExternal(port, engine, event, input) {
+  if (!EXTERNAL_EVENTS.has(event)) return
+  const sessionId = input.session_id
+  if (typeof sessionId !== 'string' || !sessionId) return
+  const clip = (value, max) => (typeof value === 'string' ? value.slice(0, max) : undefined)
+  await post(port, '/api/hook/external', {
+    engine,
+    event,
+    sessionId,
+    cwd: typeof input.cwd === 'string' ? input.cwd : undefined,
+    title: clip(input.session_title, 200),
+    model: modelName(input.model),
+    message: event === 'Notification' ? clip(input.message, 160) : undefined,
+    notificationType: event === 'Notification' ? clip(input.notification_type, 40) : undefined,
+    callerPid: process.ppid,
+  })
+}
+
 async function fallbackSessionEnd(sessionId, reason, engine, tmuxPane) {
   // SessionEnd is not process-lifetime authority. If the daemon is down, its startup scan will reconcile
   // the actual tmux process; deleting the offline record here would hide a still-running CLI.
@@ -1304,7 +1338,16 @@ async function main() {
 
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
-  if (!tmuxPane) return
+  if (!tmuxPane) {
+    if ((engine === 'claude' || engine === 'codex') && externalSessionsOn()) {
+      if (engine === 'claude' && isDevinSession(input, paths())) return
+      if (engine === 'codex' && isCodexSubagent(input, paths())) return
+      await postExternal(port, engine, event, input)
+    }
+    return
+  }
+  // Notification is installed only for external sessions; a tmux pane's prompts are read off the pane.
+  if (event === 'Notification') return
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return

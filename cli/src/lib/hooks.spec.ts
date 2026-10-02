@@ -602,3 +602,33 @@ describe('Hermes hook allowlist', () => {
     expect(new Set(ours.map((a) => a.event)).size).toBe(ours.length)
   })
 })
+
+describe('Claude hook installation and external sessions', () => {
+  let home = ''
+  let dataDir = ''
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'adapter-claude-home-'))
+    dataDir = mkdtempSync(join(tmpdir(), 'adapter-claude-data-'))
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('ADAPTER_DATA_DIR', dataDir)
+    vi.stubEnv('HARNESS_EXTERNAL_SESSIONS', '')
+  })
+
+  afterEach(() => {
+    for (const dir of [home, dataDir]) rmSync(dir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  const installed = async (): Promise<string[]> => {
+    const { installSessionHooks } = await loadHooks()
+    installSessionHooks(18473)
+    return Object.keys(JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks)
+  }
+
+  it('installs Notification only while external sessions are on', async () => {
+    expect(await installed()).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'])
+    writeFileSync(join(dataDir, 'external-sessions.json'), '{"enabled":true}\n')
+    expect(await installed()).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification'])
+  })
+})

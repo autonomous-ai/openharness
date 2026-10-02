@@ -16,6 +16,7 @@ import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { opencodeMemoryPluginSource } from './opencodeMemoryPlugin.js'
 import { opencodeRecallPluginSource } from './opencodeRecallPlugin.js'
+import { readExternalSessionsSwitch } from './externalWatch.js'
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
@@ -111,7 +112,11 @@ export function installSessionHooks(port: number): void {
   let changed = false
   let updated = false // true when an EXISTING block's command changed (path/port drift)
 
-  for (const event of EVENTS) {
+  // Notification carries Claude's permission and input prompts. Only external sessions read it (a tmux
+  // pane's prompts are read off the pane), so it is installed only while that switch is on. Switching
+  // off leaves the block in place; the hook script ignores it.
+  const events: readonly string[] = readExternalSessionsSwitch(env.ADAPTER_DATA_DIR).enabled ? [...EVENTS, 'Notification'] : EVENTS
+  for (const event of events) {
     const blocks = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []
     // Collapse any duplicate "ours" blocks (e.g. from an earlier path) down to a single one, and
     // keep every non-ours block untouched.

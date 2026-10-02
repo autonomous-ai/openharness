@@ -99,6 +99,11 @@ export interface HookServerHandlers {
 
   /** SessionEnd — a reconciliation hint only; it is never process-lifetime authority. */
   onSessionEnd: (sessionId: string, reason: string | undefined) => void
+  /**
+   * A hook from a Claude Code or Codex session with no tmux pane (lib/externalWatch.ts). Registers or
+   * updates a read-only, in-memory row; it never binds a runtime or acts on a process. Absent = ignored.
+   */
+  onExternalHook?: (body: unknown) => Promise<Record<string, unknown>> | Record<string, unknown>
   /** Ensure a matching process-owned agent exists before a hook binds its mutable engine session. */
   resolveHookAgent?: (session: {
     engine: RegisteredSession['engine']
@@ -644,6 +649,15 @@ export function startHookServer(
         if (!agent || (body.engine === 'opencode' && !agent.processIdentity)) { json(403, { error: 'UNBOUND_HOOK' }); return }
         const recorded = await handlers.onMemoryContextEmitted?.(agent.agentId, body.memoryReceiptId!).catch(() => false) ?? false
         json(200, { ok: true, recorded, delivery: 'unverified' }); return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/external') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let parsed: unknown
+        try { parsed = JSON.parse(await readBody(req)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        if (!handlers.onExternalHook) { json(200, { ignored: true, reason: 'unavailable' }); return }
+        try { json(200, await handlers.onExternalHook(parsed)) } catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
+        return
       }
 
       if (req.method === 'POST' && url === '/api/hook/session-end') {

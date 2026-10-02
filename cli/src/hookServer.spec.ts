@@ -802,3 +802,23 @@ describe('the device history and dismiss endpoints', () => {
     expect((await post({ confirm: true, head: 'x' })).status).toBe(400)
   })
 })
+
+describe('external session hooks', () => {
+  it('needs the hook credential and hands the body to the external handler only', async () => {
+    const onExternalHook = vi.fn(async () => ({ ok: true }))
+    const { base, headers, handlers } = await start({ onExternalHook })
+    const send = (body: string, auth = true) => fetch(`${base}/api/hook/external`, { method: 'POST', headers: auth ? headers : {}, body })
+    expect((await send('{}', false)).status).toBe(401)
+    expect((await send('{')).status).toBe(400)
+    const body = { engine: 'claude', event: 'SessionStart', sessionId: '0f8fad5b-d9cb-469f-a165-70867728950e' }
+    expect(await (await send(JSON.stringify(body))).json()).toEqual({ ok: true })
+    expect(onExternalHook).toHaveBeenCalledExactlyOnceWith(body)
+    expect(handlers.onRegistered).not.toHaveBeenCalled()
+  })
+
+  it('answers ignored when no handler is wired', async () => {
+    const { base, headers } = await start()
+    const response = await fetch(`${base}/api/hook/external`, { method: 'POST', headers, body: '{}' })
+    expect(await response.json()).toEqual({ ignored: true, reason: 'unavailable' })
+  })
+})
