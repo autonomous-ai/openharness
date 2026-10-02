@@ -37,6 +37,9 @@ then N → Terminal.
   `nmcli device wifi list` and `sudo nmcli --ask device wifi connect SSID`.
   Keep passwords out of shell arguments and transcripts.
 - Audio uses PipeWire. Clipboard uses `wl-copy` and `wl-paste`.
+- npm installs into `~/.local`. The initial npm configuration permits the vendor
+  install scripts for Claude Code, Codex and OpenCode. When another package needs
+  an install script, approve that package explicitly; keep npm's other defaults.
 - `Super+B` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;
   `Super+L` locks the screen. `sudo systemctl poweroff` shuts down cleanly.
 - On supported NVIDIA Turing and newer GPUs, including RTX 4090/5090 and RTX 6000

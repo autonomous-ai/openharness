@@ -1,3 +1,7 @@
 #!/bin/sh
 export HARNESS_TUI_BIN=/usr/lib/harness/hn
-exec /usr/bin/harness tui "$@"
+# The OS already supervises the daemon. Run the native client directly instead
+# of keeping a second Node process resident for the lifetime of the screen.
+export HARNESS_CLI=/usr/bin/harness
+export HARNESS_CLI_ARGS='[]'
+exec /usr/lib/harness/hn "$@"
