@@ -50,12 +50,15 @@ def main():
             checked = candidate.verification.verify(version, uri.replace('gs://', 'https://storage.googleapis.com/'))
             assert checked['status'] == 'passed', checked
             print('PASS: publish and verify all six promoted fixture downloads', flush=True)
+            destination_uris = [f'gs://{bucket}/{destination}/{filename}' for filename in candidate.FILES.values()]
+            before = [candidate.describe(path)['generation'] for path in destination_uris]
             try:
                 candidate.promote(receipt, destination, scratch)
             except RuntimeError as error:
-                assert '412' in str(error), error
+                assert '412' in str(error) or 'GcsPreconditionFailedError' in str(error), error
             else:
                 raise AssertionError('promotion overwrote an immutable destination')
+            assert [candidate.describe(path)['generation'] for path in destination_uris] == before
             print('PASS: a second promotion fails the atomic destination precondition', flush=True)
 
             # Verify the actual SDK listing schema and generation-qualified delete
