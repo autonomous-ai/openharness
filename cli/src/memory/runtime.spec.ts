@@ -251,7 +251,7 @@ it.each(['claude', 'codex', 'opencode'] as const)('keeps %s prompt delivery unav
   expect((await runtime.recall('agent', { query: 'coding changes' })).items).toHaveLength(1)
 })
 
-it.each(['0.159.0', '0.159.3'])('prepares Codex prompt memory for tested native release %s', async cliVersion => {
+it.each(['0.159.0', '0.159.3', '0.160.0'])('prepares Codex prompt memory for tested native release %s', async cliVersion => {
   await learn()
   sessions[0] = { ...sessions[0], engine: 'codex', cliVersion }
   const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
@@ -262,17 +262,17 @@ it.each(['0.159.0', '0.159.3'])('prepares Codex prompt memory for tested native 
   expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
 })
 
-it('recalls a Claude lesson through a verified OpenCode adapter without changing ownership or requiring learning', async () => {
+it.each([{ engine: 'codex', cliVersion: '0.160.0' }, { engine: 'opencode', cliVersion: '1.18.34' }] as const)(
+  'recalls a Claude lesson through a verified $engine adapter without changing ownership or requiring learning', async adapter => {
   await learn()
-  sessions[0] = { ...sessions[0], engine: 'opencode', sessionId: 'opencode_native', cliVersion: null }
+  sessions[0] = { ...sessions[0], engine: adapter.engine, sessionId: `${adapter.engine}_native`, cliVersion: null }
   await runtime.configure({ learn: false, recall: true })
   expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.status).toBe('unavailable')
-  const adapter = { engine: 'opencode', cliVersion: '1.18.34' }
   const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' }, adapter)
   expect(prepared.packet.items[0]).toMatchObject({ claim: preference, sources: [{ engine: 'claude' }] })
   expect(prepared.receipt?.delivery).toBe('unverified')
   expect(await runtime.promptRecallEmitted('agent', prepared.receipt!.id)).toBe(true)
-  expect((await runtime.preparePromptRecall('agent', { query: 'coding' }, { engine: 'codex', cliVersion: '0.159.3' })).packet.status).toBe('unavailable')
+  expect((await runtime.preparePromptRecall('agent', { query: 'coding' }, { engine: 'claude', cliVersion: '2.1.287' })).packet.status).toBe('unavailable')
   await runtime.configure({ learn: false, recall: false })
   expect((await runtime.preparePromptRecall('agent', { query: 'coding' }, adapter)).packet.status).toBe('off')
   expect(sessions[0].cliVersion).toBeNull()
@@ -286,7 +286,7 @@ it('shares a correction and deletion across Codex and OpenCode without copying t
     evidence: _evidence, evidenceClass: _class, ...draft } = store.read(first.id, access)!
   const corrected = store.correctFromUser(first.id, first.revision,
     { ...draft, claim: 'Group related coding changes together.', futureAction: 'Group related coding changes together.' }, access)
-  for (const [engine, cliVersion] of [['claude', '2.1.287'], ['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
+  for (const [engine, cliVersion] of [['claude', '2.1.287'], ['codex', '0.160.0'], ['opencode', '1.18.34']] as const) {
     sessions[0] = { ...sessions[0], engine, cliVersion, sessionId: `${engine}_native` }
     const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
     expect(prepared.packet.items).toHaveLength(1)
@@ -298,7 +298,7 @@ it('shares a correction and deletion across Codex and OpenCode without copying t
   }
   expect(store.list(access)).toHaveLength(1)
   store.forget(first.id, corrected.revision, access)
-  for (const [engine, cliVersion] of [['claude', '2.1.287'], ['codex', '0.159.3'], ['opencode', '1.18.34']] as const) {
+  for (const [engine, cliVersion] of [['claude', '2.1.287'], ['codex', '0.160.0'], ['opencode', '1.18.34']] as const) {
     sessions[0] = { ...sessions[0], engine, cliVersion, sessionId: `${engine}_native` }
     expect((await runtime.preparePromptRecall('agent', { query: 'coding changes' })).packet.items).toEqual([])
   }

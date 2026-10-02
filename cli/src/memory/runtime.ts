@@ -274,7 +274,7 @@ export class CodingMemoryRuntime {
     // An extraction certificate or a successful stdout write does not certify hook delivery.
     // Manual recall remains available; add native releases after the same isolated transport check.
     const tested = session?.engine === 'claude' ? ['2.1.286', '2.1.287'].includes(version ?? '')
-      : session?.engine === 'codex' ? ['0.159.0', '0.159.3'].includes(version ?? '')
+      : session?.engine === 'codex' ? ['0.159.0', '0.159.3', '0.160.0'].includes(version ?? '')
       : session?.engine === 'opencode' && version === '1.18.34'
     if (!tested) return { packet: empty('unavailable'), receipt: null }
     return this.recallBound(agentId, { ...request, format: 'source_excerpts' }, 'prompt_hook')

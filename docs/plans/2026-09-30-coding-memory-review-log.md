@@ -973,3 +973,32 @@ This applies the council's evidence and behavioral-contract principles without
 treating a fluent paraphrase or a passing transport test as proof of intent. Private
 real-user quality, independent review, native lifecycle coverage, paired framework
 workflows and the broader rollout gates remain open. No app or firmware release.
+
+### Codex 0.160 prompt recall lifecycle — October 2
+
+The [native lifecycle report](../research/2026-10-02-codex-memory-0160/lifecycle.json)
+observed the complete source-excerpt packet on each of five user prompts across
+manual compaction, restart, model change and native configuration-profile selection.
+Each prompt receives a fresh marker; old context in history cannot satisfy that check.
+The first [incomplete run](../research/2026-10-02-codex-memory-0160/lifecycle-incomplete.json)
+exhausted its initial deadline during individual hook review. It remains failed.
+The probe now allows that setup time, stops on a timeout even when the native CLI
+exits zero, and checks ordered PreCompact/PostCompact events instead of assuming
+every provider uses the remote compaction endpoint. Native checks use synthetic
+localhost responses, fake credentials and disposable homes with execution disabled.
+
+Codex 0.160.0 is added only to prompt recall. A lesson captured through Claude can
+be recalled through the verified Codex adapter while learning is off, with the same
+ownership, correction, deletion and recall controls. Real-session delivery receipts
+still say unverified. Five additional native requests omitted context; their purpose
+is not established by the metadata probe. Configuration-profile selection does not
+certify a real login/account or Harness-owner change.
+
+Restricted background extraction remains uncertified. Both the
+[original command](../research/2026-10-02-codex-memory-0160/extraction-failed.json)
+and [explicit Code Mode disable flags](../research/2026-10-02-codex-memory-0160/extraction-flags-failed.json)
+produced a startup error with the current model. The installed catalog specifies
+Code Mode for that model independently of those feature switches. Neither the
+execution host nor a different model is enabled to make this test pass, and the
+adapter's error rejection remains intact. [Conditions and source identities](../research/2026-10-02-codex-memory-0160/conditions.json)
+separate this transport evidence from the still-open quality and usefulness gates.
