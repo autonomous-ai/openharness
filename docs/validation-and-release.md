@@ -91,10 +91,11 @@ checks still apply. Candidate packaging never substitutes for application tests
 or authorizes a merge or release.
 
 A matching in-progress candidate may finish while release preflight waits, bounded
-by ten minutes from the candidate's creation. An absent, failed, expired or changed
+by twenty minutes from the candidate's creation. An absent, failed, expired or changed
 candidate falls back to the normal build. If a matching candidate is still live at
-that deadline, preflight stops with its run link; follow that same build and retry
-the release after it passes. A deadline or failed status poll does not start another
+that deadline, preflight stops with its run link; follow that same build, then rerun
+the existing release workflow (all jobs, so per-attempt paths are refreshed) after
+it passes. A deadline or failed status poll does not start another
 copy of a known live build.
 Once any promotion copy starts, failure
 stops the release rather than rebuilding over partially copied immutable objects.

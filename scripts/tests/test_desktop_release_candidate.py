@@ -175,9 +175,10 @@ class CandidateIdentityTests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 1)
         self.assertTrue(all(path.startswith(('actions/', 'git/')) for path in client.calls))
 
-    def test_an_old_in_progress_run_does_not_add_another_ten_minutes(self):
+    def test_an_old_in_progress_run_does_not_get_another_wait_budget(self):
         client = FakeGithub()
-        client.run.update(status='in_progress', conclusion=None, created_at=(NOW - timedelta(minutes=11)).isoformat())
+        client.run.update(status='in_progress', conclusion=None,
+                          created_at=(NOW - timedelta(seconds=candidate.MAX_AGE_SECONDS + 1)).isoformat())
         with patch.object(candidate.time, 'sleep') as sleep:
             with self.assertRaisesRegex(candidate.CandidatePendingError, 'actions/runs/123'):
                 candidate.find_candidate(client, VERSION, TREE, BUCKET, 456)

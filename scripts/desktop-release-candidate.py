@@ -38,7 +38,7 @@ FILES = dict(zip(verification.KEYS, (
 )))
 PREFIX = r'harness/desktop-candidates/([1-9][0-9]*)-([1-9][0-9]*)-[0-9a-f]{32}'
 RETENTION = timedelta(days=7)
-MAX_AGE_SECONDS = 600
+MAX_AGE_SECONDS = 1200
 
 
 class CandidatePendingError(RuntimeError):
@@ -300,7 +300,7 @@ def main(argv=None):
     parser.add_argument('--destination')
     parser.add_argument('--scratch')
     parser.add_argument('--require-candidate', action='store_true')
-    parser.add_argument('--wait-seconds', type=int, choices=range(0, 601), default=600)
+    parser.add_argument('--wait-seconds', type=int, choices=range(0, MAX_AGE_SECONDS + 1), default=MAX_AGE_SECONDS)
     args = parser.parse_args(argv)
     check_bucket(args.bucket)
     if args.operation == 'remove':

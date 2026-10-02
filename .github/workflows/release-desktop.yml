@@ -156,7 +156,7 @@ jobs:
   preflight:
     needs: version
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    timeout-minutes: 24  # follows an existing candidate for at most its 20-minute budget
     outputs:
       reused: ${{ steps.candidate.outputs.reused }}
       candidate_prefix: ${{ steps.candidate.outputs.candidate_prefix }}
