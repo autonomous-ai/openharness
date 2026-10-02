@@ -130,21 +130,27 @@ def checkpoint(reason='manual', pacman_hook=False):
     return name
 
 
-def pacman_config(date):
-    return ('[options]\nArchitecture = auto\nCheckSpace\nParallelDownloads = 8\n'
-            'SigLevel = Required DatabaseOptional\nLocalFileSigLevel = Optional\n' +
-            ''.join(f'[{repo}]\nServer = https://archive.archlinux.org/repos/{date}/$repo/os/$arch\n'
-                    for repo in ['core', 'extra']))
+def advance_snapshot(config, date):
+    pattern = re.compile(r'(https://archive\.archlinux\.org/repos/)(\d{4}/\d{2}/\d{2})(/\$repo/os/\$arch)')
+    dates = {match.group(2) for match in pattern.finditer(config)}
+    if len(dates) != 1:
+        raise ValueError('Expected one managed Arch snapshot. Custom mirror setups should use their normal full-upgrade procedure.')
+    if date < next(iter(dates)):
+        raise ValueError('Use offline checkpoint recovery to go back. Updates must not move the repository date backward.')
+    # Preserve user-added repositories, Includes, signature policy and options.
+    return pattern.sub(lambda match: match.group(1) + date + match.group(3), config)
 
 
 def update(date):
     # Pin every repository to the same date, and perform a full upgrade. Never mix
     # a newly synced package database with an intentionally old installed base.
-    current = re.search(r'archive\.archlinux\.org/repos/(\d{4}/\d{2}/\d{2})/', Path('/etc/pacman.conf').read_text())
-    if current and date < current.group(1):
-        raise ValueError('Use offline checkpoint recovery to go back. Updates must not move the repository date backward.')
+    config = Path('/etc/pacman.conf')
+    advanced = advance_snapshot(config.read_text(), date)
     previous = checkpoint('before-update')
-    Path('/etc/pacman.conf').write_text(pacman_config(date))
+    temporary = config.with_suffix('.hn-next')
+    temporary.write_text(advanced)
+    temporary.chmod(stat.S_IMODE(config.stat().st_mode))
+    temporary.replace(config)
     result = subprocess.run(['pacman', '-Syyu'])
     receipt = {'snapshot': date, 'checkpoint': previous,
                'finished_at': datetime.now(timezone.utc).isoformat(), 'exit_status': result.returncode}

@@ -18,6 +18,8 @@ is safe to recommend for installation. See the release's validation receipt.
 - One fullscreen foot window displays the existing Rust `hn`. Agent/runtime
   processes are supervised separately from that window. The image does not fork
   foot or add a second graphical Harness client.
+  If graphics initialization fails, the login session falls back to hn on the
+  Linux console so drivers can be repaired without a working compositor.
 - Chromium is installed but does not start at boot. `Super+B` opens/focuses it or
   returns to hn. `Super+Enter` focuses hn; `Alt+Tab` switches available windows.
   Browser sandboxing and hardware acceleration remain enabled.
@@ -40,14 +42,19 @@ The GitHub **Programmer OS** workflow builds on an isolated x86 Linux runner.
 Local equivalent on an x86 Arch build host:
 
 ```sh
-sudo pacman -Syu archiso python git
+sudo pacman -Syu archiso python git rustup musl nodejs-lts-jod npm
+rustup default stable
+rustup target add x86_64-unknown-linux-musl
 make -C os check
+make -C os runtime
 make -C os build
 ```
 
 Use a fresh `HARNESS_OS_BUILD_DIR` for every build. Outputs are in `os/dist`:
 the hybrid USB ISO, its SHA-256 checksum, the package inventory, and a manifest
-with the source commit and locked Harness inputs. There is no publication to
+with the clean source commit, runtime toolchains and hashes. Commit source changes
+before building; published client binaries do not contain the OS session mode.
+There is no publication to
 the normal Harness CLI/TUI update channels.
 
 ## Try and install

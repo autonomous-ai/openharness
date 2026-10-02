@@ -13,7 +13,8 @@ isos = list(out.glob('*.iso'))
 if len(isos) != 1:
     raise SystemExit('Expected exactly one ISO')
 iso = isos[0]
-digest = hashlib.file_digest(iso.open('rb'), 'sha256').hexdigest()
+with iso.open('rb') as handle:
+    digest = hashlib.file_digest(handle, 'sha256').hexdigest()
 (out / (iso.name + '.sha256')).write_text(f'{digest}  {iso.name}\n')
 packages = (root / 'usr/share/harness-os/packages.txt').read_text()
 (out / 'packages.txt').write_text(packages)

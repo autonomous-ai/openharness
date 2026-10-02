@@ -43,11 +43,16 @@ class RecoveryGuards(unittest.TestCase):
             kernel.unlink()
             self.assertNotEqual(before, system.boot_hashes(root))
 
-    def test_update_uses_one_signed_snapshot_for_all_repositories(self):
-        config = system.pacman_config('2026/10/01')
-        self.assertEqual(config.count('/2026/10/01/'), 2)
-        self.assertIn('SigLevel = Required DatabaseOptional', config)
-        self.assertNotIn('TrustAll', config)
+    def test_update_preserves_custom_configuration_and_advances_both_repositories(self):
+        config = ('[options]\nSigLevel = Required DatabaseOptional\nParallelDownloads = 5\n' +
+                  ''.join(f'[{repo}]\nServer = https://archive.archlinux.org/repos/2026/09/01/$repo/os/$arch\n' for repo in ['core', 'extra']) +
+                  '[work]\nInclude = /etc/pacman.d/work.conf\n')
+        advanced = system.advance_snapshot(config, '2026/10/01')
+        self.assertEqual(advanced, config.replace('/2026/09/01/', '/2026/10/01/'))
+        with self.assertRaises(ValueError):
+            system.advance_snapshot(config, '2026/08/01')
+        with self.assertRaises(ValueError):
+            system.advance_snapshot('[core]\nInclude = /etc/pacman.d/mirrorlist\n', '2026/10/01')
 
 
 if __name__ == '__main__':

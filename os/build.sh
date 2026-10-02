@@ -4,9 +4,20 @@ set -euo pipefail
 OS_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 [[ $(uname -m) == x86_64 && $EUID == 0 ]] || { echo 'Build requires x86_64 Linux and root.' >&2; exit 1; }
 cd "$OS_DIR"
+SOURCE_ROOT=$(cd "$OS_DIR/.." && pwd)
+[[ -z $(git -c safe.directory="$SOURCE_ROOT" -C "$SOURCE_ROOT" status --porcelain --untracked-files=normal) ]] || {
+    echo 'Commit source changes before building a traceable OS image.' >&2
+    exit 1
+}
+export HARNESS_OS_SOURCE_SHA=${HARNESS_OS_SOURCE_SHA:-$(git -c safe.directory="$SOURCE_ROOT" -C "$SOURCE_ROOT" rev-parse HEAD)}
 VERSION=$(python3 -c 'import json; print(json.load(open("lock.json"))["version"])')
 SNAPSHOT=$(python3 -c 'import json; print(json.load(open("lock.json"))["arch_snapshot"])')
 BUILD_DIR=${HARNESS_OS_BUILD_DIR:-$OS_DIR/work}
+RUNTIME_DIR=${HARNESS_OS_RUNTIME_DIR:-$OS_DIR/work/runtime}
+[[ -s "$RUNTIME_DIR/source.json" && -x "$RUNTIME_DIR/harness-tui" ]] || {
+    echo 'Build the OS runtimes first with make -C os runtime on x86_64 Linux.' >&2
+    exit 1
+}
 mkdir -p "$BUILD_DIR" "$OS_DIR/dist"
 [[ ! -e "$BUILD_DIR/profile" ]] || { echo 'Use a fresh build directory; refusing to reuse an incomplete image.' >&2; exit 1; }
 cp -a /usr/share/archiso/configs/releng "$BUILD_DIR/profile"
@@ -36,23 +47,22 @@ cp installer.py "$BUILD_DIR/package/usr/lib/harness-os/install.py"
 cp system.py "$BUILD_DIR/package/usr/lib/harness-os/system.py"
 install -m 755 tools/hn-os "$BUILD_DIR/package/usr/bin/hn-os"
 cp lock.json "$BUILD_DIR/package/usr/share/harness-os/lock.json"
-if [[ -n ${HARNESS_OS_RUNTIME_DIR:-} ]]; then
-    install -m 755 "$HARNESS_OS_RUNTIME_DIR/harness-tui" "$BUILD_DIR/package/usr/lib/harness/harness-tui"
-    install -m 644 "$HARNESS_OS_RUNTIME_DIR/cli.js" "$BUILD_DIR/package/usr/lib/harness/cli.mjs"
-    install -m 644 "$HARNESS_OS_RUNTIME_DIR/notify.mjs" "$BUILD_DIR/package/usr/lib/harness/notify.mjs"
-else
-    python3 tools/fetch.py "$BUILD_DIR/package/usr/lib/harness"
-    mv "$BUILD_DIR/package/usr/lib/harness/hn" "$BUILD_DIR/package/usr/lib/harness/harness-tui"
-fi
+install -m 755 "$RUNTIME_DIR/harness-tui" "$BUILD_DIR/package/usr/lib/harness/harness-tui"
+install -m 644 "$RUNTIME_DIR/cli.js" "$BUILD_DIR/package/usr/lib/harness/cli.mjs"
+install -m 644 "$RUNTIME_DIR/notify.mjs" "$BUILD_DIR/package/usr/lib/harness/notify.mjs"
 ln -s harness-tui "$BUILD_DIR/package/usr/lib/harness/hn"
-python3 - "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/package/usr/share/harness-os/runtime.json" <<'PY'
+python3 - "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/package/usr/share/harness-os/runtime.json" "$RUNTIME_DIR/source.json" <<'PY'
 import hashlib, json, os, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-data = {'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA'),
-        'mode': 'source' if os.environ.get('HARNESS_OS_RUNTIME_DIR') else 'published',
-        'files': {p.name: {'sha256': hashlib.file_digest(p.open('rb'), 'sha256').hexdigest(), 'bytes': p.stat().st_size}
-                  for p in root.iterdir() if p.is_file() and not p.is_symlink()}}
+data = json.loads(Path(sys.argv[3]).read_text())
+if data['dirty'] or (os.environ.get('HARNESS_OS_SOURCE_SHA') and data['source_commit'] != os.environ['HARNESS_OS_SOURCE_SHA']):
+    raise SystemExit('OS runtime must be built from the same clean source commit as the image.')
+data.update(mode='source', files={})
+for path in root.iterdir():
+    if path.is_file() and not path.is_symlink():
+        with path.open('rb') as handle:
+            data['files'][path.name] = {'sha256': hashlib.file_digest(handle, 'sha256').hexdigest(), 'bytes': path.stat().st_size}
 Path(sys.argv[2]).write_text(json.dumps(data, indent=2) + '\n')
 PY
 find "$BUILD_DIR/package/usr/bin" "$BUILD_DIR/package/usr/lib/harness-os" -type f -exec chmod 755 {} +

@@ -28,11 +28,13 @@ def partitions(disk):
 
 
 def validate_config(config):
+    if not isinstance(config, dict) or any(not isinstance(config.get(key), str) for key in ['username', 'hostname', 'password', 'disk']):
+        raise ValueError('Account, computer, password and disk fields must be text.')
     if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,30}', config.get('username', '')):
         raise ValueError('Use a Linux username: lowercase letters, digits, underscores or hyphens.')
     if config['username'] == 'root':
         raise ValueError('Create a regular user, not root.')
-    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', config.get('hostname', '')):
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', config.get('hostname', '')):
         raise ValueError('Invalid hostname.')
     password = config.get('password', '')
     if len(password) < 8 or any(c in password for c in '\r\n\0'):
@@ -52,7 +54,7 @@ def validate_disk(device, expected_serial=None):
         return any(node.get('mountpoints') or []) or any(mounted(c) for c in node.get('children', []))
     if mounted(device):
         raise ValueError('The disk has mounted filesystems. The live USB and active disks cannot be erased.')
-    if expected_serial is not None and device.get('serial', '').strip() != expected_serial:
+    if expected_serial is not None and str(device.get('serial') or '').strip() != expected_serial:
         raise ValueError('Disk serial does not match the unattended installation configuration.')
 
 
@@ -80,6 +82,23 @@ def chroot(root, *args, **kwargs):
     return run('arch-chroot', root, *args, **kwargs)
 
 
+def validate_image_account(passwd, username):
+    names = {line.split(':', 1)[0] for line in passwd.splitlines()}
+    if username != 'programmer' and username in names:
+        raise ValueError(f'The image reserves the username {username}; choose a different account name.')
+
+
+def preflight(config, source):
+    for command in ['sgdisk', 'udevadm', 'mkfs.fat', 'mkfs.btrfs', 'cryptsetup',
+                    'mount', 'umount', 'btrfs', 'unsquashfs', 'arch-chroot', 'blkid']:
+        if not shutil.which(command):
+            raise ValueError(f'The installer is missing {command}. Boot an intact Programmer OS image.')
+    validate_image_account(run('unsquashfs', '-cat', source, 'etc/passwd', capture=True), config['username'])
+    lock = json.loads(run('unsquashfs', '-cat', source, 'usr/share/harness-os/lock.json', capture=True))
+    if lock.get('architecture') != 'x86_64' or not lock.get('version'):
+        raise ValueError('The source is not a Programmer OS x86_64 image.')
+
+
 def install(config, source, target):
     validate_config(config)
     # Inspect again immediately before partitioning, rather than trusting the picker.
@@ -90,6 +109,8 @@ def install(config, source, target):
         raise ValueError('Installation mountpoint is not empty.')
     if config.get('confirm_erase') != config['disk']:
         raise ValueError('Explicit confirmation of the exact disk is required.')
+    preflight(config, source)
+    selected_disk(config)
     started = time.monotonic()
     disk = config['disk']
     _, boot, root_partition = partitions(disk)
@@ -234,6 +255,8 @@ def interactive():
         raise ValueError('Passwords do not match.')
     validate_config(config)
     disk = selected_disk(config)
+    if disk.get('serial'):
+        config['expected_serial'] = disk['serial'].strip()
     print(f"\nAll data on {disk['name']} ({disk.get('model', '')}, {disk.get('serial', '')}) will be erased.")
     config['confirm_erase'] = input(f"Type {disk['name']} to erase and install: ").strip()
     return config

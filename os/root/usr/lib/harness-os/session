@@ -7,6 +7,22 @@ export HARNESS_TUI_BIN=/usr/lib/harness/hn
 export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/bin"
 export BROWSER=hn-browser
 export npm_config_prefix="$HOME/.local"
+export HARNESS_OS=1
+export HARNESS_TUI_NOTIFY=off
+export HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
 mkdir -p "$HOME/.local/bin" "$HOME/Projects" "$HOME/.local/state/harness-os"
-# No shell remains between the console login and the graphical session.
-exec dbus-run-session -- labwc -C /usr/share/harness-os/labwc
+# Use the systemd user's existing bus so activation and the compositor share one
+# environment. A second dbus-run-session bus would split those services.
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+if labwc -C /usr/share/harness-os/labwc > "$HOME/.local/state/harness-os/display.log" 2>&1; then
+    exit 0
+fi
+# A missing/broken GPU driver must not strand the programmer at a blank screen.
+# Stay in hn on the Linux console; an agent can install drivers and arrange a reboot.
+systemctl --user stop harness-os.target || true
+printf '%s\n' 'Graphics unavailable; continuing in hn on the console.'
+cd "$HOME/Projects"
+while :; do
+    /usr/bin/hn || true
+    sleep 2
+done

@@ -3,8 +3,7 @@ Description=Persistent hn terminal surface
 PartOf=harness-os.target
 Wants=harness-daemon.service
 After=harness-daemon.service
-StartLimitIntervalSec=60
-StartLimitBurst=6
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -18,6 +17,8 @@ WorkingDirectory=%h/Projects
 ExecStart=/usr/bin/foot --config=/usr/share/harness-os/foot.ini /usr/bin/hn
 Restart=always
 RestartSec=1
+RestartSteps=5
+RestartMaxDelaySec=30
 KillMode=process
 # Agent daemons and PTY owners must be outside this service. The launcher starts
 # the daemon through its own service; reconnect never kills the work.

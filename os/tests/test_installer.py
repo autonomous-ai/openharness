@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('installer', Path(__file__).resolve().parents[1] / 'installer.py')
 installer = importlib.util.module_from_spec(spec)
@@ -32,12 +34,29 @@ class DiskSafety(unittest.TestCase):
         installer.validate_disk(self.disk(), 'HN_TEST')
         with self.assertRaises(ValueError):
             installer.validate_disk(self.disk(), 'ANOTHER_DISK')
+        with self.assertRaises(ValueError):
+            installer.validate_disk(self.disk(serial=None), 'HN_TEST')
+
+    def test_reserved_image_account_is_rejected_before_any_disk_write(self):
+        config = dict(username='daemon', hostname='test', password='test-password', encrypt=True,
+                      disk='/dev/vda', confirm_erase='/dev/vda')
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload.sfs'
+            source.touch()
+            with patch.object(installer, 'selected_disk', return_value=self.disk()), \
+                 patch.object(installer.shutil, 'which', return_value='/usr/bin/tool'), \
+                 patch.object(installer, 'run', return_value='root:x:0:0::/root:/bin/bash\ndaemon:x:2:2::/:/usr/bin/nologin\n') as commands:
+                with self.assertRaisesRegex(ValueError, 'reserves the username'):
+                    installer.install(config, source, Path(temp) / 'target')
+                self.assertEqual([call.args[0] for call in commands.call_args_list], ['unsquashfs'])
+                self.assertFalse((Path(temp) / 'target').exists())
 
     def test_config_cannot_inject_commands_or_password_lines(self):
         good = dict(username='programmer', hostname='thinkpad', password='test-password', encrypt=True, disk='/dev/sda')
         installer.validate_config(good)
         for change in [dict(username='root'), dict(username='x;reboot'), dict(hostname='bad name'),
-                       dict(password='password\nroot:injected'), dict(disk='/dev/sda;reboot'), dict(encrypt='yes')]:
+                       dict(password='password\nroot:injected'), dict(disk='/dev/sda;reboot'), dict(encrypt='yes'),
+                       dict(username=None), dict(password=123456789), dict(hostname='bad-')]:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 installer.validate_config(dict(good, **change))
 

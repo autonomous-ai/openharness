@@ -52,12 +52,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools tmux
-          npm ci --prefix cli --no-audit --no-fund
-          (cd cli && node build-bundle.mjs)
-          cargo build --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
-          mkdir -p os/work/runtime
-          cp tui/target/x86_64-unknown-linux-musl/release/harness-tui os/work/runtime/
-          cp cli/dist/cli.js cli/dist/notify.mjs os/work/runtime/
+          make -C os runtime
       - name: Validate hn session behavior and native terminal lifecycle
         run: |
           timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl

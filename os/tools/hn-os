@@ -5,6 +5,18 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
+
+
+def capture(*args):
+    result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return {'exit_status': result.returncode, 'output': result.stdout.strip()}
+
+
+def cpu_ticks():
+    # user/nice/system/idle/iowait/irq/softirq/steal; guest times are already in user/nice.
+    values = [int(value) for value in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
+    return sum(values), values[3] + values[4]
 
 
 def main():
@@ -21,10 +33,19 @@ def main():
         subprocess.run(['systemctl', '--user', '--no-pager', 'status', 'harness-daemon', 'hn-screen'])
         return
     if command == 'measure':
-        data = {'uptime': Path('/proc/uptime').read_text().split()[0],
-                'memory': Path('/proc/meminfo').read_text(),
-                'boot': subprocess.check_output(['systemd-analyze'], text=True),
-                'processes': subprocess.check_output(['ps', '-eo', 'comm,rss,pcpu', '--sort=-rss'], text=True)}
+        before, idle_before = cpu_ticks()
+        time.sleep(2)
+        after, idle_after = cpu_ticks()
+        memory = {line.split(':')[0]: int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()}
+        disk = os.statvfs('/')
+        data = {'uptime_seconds': float(Path('/proc/uptime').read_text().split()[0]),
+                'memory_total_mib': round(memory['MemTotal'] / 1024, 2),
+                'memory_used_excluding_available_mib': round((memory['MemTotal'] - memory['MemAvailable']) / 1024, 2),
+                'cpu_busy_percent_over_2s': round(100 * (1 - (idle_after - idle_before) / max(1, after - before)), 2),
+                'root_filesystem_used_bytes_including_home_and_snapshots': (disk.f_blocks - disk.f_bfree) * disk.f_frsize,
+                'boot': capture('systemd-analyze'),
+                'screen_service_started_monotonic_usec': capture('systemctl', '--user', 'show', 'hn-screen', '--property=ActiveEnterTimestampMonotonic', '--value'),
+                'processes_rss_kib_and_lifetime_cpu': capture('ps', '-eo', 'comm,rss,pcpu', '--sort=-rss')}
         print(json.dumps(data, indent=2))
         return
     raise SystemExit('Usage: hn-os [status | install | browser [URL] | measure | checkpoint | update [--snapshot YYYY/MM/DD] | recover ROOT_DEVICE [CHECKPOINT]]')
