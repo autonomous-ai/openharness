@@ -13,7 +13,8 @@ class PublicationGuards(unittest.TestCase):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'}}
         receipts = [dict(firmware=fw, encrypted=encrypted, status='passed', iso_sha256='image-one',
                          image_source_commit='source-one', checks=publish.REQUIRED_CHECKS +
-                         ['Real Claude Code, Codex, OpenCode and pi install and start'])
+                         ['Real Claude Code, Codex, OpenCode and pi install and start',
+                          'On-demand gcc/make installation and local preview passed'])
                     for fw, encrypted in [('bios', False), ('uefi', True)]]
         publish.validate_receipts(manifest, receipts)
         for change in [dict(status='failed'), dict(scope='live session only'), dict(iso_sha256='another-image'),
@@ -24,6 +25,10 @@ class PublicationGuards(unittest.TestCase):
                 publish.validate_receipts(manifest, bad)
         with self.assertRaises(ValueError):
             publish.validate_receipts(manifest, receipts[:1])
+        incomplete = copy.deepcopy(receipts)
+        incomplete[0]['checks'] = [row for row in incomplete[0]['checks'] if not row.startswith('On-demand')]
+        with self.assertRaises(ValueError):
+            publish.validate_receipts(manifest, incomplete)
 
 
 if __name__ == '__main__':

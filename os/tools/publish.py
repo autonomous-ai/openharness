@@ -12,6 +12,7 @@ import time
 import zipfile
 
 REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
+                   'Browser starts only on shortcut', 'Dated package repositories are queryable',
                    'An hn terminal pane inherits', 'OS surface refuses detach',
                    'Terminal process survives screen restart', 'Offline installer completed',
                    'Installed disk boots to hn', 'A real offline package transaction',
@@ -45,6 +46,8 @@ def validate_receipts(manifest, receipts):
             raise ValueError('A required live, installation or recovery check is absent.')
     if not any(check.startswith('Real Claude Code, Codex, OpenCode and pi install') for check in rows[('bios', False)]['checks']):
         raise ValueError('Real agent executable compatibility has not passed.')
+    if not any(check.startswith('On-demand gcc/make installation') for check in rows[('bios', False)]['checks']):
+        raise ValueError('The real compiler and local web development check has not passed.')
 
 
 def main():
@@ -97,7 +100,7 @@ Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No deskto
 
 To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. In an hn Terminal pane, run `sudo hn-os install`. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
 
-BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
+BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM also installed a compiler on demand, built C, served a local Node preview, and installed and started the four agent executables. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
 {chr(10).join('- ' + item for item in limitations)}
 
@@ -106,9 +109,9 @@ Source: `{manifest['source_commit']}`. [Machine validation]({run['html_url']}).
     subprocess.run(['gh', 'release', 'create', tag, '--repo', args.repo, '--target', manifest['source_commit'],
                     '--draft', '--prerelease', '--title', 'Programmer OS ' + version, '--notes-file', str(notes),
                     *map(str, assets)], check=True, timeout=900)
-    subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=false'], check=True, timeout=120)
-    release = json.loads(gh('api', f'repos/{args.repo}/releases/tags/{tag}'))
     try:
+        subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=false'], check=True, timeout=120)
+        release = json.loads(gh('api', f'repos/{args.repo}/releases/tags/{tag}'))
         def verify(asset):
             expected = identities[asset['name']]
             with tempfile.TemporaryDirectory(prefix='hn-release-check-') as temp:
