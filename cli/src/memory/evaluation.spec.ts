@@ -73,7 +73,7 @@ it('evaluates separate sessions together without leaking their rubric, and repor
   const inference = provider([{ ...draft, evidence: [{ ...draft.evidence[0], sourceEventId: 'synthetic-preference-0' }] }])
   const result = await evaluateExtractionCase({ fixture: batch, directory, engine: 'claude', inference })
   expect(result.checks.every(check => check.passed)).toBe(true)
-  expect(result.episodes).toEqual({ expected: 2, reviewed: 2, jobs: { learned: 1, no_useful_memory: 1 } })
+  expect(result.episodes).toEqual({ expected: 2, reviewed: 2, jobs: { learned: 1, no_useful_memory: 1 }, boundary: 'complete' })
   expect(result.semanticReview.status).toBe('pending')
   expect(inference.run).toHaveBeenCalledOnce()
   const prompt = (inference.run.mock.calls[0] as unknown as [string])[0]
@@ -89,7 +89,7 @@ it('does not score a partial batch as successful abstention when input limits le
     episodes: Array.from({ length: 4 }, (_, index) => ({ id: `large-${index}`, sources: [{ role: 'user', text: 'x'.repeat(32_000) }] })) }
   const result = await evaluateExtractionCase({ fixture: batch, directory, engine: 'claude', inference: provider([]) })
   expect(result.outcome.state).toBe('no_useful_memory')
-  expect(result.episodes).toEqual({ expected: 4, reviewed: 2, jobs: { no_useful_memory: 2, queued: 2 } })
+  expect(result.episodes).toEqual({ expected: 4, reviewed: 2, jobs: { no_useful_memory: 2, queued: 2 }, boundary: 'complete' })
   expect(result.checks[0]).toEqual({ name: 'completed_extraction', passed: false })
   expect(result.checks.slice(1).every(check => check.passed === null)).toBe(true)
   expect(result.probes.every(probe => probe.status === 'not_run')).toBe(true)
@@ -101,6 +101,27 @@ it('rejects an oversized diagnostic group before invoking inference', async () =
   const inference = provider([])
   const batch: ExtractionBatchCase = { ...base, episodes: Array.from({ length: 5 }, (_, index) => ({ id: `case-${index}`, sources })) }
   await expect(evaluateExtractionCase({ fixture: batch, directory, engine: 'claude', inference })).rejects.toThrow('invalid_evaluation_episodes')
+  expect(inference.run).not.toHaveBeenCalled()
+})
+
+it('runs bounded excerpts under the real queue restriction and exposes the boundary in its report', async () => {
+  const inferred: MemoryDraft = { ...draft, assertionType: 'observed_usage', evidenceClass: 'inferred' }
+  const complete = await evaluateExtractionCase({ fixture, directory, engine: 'codex', inference: provider([inferred]) })
+  expect(complete.outcome).toEqual({ state: 'learned', learned: 1 })
+  const inference = provider([inferred])
+  const bounded = await evaluateExtractionCase({ fixture: { ...fixture, boundary: 'bounded' },
+    directory: join(directory, 'bounded'), engine: 'codex', inference })
+  expect(bounded.outcome).toEqual({ state: 'failed', reason: 'bounded_context_evidence' })
+  expect(bounded.episodes.boundary).toBe('bounded')
+  expect(bounded.records).toEqual([])
+  expect(bounded.probes.every(probe => probe.status === 'not_run')).toBe(true)
+  expect((inference.run.mock.calls[0] as unknown as [string])[0]).toContain('"context":"bounded"')
+})
+
+it('rejects an unrecognized boundary before calling the model', async () => {
+  const inference = provider([])
+  await expect(evaluateExtractionCase({ fixture: { ...fixture, boundary: 'partial' as 'bounded' }, directory, engine: 'codex', inference }))
+    .rejects.toThrow('invalid_evaluation_boundary')
   expect(inference.run).not.toHaveBeenCalled()
 })
 

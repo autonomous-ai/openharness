@@ -11,6 +11,7 @@ const source = z.object({ role: z.enum(['user', 'assistant', 'tool', 'reference'
 const probe = z.object({ id, query: z.string().max(4_000), projectIds: z.array(id), conditions: conditionsSchema,
   expected: z.enum(['recall', 'abstain']) })
 const fixture = z.object({ id, projectId: id.nullable(), sources: z.array(source).min(1).optional(),
+  boundary: z.enum(['complete', 'bounded']).optional(),
   episodes: z.array(z.object({ id, sources: z.array(source).min(1) })).min(1).max(4).optional(),
   expected: z.object({ review: z.array(z.string().max(2_000)) }), probes: z.array(probe) })
   .refine(row => !!row.sources !== !!row.episodes, 'choose sources or episodes')
@@ -20,7 +21,8 @@ const recordSchema = draftSchema.safeExtend({ schemaVersion: z.literal(1), id, r
 const contextSchema = z.object({ text: z.string().max(16_000), bytes: count, maxBytes: count.max(16_000), estimatedTokens: count })
 const packetSchema = z.object({ type: z.literal('coding_memory_context'), items: z.array(z.object({ id, revision: count.positive() })).max(6) })
 const resultSchema = z.object({ id, outcome: z.object({ state: z.string() }),
-  episodes: z.object({ expected: count, reviewed: count, jobs: z.record(z.string(), count) }).optional(),
+  episodes: z.object({ expected: count, reviewed: count, jobs: z.record(z.string(), count),
+    boundary: z.enum(['complete', 'bounded']).optional() }).optional(),
   checks: z.array(z.object({ name: z.string(), passed: z.boolean().nullable() })),
   records: z.array(recordSchema).max(100),
   probes: z.array(probe.extend({ status: z.string(), returnedIds: z.array(id).max(6), passed: z.boolean().nullable(),
@@ -58,6 +60,11 @@ export function prepareEvaluationReview(suiteText: string, reportText: string) {
     unique(episodes.map(e => e.id))
     const result = report.cases.find(row => row.id === f.id)
     if (result) {
+      // Older diagnostics always captured complete episodes. A bounded fixture must have an
+      // explicit matching observation; do not grade it as if omitted context had been supplied.
+      if ((result.episodes?.boundary ?? 'complete') !== (f.boundary ?? 'complete')) {
+        throw new MemoryError('evaluation_boundary_changed')
+      }
       unique(result.records.map(record => record.id)); unique(result.probes.map(p => p.id))
       for (const p of result.probes) {
         const expected = f.probes.find(original => original.id === p.id)
@@ -82,7 +89,7 @@ export function prepareEvaluationReview(suiteText: string, reportText: string) {
       && result.probes.every(p => p.status === 'ok')
     return { id: f.id, projectId: f.projectId, completed, criteria: f.expected.review,
       sources: episodes.flatMap(e => e.sources.map((s, index) => ({
-        id: `${f.id}${f.episodes ? `-${e.id}` : ''}-${index}`, episode: e.id, ...s }))),
+        id: `${f.id}${f.episodes ? `-${e.id}` : ''}-${index}`, episode: e.id, boundary: f.boundary ?? 'complete', ...s }))),
       records: result?.records ?? [], probes: f.probes.map(p => ({ ...p,
         returnedIds: result?.probes.find(actual => actual.id === p.id)?.returnedIds ?? [],
         context: result?.probes.find(actual => actual.id === p.id)?.context ?? null })),

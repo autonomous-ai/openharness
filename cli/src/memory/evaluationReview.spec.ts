@@ -73,6 +73,19 @@ it('keeps attributed semantic review separate from native delivery and task bene
   expect(scored.nativeDelivery).toBe('not_measured')
 })
 
+it('shows bounded context to the reviewer and rejects a missing or changed capture boundary', () => {
+  suiteText = JSON.stringify({ schemaVersion: 1, suite: 'review-test', cases: [{ ...fixture, boundary: 'bounded' }] })
+  expect(() => prepareEvaluationReview(suiteText, report())).toThrow('evaluation_boundary_changed')
+  result.episodes.boundary = 'bounded'
+  const packet = prepareEvaluationReview(suiteText, report())
+  expect(packet.cases[0].sources.every(source => source.boundary === 'bounded')).toBe(true)
+  const missing = JSON.parse(report())
+  delete missing.cases[0].episodes.boundary
+  expect(() => prepareEvaluationReview(suiteText, JSON.stringify(missing))).toThrow('evaluation_boundary_changed')
+  suiteText = JSON.stringify({ schemaVersion: 1, suite: 'review-test', cases: [fixture] })
+  expect(() => prepareEvaluationReview(suiteText, report())).toThrow('evaluation_boundary_changed')
+})
+
 it('fails a nonempty recall of the wrong memory even when the older presence check passed', () => {
   recalled([release()])
   expect(result.probes[0].passed).toBe(true)
