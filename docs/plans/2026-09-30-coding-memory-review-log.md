@@ -909,3 +909,24 @@ Review against Parnas's module boundaries, Liskov/Wing's behavioral contracts,
 Dijkstra's distinction between checks and broader claims, and Knuth's readable
 explanations is recorded with the evidence. These remain our applications of
 published principles, not reviews or endorsements by those authors.
+
+### Reject prompt-only fixes that still change the user's meaning — October 2
+
+The offline diagnostic runner now records complete versus bounded source context
+and rejects review/report boundary mismatches. A frozen eight-case corpus exercises
+defaults and overrides, polite requests and exploratory questions, tentative and
+accepted numbers, quoted assistant plans, and limited control changes.
+
+The [measured comparison](../research/2026-10-02-memory-meaning.md) keeps failures
+visible. Production v6 completed seven cases; one positive recall omitted a permitted
+override and another case failed admission. Two candidate prompts completed all
+eight cases but each retained two records rejected for overstating the source.
+The implementing agent judged five of seven memories and four of six positive
+recall packets supported; all eighteen abstention probes passed. An approved offline
+private check also failed to show improvement. Neither candidate was promoted.
+
+Production extraction remains v6. Diagnostic typechecking and 27 tests passed;
+the retained changes are evaluation coverage and attributed evidence. Semantic
+checking of proposals is a future experiment, not a shipped safeguard. Selected
+companion learning, automatic contextual recall, independent quality assessment
+and improved coding outcomes remain unproven. No app or firmware was released.
