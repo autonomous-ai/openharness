@@ -49,4 +49,10 @@ with kernel.open('rb') as handle:
 Path('/usr/share/harness-os/kernel.json').write_text(json.dumps({'path': str(kernel.relative_to('/')), 'sha256': digest}) + '\n')
 PY
 pacman -Q > /usr/share/harness-os/packages.txt
+# Archiso removes pacman's sync databases during cleanup. Preserve the two
+# dated repositories so the first package query/install works immediately.
+install -d /usr/share/harness-os/repository-databases
+for repo in core extra; do
+    install -m 644 "/var/lib/pacman/sync/$repo.db" "/usr/share/harness-os/repository-databases/$repo.db"
+done
 rm -rf /var/cache/pacman/pkg/* /root/.cache

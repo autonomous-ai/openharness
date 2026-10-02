@@ -63,6 +63,8 @@ def inspect(iso):
         config = read('etc/pacman.conf').decode()
         assert config.count('/' + manifest['arch_snapshot'] + '/') == 2 and '[harness-build]' not in config
         assert 'SigLevel = Required DatabaseOptional' in config
+        for repo in ['core', 'extra']:
+            assert len(read(f'usr/share/harness-os/repository-databases/{repo}.db')) > 65536, f'Missing offline {repo} repository database'
         assert b'programmer:x:1000:' in read('etc/passwd'), 'Live user was not created'
         assert b'--autologin programmer' in read('etc/systemd/system/getty@tty1.service.d/autologin.conf')
         receipt = {'status': 'passed', 'scope': 'ISO boot entries, exact SquashFS configuration, runtime and offline kernel hashes, live account and package inventory',
