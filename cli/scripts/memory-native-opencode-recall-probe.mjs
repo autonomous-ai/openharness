@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -14,10 +14,12 @@ const directory = await realpath(await mkdtemp(join(tmpdir(), 'memory-opencode-r
 const workspace = join(directory, 'work'), database = join(directory, 'native.db')
 const marker = 'harness-memory-transport-619f9e'
 const correctedMarker = 'harness-memory-corrected-883bb0'
+const derivedMarker = 'harness-derived-action-not-source-e723ab'
 const requests = [], observations = []
 const owner = 'synthetic-owner', access = { profileId: owner, projectIds: [], includeProfile: true }
 let native, nativeUrl, stdout = '', stderr = '', allowedSession, phase = 'on', runtime, store, requestAgent
 let report
+let lastNativeRoute = null
 let overflowSent = false
 let errorSent = false
 const server = createServer(async (request, response) => {
@@ -50,6 +52,8 @@ const server = createServer(async (request, response) => {
   requests.push({ phase, agent: requestAgent, model: body.model, roles: matching.map(message => message.role),
     markers: JSON.stringify(body).split(marker).length - 1,
     correctedMarkers: JSON.stringify(body).split(correctedMarker).length - 1,
+    sourceContext: JSON.stringify(body).includes('coding_memory_sources'),
+    derivedSummaryReceived: JSON.stringify(body).includes(derivedMarker),
     hasCurrentRequest: JSON.stringify(body).includes('Synthetic parser review') })
   if (phase === 'overflow-replay' && !errorSent) {
     errorSent = true
@@ -146,6 +150,9 @@ try {
       XDG_DATA_HOME: join(directory, 'data'), XDG_CACHE_HOME: join(directory, 'cache'), XDG_STATE_HOME: join(directory, 'state'),
       OPENCODE_DB: database, OPENCODE_CONFIG_CONTENT: JSON.stringify(config), OPENCODE_AUTH_CONTENT: '{}',
       OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1',
+      // This plain-JS fixture imports no SDK packages. Fail native background npm installs
+      // immediately offline instead of waiting for registry retries before loading our plugin.
+      npm_config_offline: 'true',
       TERM: 'dumb' },
   })
   native.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-5000); nativeUrl = stdout.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0] })
@@ -154,6 +161,7 @@ try {
   while (!nativeUrl && native.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
   assert.ok(nativeUrl, `Native server did not start: ${stderr}`)
   const call = async (route, body) => {
+    lastNativeRoute = route
     const response = await fetch(nativeUrl + route, { method: body === undefined ? 'GET' : 'POST',
       headers: { 'content-type': 'application/json', 'x-opencode-directory': workspace },
       signal: AbortSignal.timeout(25000), ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -168,7 +176,7 @@ try {
     nativeEventId: 'synthetic-statement', role: 'user', eligibility: 'coding', observedAt: Date.now(),
     rootIds: ['synthetic-claude-source'], text: claim })
   const draft = { kind: 'working_preference', facet: 'debugging', assertionType: 'stated_preference', scope: { profileId: owner },
-    claim, rationale: null, futureAction: 'For parser reviews, start with a small failing example.', applicability: {}, exceptions: [], retrievalCues: ['parser', 'review'],
+    claim, rationale: null, futureAction: `For parser reviews, start with a small failing example. ${derivedMarker}`, applicability: {}, exceptions: [], retrievalCues: ['parser', 'review'],
     evidenceClass: 'user_stated', evidence: [{ sourceEventId: 'synthetic-claude-source', quote: claim,
       paths: ['/claim', '/futureAction', '/applicability'] }], conflictKey: 'parser-review',
     validity: { validFrom: null, validUntil: null, recheckWhen: [] } }
@@ -178,6 +186,8 @@ try {
     parts: [{ type: 'text', text: 'Synthetic parser review. Respond briefly without tools.' }] })
   await send(allowedSession)
   assert.ok(requests.some(request => request.phase === 'on' && request.markers === 1 && request.roles[0] === 'user' && request.hasCurrentRequest))
+  assert.ok(requests.some(request => request.phase === 'on' && request.sourceContext))
+  assert.ok(requests.every(request => !request.derivedSummaryReceived))
   const db = new DatabaseSync(database, { readOnly: true })
   try {
     const persisted = db.prepare('SELECT COUNT(*) AS n FROM part WHERE instr(data,?)>0').get(marker).n
@@ -217,7 +227,9 @@ try {
     assert.ok(requests.filter(request => request.phase === 'forgotten').every(request => request.markers === 0 && request.correctedMarkers === 0))
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM part WHERE instr(data,?)>0').get(marker).n, 0)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM part WHERE instr(data,?)>0').get(correctedMarker).n, 0)
+    assert.ok(requests.every(request => !request.derivedSummaryReceived))
     report = { version: '1.18.34', requests, result: { nativeModelRequestReceivedContext: true,
+      sourceContextFormat: 'coding_memory_sources', generatedActionReceived: false,
       persistedMemoryParts: persisted, offReceivedContext: false, unavailableBlockedPrompt: false,
       otherSessionReceivedContext: false, compactionReceivedContext: false, automaticContinuationReceivedContext: true,
       correctedReceivedLatestRevision: true, forgottenReceivedContext: false, sourcePrivacyRespected: true,
@@ -228,6 +240,18 @@ try {
         'No interactive TUI or provider matrix certification.'] }
     console.log(JSON.stringify(report, null, 2))
   } finally { db.close() }
+} catch (error) {
+  const logs = []
+  const directoryPath = join(directory, 'data', 'opencode', 'log')
+  for (const entry of (await readdir(directoryPath, { withFileTypes: true }).catch(() => [])).slice(-4)) {
+    if (!entry.isFile() || !entry.name.endsWith('.log')) continue
+    const text = await readFile(join(directoryPath, entry.name), 'utf8').catch(() => '')
+    logs.push({ name: entry.name, text: text.slice(-12_000) })
+  }
+  report = { status: 'failed', phase, lastNativeRoute, requests,
+    error: { name: error?.name, message: error?.message }, nativeDiagnostics: { stdout, stderr, logs } }
+  console.error(JSON.stringify(report, null, 2).replaceAll(directory, '/fixture'))
+  throw error
 } finally {
   if (process.env.MEMORY_RECALL_RECORDING) await writeFile(process.env.MEMORY_RECALL_RECORDING,
     JSON.stringify({ ...report, requests, observations }, null, 2).replaceAll(directory, '/fixture') + '\n', { mode: 0o600 })

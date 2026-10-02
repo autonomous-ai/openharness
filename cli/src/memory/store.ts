@@ -16,6 +16,7 @@ import { libraryActivityQuerySchema, type LibraryActivity, type LibraryActivityQ
 import { MemoryNotebook, NOTEBOOK_SCHEMA, type NotebookInput, type NotebookLease, type NotebookProposal } from './notebook.js'
 import type { InferenceTarget } from './queue.js'
 import { visibleEvidenceSql } from './visibility.js'
+import { sourceRecallText, type SourceRecallSelection } from './recallSources.js'
 import { correctionSchema, libraryCommandSchema, libraryQuerySchema, libraryProjectQuerySchema, notebookQuerySchema, summarize, type NotebookQuery, type NotebookIndex, type NotebookSummary, type NotebookDetail, type LibraryProjectQuery, type LibraryProject, type LibraryProjects, type LibraryQuery, type LibraryPage, type LibraryDetail, type MemoryCorrection, type LibraryCommand, type LibraryPreview } from './library.js'
 import {
   canAccess, conditionsOverlap, conditionsSchema, draftSchema, hasPointer, matches, MemoryError, parse, sourceSchema, topicSchema,
@@ -761,6 +762,7 @@ export class CodingMemoryStore {
     if (access.profileId !== this.profileId) return EMPTY('denied')
     if (!this.controls().recall) return EMPTY('off')
     if (typeof request.query !== 'string') throw new MemoryError('invalid_input')
+    if (request.format !== undefined && !['summary', 'source_excerpts'].includes(request.format)) throw new MemoryError('invalid_input')
     const actual = parse(conditionsSchema, request.conditions ?? {})
     const excluded = request.excludeIds ?? []
     if (!Array.isArray(excluded) || excluded.length > 1_000 || excluded.some(id => typeof id !== 'string' || id.length > 200)) throw new MemoryError('invalid_input')
@@ -804,6 +806,7 @@ export class CodingMemoryStore {
       rows.sort((left, right) => score(left) - score(right))
     }
     const packet = EMPTY()
+    const sourceSelections: SourceRecallSelection[] = []
     const maxBytes = bounded(request.maxBytes, 3_000, 0, 16_000)
     const maxItems = bounded(request.maxItems, 6, 0, 6)
     for (const row of rows) {
@@ -826,9 +829,13 @@ export class CodingMemoryStore {
         ],
         sources: [...new Map(sources.map(source => [source!.id, { id: source!.id, engine: source!.engine, role: source!.role, observedAt: source!.observedAt }])).values()],
       }
-      const text = JSON.stringify({ type: 'coding_memory_context', notice: 'Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.', items: [...packet.items, item] })
+      const selection = { record, sources: sources as SourceEvent[] }
+      const text = request.format === 'source_excerpts'
+        ? sourceRecallText([...sourceSelections, selection])
+        : JSON.stringify({ type: 'coding_memory_context', notice: 'Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.', items: [...packet.items, item] })
       if (Buffer.byteLength(text, 'utf8') > maxBytes) continue
       packet.items.push(item); packet.text = text
+      if (request.format === 'source_excerpts') sourceSelections.push(selection)
     }
     packet.estimatedTokens = Math.ceil(Buffer.byteLength(packet.text, 'utf8') / 3)
     return packet

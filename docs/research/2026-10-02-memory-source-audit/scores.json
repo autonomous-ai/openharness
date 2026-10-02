@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "reportSha256": "13ad3af5367b2b48e98bcc81c4f162222904d47e391931ec5e24b61b938866c0",
+  "evidence": "development_diagnostic_only",
+  "labelAuthor": {
+    "kind": "agent",
+    "independent": false
+  },
+  "completedCases": 16,
+  "expectedCases": 16,
+  "confusion": {
+    "unsupported->supported": 2,
+    "unsupported->unsupported": 4,
+    "supported->supported": 10
+  },
+  "medianCallMs": 6725.5,
+  "maxCallMs": 12732,
+  "mismatches": [
+    {
+      "id": "audit-01f634831f20",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "35b7d8f2-349c-4143-8d6a-5b18b4807236"
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "The source withholds approval and says measurement is pending; it does not verify an unset implementation or permanently rule out a two-second value. The claim/action leave these distinctions insufficiently explicit. Review conservatively rejects the record rather than treating unresolved approval as a prohibition or observed state."
+      },
+      "actual": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's rejection of the 2-second retry delay and the requirement for measurement, aligning with the provided source."
+      },
+      "candidate": {
+        "claim": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+        "futureAction": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+        "exceptions": []
+      }
+    },
+    {
+      "id": "audit-776a00824696",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "recordId": "2c41d8af-2d46-46c6-818d-974211f37f20"
+      },
+      "expected": {
+        "verdict": "unsupported",
+        "note": "The component boundary is preserved, but the record adds only Cancel and Save copy. Naming two retained options and two removals does not establish an exhaustive inventory in a bounded excerpt. The original only qualifies the scope of the change, not the allowed options."
+      },
+      "actual": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's specific instruction to modify only the conflict prompt while preserving other export actions."
+      },
+      "candidate": {
+        "claim": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+        "futureAction": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+        "exceptions": []
+      }
+    }
+  ],
+  "decision": "reject_as_publication_gate",
+  "limitations": [
+    "Same reference model as the extractor; not independent validation.",
+    "Frozen development diagnostic, not held-out user histories.",
+    "Expected labels are implementing-agent judgments and are never supplied to the model.",
+    "No live memory, selected companion model, native delivery or coding-task benefit is measured."
+  ]
+}

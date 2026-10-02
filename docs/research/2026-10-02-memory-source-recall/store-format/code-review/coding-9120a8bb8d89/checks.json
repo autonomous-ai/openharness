@@ -1,0 +1,1 @@
+{"function": "updateNetworkConfig", "checks": [{"args": [{"retryDelayMs": 2000, "showFailures": false, "maxConnections": 4}], "expected": {"retryDelayMs": 2000, "showFailures": true, "maxConnections": 4}}, {"args": [{"retryDelayMs": 750, "showFailures": false}], "expected": {"retryDelayMs": 750, "showFailures": true}}]}

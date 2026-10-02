@@ -1,0 +1,445 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-proposal-source-audit-development-v1",
+  "suiteSha256": "d9b1cd4c9a50327935dde45115afc23e7550a8a1a33c61c1ee0d9a0d3889e430",
+  "promptSha256": "9dcba257fcf8e72998ae7bcc82e14831775ea23989d34c4f2124c7d485ec2ffb",
+  "runnerSha256": "457648d3764a2f08ab041437258062c474f6a40a4d55b776b70557bb6669aafb",
+  "startedAt": "2026-10-02T19:46:09.029Z",
+  "status": "completed",
+  "cases": [
+    {
+      "id": "audit-01f634831f20",
+      "durationMs": 7050,
+      "promptSha256": "443193f9e2a8c4078279251f389ee54b34ab2db0419c0455fb753d3ad6882a96",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's rejection of the 2-second retry delay and the requirement for measurement, aligning with the provided source.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 53,
+          "prompt_tokens": 748,
+          "total_tokens": 801,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's rejection of the 2-second retry delay and the requirement for measurement, aligning with the provided source."
+      }
+    },
+    {
+      "id": "audit-07e16b26a94a",
+      "durationMs": 10015,
+      "promptSha256": "a6253b3051747701e53235acc309a5e14a0d5241b3e6ff3ecb12bc81699feadd",
+      "answer": {
+        "text": "{\n  \"verdict\": \"unsupported\",\n  \"issues\": [\n    {\n      \"path\": \"/futureAction\",\n      \"reason\": \"The source explicitly states to leave manually expanded folders expanded for the current session. The candidate's futureAction to 'Collapse all folders after every navigation' directly contradicts this instruction and invents a behavior not present in the source.\"\n    }\n  ],\n  \"summary\": \"The candidate's futureAction contradicts the source's explicit instruction to preserve manually expanded folders during the session.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 115,
+          "prompt_tokens": 674,
+          "total_tokens": 789,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "unsupported",
+        "issues": [
+          {
+            "path": "/futureAction",
+            "reason": "The source explicitly states to leave manually expanded folders expanded for the current session. The candidate's futureAction to 'Collapse all folders after every navigation' directly contradicts this instruction and invents a behavior not present in the source."
+          }
+        ],
+        "summary": "The candidate's futureAction contradicts the source's explicit instruction to preserve manually expanded folders during the session."
+      }
+    },
+    {
+      "id": "audit-1f43fab87514",
+      "durationMs": 6061,
+      "promptSha256": "1699f9141d854e58ce6b61750ba7449009787bb349a2597026e42c3de1785b20",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's explicit request to prefer SQLite for the local cache within the specified project scope.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 47,
+          "prompt_tokens": 635,
+          "total_tokens": 682,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's explicit request to prefer SQLite for the local cache within the specified project scope."
+      }
+    },
+    {
+      "id": "audit-3cba24a110f0",
+      "durationMs": 7130,
+      "promptSha256": "8a24a01b8538e1c420f2667a05a9686c83fc2fff164c4262c84dd711362dfec7",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's explicit rejection of the assistant's plan to hide failures and the requirement to keep displaying them in the network-client project.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 55,
+          "prompt_tokens": 743,
+          "total_tokens": 798,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's explicit rejection of the assistant's plan to hide failures and the requirement to keep displaying them in the network-client project."
+      }
+    },
+    {
+      "id": "audit-4d25c6f7134d",
+      "durationMs": 12732,
+      "promptSha256": "b1b0ab6543399b8a6a06d4396c50516cfceceb6ba2d498879cd4b1e7124ecb66",
+      "answer": {
+        "text": "{\n  \"verdict\": \"unsupported\",\n  \"issues\": [\n    {\n      \"path\": \"/claim\",\n      \"reason\": \"The source is a request to implement a retry button, not a statement that one already exists. The claim asserts the feature is already working, which contradicts the source's intent to create it.\"\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"reason\": \"The action to 'rely on the existing retry button' is unsupported because the source indicates the button needs to be shown, implying it is not yet present or functional.\"\n    }\n  ],\n  \"summary\": \"The candidate incorrectly interprets a user request to implement a feature as a confirmation that the feature already exists and works.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 165,
+          "prompt_tokens": 641,
+          "total_tokens": 806,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "unsupported",
+        "issues": [
+          {
+            "path": "/claim",
+            "reason": "The source is a request to implement a retry button, not a statement that one already exists. The claim asserts the feature is already working, which contradicts the source's intent to create it."
+          },
+          {
+            "path": "/futureAction",
+            "reason": "The action to 'rely on the existing retry button' is unsupported because the source indicates the button needs to be shown, implying it is not yet present or functional."
+          }
+        ],
+        "summary": "The candidate incorrectly interprets a user request to implement a feature as a confirmation that the feature already exists and works."
+      }
+    },
+    {
+      "id": "audit-50d82bed0606",
+      "durationMs": 6358,
+      "promptSha256": "3171f34abd24df4a116f0680fea9506478efef2023e64c23636ba7d4ab88a8e2",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate faithfully captures the user's stated project constraint regarding compact navigation defaults and permitted manual overrides.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 44,
+          "prompt_tokens": 731,
+          "total_tokens": 775,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate faithfully captures the user's stated project constraint regarding compact navigation defaults and permitted manual overrides."
+      }
+    },
+    {
+      "id": "audit-567845832990",
+      "durationMs": 6694,
+      "promptSha256": "c4c5aa1c9af72e5b37855344ec878176b8d24a1f7689675df3060f3f4858d30f",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate faithfully captures the user's explicit request to preserve the last successful build log, correctly excluding the undecided UI placement details.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 50,
+          "prompt_tokens": 711,
+          "total_tokens": 761,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate faithfully captures the user's explicit request to preserve the last successful build log, correctly excluding the undecided UI placement details."
+      }
+    },
+    {
+      "id": "audit-776a00824696",
+      "durationMs": 6804,
+      "promptSha256": "60bffc5d14587239eeeae29d4ea0d124b79658c1a7a56104f96215b148a0cb2c",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's specific instruction to modify only the conflict prompt while preserving other export actions.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 46,
+          "prompt_tokens": 755,
+          "total_tokens": 801,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's specific instruction to modify only the conflict prompt while preserving other export actions."
+      }
+    },
+    {
+      "id": "audit-8625fb25e3b1",
+      "durationMs": 6757,
+      "promptSha256": "f3c5c3fdce61dee36fa48d3a6660463a585df060a764b6d55c270f6390f2e36f",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's explicit request to retain completed logs for 14 days in the build monitor project.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 49,
+          "prompt_tokens": 685,
+          "total_tokens": 734,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's explicit request to retain completed logs for 14 days in the build monitor project."
+      }
+    },
+    {
+      "id": "audit-989f8e0009a9",
+      "durationMs": 6153,
+      "promptSha256": "660c1b24f71bc2ce85c61e68581dc05ca066d2b251e979532e3489d2abf50439",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's request for a retry button after upload failures within the specified project scope.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 46,
+          "prompt_tokens": 637,
+          "total_tokens": 683,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's request for a retry button after upload failures within the specified project scope."
+      }
+    },
+    {
+      "id": "audit-9a0077092e24",
+      "durationMs": 6110,
+      "promptSha256": "fc736dff5fef57dde82ad7058af617793515a88123ffee390a1d08b0c6d293db",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's explicit request to keep error details visible until dismissed within the specified project scope.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 47,
+          "prompt_tokens": 641,
+          "total_tokens": 688,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's explicit request to keep error details visible until dismissed within the specified project scope."
+      }
+    },
+    {
+      "id": "audit-9cec6f971b07",
+      "durationMs": 8712,
+      "promptSha256": "a351f87286a48b5f2eb7cca264c00592927c142c51e5e5c5b885f8ca2fe4aa76",
+      "answer": {
+        "text": "{\n  \"verdict\": \"unsupported\",\n  \"issues\": [\n    {\n      \"path\": \"/rationale\",\n      \"reason\": \"The source text does not mention a screen reader or the need for extra reading time; this rationale is invented.\"\n    }\n  ],\n  \"summary\": \"The candidate invents a rationale regarding screen reader usage that is not present in the historical source.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 90,
+          "prompt_tokens": 652,
+          "total_tokens": 742,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "unsupported",
+        "issues": [
+          {
+            "path": "/rationale",
+            "reason": "The source text does not mention a screen reader or the need for extra reading time; this rationale is invented."
+          }
+        ],
+        "summary": "The candidate invents a rationale regarding screen reader usage that is not present in the historical source."
+      }
+    },
+    {
+      "id": "audit-9efa67f8c22f",
+      "durationMs": 6651,
+      "promptSha256": "b9264fd7e6afc547bf9e889fd3921d4638a326c0249f49b3af814bb820e4fb0c",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's request for a condensed default tree and session-persistent manual expansions within the specified project scope.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 50,
+          "prompt_tokens": 678,
+          "total_tokens": 728,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's request for a condensed default tree and session-persistent manual expansions within the specified project scope."
+      }
+    },
+    {
+      "id": "audit-a65781ef836b",
+      "durationMs": 6493,
+      "promptSha256": "914c7d560c7ece981fcce31fdaea87dba92c1d588ef1c03eef94a802148aa360",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's explicit instruction to maintain compact navigation as the default in the editor project.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 46,
+          "prompt_tokens": 698,
+          "total_tokens": 744,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's explicit instruction to maintain compact navigation as the default in the editor project."
+      }
+    },
+    {
+      "id": "audit-bb84d91e6745",
+      "durationMs": 11520,
+      "promptSha256": "0e248d9e646b833a13d9f42c1631ce99dd1efedcc2d681e43986940bbc690873",
+      "answer": {
+        "text": "{\n  \"verdict\": \"unsupported\",\n  \"issues\": [\n    {\n      \"path\": \"/claim\",\n      \"reason\": \"The source limits the preference to 'this project' and 'the local cache', but the claim generalizes it to 'all local caches across projects'.\"\n    },\n    {\n      \"path\": \"/futureAction\",\n      \"reason\": \"The source specifies a preference for a specific project, but the action mandates 'Always choose SQLite' for all local caches, removing the project boundary.\"\n    }\n  ],\n  \"summary\": \"The candidate incorrectly generalizes a project-specific preference into a global rule across all projects.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 146,
+          "prompt_tokens": 630,
+          "total_tokens": 776,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "unsupported",
+        "issues": [
+          {
+            "path": "/claim",
+            "reason": "The source limits the preference to 'this project' and 'the local cache', but the claim generalizes it to 'all local caches across projects'."
+          },
+          {
+            "path": "/futureAction",
+            "reason": "The source specifies a preference for a specific project, but the action mandates 'Always choose SQLite' for all local caches, removing the project boundary."
+          }
+        ],
+        "summary": "The candidate incorrectly generalizes a project-specific preference into a global rule across all projects."
+      }
+    },
+    {
+      "id": "audit-dfb13cf95cfc",
+      "durationMs": 6506,
+      "promptSha256": "26078d85958c41030a2572ef034e478732d368c658bf0058cdb102f897a06342",
+      "answer": {
+        "text": "{\n  \"verdict\": \"supported\",\n  \"issues\": [],\n  \"summary\": \"The candidate accurately reflects the user's polite request to retain keyboard focus in the search box after a search in the review tool.\"\n}",
+        "model": "memory-reference",
+        "finishReason": "stop",
+        "usage": {
+          "completion_tokens": 50,
+          "prompt_tokens": 685,
+          "total_tokens": 735,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "review": {
+        "verdict": "supported",
+        "issues": [],
+        "summary": "The candidate accurately reflects the user's polite request to retain keyboard focus in the search box after a search in the review tool."
+      }
+    }
+  ],
+  "inferenceCalls": 16,
+  "limits": {
+    "maxCalls": 16,
+    "perCallMs": 90000,
+    "totalMs": 480000,
+    "maxOutputTokens": 1024,
+    "contextTokens": 16384,
+    "temperature": 0,
+    "seed": 42,
+    "thinking": false,
+    "retries": 0,
+    "tools": "none",
+    "corpus": "synthetic_only"
+  },
+  "limitations": [
+    "Same reference model as the extractor; not independent validation.",
+    "Frozen development diagnostic, not held-out user histories.",
+    "Expected labels are implementing-agent judgments and are never supplied to the model.",
+    "No live memory, selected companion model, native delivery or coding-task benefit is measured."
+  ],
+  "model": {
+    "name": "Qwen3.8-27B-Q4_0",
+    "weightSha256": "ede16c7b36e578ca87a8c70e011e4b4633a32c831c0ce76d0f474582384e671d"
+  },
+  "networkGuard": {
+    "nonLoopbackConnectError": 1
+  },
+  "runtime": {
+    "health": {
+      "status": "ok"
+    },
+    "version": "9870 (2d973636e)"
+  },
+  "workerExit": {
+    "code": 0,
+    "signal": null
+  },
+  "finishedAt": "2026-10-02T19:48:21.423Z"
+}

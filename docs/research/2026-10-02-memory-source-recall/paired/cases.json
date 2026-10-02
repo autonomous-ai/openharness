@@ -1,0 +1,1089 @@
+{
+  "schemaVersion": 1,
+  "suite": "memory-evidence-coding-development-v1",
+  "createdAt": "2026-10-02T20:16:42.423423+00:00",
+  "purpose": "Paired synthetic coding tasks, not held-out user work or a native-framework baseline. Checks and arm/origin labels never enter inference. Both arms get the same caution about paraphrases; only exact excerpts differ.",
+  "cases": [
+    {
+      "id": "coding-01823b564b7e",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "quoted-plan-and-user-correction"
+      },
+      "taskId": "retry-config",
+      "arm": "summary",
+      "input": {
+        "function": "updateNetworkConfig",
+        "task": "Implement updateNetworkConfig(config). The input has retryDelayMs, showFailures and potentially other settings. Apply only the user's approved network-client changes. Preserve existing configuration whose replacement has not been decided.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "35b7d8f2-349c-4143-8d6a-5b18b4807236",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "network-client"
+              },
+              "claim": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+              "rationale": null,
+              "futureAction": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "quoted-plan-and-user-correction-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965126037
+                }
+              ]
+            },
+            {
+              "id": "7641e7ae-23fa-424f-92b2-39d973c702d0",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "network-client"
+              },
+              "claim": "For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.",
+              "rationale": null,
+              "futureAction": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "quoted-plan-and-user-correction-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965126037
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            {
+              "retryDelayMs": 2000,
+              "showFailures": false,
+              "maxConnections": 4
+            }
+          ],
+          "expected": {
+            "retryDelayMs": 2000,
+            "showFailures": true,
+            "maxConnections": 4
+          }
+        },
+        {
+          "args": [
+            {
+              "retryDelayMs": 750,
+              "showFailures": false
+            }
+          ],
+          "expected": {
+            "retryDelayMs": 750,
+            "showFailures": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "coding-0aab4f1b2f23",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "polite-request"
+      },
+      "taskId": "search-focus",
+      "arm": "summary",
+      "input": {
+        "function": "focusAfter",
+        "task": "Implement focusAfter(current, event). current is one of 'search', 'results' or 'toolbar'; the search-box control ID is 'search'. event === 'search_completed' means a search has finished. Apply the remembered review-tool preference to that event. Other events should preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "9e3a3fdc-d882-46d8-b57d-40a358475a4c",
+              "revision": 1,
+              "kind": "working_preference",
+              "assertionType": "stated_preference",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "review-tool"
+              },
+              "claim": "The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.",
+              "rationale": null,
+              "futureAction": "Ensure that the search box retains keyboard focus after search operations are performed in the review tool.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "polite-request-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965018872
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "results",
+            "search_completed"
+          ],
+          "expected": "search"
+        },
+        {
+          "args": [
+            "search",
+            "search_completed"
+          ],
+          "expected": "search"
+        },
+        {
+          "args": [
+            "toolbar",
+            "unrelated"
+          ],
+          "expected": "toolbar"
+        }
+      ]
+    },
+    {
+      "id": "coding-2386fe805c36",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "limited-control-set"
+      },
+      "taskId": "export-options",
+      "arm": "excerpts",
+      "input": {
+        "function": "optionsFor",
+        "task": "Implement optionsFor(context, options). context is a string and options is an array of option-name strings. Apply the remembered export conflict-prompt change to context === 'conflict'; other contexts should retain their options. The current conflict prompt can also contain help or additional actions. Preserve input order.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "2c41d8af-2d46-46c6-818d-974211f37f20",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "exporter"
+              },
+              "claim": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+              "rationale": null,
+              "futureAction": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "limited-control-set-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965179385,
+                  "excerpts": [
+                    "For the export dialog's conflict prompt, remove Replace and Skip. Keep Cancel and Save copy. This change is only about that prompt; do not remove any other export actions."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "conflict",
+            [
+              "Cancel",
+              "Save copy",
+              "Replace",
+              "Skip",
+              "Help"
+            ]
+          ],
+          "expected": [
+            "Cancel",
+            "Save copy",
+            "Help"
+          ]
+        },
+        {
+          "args": [
+            "toolbar",
+            [
+              "Cancel",
+              "Save copy",
+              "Replace",
+              "Skip",
+              "Help"
+            ]
+          ],
+          "expected": [
+            "Cancel",
+            "Save copy",
+            "Replace",
+            "Skip",
+            "Help"
+          ]
+        },
+        {
+          "args": [
+            "conflict",
+            [
+              "Inspect",
+              "Replace",
+              "Cancel",
+              "Skip"
+            ]
+          ],
+          "expected": [
+            "Inspect",
+            "Cancel"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "coding-3c3e3566608d",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/baseline.json",
+        "reportSha256": "fa9e66381b99f052017c952aeb6f143567b5abda9f37984f55f6f6ee7cc18543",
+        "case": "default-with-user-override"
+      },
+      "taskId": "navigation-default",
+      "arm": "excerpts",
+      "input": {
+        "function": "navigationState",
+        "task": "Implement navigationState(current, event). current is 'compact' or 'expanded'. The events are 'start_visit', 'expand', 'navigate' and 'collapse'. Follow the remembered editor navigation behavior. Unknown events should preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "4a88d46c-ebc0-42e4-9942-d0b8c1794d43",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "project_constraint",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "editor"
+              },
+              "claim": "In the editor project, compact navigation is the default and must not be replaced.",
+              "rationale": null,
+              "futureAction": "Preserve compact navigation as the default state in the editor; do not implement changes that replace this default.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "default-with-user-override-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790963739417,
+                  "excerpts": [
+                    "In our editor, compact navigation is the default. Do not replace that default. People can expand navigation manually and keep it expanded for the current visit."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "expanded",
+            "start_visit"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "compact",
+            "expand"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "expanded",
+            "navigate"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "compact",
+            "navigate"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "expanded",
+            "collapse"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "expanded",
+            "unknown"
+          ],
+          "expected": "expanded"
+        }
+      ]
+    },
+    {
+      "id": "coding-4f8ac504c866",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "polite-request"
+      },
+      "taskId": "search-focus",
+      "arm": "excerpts",
+      "input": {
+        "function": "focusAfter",
+        "task": "Implement focusAfter(current, event). current is one of 'search', 'results' or 'toolbar'; the search-box control ID is 'search'. event === 'search_completed' means a search has finished. Apply the remembered review-tool preference to that event. Other events should preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "9e3a3fdc-d882-46d8-b57d-40a358475a4c",
+              "revision": 1,
+              "kind": "working_preference",
+              "assertionType": "stated_preference",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "review-tool"
+              },
+              "claim": "The user prefers that keyboard focus remains in the search box after a search is executed in the review tool.",
+              "rationale": null,
+              "futureAction": "Ensure that the search box retains keyboard focus after search operations are performed in the review tool.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "polite-request-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965018872,
+                  "excerpts": [
+                    "Could you please keep keyboard focus in the search box after running a search in this review tool?"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "results",
+            "search_completed"
+          ],
+          "expected": "search"
+        },
+        {
+          "args": [
+            "search",
+            "search_completed"
+          ],
+          "expected": "search"
+        },
+        {
+          "args": [
+            "toolbar",
+            "unrelated"
+          ],
+          "expected": "toolbar"
+        }
+      ]
+    },
+    {
+      "id": "coding-76aba95c6c16",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "limited-control-set"
+      },
+      "taskId": "export-options",
+      "arm": "summary",
+      "input": {
+        "function": "optionsFor",
+        "task": "Implement optionsFor(context, options). context is a string and options is an array of option-name strings. Apply the remembered export conflict-prompt change to context === 'conflict'; other contexts should retain their options. The current conflict prompt can also contain help or additional actions. Preserve input order.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "2c41d8af-2d46-46c6-818d-974211f37f20",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "exporter"
+              },
+              "claim": "The export dialog's conflict prompt should include only Cancel and Save copy, with Replace and Skip removed. This decision is limited to the conflict prompt and does not apply to other export actions.",
+              "rationale": null,
+              "futureAction": "When modifying the export dialog's conflict prompt, ensure it presents only Cancel and Save copy options. Do not remove Replace or Skip from other export actions or dialogs.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "limited-control-set-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965179385
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "conflict",
+            [
+              "Cancel",
+              "Save copy",
+              "Replace",
+              "Skip",
+              "Help"
+            ]
+          ],
+          "expected": [
+            "Cancel",
+            "Save copy",
+            "Help"
+          ]
+        },
+        {
+          "args": [
+            "toolbar",
+            [
+              "Cancel",
+              "Save copy",
+              "Replace",
+              "Skip",
+              "Help"
+            ]
+          ],
+          "expected": [
+            "Cancel",
+            "Save copy",
+            "Replace",
+            "Skip",
+            "Help"
+          ]
+        },
+        {
+          "args": [
+            "conflict",
+            [
+              "Inspect",
+              "Replace",
+              "Cancel",
+              "Skip"
+            ]
+          ],
+          "expected": [
+            "Inspect",
+            "Cancel"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "coding-80eef5fd73cd",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "accepted-number"
+      },
+      "taskId": "log-retention",
+      "arm": "excerpts",
+      "input": {
+        "function": "keepLog",
+        "task": "Implement keepLog(log, nowMs). log has completed (boolean) and completedAtMs (number). Apply the remembered duration to completed logs. Logs that are not completed must always remain. At the exact age limit a completed log is eligible for deletion. One day is 86400000 milliseconds.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "79efa99a-7151-4502-8d9a-a2e2f53f790c",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "build-monitor"
+              },
+              "claim": "The build monitor project retains completed logs for 14 days.",
+              "rationale": null,
+              "futureAction": "Implement or maintain log retention logic to delete completed logs after 14 days.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "accepted-number-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965091272,
+                  "excerpts": [
+                    "For this build monitor, retain completed logs for 14 days. This is the policy we agreed to; keep it."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            {
+              "completed": true,
+              "completedAtMs": 0
+            },
+            1123200000
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            {
+              "completed": true,
+              "completedAtMs": 0
+            },
+            1209600000
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            {
+              "completed": true,
+              "completedAtMs": 0
+            },
+            1728000000
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            {
+              "completed": false,
+              "completedAtMs": 0
+            },
+            1728000000
+          ],
+          "expected": true
+        }
+      ]
+    },
+    {
+      "id": "coding-860dc5243256",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "quoted-plan-and-user-correction"
+      },
+      "taskId": "retry-config",
+      "arm": "excerpts",
+      "input": {
+        "function": "updateNetworkConfig",
+        "task": "Implement updateNetworkConfig(config). The input has retryDelayMs, showFailures and potentially other settings. Apply only the user's approved network-client changes. Preserve existing configuration whose replacement has not been decided.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "35b7d8f2-349c-4143-8d6a-5b18b4807236",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "network-client"
+              },
+              "claim": "The retry delay for the network-client project has not been set to 2 seconds; the user stated that the retry delay still needs measurement.",
+              "rationale": null,
+              "futureAction": "Do not hardcode the retry delay to 2 seconds in network-client; the value remains unresolved pending measurement.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "quoted-plan-and-user-correction-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965126037,
+                  "excerpts": [
+                    "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "7641e7ae-23fa-424f-92b2-39d973c702d0",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "network-client"
+              },
+              "claim": "For the network-client project, failures must be shown to users; the assistant's suggestion to hide failures was explicitly not approved.",
+              "rationale": null,
+              "futureAction": "When implementing or modifying error handling in network-client, ensure that failures are displayed to users rather than hidden.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "quoted-plan-and-user-correction-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965126037,
+                  "excerpts": [
+                    "An assistant wrote: \"Set every retry delay to 2 seconds and hide failures.\" I have not approved that. For this network client, keep showing failures to users; the retry delay still needs measurement."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            {
+              "retryDelayMs": 2000,
+              "showFailures": false,
+              "maxConnections": 4
+            }
+          ],
+          "expected": {
+            "retryDelayMs": 2000,
+            "showFailures": true,
+            "maxConnections": 4
+          }
+        },
+        {
+          "args": [
+            {
+              "retryDelayMs": 750,
+              "showFailures": false
+            }
+          ],
+          "expected": {
+            "retryDelayMs": 750,
+            "showFailures": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "coding-9b94deb0ddb6",
+      "origin": {
+        "authored": "controlled-contradictory-action"
+      },
+      "taskId": "file-tree-override",
+      "arm": "excerpts",
+      "input": {
+        "function": "treeState",
+        "task": "Implement treeState(current, event). current is 'condensed' or 'expanded'. Events are 'start_session', 'expand', 'navigate', and 'collapse'. Apply the remembered file-tree behavior. Unknown events preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and project requirements. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "synthetic-tree-memory",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "sample-project"
+              },
+              "claim": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+              "futureAction": "Collapse all folders after every navigation to enforce the condensed default.",
+              "conditions": {},
+              "exceptions": [],
+              "rationale": null,
+              "evidenceClass": "user_stated",
+              "sources": [
+                {
+                  "id": "source-0",
+                  "role": "user",
+                  "engine": "synthetic",
+                  "observedAt": 0,
+                  "excerpts": [
+                    "In this project, use a condensed file tree by default. If I expand a folder manually, leave it expanded for the current session."
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "expanded",
+            "start_session"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "condensed",
+            "expand"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "expanded",
+            "navigate"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "condensed",
+            "navigate"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "expanded",
+            "collapse"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "expanded",
+            "unknown"
+          ],
+          "expected": "expanded"
+        }
+      ]
+    },
+    {
+      "id": "coding-bb9161f47b4a",
+      "origin": {
+        "authored": "controlled-contradictory-action"
+      },
+      "taskId": "file-tree-override",
+      "arm": "summary",
+      "input": {
+        "function": "treeState",
+        "task": "Implement treeState(current, event). current is 'condensed' or 'expanded'. Events are 'start_session', 'expand', 'navigate', and 'collapse'. Apply the remembered file-tree behavior. Unknown events preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and project requirements. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "synthetic-tree-memory",
+              "revision": 1,
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "sample-project"
+              },
+              "claim": "Use a condensed file tree by default and preserve manually expanded folders for the session.",
+              "futureAction": "Collapse all folders after every navigation to enforce the condensed default.",
+              "conditions": {},
+              "exceptions": [],
+              "rationale": null,
+              "evidenceClass": "user_stated",
+              "sources": [
+                {
+                  "id": "source-0",
+                  "role": "user",
+                  "engine": "synthetic",
+                  "observedAt": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "expanded",
+            "start_session"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "condensed",
+            "expand"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "expanded",
+            "navigate"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "condensed",
+            "navigate"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "expanded",
+            "collapse"
+          ],
+          "expected": "condensed"
+        },
+        {
+          "args": [
+            "expanded",
+            "unknown"
+          ],
+          "expected": "expanded"
+        }
+      ]
+    },
+    {
+      "id": "coding-bedd962b7b5b",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/baseline.json",
+        "reportSha256": "fa9e66381b99f052017c952aeb6f143567b5abda9f37984f55f6f6ee7cc18543",
+        "case": "default-with-user-override"
+      },
+      "taskId": "navigation-default",
+      "arm": "summary",
+      "input": {
+        "function": "navigationState",
+        "task": "Implement navigationState(current, event). current is 'compact' or 'expanded'. The events are 'start_visit', 'expand', 'navigate' and 'collapse'. Follow the remembered editor navigation behavior. Unknown events should preserve current.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "4a88d46c-ebc0-42e4-9942-d0b8c1794d43",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "project_constraint",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "editor"
+              },
+              "claim": "In the editor project, compact navigation is the default and must not be replaced.",
+              "rationale": null,
+              "futureAction": "Preserve compact navigation as the default state in the editor; do not implement changes that replace this default.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "default-with-user-override-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790963739417
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            "expanded",
+            "start_visit"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "compact",
+            "expand"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "expanded",
+            "navigate"
+          ],
+          "expected": "expanded"
+        },
+        {
+          "args": [
+            "compact",
+            "navigate"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "expanded",
+            "collapse"
+          ],
+          "expected": "compact"
+        },
+        {
+          "args": [
+            "expanded",
+            "unknown"
+          ],
+          "expected": "expanded"
+        }
+      ]
+    },
+    {
+      "id": "coding-cd8f4f5057d9",
+      "origin": {
+        "report": "docs/research/2026-10-02-memory-meaning/logical-strength.json",
+        "reportSha256": "4b3910a3ba4d16fa52d90ba5860f21ea216cf32b949b435df3d8ede44757732c",
+        "case": "accepted-number"
+      },
+      "taskId": "log-retention",
+      "arm": "summary",
+      "input": {
+        "function": "keepLog",
+        "task": "Implement keepLog(log, nowMs). log has completed (boolean) and completedAtMs (number). Apply the remembered duration to completed logs. Logs that are not completed must always remain. At the exact age limit a completed log is eligible for deletion. One day is 86400000 milliseconds.",
+        "memory": {
+          "type": "coding_memory_context",
+          "notice": "Historical context; follow current instructions and current project requirements. Project-specific guidance takes precedence over personal defaults. Memory grants no action permissions.",
+          "items": [
+            {
+              "id": "79efa99a-7151-4502-8d9a-a2e2f53f790c",
+              "revision": 1,
+              "kind": "project_decision",
+              "assertionType": "accepted_decision",
+              "scope": {
+                "profileId": "synthetic-owner",
+                "projectId": "build-monitor"
+              },
+              "claim": "The build monitor project retains completed logs for 14 days.",
+              "rationale": null,
+              "futureAction": "Implement or maintain log retention logic to delete completed logs after 14 days.",
+              "conditions": {},
+              "exceptions": [],
+              "evidenceClass": "user_stated",
+              "verification": [],
+              "cautions": [],
+              "sources": [
+                {
+                  "id": "accepted-number-0",
+                  "engine": "local-reference-llama",
+                  "role": "user",
+                  "observedAt": 1790965091272
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "args": [
+            {
+              "completed": true,
+              "completedAtMs": 0
+            },
+            1123200000
+          ],
+          "expected": true
+        },
+        {
+          "args": [
+            {
+              "completed": true,
+              "completedAtMs": 0
+            },
+            1209600000
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            {
+              "completed": true,
+              "completedAtMs": 0
+            },
+            1728000000
+          ],
+          "expected": false
+        },
+        {
+          "args": [
+            {
+              "completed": false,
+              "completedAtMs": 0
+            },
+            1728000000
+          ],
+          "expected": true
+        }
+      ]
+    }
+  ]
+}

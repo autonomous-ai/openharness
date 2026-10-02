@@ -930,3 +930,46 @@ the retained changes are evaluation coverage and attributed evidence. Semantic
 checking of proposals is a future experiment, not a shipped safeguard. Selected
 companion learning, automatic contextual recall, independent quality assessment
 and improved coding outcomes remain unproven. No app or firmware was released.
+
+### Give receiving agents the supporting words — October 2
+
+A [separate model review](../research/2026-10-02-memory-source-audit.md) accepted
+both subtle interpretation errors from the earlier extraction experiments. It is
+not promoted to an automatic admission gate. Instead, native prompt and collection
+MCP recall now use `coding_memory_sources`: exact selected evidence excerpts with
+captured author, engine, time, verification limits and memory revision/scope. The
+generated claim and action still support search and the owner library, but are not
+included in this context format. Existing direct summary callers retain their
+contract. Extraction remains v6; no schema migration or extra model call is added.
+
+Selection keeps the existing account, project, task, branch, applicability, privacy,
+revision and deletion rules. Excerpts shared by several records appear once. The
+same byte cap applies to the complete packet: an oversized candidate is omitted
+whole, with no qualification trimming or fallback to a generated instruction.
+Explicit viewer corrections retain their field labels and replace old evidence.
+Missing or altered source evidence cannot be invented by serialization. The wrapper
+identifies historical excerpts as fallible context, not current instructions or
+permission. Surrounding source context may still be absent.
+
+The [synthetic coding comparison](../research/2026-10-02-memory-source-recall/comparison.json)
+records two of five assessable tasks passing with generated summaries, three with
+summaries plus excerpts, and four with excerpts alone. The actual store format also
+passed four of five. The last two arms were added after inspecting the earlier
+results; this is adaptive development evidence, not a held-out improvement claim.
+An underspecified sixth task and strict-JSON failures remain visible. The model
+still removes unrelated export actions despite the original qualification.
+
+Native localhost probes observed exact context in [Claude 2.1.287](../research/2026-10-02-memory-source-recall/native/claude.json)
+and [Codex 0.160.0](../research/2026-10-02-memory-source-recall/native/codex.json).
+Codex also made an unidentified request without context; its runtime allowlist is
+unchanged. The [OpenCode 1.18.34 probe](../research/2026-10-02-memory-source-recall/native/opencode.json)
+exercised the shared store/runtime and real plugin through correction, forgetting,
+privacy, Recall off, manual/automatic compaction and overflow replay. Its isolated
+startup originally waited for npm registry retries before loading the local plugin;
+the SDK-free fixture now explicitly uses npm offline mode under the same OS network
+block. No installed engine configuration changes.
+
+This applies the council's evidence and behavioral-contract principles without
+treating a fluent paraphrase or a passing transport test as proof of intent. Private
+real-user quality, independent review, native lifecycle coverage, paired framework
+workflows and the broader rollout gates remain open. No app or firmware release.

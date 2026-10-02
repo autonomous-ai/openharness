@@ -258,7 +258,7 @@ export class CodingMemoryRuntime {
   async recallCollection(agentId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const request = parse(toolRecallSchema, input)
     if (this.session(agentId)?.scope !== 'profile') throw new MemoryError('scope_denied')
-    const result = await this.recallBound(agentId, request, 'mcp')
+    const result = await this.recallBound(agentId, { ...request, format: 'source_excerpts' }, 'mcp')
     return { ok: true, status: result.packet.status, context: result.packet.text,
       receipt: result.receipt ? { id: result.receipt.id, delivery: result.receipt.delivery } : null }
   }
@@ -277,7 +277,7 @@ export class CodingMemoryRuntime {
       : session?.engine === 'codex' ? ['0.159.0', '0.159.3'].includes(version ?? '')
       : session?.engine === 'opencode' && version === '1.18.34'
     if (!tested) return { packet: empty('unavailable'), receipt: null }
-    return this.recallBound(agentId, request, 'prompt_hook')
+    return this.recallBound(agentId, { ...request, format: 'source_excerpts' }, 'prompt_hook')
   }
 
   /** A verified adapter handed context to the native prompt path; not proof of model consumption. */

@@ -113,6 +113,8 @@ export interface TopicPage extends Omit<TopicDraft, 'statements'> {
 }
 
 export interface RecallRequest {
+  /** Existing callers keep summary context; native prompt delivery can request exact supporting excerpts. */
+  format?: 'summary' | 'source_excerpts'
   query: string
   conditions?: Conditions
   maxBytes?: number

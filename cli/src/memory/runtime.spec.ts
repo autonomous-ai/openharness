@@ -231,6 +231,9 @@ it.each(['2.1.286', '2.1.287'])('prepares a Claude %s host-bound prompt receipt 
   await learn()
   const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
   expect(prepared.packet.items).toHaveLength(1)
+  expect(JSON.parse(prepared.packet.text)).toMatchObject({ type: 'coding_memory_sources', version: 1,
+    sources: [{ role: 'user', engine: 'claude', excerpts: [{ text: preference }] }] })
+  expect(JSON.parse(prepared.packet.text).items[0]).not.toHaveProperty('futureAction')
   expect(prepared.receipt?.delivery).toBe('unverified')
   expect((await runtime.promptRecallReceipts('agent'))[0].emittedAt).toBeNull()
   expect(await runtime.promptRecallEmitted('agent', prepared.receipt!.id)).toBe(true)
@@ -288,6 +291,10 @@ it('shares a correction and deletion across Codex and OpenCode without copying t
     const prepared = await runtime.preparePromptRecall('agent', { query: 'coding changes' })
     expect(prepared.packet.items).toHaveLength(1)
     expect(prepared.packet.items[0]).toMatchObject({ id: first.id, revision: corrected.revision, claim: corrected.claim })
+    expect(JSON.parse(prepared.packet.text)).toMatchObject({ type: 'coding_memory_sources', version: 1,
+      sources: [{ engine: 'harness_viewer', role: 'user' }] })
+    expect(prepared.packet.text).toContain(corrected.claim)
+    expect(prepared.packet.text).not.toContain(preference)
   }
   expect(store.list(access)).toHaveLength(1)
   store.forget(first.id, corrected.revision, access)
