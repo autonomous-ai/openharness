@@ -264,7 +264,8 @@ import { updateManagedTui } from './tui/manage.js'
 import { startTuiUpdater } from './tui/update.js'
 import { ensureHnLauncher, ensureLauncher, ensureManagedGrid, ensureManagedRuntime, startGridPinRecheck } from './lib/runtimeInstall.js'
 import { readdir, stat } from 'fs/promises'
-import { CodexNormalizer, codexTaskError, lastCodexTurnText } from './engines/codex/normalizer.js'
+import { CodexNormalizer, codexTaskError } from './engines/codex/normalizer.js'
+import { readLastCodexTurnText } from './engines/codex/lastTurn.js'
 import { TurnActivity, type ActivityFrame } from './lib/turnActivity.js'
 import { CodexActivityReader, RuntimeActivityReader, activityRuntimeKey } from './lib/runtimeActivity.js'
 import { codexSubagentResolverFor } from './engines/codex/subagent.js'
@@ -3091,8 +3092,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDbForSession(s), sessionId))
       if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(DEVIN_DB, sessionId))
       if (!s.transcriptPath) return null
+      if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
       const lines = await tailFile(s.transcriptPath, Infinity)
-      if (s.engine === 'codex') return lastCodexTurnText(lines)
       if (s.engine === 'cursor') return lastCursorTurnText(lines)
       if (s.engine === 'muse') return lastMuseTurnText(lines)
       if (s.engine === 'amp') return lastAmpTurnText(lines)
