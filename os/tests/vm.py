@@ -308,6 +308,22 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         vm.screenshot('05-recovered-hn')
         result['checks'].append('Recovered disk boots to hn; system and package database reverted, stale lock cleared and project preserved')
         if args.agents:
+            # A real development toolchain must install from the shipped package
+            # indexes, compile a project, and serve its preview in another hn pane.
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S pacman --noconfirm -S --needed gcc make', timeout=300)
+            development = base64.b64encode(Path(__file__).with_name('development.sh').read_bytes()).decode()
+            vm.command(f'printf %s {development} | base64 -d > /tmp/hn-os-development.sh')
+            vm.command('hn new-window -n development ' + shlex.quote('bash /tmp/hn-os-development.sh > "$HOME/.local/state/harness-os/development.log" 2>&1'))
+            output, _ = vm.command('for n in $(seq 1 60); do test -s ~/.local/state/harness-os/development-check/status && break; sleep 1; done; cat ~/.local/state/harness-os/development.log; test "$(cat ~/.local/state/harness-os/development-check/status)" = 0', timeout=75)
+            (folder / 'development.log').write_text(output)
+            vm.command('hn new-window -n local-preview ' + shlex.quote('node "$HOME/Projects/os-validation/server.mjs"'))
+            vm.command('curl --fail --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:18781 | grep -F "Local development works."', timeout=30)
+            vm.command('hn-browser http://127.0.0.1:18781')
+            time.sleep(5)
+            vm.screenshot('06-local-development-preview')
+            vm.keys('meta_l', 'ret')
+            vm.command('pkill -x chromium', check=False)
+            result['checks'].append('On-demand gcc/make installation, C compilation, Git diff and Node preview in an hn pane passed')
             script = Path(__file__).with_name('agents.sh').read_bytes()
             encoded = base64.b64encode(script).decode()
             vm.command(f'printf %s {shlex.quote(encoded)} | base64 -d > /tmp/hn-os-agents.sh')
