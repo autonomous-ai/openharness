@@ -1002,3 +1002,45 @@ Code Mode for that model independently of those feature switches. Neither the
 execution host nor a different model is enabled to make this test pass, and the
 adapter's error rejection remains intact. [Conditions and source identities](../research/2026-10-02-codex-memory-0160/conditions.json)
 separate this transport evidence from the still-open quality and usefulness gates.
+
+### Score the source context actually recalled — October 2
+
+Extraction diagnostics now request the source-excerpt format used by native recall.
+`--recall-format summary` retains the earlier format as an explicit comparison arm.
+Reports include sanitized source snapshots captured before maintenance. Review checks
+each packet's exact excerpts, author role, engine, timestamp, verification metadata,
+record revision, scope, source links and evidence-field coverage. The validator does
+not call the production serializer. It binds captured text and role to the frozen
+fixture and rejects missing, duplicated, altered or extra supporting material.
+
+Older summary reports remain reviewable and keep their format label; they do not
+acquire source-validation evidence retroactively. Review scores name the context
+formats inspected, and the offline runner records the validator's source hash.
+Neither exact text nor a matching hash proves semantic support or authentic authorship.
+The attributed reviewer still assesses meaning, qualifications, relevance and missing
+knowledge. Unsupported stored records continue to fail correct-memory recall even
+when their source packet preserves the original words.
+
+A private offline replay used only five previously consented excerpts and their six
+already-generated proposals. It made no new model calls. The original record-quality
+judgements were retained and the new packets inspected against their frozen sources.
+All three positive source contexts preserved the original full excerpt, including
+qualifications, compared with one faithful positive summary context. **Both formats
+still scored four of six supported/useful records and one of three fully correct
+recalls.** All twelve negative probes abstained. The two overbroad records remain
+failures; these results do not establish improved extraction or coding-task outcomes.
+
+The replay preserved project scope, text, source role/engine, bounded context and
+probes. Only disposable profile/source identifiers and generated replay metadata
+changed, with mappings retained privately. Original files and production memory were
+read-only. The OS sandbox denied networking and limited writes to the private test
+folder. An initial SQLite temporary-file failure was preserved; directing temporary
+files into that folder allowed the replay to finish under the same restrictions.
+All excerpts, records, labels, hashes and detailed reports remain local. This is a
+small, attributed development review, not independent or held-out release evidence.
+
+The storage failure also exposed a separate diagnosis problem: an unexpected store
+error can surface as `waiting_for_model / inference_unavailable`. That classification
+needs a focused follow-up; it does not explain the live provider blockage without
+additional evidence. Live automatic learning, wider native lifecycles and the
+planned quality/benefit gates remain unfinished.

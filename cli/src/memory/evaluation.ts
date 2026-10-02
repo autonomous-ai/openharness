@@ -2,7 +2,7 @@
 import { MemoryLearner, type MemoryInference } from './learner.js'
 import { CodingMemoryStore } from './store.js'
 import { QUEUE_OPERATIONS, type Arguments, type MemoryPort, type Operation, type Result } from './operations.js'
-import { MemoryError, type Conditions, type MemoryRecord, type SourceEvent } from './types.js'
+import { MemoryError, type Conditions, type MemoryRecord, type RecallRequest, type SourceEvent } from './types.js'
 import { MAX_EPISODES_PER_CALL } from './queue.js'
 
 export interface ExtractionCase {
@@ -27,8 +27,12 @@ export type ExtractionScenario = ExtractionCase | ExtractionBatchCase
 /** Expectations and probes are never included in captured text or extraction input. */
 export async function evaluateExtractionCase(input: {
   fixture: ExtractionScenario; directory: string; inference: MemoryInference; engine: string
+  /** Default to the packet delivered by native prompt recall; summary is an explicit comparison arm. */
+  recallFormat?: RecallRequest['format']
 }) {
   const { fixture } = input
+  const recallFormat = input.recallFormat ?? 'source_excerpts'
+  if (!['summary', 'source_excerpts'].includes(recallFormat)) throw new MemoryError('invalid_evaluation_recall_format')
   const boundary = fixture.boundary ?? 'complete'
   if (!['complete', 'bounded'].includes(boundary)) throw new MemoryError('invalid_evaluation_boundary')
   const batch = 'episodes' in fixture
@@ -40,6 +44,7 @@ export async function evaluateExtractionCase(input: {
   if (!opened.ok) throw new Error(opened.reason)
   const store = opened.store
   const startedAt = Date.now()
+  const capturedSources: SourceEvent[] = []
   try {
     const projectIds = [...new Set([fixture.projectId, ...fixture.probes.flatMap(probe => probe.projectIds)].filter((id): id is string => id !== null))]
     for (const id of projectIds) store.registerProject(id)
@@ -54,6 +59,10 @@ export async function evaluateExtractionCase(input: {
       }))
       store.learning.capture({ streamId: id, episodeId: id, engine: input.engine, sessionId,
         projectId: fixture.projectId, from: null, to: '1', events: sources, boundary })
+      for (const source of sources) {
+        const captured = store.source(source.id, { profileId, projectIds, includeProfile: true })
+        if (captured) capturedSources.push(captured)
+      }
     }
     const memory: MemoryPort = { async request<K extends Operation>(operation: K, args: Arguments<K>): Promise<Result<K>> {
       const owner = (QUEUE_OPERATIONS as readonly string[]).includes(operation) ? store.learning : store
@@ -71,14 +80,15 @@ export async function evaluateExtractionCase(input: {
         return { ...probe, status: 'not_run', returnedIds: [], passed: null, context: null }
       }
       const maxBytes = 3_000
-      const result = store.recall({ query: probe.query, conditions: probe.conditions, maxBytes }, { profileId, projectIds: probe.projectIds, includeProfile: true })
+      const result = store.recall({ query: probe.query, conditions: probe.conditions, maxBytes, format: recallFormat },
+        { profileId, projectIds: probe.projectIds, includeProfile: true })
       const passed = result.status === 'ok' && (probe.expected === 'recall' ? result.items.length > 0 : result.items.length === 0)
       checks.push({ name: `recall:${probe.id}`, passed })
       return { ...probe, status: result.status, returnedIds: result.items.map(item => item.id), passed,
         measurement: 'presence_only' as const,
         context: { text: result.text, bytes: Buffer.byteLength(result.text, 'utf8'), maxBytes, estimatedTokens: result.estimatedTokens } }
     })
-    return { id: fixture.id, durationMs: Date.now() - startedAt, outcome, checks, probes, records,
+    return { id: fixture.id, durationMs: Date.now() - startedAt, recallFormat, capturedSources, outcome, checks, probes, records,
       episodes: { expected: episodes.length, reviewed, jobs, boundary },
       // Mechanical success never claims semantic entailment, usefulness or independent review.
       semanticReview: { status: completed ? 'pending' as const : 'not_reviewable' as const, criteria: fixture.expected.review } }

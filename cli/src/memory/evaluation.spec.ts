@@ -33,10 +33,41 @@ it('runs real admission and scoped recall without leaking its rubric or probes t
   expect(result.outcome).toEqual({ state: 'learned', learned: 1 })
   expect(result.checks.every(check => check.passed)).toBe(true)
   expect(result.semanticReview.status).toBe('pending')
+  expect(result.recallFormat).toBe('source_excerpts')
+  const packet = JSON.parse(result.probes[0].context!.text)
+  expect(packet.type).toBe('coding_memory_sources')
+  expect(packet.sources[0]).toMatchObject({ id: 'synthetic-0', engine: 'claude', role: 'user',
+    excerpts: [{ text: fixture.sources[0].text, fields: draft.evidence[0].paths }] })
+  expect(result.probes[0].context!.text).not.toContain(draft.claim)
+  expect(result.probes[0].context!.text).not.toContain(draft.futureAction)
   const prompt = (inference.run.mock.calls[0] as unknown as [string])[0]
   expect(prompt).toContain(fixture.sources[0].text)
   expect(prompt).not.toContain('SECRET_EXPECTATION_NOT_IN_PROMPT')
   expect(prompt).not.toContain('"id":"negative"')
+})
+
+it('retains sanitized captured source metadata even when extraction produces no memory', async () => {
+  const result = await evaluateExtractionCase({ fixture: { ...fixture,
+    sources: [{ role: 'user', text: ' Contact tester@example.com about debugging. ' }] },
+    directory, engine: 'codex', inference: provider([]) })
+  expect(result.capturedSources).toEqual([expect.objectContaining({ id: 'synthetic-0', role: 'user',
+    engine: 'codex', projectId: null, text: ' Contact [email] about debugging. ', observedAt: expect.any(Number) })])
+  expect(JSON.stringify(result)).not.toContain('tester@example.com')
+})
+
+it('keeps the older summary packet available as an explicit comparison', async () => {
+  const result = await evaluateExtractionCase({ fixture, directory, engine: 'claude',
+    inference: provider([draft]), recallFormat: 'summary' })
+  expect(result.recallFormat).toBe('summary')
+  expect(JSON.parse(result.probes[0].context!.text).type).toBe('coding_memory_context')
+  expect(result.probes[0].context!.text).toContain(draft.claim)
+})
+
+it('rejects an unknown recall format before inference', async () => {
+  const inference = provider([draft])
+  await expect(evaluateExtractionCase({ fixture, directory, engine: 'claude', inference,
+    recallFormat: 'unknown' as 'summary' })).rejects.toThrow('invalid_evaluation_recall_format')
+  expect(inference.run).not.toHaveBeenCalled()
 })
 
 it('exposes independently specified condition mismatch instead of copying generated keys into the probe', async () => {
