@@ -227,6 +227,13 @@ def main():
         time.sleep(1)
         vm.screenshot('03-return-to-hn')
         result['checks'].append('Browser starts only on shortcut; toggle screenshots recorded')
+        # hn has its own tmux-style settings; the underlying tmux server needs
+        # its separate system configuration so a short-lived last pane cannot
+        # restart the server and reuse a still-registered terminal identity.
+        for index in range(3):
+            vm.command(user('hn new-window -n quick-exit ' + shlex.quote(f'touch /tmp/hn-quick-exit-{index}')))
+            vm.command(f'for n in $(seq 1 10); do test -e /tmp/hn-quick-exit-{index} && exit 0; sleep 1; done; exit 1', timeout=15)
+        result['checks'].append('Closing the last terminal and immediately opening another works repeatedly')
         # A long-lived terminal process proves a screen restart does not kill the work.
         survivor = "echo $$ > /tmp/hn-survivor.pid; exec sleep 1800"
         vm.command(user("hn new-window -n persistence " + shlex.quote(survivor)))

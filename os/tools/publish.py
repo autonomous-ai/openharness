@@ -13,6 +13,7 @@ import zipfile
 
 REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
                    'Browser starts only on shortcut', 'Dated package repositories are queryable',
+                   'Closing the last terminal and immediately opening another',
                    'An hn terminal pane inherits', 'OS surface refuses detach',
                    'Terminal process survives screen restart', 'Offline installer completed',
                    'Installed disk boots to hn', 'A real offline package transaction',
