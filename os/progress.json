@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": null,
   "completion_utc": null,
-  "status": "building; machine validation awaiting working network access",
+  "status": "building; network restored and CI resumed",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -53,10 +53,11 @@
   "waiting": [
     {
       "started_utc": "2026-10-02T18:15:44Z",
-      "ended_utc": null,
+      "ended_utc": "2026-10-02T22:01:42Z",
       "reason": "GitHub CLI/Git TLS resets and timeouts; intermittent connector RPC failures; connector lacks repository-content write permission and cannot download artifacts above 512 MiB. Native QEMU install failed fetching ghcr.io. Existing Colima VM now runs, but its Ubuntu package-index transfers time out. Some automatic approval reviews timed out; retries sometimes succeeded.",
       "local_implementation_continued": true,
-      "overlaps_other_stages": true
+      "overlaps_other_stages": true,
+      "resolution": "User restored network access. Git push and local VM package downloads succeeded."
     }
   ],
   "remaining": [
@@ -68,8 +69,8 @@
     "Measure boot, install duration, idle RAM/CPU and disk footprint; optimize from those measurements",
     "Publish a verified preview with checksum and installation directions; physical ThinkPad/RTX verification remains separate"
   ],
-  "last_updated_utc": "2026-10-02T22:01:21Z",
-  "remote_build_commit": "4677aa7e7596a93a88dd08d31481fa8c758c8d4a",
+  "last_updated_utc": "2026-10-02T22:04:28Z",
+  "remote_build_commit": "e08de0d895771be891da676b331cca1ab2cf8e00",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
     {
@@ -90,6 +91,11 @@
     {
       "run_id": 37044532366,
       "result": "image passed; machine harness failed before guest boot"
+    },
+    {
+      "run_id": 37070229186,
+      "result": "failed",
+      "reason": "All 14 Linux guard/protocol tests passed. Workflow lint rejected two unprefixed file globs; corrected with ./ prefixes."
     }
   ],
   "recent_implementation": [

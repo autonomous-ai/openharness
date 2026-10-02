@@ -69,9 +69,9 @@ jobs:
       - name: Inspect image artifact
         run: |
           cd os/dist
-          sha256sum -c *.sha256
+          sha256sum -c ./*.sha256
           cat manifest.json
-          ls -lh *.iso
+          ls -lh ./*.iso
       - name: Retain image, checksums, package inventory and build manifest
         uses: actions/upload-artifact@v6
         with:
