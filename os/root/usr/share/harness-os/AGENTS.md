@@ -34,7 +34,7 @@ then N → Terminal.
 ## Network and hardware
 
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
-  `nmcli device wifi list` and `nmcli --ask device wifi connect SSID`.
+  `nmcli device wifi list` and `sudo nmcli --ask device wifi connect SSID`.
   Keep passwords out of shell arguments and transcripts.
 - Audio uses PipeWire. Clipboard uses `wl-copy` and `wl-paste`.
 - `Super+B` opens/focuses Chromium or returns to hn; `Super+Enter` focuses hn;

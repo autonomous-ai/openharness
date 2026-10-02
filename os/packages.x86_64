@@ -2,6 +2,7 @@
 base
 linux-lts
 linux-firmware
+sof-firmware
 intel-ucode
 amd-ucode
 mkinitcpio

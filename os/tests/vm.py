@@ -117,7 +117,9 @@ class VM:
 
     def command(self, command, timeout=90, check=True):
         marker = 'HN_RESULT_' + uuid.uuid4().hex
-        self.send(command + f"; hn_status=$?; printf '\\n{marker}:%s\\n' \"$hn_status\"\n")
+        # A probe may use `exit` or `exec`. Keep it inside a subshell so the
+        # serial login remains available to report its status and run diagnostics.
+        self.send('(' + command + f"); hn_status=$?; printf '\\n{marker}:%s\\n' \"$hn_status\"\n")
         output = self.wait(r'\r?\n' + marker + r':\d+\r?\n', timeout)
         match = re.search(r'\r?\n' + marker + r':(\d+)\r?\n', output)
         status = int(match.group(1))
@@ -223,6 +225,10 @@ def main():
         survivor = "echo $$ > /tmp/hn-survivor.pid; exec sleep 1800"
         vm.command(user("hn new-window -n persistence " + shlex.quote(survivor)))
         vm.command('test -s /tmp/hn-survivor.pid')
+        clipboard_probe = 'printf hn-pane-clipboard | wl-copy; test "$(wl-paste --no-newline)" = hn-pane-clipboard && touch /tmp/hn-pane-clipboard-passed'
+        vm.command(user('hn new-window -n clipboard ' + shlex.quote(clipboard_probe)))
+        vm.command('for n in $(seq 1 15); do test -e /tmp/hn-pane-clipboard-passed && exit 0; sleep 1; done; exit 1', timeout=20)
+        result['checks'].append('An hn terminal pane inherits the working Wayland clipboard environment')
         vm.command('! ' + user('hn detach'))
         vm.command('! ' + user('hn suspend-client'))
         vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
@@ -255,8 +261,20 @@ def main():
         # A disposable failure exercises actual root + boot restoration, including
         # an encrypted root in the UEFI row. The project's separate subvolume survives.
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
-        output, _ = vm.command('sudo hn-os checkpoint', timeout=180)
+        # A local package exercises the actual pacman PreTransaction hook while
+        # networking is unavailable. Its checkpoint includes the active db.lck.
+        package_script = '''set -eu
+mkdir -p /tmp/hn-recovery-package/etc
+printf 'pkgname = hn-os-recovery-probe\npkgver = 1-1\npkgdesc = Disposable VM rollback probe\narch = any\nsize = 7\n' > /tmp/hn-recovery-package/.PKGINFO
+printf changed > /tmp/hn-recovery-package/etc/hn-os-recovery-probe
+bsdtar --zstd -cf /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst -C /tmp/hn-recovery-package .PKGINFO etc
+pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
+'''
+        encoded = base64.b64encode(package_script.encode()).decode()
+        output, _ = vm.command('printf %s ' + encoded + ' | base64 -d | sudo bash', timeout=180)
         checkpoint = re.search(r'Checkpoint ([A-Za-z0-9_-]+)', output).group(1)
+        vm.command('pacman -Q hn-os-recovery-probe && test -f /etc/hn-os-recovery-probe')
+        result['checks'].append('A real offline package transaction creates its pre-update checkpoint')
         vm.command('printf keep-my-project > ~/Projects/recovery-probe.txt')
         vm.command("sudo sh -c 'printf broken > /etc/hn-os-recovery-probe; chmod 000 /usr/lib/harness/harness-tui'")
         vm.command('sync')
@@ -277,8 +295,9 @@ def main():
         vm.start(live=False)
         vm.login_installed(config)
         vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
+        vm.command('test ! -e /var/lib/pacman/db.lck && ! pacman -Q hn-os-recovery-probe')
         vm.screenshot('05-recovered-hn')
-        result['checks'].append('Recovered disk boots to hn; changed system reverted and project preserved')
+        result['checks'].append('Recovered disk boots to hn; system and package database reverted, stale lock cleared and project preserved')
         if args.agents:
             script = Path(__file__).with_name('agents.sh').read_bytes()
             encoded = base64.b64encode(script).decode()

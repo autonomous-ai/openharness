@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -49,6 +51,22 @@ class DiskSafety(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'reserves the username'):
                     installer.install(config, source, Path(temp) / 'target')
                 self.assertEqual([call.args[0] for call in commands.call_args_list], ['unsquashfs'])
+                self.assertFalse((Path(temp) / 'target').exists())
+
+    def test_corrupt_offline_kernel_is_rejected_before_any_disk_write(self):
+        config = dict(username='programmer', hostname='test', password='test-password', encrypt=True,
+                      disk='/dev/vda', confirm_erase='/dev/vda')
+        kernel = {'path': 'usr/lib/modules/6.12.1-lts/vmlinuz', 'sha256': hashlib.sha256(b'valid-kernel').hexdigest()}
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'payload.sfs'
+            source.touch()
+            with patch.object(installer, 'selected_disk', return_value=self.disk()), \
+                 patch.object(installer.shutil, 'which', return_value='/usr/bin/tool'), \
+                 patch.object(installer, 'run', side_effect=['root:x:0:0::/root:/bin/bash\n', json.dumps({'architecture': 'x86_64', 'version': 'preview'}), json.dumps(kernel)]) as commands, \
+                 patch.object(installer.subprocess, 'check_output', return_value=b'corrupt-kernel'):
+                with self.assertRaisesRegex(ValueError, 'kernel failed verification'):
+                    installer.install(config, source, Path(temp) / 'target')
+                self.assertTrue(all(call.args[0] == 'unsquashfs' for call in commands.call_args_list))
                 self.assertFalse((Path(temp) / 'target').exists())
 
     def test_config_cannot_inject_commands_or_password_lines(self):

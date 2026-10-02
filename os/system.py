@@ -222,6 +222,9 @@ def recover(device, name=None):
             saved.mkdir(mode=0o700)
             shutil.copytree(boot, saved / 'boot')
             run('btrfs', 'subvolume', 'snapshot', chosen / 'root', restoring)
+            # PreTransaction snapshots contain pacman's active transaction lock.
+            # No package manager owns it in this offline recovery candidate.
+            (restoring / 'var/lib/pacman/db.lck').unlink(missing_ok=True)
             try:
                 copy_contents(chosen / 'boot', boot)
                 run('sync')

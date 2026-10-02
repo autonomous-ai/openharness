@@ -9,16 +9,17 @@
   "status": "building; machine validation awaiting working network access",
   "evidence": [
     {
-      "scope": "Installer/recovery guard tests and Python/JSON/XML/Bash syntax",
+      "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
       "command": "make -C os check",
       "result": "passed",
-      "test_count": 11,
-      "at_utc": "2026-10-02T20:40:08Z",
+      "test_count": 14,
+      "at_utc": "2026-10-02T22:01:21Z",
       "source_sha256": {
-        "os/installer.py": "af440b88583e8f8b20320d3c5167e05daf674c164b839aaf31145135160cf7f0",
-        "os/system.py": "7d4e0f8180669ded465907cf00072130d4797ede783d23cf1b7ab686a52f0616",
-        "os/tests/test_installer.py": "ef780457ad2ad699f23b63d3d89ab50b6c11b4ca3958f42c84e29774d472b419",
-        "os/tests/test_system.py": "f028ed6d3ab27f1802fe504ed99cb209a07c57dd9e6837cc5a3a5bca6265a336"
+        "os/installer.py": "7703760b9192f727e9e1daafe80e984774a68b47226cf4f6e96115719b51aa7a",
+        "os/system.py": "d4151c2c0d02d8a99a733ad8abb0f334a2e40562421215638dadcef81d853379",
+        "os/tests/test_installer.py": "a91f0916da58620b4256a36ccb4341c0ab2de3d2ba11d10a90e635838dd61a9b",
+        "os/tests/test_system.py": "f028ed6d3ab27f1802fe504ed99cb209a07c57dd9e6837cc5a3a5bca6265a336",
+        "os/tests/test_vm_protocol.py": "14a8657be48778ca38778321e0ebbc7b42970822c9cb69277c7667ca59089ea8"
       },
       "limitations": "No claim of real image boot, installation, recovery, or hardware support."
     },
@@ -53,7 +54,7 @@
     {
       "started_utc": "2026-10-02T18:15:44Z",
       "ended_utc": null,
-      "reason": "GitHub CLI/Git TLS resets and timeouts; connector RPC failures; GitHub connector does not have repository-content write permission. Local QEMU installation also failed fetching ghcr.io dependencies. Some escalation reviews timed out; subsequent local commit and test-tool installation commands were approved.",
+      "reason": "GitHub CLI/Git TLS resets and timeouts; intermittent connector RPC failures; connector lacks repository-content write permission and cannot download artifacts above 512 MiB. Native QEMU install failed fetching ghcr.io. Existing Colima VM now runs, but its Ubuntu package-index transfers time out. Some automatic approval reviews timed out; retries sometimes succeeded.",
       "local_implementation_continued": true,
       "overlaps_other_stages": true
     }
@@ -67,9 +68,9 @@
     "Measure boot, install duration, idle RAM/CPU and disk footprint; optimize from those measurements",
     "Publish a verified preview with checksum and installation directions; physical ThinkPad/RTX verification remains separate"
   ],
-  "last_updated_utc": "2026-10-02T20:44:21Z",
+  "last_updated_utc": "2026-10-02T22:01:21Z",
   "remote_build_commit": "4677aa7e7596a93a88dd08d31481fa8c758c8d4a",
-  "local_commit_before_latest_test_changes": "e288d3e98a3dd8d8724579d34a2f9aa526b0f13e",
+  "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
     {
       "run_id": 37041386511,
@@ -90,5 +91,12 @@
       "run_id": 37044532366,
       "result": "image passed; machine harness failed before guest boot"
     }
+  ],
+  "recent_implementation": [
+    "Verify and restore the package-owned kernel removed from /boot by Archiso before offline installation",
+    "Initialize a fresh package-verification keyring per machine and pin live-session repositories",
+    "Start the agent runtime with the graphical environment; browser requests use the current user-service environment",
+    "Exercise a real offline package transaction and clear its stale database lock during recovery",
+    "Inspect the actual ISO payload and shorten the USB boot-menu delay to one second"
   ]
 }

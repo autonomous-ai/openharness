@@ -54,6 +54,9 @@ Use a fresh `HARNESS_OS_BUILD_DIR` for every build. Outputs are in `os/dist`:
 the hybrid USB ISO, its SHA-256 checksum, the package inventory, and a manifest
 with the clean source commit, runtime toolchains and hashes. Commit source changes
 before building; published client binaries do not contain the OS session mode.
+The build independently reads the ISO's SquashFS payload and compares its runtime,
+kernel, configuration and package inventory with the source. `inspection.json`
+records that check; machine validation is still required afterward.
 There is no publication to
 the normal Harness CLI/TUI update channels.
 
@@ -87,6 +90,8 @@ or the USB; the machine's owner retains normal Linux administrator control.
 complete Arch repository snapshot. Use `--snapshot YYYY/MM/DD` to choose a complete
 snapshot at or after the current one. Packages remain signed by Arch; the OS does not
 run an updater or download anything on a schedule.
+The bundled hn and OS integration are pinned to this preview's source build;
+this command updates Arch packages, not the bundled Harness runtime.
 
 Every package transaction also saves a checkpoint. It contains Btrfs root and a
 checksummed copy of `/boot`, so the package database, kernel, modules and initramfs

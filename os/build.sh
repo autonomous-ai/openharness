@@ -43,6 +43,7 @@ Server = https://archive.archlinux.org/repos/$SNAPSHOT/\$repo/os/\$arch
 EOF
 mkdir -p "$BUILD_DIR/package/usr/lib/harness" "$BUILD_DIR/repo"
 cp -a root/. "$BUILD_DIR/package/"
+install -Dm 644 "$SOURCE_ROOT/LICENSE" "$BUILD_DIR/package/usr/share/licenses/harness-os/LICENSE"
 cp installer.py "$BUILD_DIR/package/usr/lib/harness-os/install.py"
 cp system.py "$BUILD_DIR/package/usr/lib/harness-os/system.py"
 install -m 755 tools/hn-os "$BUILD_DIR/package/usr/bin/hn-os"
@@ -114,7 +115,7 @@ EOF
 # Use the same LTS kernel in the live USB and on disk.
 python3 - "$PROFILE" <<'PY'
 from pathlib import Path
-import sys
+import re, sys
 p = Path(sys.argv[1])
 for d in ['syslinux', 'efiboot', 'grub']:
     for f in (p / d).rglob('*'):
@@ -123,7 +124,15 @@ for d in ['syslinux', 'efiboot', 'grub']:
             except UnicodeDecodeError: continue
             s = s.replace('vmlinuz-linux', 'vmlinuz-linux-lts').replace('initramfs-linux.img', 'initramfs-linux-lts.img')
             s = s.replace('Arch Linux install medium', 'Programmer OS - try or install')
+            # Keep a short opportunity to choose recovery media or firmware tools.
+            s = re.sub(r'(?m)^timeout(?:=|\s+)\d+', lambda m: 'timeout=1' if '=' in m[0] else 'timeout 1', s)
+            s = re.sub(r'(?m)^TIMEOUT\s+\d+', 'TIMEOUT 10', s)  # Syslinux uses tenths of a second.
+            s = re.sub(r'(?m)^beep on$', 'beep off', s)
+            s = re.sub(r'(?m)^play .*$', '', s)
+            s = s.replace('MENU TITLE Arch Linux', 'MENU TITLE Programmer OS')
+            s = re.sub(r'(?m)^MENU BACKGROUND .*\n', '', s)
             f.write_text(s)
 PY
 mkarchiso -v -w "$BUILD_DIR/archiso" -o "$OS_DIR/dist" "$PROFILE"
 python3 tools/manifest.py "$OS_DIR/dist" "$BUILD_DIR/archiso/x86_64/airootfs"
+python3 tools/inspect.py "$OS_DIR/dist/"*.iso

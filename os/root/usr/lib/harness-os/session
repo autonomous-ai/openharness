@@ -20,6 +20,7 @@ fi
 # A missing/broken GPU driver must not strand the programmer at a blank screen.
 # Stay in hn on the Linux console; an agent can install drivers and arrange a reboot.
 systemctl --user stop harness-os.target || true
+systemctl --user start harness-daemon.service || true
 printf '%s\n' 'Graphics unavailable; continuing in hn on the console.'
 cd "$HOME/Projects"
 while :; do

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -97,6 +98,13 @@ def preflight(config, source):
     lock = json.loads(run('unsquashfs', '-cat', source, 'usr/share/harness-os/lock.json', capture=True))
     if lock.get('architecture') != 'x86_64' or not lock.get('version'):
         raise ValueError('The source is not a Programmer OS x86_64 image.')
+    kernel = json.loads(run('unsquashfs', '-cat', source, 'usr/share/harness-os/kernel.json', capture=True))
+    if not re.fullmatch(r'usr/lib/modules/[a-zA-Z0-9._+-]+/vmlinuz', kernel.get('path', '')) or not re.fullmatch(r'[a-f0-9]{64}', kernel.get('sha256', '')):
+        raise ValueError('The image has an invalid kernel manifest.')
+    payload = subprocess.check_output(['unsquashfs', '-cat', str(source), kernel['path']])
+    if hashlib.sha256(payload).hexdigest() != kernel['sha256']:
+        raise ValueError('The installation kernel failed verification. No disk has been erased.')
+    return kernel
 
 
 def install(config, source, target):
@@ -109,7 +117,7 @@ def install(config, source, target):
         raise ValueError('Installation mountpoint is not empty.')
     if config.get('confirm_erase') != config['disk']:
         raise ValueError('Explicit confirmation of the exact disk is required.')
-    preflight(config, source)
+    kernel = preflight(config, source)
     selected_disk(config)
     started = time.monotonic()
     disk = config['disk']
@@ -163,6 +171,9 @@ def install(config, source, target):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, destination)
         shutil.rmtree(boot_staging)
+        # mkarchiso moves the live /boot files out of SquashFS. Regenerate the
+        # disk initramfs around this verified, package-owned kernel instead.
+        shutil.copyfile(target / kernel['path'], target / 'boot/vmlinuz-linux-lts')
         print('Configuring account, boot and recovery...', flush=True)
         # The live image is immutable. No live passwords, SSH keys or sessions are copied.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
@@ -219,6 +230,7 @@ def install(config, source, target):
             shutil.copytree(networks, target / 'etc/NetworkManager/system-connections', dirs_exist_ok=True)
         chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd')
         chroot(target, 'systemctl', 'disable', 'sshd.service')
+        chroot(target, '/usr/lib/harness-os/init-keyring')
         chroot(target, 'mkinitcpio', '-P')
         chroot(target, 'grub-install', '--target=i386-pc', '--recheck', disk)
         chroot(target, 'grub-install', '--target=x86_64-efi', '--efi-directory=/boot', '--boot-directory=/boot', '--removable', '--no-nvram')
