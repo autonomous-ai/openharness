@@ -3,6 +3,88 @@
 Start with the [September 22 wrap-up and resume notes](../../../docs/performance/2026-09-22-wrap-up.md)
 for the ready PRs, measured improvements, rejected experiments and remaining priorities.
 
+## Connected local workspace resources
+
+The older fixtures below deliberately suppress real connections and several
+background services. Their component timings cannot establish total app energy
+savings. The connected fixture runs the Release desktop, its full local daemon,
+and real tmux terminals with a private home, identity, control port and socket.
+`FLUTTER_TEST` is absent: local background services and daemon supervision
+remain active. Environment installation, sign-in and update acquisition are
+substituted; the workspace is signed out. The injected discovery uses the
+externally owned test daemon and disables ownership-triggered restarts. It does
+not use real conversations, model accounts or the installed daemon.
+
+On macOS, build the CLI with `node build-bundle.mjs` in `cli/`, then:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  python3 tool/native_benchmark/prepare.py --flutter /path/to/pinned/flutter \
+  --connected-resource
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  python3 tool/native_benchmark/test_process_forest_usage.py
+HARNESS_BENCH_NODE=/absolute/path/to/pinned/node \
+  HARNESS_BENCH_TMUX=/absolute/path/to/tmux \
+  python3 tool/native_benchmark/test_connected_stack.py
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun swiftc tool/native_benchmark/process_forest_usage.swift \
+  -o /private/tmp/harness-process-forest-usage
+python3 tool/native_benchmark/connected_run.py \
+  --app '/private/tmp/harness-native-benchmark-PRINTED/desktop/build/macos/Build/Products/Release/Harness Benchmark.app' \
+  --root /private/tmp/harness-connected-UNUSED_NAME \
+  --node /absolute/path/to/pinned/node --tmux /absolute/path/to/tmux \
+  --sampler /private/tmp/harness-process-forest-usage \
+  --label current --terminals 10 --seconds 30
+```
+
+The launcher refuses an existing root or a normal installed app. Its additional
+macOS sandbox allows writes only inside that run and terminal devices, and
+outbound networking only over loopback or its private Unix sockets. macOS's
+setuid `/bin/ps` has a narrow execution exception for read-only discovery.
+Closing the owning launcher's stdin stops its daemon and its explicitly named
+tmux server; `cleanup.json` verifies the private socket has stopped listening.
+The app also refuses startup without the matching private-home environment.
+
+Every retained terminal runs a deterministic Node worker with 1,000 seeded
+lines. Four panes are visible; the remaining panes live in other tabs. The five
+phases are foreground idle with a visible cursor, foreground idle with a hidden
+cursor, foreground output, hidden-app idle, and hidden-app output. Active
+workers redraw eight rows at 20 Hz. Output must reach every retained terminal,
+connections must remain controlling, and actual output counts and skipped ticks
+are retained. A focus, visibility or geometry change during a phase rejects it.
+This controls terminal traffic, not model behavior, inference or cloud latency.
+
+`process_forest_usage.swift` samples the app, daemon and tmux process trees at
+1 Hz. CPU and wakeup accounting includes kernel-recorded exited children, so
+short-lived `ps` and Git helpers count. The process inventory includes zombies:
+their CPU remains attributed to them until their parent reaps them and receives
+the child counters. The regression calibration deliberately delays reaping;
+the earlier `proc_listallpids` inventory dropped that interval and was rejected.
+See Apple's [child-accounting implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_exit.c).
+Root overlap, root replacement, unstable
+membership and regressing counters reject a measurement. Calibration compares
+live and reaped child CPU against independent `getrusage` counters. Processes
+that escape/reparent out of these trees are outside its boundary. Summed
+physical footprints can include shared mappings. Neither this sampler nor the
+single-process sampler measures GPU joules, battery discharge, or macOS's
+“Using Significant Energy” classification.
+
+Use `prepare.py --source /path/to/baseline/desktop` and `connected_run.py
+--bundle /path/to/baseline/cli/dist/cli.js` to compare a second source variant
+with the same tooling. The copied build records its source revision, production
+patch digest and fixture hashes; the stack records the exact CLI bundle hash.
+Finish all builds before recording measurements. Run at least three paired
+trials, alternate their order, keep failed runs, and record host contention.
+Treat five-second runs as calibration only. Raw phase samples, output counters,
+native state, source identities, failures and cleanup results remain in the run
+directory. Never extrapolate one workload's CPU improvement to whole-device
+energy or unrelated signed-in workloads.
+
+The [October 2 connected comparison](../../../docs/performance/2026-10-02-connected-workspace-resources.md)
+records three pairs, the rejected initial accounting experiment, and both the
+hidden-cursor idle improvement and higher foreground active-output CPU. It does
+not establish overall energy savings.
+
 ## Core experiences and process resources
 
 ```sh
