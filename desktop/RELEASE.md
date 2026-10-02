@@ -17,10 +17,22 @@ make release-desktop ARGS="--dry-run"      # print the version it would cut and 
 make release-desktop ARGS="--minor"        # bump the MINOR version, per the usual semver convention
 make release-desktop ARGS="1.3.0"          # release an explicit version
 make release-desktop ARGS="--notes-file notes.md"   # hand-written release notes
+make release-desktop ARGS="--prepare"      # package the final pushed PR head during tests/review; publish nothing
+make release-desktop ARGS="--wait"         # release, then follow this exact tag through public verification
 ```
 
-Nothing is built locally and no GCS credentials are needed: the only things the script touches are
-git and a public HTTPS read of the manifest.
+Nothing is built locally and no GCS credentials are needed. The script uses Git and a public
+HTTPS read of the manifest; `--prepare` and `--wait` also need the authenticated `gh` CLI.
+
+For an authorized release, run `--prepare` once the final implementation is pushed to its PR
+branch, while the required tests and review run. It selects the next version by the same rules
+as a release, builds/signs/notarizes all platforms in CI, and verifies all six downloads at an
+isolated candidate path. It creates neither a release tag nor a product manifest/Release page.
+After checks pass, merge and release that same version normally. CI reuses the candidate only
+when the complete source tree and version match; a clean squash is supported. Changed code,
+build inputs or version require a new build. Candidate packaging does not replace application
+tests or authorize publication. See the [validation guide](../docs/validation-and-release.md#package-desktop-while-final-checks-run)
+for identity checks, bounded waiting, expiration and disposable promotion validation.
 
 **Why the version comes from two places.** `scripts/release-desktop.sh` takes the highest of the last
 git tag and the highest version in the live `metadata.json`, across every `desktop-*` key. Publishing

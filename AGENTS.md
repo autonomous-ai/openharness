@@ -26,3 +26,8 @@ validation and shipping, use [docs/validation-and-release.md](docs/validation-an
   `scripts/record-ci-validation.py RUN_ID --scope SCOPE --pr PR_NUMBER`; retain routine
   results in its ignored receipt and the PR body instead of another documentation
   commit. Resolve any source differences explicitly before reusing that evidence.
+- For an authorized Desktop release, start `make release-desktop ARGS="--prepare"`
+  from the final pushed PR branch alongside validation and review. It prepares
+  verified packages without publishing; merge and release only after checks pass.
+  Avoid starting candidates while implementation is still changing. The release
+  automatically reuses a matching source tree/version and otherwise builds normally.
