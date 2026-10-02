@@ -411,7 +411,7 @@ describe('claudeContinuation', () => {
     await expect(claudeContinuation(oldPath)).resolves.toEqual({ sessionId: newId, transcriptPath: background })
   })
 
-  it('follows a continuation whose first turn is past the bounded read', async () => {
+  it.each(['x', '漢', '📘'])('follows a continuation past the byte cap with %s bookkeeping', async (character) => {
     // A rollover can open on a `file-history-snapshot` big enough to push the first turn out of the
     // head this check reads. What it rules out is two short lines, so size alone answers for a file
     // larger than the bound — the bound must never be the thing that refuses a real conversation.
@@ -421,11 +421,15 @@ describe('claudeContinuation', () => {
     writeFileSync(oldPath, `${JSON.stringify({ type: 'continued-in', continuedInSessionId: newId })}\n`)
     const nextPath = join(dir, `${newId}.jsonl`)
     writeFileSync(nextPath, [
-      JSON.stringify({ type: 'file-history-snapshot', sessionId: newId, blob: 'x'.repeat(300 * 1024) }),
+      JSON.stringify({ type: 'file-history-snapshot', sessionId: newId, blob: character.repeat(300 * 1024) }),
       JSON.stringify({ type: 'user', sessionId: newId, message: { role: 'user', content: 'carry on' } }),
     ].join('\n') + '\n')
 
     await expect(claudeContinuation(oldPath)).resolves.toEqual({ sessionId: newId, transcriptPath: nextPath })
+
+    // Small Unicode-only bookkeeping is still an empty background session, not a conversation.
+    writeFileSync(nextPath, JSON.stringify({ type: 'ai-title', title: character.repeat(12) }) + '\n')
+    await expect(claudeContinuation(oldPath)).resolves.toBeNull()
   })
 
   it('returns null for a missing file', async () => {
