@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/devices/device_settings.dart';
+import 'package:harness/devices/device_artwork.dart';
 import 'package:harness/devices/device_hosts.dart';
 import 'package:harness/devices/devices_controller.dart';
 import 'package:harness/devices/devices_screen.dart';
@@ -74,6 +75,10 @@ void main() {
             AssetImage('assets/devices/harness-$image.webp'),
             context,
           ),
+        precacheImage(
+          const AssetImage('assets/devices/harness-square.png'),
+          context,
+        ),
       ]);
     });
     await tester.pumpAndSettle();
@@ -122,6 +127,90 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
+    testWidgets('${brightness.name} two round devices and one square device', (
+      tester,
+    ) async {
+      final dial = DialState();
+      final controller = DevicesController(
+        dial: dial,
+        accountId: 'mixed-hardware',
+        sendSettings: (_, _) async => true,
+      );
+      await controller.load();
+      final first = deviceStatus('round-one');
+      final second = deviceStatus('round-two');
+      // The connected square unit's older firmware sends its explicit hardware
+      // identity without settings. It must still get the correct photograph.
+      const square = DialStatus(
+        attached: true,
+        id: 'square',
+        mac: '00:11:22:33:44:55',
+        hw: 'harness-pro',
+      );
+      report(dial, [first, second, square]);
+      // A user-selected retail label must not turn a reported round screen
+      // into a square enclosure.
+      controller.rename(
+        controller.devices[1].key,
+        'Round two',
+        HarnessDeviceModel.pro,
+      );
+      final key = GlobalKey();
+      await pump(tester, controller, brightness: brightness, capture: key);
+      for (var i = 0; i < 3; i++) {
+        final card = find.byKey(
+          ValueKey('device-card-${controller.devices[i].key}'),
+        );
+        final artwork = tester.widget<DeviceArtwork>(
+          find.descendant(of: card, matching: find.byType(DeviceArtwork)),
+        );
+        expect(artwork.square, i == 2);
+      }
+      await tester.tap(
+        find.byKey(ValueKey('device-card-${controller.devices.last.key}')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.image(const AssetImage('assets/devices/harness-square.png')),
+        findsNWidgets(2),
+      );
+      expect(tester.takeException(), isNull);
+      controller.rename(
+        controller.devices[1].key,
+        'Round two',
+        HarnessDeviceModel.harness,
+      );
+      controller.rename(
+        controller.devices.last.key,
+        'Square unit',
+        HarnessDeviceModel.pro,
+      );
+      await tester.pumpAndSettle();
+      await capture(tester, key, '${brightness.name}-mixed-hardware');
+
+      // Shape also works without a retail SKU, using the same resolution as
+      // the round units. Firmware's explicit shape is the authority.
+      report(dial, [
+        first,
+        second,
+        DialStatus.fromJson({
+          'attached': true,
+          'id': square.id,
+          'mac': square.mac,
+          'hw': 'unknown-board',
+          'settings': {...first.settings!.toJson(), 'round': false},
+        }),
+      ]);
+      await tester.pumpAndSettle();
+      expect(
+        find.image(const AssetImage('assets/devices/harness-square.png')),
+        findsNWidgets(2),
+      );
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      dial.dispose();
+    });
+
     for (final empty in [false, true]) {
       testWidgets(
         '${brightness.name} ${empty ? 'empty' : 'five-device'} product view',

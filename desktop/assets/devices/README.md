@@ -11,6 +11,12 @@ representations of a separate Pro enclosure or a connected device's live display
 Bundled for offline device management. Presentation crops happen in
 `DeviceArtwork`; the original images are unchanged.
 
+`harness-square.png` is the square-unit photograph supplied by the user on
+2026-10-02, copied unchanged. Connected-device cards and details select it from
+the firmware's `round: false` setting or the explicit `harness-pro` hardware ID
+when settings are unavailable. Resolution and user-selected model labels do
+not determine the enclosure artwork. This photograph is not a live display.
+
 ## Devices navigation mark
 
 `harness-mark.png` is a transparent product illustration generated with the

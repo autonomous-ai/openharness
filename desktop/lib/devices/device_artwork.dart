@@ -24,33 +24,35 @@ class DeviceMark extends StatelessWidget {
   );
 }
 
-/// Product photography from autonomous.ai/harness-device. Bundled so the
-/// library remains useful when the computer is offline.
+/// Bundled product photography, selected using the connected screen's shape.
 class DeviceArtwork extends StatelessWidget {
   const DeviceArtwork({
     super.key,
     this.desk = false,
     this.side = false,
     this.closeUp = false,
+    this.square = false,
   });
-  final bool desk, side, closeUp;
+  final bool desk, side, closeUp, square;
 
   @override
   Widget build(BuildContext context) => ExcludeSemantics(
     child: ClipRect(
       child: Transform.scale(
-        scale: closeUp ? 1.85 : 1,
+        scale: closeUp && !square ? 1.85 : 1,
         alignment: const Alignment(-.22, .12),
         child: Image.asset(
-          'assets/devices/harness-${desk
-              ? 'desk'
-              : side
-              ? 'side'
-              : 'front'}.webp',
+          square
+              ? 'assets/devices/harness-square.png'
+              : 'assets/devices/harness-${desk
+                    ? 'desk'
+                    : side
+                    ? 'side'
+                    : 'front'}.webp',
           fit: BoxFit.cover,
           width: double.infinity,
           height: double.infinity,
-          alignment: const Alignment(-.22, .12),
+          alignment: square ? Alignment.center : const Alignment(-.22, .12),
           filterQuality: FilterQuality.medium,
         ),
       ),

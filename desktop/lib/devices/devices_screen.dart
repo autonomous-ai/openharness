@@ -394,7 +394,13 @@ class _DeviceCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 116, child: DeviceArtwork(closeUp: true)),
+              SizedBox(
+                height: 116,
+                child: DeviceArtwork(
+                  closeUp: true,
+                  square: device.hasSquareDisplay,
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(15, 13, 15, 14),
                 child: Column(
@@ -461,9 +467,13 @@ class _DeviceShowcase extends StatelessWidget {
     children: [
       ClipRRect(
         borderRadius: BorderRadius.circular(18),
-        child: const SizedBox(
+        child: SizedBox(
           height: 205,
-          child: DeviceArtwork(side: true, closeUp: true),
+          child: DeviceArtwork(
+            side: true,
+            closeUp: true,
+            square: device.hasSquareDisplay,
+          ),
         ),
       ),
       const SizedBox(height: 16),

@@ -36,6 +36,13 @@ class HarnessDevice {
   final DialStatus status;
   final String machineId, machineName;
   final bool hostOnline, hostAvailable, local;
+
+  /// Use the reported screen shape, not its resolution or the saved model
+  /// label. Older Pro firmware identifies itself before it reports settings.
+  bool get hasSquareDisplay => status.settings?.round != null
+      ? !status.settings!.round
+      : status.hw == 'harness-pro';
+
   bool get canEdit =>
       hostOnline &&
       hostAvailable &&
