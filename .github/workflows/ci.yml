@@ -162,6 +162,40 @@ jobs:
       - name: Agent startup through the system zsh login shell
         run: npx vitest run src/lib/engineShellStartup.spec.ts
 
+  # Build both slices and execute each host architecture. All process/tmux
+  # fixtures are private; no installed agent or running session is controlled.
+  process-images-native:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: command -v tmux || brew install tmux
+      - name: Read-only kernel probe, universal signing and byte-safe protocol
+        run: python3 native/test_process_images.py
+      - name: Build the embedded universal artifact
+        run: python3 scripts/build-process-images.py --output "$RUNNER_TEMP/process-images.json"
+      - name: Bundled native discovery, exec replacement and private tmux cleanup
+        env:
+          HARNESS_PROCESS_IMAGES_ARTIFACT: ${{ runner.temp }}/process-images.json
+          RUN_DARWIN_PROCESS_IMAGES: '1'
+        run: |
+          node scripts/test-process-images-bundled.mjs
+          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts --maxWorkers=1
+
   # Typecheck and contract checks run alongside the default suite's four shards.
   cli-contracts:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
@@ -224,6 +258,9 @@ jobs:
       - run: npm ci
 
       - run: npx tsc --noEmit
+
+      - name: Native helper build-input and portable bundle contracts
+        run: node --test scripts/test-process-image-bundle.mjs
 
       # The guard fuzz suite measures a wall-clock CPU budget. Sibling workers running
       # subprocess fixtures can deschedule it past that bound on a shared runner.

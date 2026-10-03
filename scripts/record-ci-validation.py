@@ -20,7 +20,7 @@ import zipfile
 
 CLI_JOBS = {"cli-contracts", "typecheck-test"} | {f"cli-tests ({i})" for i in range(1, 5)} | {
     f"serial-native ({system}, {node})" for system in ["ubuntu-latest", "macos-latest"] for node in ["20.19.0", "22.23.2"]
-}
+} | {f"process-images-native ({system})" for system in ["macos-15", "macos-15-intel"]}
 TUI_JOBS = {"tui-test (ubuntu-latest, x86_64-unknown-linux-musl)", "tui-test (ubuntu-24.04-arm, aarch64-unknown-linux-musl)"}
 DESKTOP_PLATFORMS = {"ubuntu-22.04", "macos-15"}
 DESKTOP_JOBS = {"desktop-test-summary"} | {f"desktop-tests ({platform}, {index})" for platform in DESKTOP_PLATFORMS for index in range(1, 5)}

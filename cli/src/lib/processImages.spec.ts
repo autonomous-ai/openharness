@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProcessRow } from './tmux.js'
 
 const execFile = vi.hoisted(() => vi.fn())
+const nativeImages = vi.hoisted(() => vi.fn())
+vi.mock('./nativeProcessImages.js', () => ({ nativeProcessImages: nativeImages }))
 vi.mock('child_process', async original => ({
   ...await original<typeof import('child_process')>(), execFile,
 }))
@@ -18,10 +20,49 @@ const image = (pid: number, path: string) => `p${pid}\nftxt\nn${path}\n`
 const answer = (text: string, error: Error | null = null) =>
   execFile.mockImplementationOnce((_command, _args, _options, callback) => callback(error, text))
 
-beforeEach(() => execFile.mockReset())
+beforeEach(() => {
+  execFile.mockReset()
+  nativeImages.mockReset().mockResolvedValue(new Map())
+})
 afterEach(() => vi.restoreAllMocks())
 
 describe('macOS executable images', () => {
+  it('uses fresh native paths without starting lsof when all births match', async () => {
+    nativeImages.mockResolvedValue(new Map([[10, { path: '/fixture/native', startMarker: 'Fri Oct  2 10:00:00 2026' }]]))
+    expect((await enrichProcessRows([row(10)]))[0].imagePath).toBe('/fixture/native')
+    expect(nativeImages).toHaveBeenCalledWith([10], 500)
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it('uses the ordinary reader only for native identities that are unavailable', async () => {
+    nativeImages.mockResolvedValue(new Map([[10, { path: '/fixture/native', startMarker: row(10).startMarker }]]))
+    answer(image(20, '/fixture/fallback'))
+    expect((await enrichProcessRows([row(10), row(20)])).map(row => row.imagePath))
+      .toEqual(['/fixture/native', '/fixture/fallback'])
+    expect(execFile.mock.calls[0][1]).toEqual(['-b', '-a', '-p', '20', '-d', 'txt', '-Fn'])
+  })
+
+  it('drops a PID with a proven new birth instead of combining new identity and old arguments', async () => {
+    nativeImages.mockResolvedValue(new Map([[10, { path: '/fixture/new-owner', startMarker: 'Fri Oct  2 10:00:01 2026' }]]))
+    const rows = [row(10), row(20)]
+    expect(await enrichProcessRows(rows, new Set([10]))).toEqual([rows[1]])
+    expect(rows).toHaveLength(2)
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it('includes native-query time in the overall fallback deadline', async () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    nativeImages.mockImplementation(async () => { now = 500; return new Map() })
+    execFile.mockImplementationOnce((_command, _args, _options, callback) => {
+      now = 1500
+      callback(new Error('timeout'), '')
+    })
+    answer(image(10, '/fixture/fallback'))
+    await enrichProcessRows([row(10)])
+    expect(execFile.mock.calls[1][2]).toEqual({ timeout: 1500 })
+  })
+
   it('gets all images in one nonblocking call, preserving spaces and Unicode', async () => {
     answer(image(10, '/fixture/renamed engine') + image(10, '/fixture/later.dylib')
       + image(20, '/fixture/引擎'))

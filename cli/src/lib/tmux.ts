@@ -16,6 +16,7 @@ import {
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
+import { nativeProcessImages } from './nativeProcessImages.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 function cleanPaneTitle(title: string): string | null {
@@ -334,23 +335,44 @@ function parseDarwinProcessImages(stdout: string | null): Map<number, string> {
   return images
 }
 
-/** macOS has no /proc. Its libproc-backed lsof supplies text-region paths from
- * the kernel; -b avoids filesystem stat/readlink helpers unnecessary for those
- * names. Keep the normal probe for missing paths, inside the same 3s budget.
+/** macOS has no /proc. Prefer the bundled read-only kernel image probe; retain
+ * both lsof readers for missing paths, inside the same total 3s budget.
  * Never cache by PID: exec can replace an image without changing its birth. */
-async function darwinProcessImages(pids: readonly number[]): Promise<Map<number, string>> {
-  if (!pids.length) return new Map()
+async function darwinProcessImages(rows: readonly ProcessRow[]): Promise<{
+  images: Map<number, string>; stale: Set<number>
+}> {
+  const images = new Map<number, string>()
+  const stale = new Set<number>()
+  if (!rows.length) return { images, stale }
   const deadline = performance.now() + 3000
+  const pids = rows.map(row => row.pid)
+  const native = await nativeProcessImages(pids, 500)
+  const normalizeStart = (marker: string) => marker.trim().split(/\s+/)
+    .map((part, index) => index === 2 ? String(Number(part)) : part).join(' ')
+  for (const row of rows) {
+    const image = native.get(row.pid)
+    if (!image) continue
+    if (normalizeStart(image.startMarker) === normalizeStart(row.startMarker)) images.set(row.pid, image.path)
+    // The PID changed owners since ps. Do not combine the new executable with
+    // old ancestry/arguments, or let the fallback reintroduce that stale row.
+    else stale.add(row.pid)
+  }
   const args = (selected: readonly number[]) => ['-a', '-p', selected.join(','), '-d', 'txt', '-Fn']
-  const images = parseDarwinProcessImages(await execText('lsof', ['-b', ...args(pids)], 1000))
-  const missing = pids.filter(pid => !images.has(pid))
-  const remaining = Math.floor(deadline - performance.now())
+  let missing = pids.filter(pid => !images.has(pid) && !stale.has(pid))
+  let remaining = Math.floor(deadline - performance.now())
+  if (missing.length && remaining > 0) {
+    for (const [pid, path] of parseDarwinProcessImages(
+      await execText('lsof', ['-b', ...args(missing)], Math.min(1000, remaining)),
+    )) images.set(pid, path)
+  }
+  missing = missing.filter(pid => !images.has(pid))
+  remaining = Math.floor(deadline - performance.now())
   if (missing.length && remaining > 0) {
     for (const [pid, path] of parseDarwinProcessImages(await execText('lsof', args(missing), remaining))) {
       images.set(pid, path)
     }
   }
-  return images
+  return { images, stale }
 }
 
 /**
@@ -367,6 +389,7 @@ export async function enrichProcessRows(
   if (!candidates.length) return rows
   const imagePaths = new Map<number, string>()
   const imageIdentities = new Map<number, ReturnType<typeof executableFileIdentity>>()
+  let stale = new Set<number>()
   if (platform() === 'linux') {
     await Promise.all(candidates.map(async (row) => {
       const procImage = `/proc/${row.pid}/exe`
@@ -379,13 +402,15 @@ export async function enrichProcessRows(
       }
     }))
   } else if (platform() === 'darwin') {
-    for (const [pid, path] of await darwinProcessImages(candidates.map((row) => row.pid))) {
+    const result = await darwinProcessImages(candidates)
+    stale = result.stale
+    for (const [pid, path] of result.images) {
       imagePaths.set(pid, path)
       imageIdentities.set(pid, executableFileIdentity(path.replace(/ \(deleted\)$/, '')))
     }
   }
 
-  return rows.map((row) => {
+  return rows.filter(row => !stale.has(row.pid)).map((row) => {
     if (!selectedPids.has(row.pid)) return row
     const imagePath = imagePaths.get(row.pid)
     const image = imageIdentities.get(row.pid) ?? null

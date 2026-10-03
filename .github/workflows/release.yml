@@ -22,8 +22,9 @@ name: Release
 #     key, so it points each at its own scratch file and merges once at the end. The CLI is ONE
 #     platform-independent bundle under ONE key, published by ONE job — the race the desktop
 #     designs around cannot occur here, so inventing a merge step would be ceremony.
-#   * NO signing or notarization. The artifacts are two JavaScript files; integrity is the sha256
-#     in the manifest, which selfUpdate.ts verifies in memory before it writes anything to disk.
+#   * The two published artifacts remain JavaScript. cli.js embeds a universal,
+#     ad-hoc-signed macOS process probe. Both its pinned digest and the manifest's
+#     whole-bundle digest are checked before any extracted helper is executed.
 #
 # cli/scripts/upload-cli.sh is used EXACTLY as it is, with no flag this file invented: GCS_BUCKET,
 # METADATA_PATH and OTA_KEY are env overrides it already supports. The script is the production
@@ -138,7 +139,24 @@ jobs:
           echo "$GITHUB_RUN_ID" | gcloud storage cp - "$probe"
           gcloud storage rm "$probe"
 
-  # No vitest gate here. The full suite (ci.yml) runs on pull requests — but NOTE that ci.yml has no
+  # Produce the optional-at-runtime probe from this exact release source. CI
+  # exercises both host architectures; this job packages both in one JS bundle.
+  process-images:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and verify universal read-only process probe
+        run: python3 cli/scripts/build-process-images.py --output "$RUNNER_TEMP/process-images.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: process-images
+          path: ${{ runner.temp }}/process-images.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # No vitest gate here. The full suite (ci.yml) runs on demand — but NOTE that ci.yml has no
   # `push` trigger and main also takes direct pushes, so a tagged commit has NOT necessarily been
   # through it. What stands between a tag and the fleet is exactly what `publish` runs itself:
   # `tsc --noEmit` below (esbuild only strips types, it never checks them) and upload-cli.sh's own
@@ -147,7 +165,7 @@ jobs:
   # the one thing cheap enough to keep in front of a publish that every daemon installs within a
   # minute and that cannot be undone.
   publish:
-    needs: [version, preflight]
+    needs: [version, preflight, process-images]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -155,8 +173,15 @@ jobs:
       # dry run it is the scratch manifest nothing polls.
       METADATA_PATH: ${{ needs.version.outputs.metadata_path }}
       VERSION: ${{ needs.version.outputs.version }}
+      HARNESS_PROCESS_IMAGES_ARTIFACT: ${{ github.workspace }}/.process-images/process-images.json
+      HARNESS_REQUIRE_PROCESS_IMAGES: '1'
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: process-images
+          path: .process-images
 
       - uses: actions/setup-node@v7
         with:

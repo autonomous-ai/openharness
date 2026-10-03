@@ -1,10 +1,12 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { link, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { link, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
+import { nativeProcessImages } from './nativeProcessImages.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { executableFileIdentity } from './engineBin.js'
 import { TmuxBackend } from './tmuxBackend.js'
@@ -17,6 +19,7 @@ const children: ChildProcess[] = []
 const folders: string[] = []
 let server: IsolatedTmux | undefined
 const exec = promisify(execFile)
+const originalRuntime = env.ADAPTER_RUNTIME_DIR
 
 afterEach(async () => {
   for (const child of children.splice(0)) {
@@ -28,6 +31,8 @@ afterEach(async () => {
   await server?.close()
   server = undefined
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
+  env.ADAPTER_RUNTIME_DIR = originalRuntime
   for (const path of folders.splice(0)) await rm(path, { recursive: true, force: true })
 })
 
@@ -56,6 +61,17 @@ async function images(pids: number[]) {
 }
 
 realDescribe.sequential('real macOS executable identity', () => {
+  beforeEach(async () => {
+    const artifact = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
+    if (!artifact) return
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', await readFile(artifact, 'utf8'))
+    env.ADAPTER_RUNTIME_DIR = await fixture()
+    // First execution of a freshly written Mach-O may wait on macOS signature
+    // inspection. Production can use lsof during that cold start; warm the
+    // private helper here before requiring the native integration path.
+    expect((await nativeProcessImages([process.pid], 3000)).size).toBe(1)
+  })
+
   it('resolves renamed, Unicode, symlinked and hard-linked native images', async () => {
     const root = await fixture()
     const native = await nativeSleeper(root, 'renamed 引擎 2.9.0')
@@ -91,7 +107,12 @@ realDescribe.sequential('real macOS executable identity', () => {
     const pid = Number(await server.run('display-message', '-p', '-t', pane, '#{pane_pid}'))
     await server.run('set-option', '-w', '-t', pane, 'remain-on-exit', 'on')
     const [before] = await images([pid])
-    expect(before.imageFileKey).toBe(executableFileIdentity('/bin/sh')!.fileKey)
+    // macOS can execute /bin/sh with /bin/bash as its kernel image. Compare
+    // the actual mapped executable, not the shell's launch pathname.
+    const mapped = (await exec('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'], { timeout: 3000 }))
+      .stdout.split('\n').find(line => line.startsWith('n/'))?.slice(1)
+    expect(mapped).toBeDefined()
+    expect(before.imageFileKey).toBe(executableFileIdentity(mapped!)!.fileKey)
     await server.run('send-keys', '-t', pane, 'Enter')
     const expected = executableFileIdentity(native)!.fileKey
     try {
