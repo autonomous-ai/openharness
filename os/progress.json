@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T10:29:26.198461+00:00",
+  "last_updated_utc": "2026-10-03T10:31:49.184447+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "First-use corrections passed targeted local validation; fresh native image and full CLI CI are next.",
+    "status": "Fresh image/native build and full CLI validation are running on 67958156d; preview 4 remains unpublished.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -980,10 +980,10 @@
       "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
       "Update release/download documentation and publish only after required evidence passes"
     ],
-    "native_run_id": 37115159220,
-    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37115159220",
-    "source_commit": "5445fe1ff1ba178c276735a05a79046a09db1a1f",
-    "native_validation_started_utc": "2026-10-03T10:04:05Z",
+    "native_run_id": 37116595898,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37116595898",
+    "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+    "native_validation_started_utc": "2026-10-03T10:29:41Z",
     "validation_attempts": [
       {
         "run_id": 37111342650,
@@ -1084,8 +1084,8 @@
         "publication_utc": null
       }
     },
-    "next_step": "Run targeted local checks, then commit/push and trigger full CLI CI alongside the fresh OS build.",
-    "last_recorded_utc": "2026-10-03T10:29:26.198461+00:00",
+    "next_step": "Follow CI 37116593867 and OS 37116595898; inspect fresh first-use screens and both complete USB install/unlock/recovery journeys. Then run default-model workload and DSH acceptance separately on the same exact image before publication.",
+    "last_recorded_utc": "2026-10-03T10:31:49.184447+00:00",
     "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1115,7 +1115,19 @@
       "Private tmux 3.7c real discovery/restart/login-shell fixtures on this Mac; unavailable engines recorded as skipped.",
       "Portable OS tests/syntax, workflow lint in image CI, full CLI CI including supported OS/Node matrix.",
       "Fresh exact-source ISO and native TUI checks; both full USB machine journeys, then separate workload/DSH default-model acceptance against the same image."
-    ]
+    ],
+    "full_cli_ci": {
+      "run_id": 37116593867,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37116593867",
+      "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+      "started_utc": "2026-10-03T10:29:38Z",
+      "status": "in progress",
+      "passed_so_far": [
+        "Repository process checks",
+        "Linux and macOS native serial/login-shell matrix on Node 20.19.0 and 22.23.2"
+      ],
+      "remaining": "Full default suite, fuzz, coverage/release checks"
+    }
   },
   "previous_goal_turn_classification": "progress: exact-source native terminal checks passed; prepared updated manual guide and default-model programmer/DSH acceptance with live process diagnostics."
 }
