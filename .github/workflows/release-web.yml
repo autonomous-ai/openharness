@@ -62,8 +62,6 @@ jobs:
       HAS_WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
 
       # Tag-only trigger, so GITHUB_REF_NAME is already the bare tag (e.g. v1.3.1_web) and that is
       # the image tag ArgoCD deploys by. The X.Y.Z inside it is also the bundle's version.
@@ -76,10 +74,9 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME is not vX.Y.Z_web"
             exit 1
           }
-          website_only=false
+          website_only="$(bash desktop/scripts/web-release-mode.sh "$GITHUB_REF" "$GITHUB_SHA")"
           archive_path="$BUNDLE_IN_CONTEXT"
-          if git for-each-ref --format='%(contents)' "$GITHUB_REF" | grep -qx 'Website-Only: true'; then
-            website_only=true
+          if [ "$website_only" = true ]; then
             archive_path=''
             # Check again at publication time in case another app release landed.
             python3 desktop/scripts/verify-website-only-release.py "$GITHUB_SHA" live
