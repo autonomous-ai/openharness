@@ -257,7 +257,7 @@ def main():
                 put(vm, '/tmp/' + name, candidate.decode())
                 vm.command('test "$(sha256sum /tmp/' + name + ' | cut -d " " -f 1)" = ' + shlex.quote(checksum))
                 vm.command('sudo install -o root -g root -m 644 /tmp/' + name + ' /usr/share/plymouth/themes/harness/' + name)
-            output, _ = vm.command('sudo mkinitcpio -P && lsinitcpio -l /boot/initramfs-linux-lts.img | grep -E "Plymouth.*ttf|harness\\.(script|plymouth)"', timeout=180)
+            output, _ = vm.command('sudo mkinitcpio -P && sudo lsinitcpio -l /boot/initramfs-linux-lts.img | grep -E "Plymouth.*ttf|harness\\.(script|plymouth)"', timeout=180)
             (folder / 'candidate-initramfs.txt').write_text(output)
         if args.session_file or (args.theme_directory and config['encrypt']):
             vm.stop()
