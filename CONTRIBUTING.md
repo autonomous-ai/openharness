@@ -29,8 +29,8 @@ The first command links the shared viewer from this checkout. Store installation
 that dependency automatically; this also lets you try a new viewer before it is published.
 
 **A harness packages an agent’s instructions, tools, and optional viewer.** Install it,
-start it in your workspace, and group it with other harnesses in a swarm; see the
-[terminology guide](docs/terminology.md). This example has three working files:
+start it in your workspace, and group it with other harnesses in a tab; see the
+[Naming System](docs/naming-system.md). This example has three working files:
 
 - [`harness.json`](store/examples/hello-world/harness.json) declares the agent and its viewer.
 - [`AGENTS.md`](store/examples/hello-world/AGENTS.md) teaches the agent to change the greeting.

@@ -4,6 +4,9 @@ The canonical system for everything around terminal panes. This supersedes
 older BIOS, bracket-button and mixed desktop recipes. The user-approved
 direction is the authority: refine one system, then use it everywhere.
 
+Product names, meanings, and action labels follow the
+[Naming System](../../docs/naming-system.md), shared across the OS, apps, and device.
+
 ## Character
 
 A calm, precise Mac workspace. Content supplies the personality: an agent's

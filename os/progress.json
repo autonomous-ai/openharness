@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Image and native checks passed; first-use VM identity assertion failed because the minimal image has no hostname utility. Fixed test to use coreutils uname -n; next exact image also includes installer completion screen.",
+    "status": "Exact image build passed; BIOS/plain and UEFI/encrypted USB journeys running. Naming System approved and documented.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -969,10 +969,10 @@
       "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
       "Update release/download documentation and publish only after required evidence passes"
     ],
-    "native_run_id": 37112874271,
-    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37112874271",
-    "source_commit": "7fc8c9c2294254b608fadb7a1060f5a749f090ae",
-    "native_validation_started_utc": "2026-10-03T09:23:17Z",
+    "native_run_id": 37113924838,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37113924838",
+    "source_commit": "ca24088bae5e648becabdfa3f4c150059e038c53",
+    "native_validation_started_utc": "2026-10-03T09:41:57Z",
     "validation_attempts": [
       {
         "run_id": 37111342650,
@@ -1012,7 +1012,7 @@
       "Interactive installation now retains a completion screen with Shut down and Back to Harness; it cannot disappear immediately when its hn pane exits. 27 installer tests and source syntax passed; VM main-entry completion coverage added but not yet run. A subsequent image build is required before publishing these changes."
     ],
     "branding_review": {
-      "status": "discussion, no global terminology migration approved",
+      "status": "approved and documented",
       "sources": [
         "https://github.com/autonomous-ai/autonomous-computer",
         "https://github.com/autonomous-ai/autonomous-grid",
@@ -1027,12 +1027,24 @@
         "Ordinary hn on macOS and other Linux does not expose OS installation actions"
       ],
       "open": [
-        "Whether to keep the existing lowercase harness term for both reusable setups and running sessions",
-        "Device variant names and exact integration scope",
-        "Local-model out-of-box claim requires tested drivers, inference engine and model provisioning; these are not currently bundled in the minimal ISO"
-      ]
+        "Final device variant names and exact integration scope",
+        "Local-model out-of-box claim requires tested drivers, inference engine and model provisioning; these are not currently bundled in the minimal ISO",
+        "Assessment file supplied under /Users/d is unavailable on this Mac; requested accessible path or GitHub link"
+      ],
+      "document": "docs/naming-system.md",
+      "approved_date": "2026-10-03",
+      "documentation": {
+        "request_received_utc": null,
+        "implementation_ready_utc": "2026-10-03T09:55:05.452913+00:00",
+        "validation_completed_utc": "2026-10-03T09:55:05.452913+00:00",
+        "validation": "Reviewed approved vocabulary, checked local Markdown links and fences in all eight touched documents, and passed git diff --check. Documentation only; no runtime suite required.",
+        "merge_utc": null,
+        "publication_utc": null
+      }
     },
     "next_step": "Build and test current source including completion screen and corrected machine identity check; inspect first-use and unlock screenshots before publication.",
-    "last_recorded_utc": "2026-10-03T09:41:12.744184+00:00"
-  }
+    "last_recorded_utc": "2026-10-03T09:41:12.744184+00:00",
+    "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys."
+  },
+  "previous_goal_turn_classification": "progress: corrected minimal-image hostname test, committed and pushed ca24088ba, started verified native build 37113924838, and completed terminology research and proposal."
 }

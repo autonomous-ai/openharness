@@ -3,6 +3,9 @@
 Follow [CONTRIBUTING.md](CONTRIBUTING.md) and the component's instructions. For
 validation and shipping, use [docs/validation-and-release.md](docs/validation-and-release.md).
 
+For product names, terminology, and visible copy, follow the
+[Naming System](docs/naming-system.md).
+
 - Measure the user's request through completion. Record implementation, validation,
   merge, publication, and waiting separately; an Actions duration is not the total.
 - Choose the necessary checks before starting them. Run affected tests and relevant

@@ -19,7 +19,7 @@ store/
 ```
 
 Both a reusable Store package and its running sessions are called **harnesses**.
-A **swarm** groups running harnesses. See [product terminology](../docs/terminology.md).
+A **tab** groups running harnesses. See the [Naming System](../docs/naming-system.md).
 In code and on the wire a package is still a **DSH**, a domain-specific harness: `harness dsh …`,
 `dsh_list`, `cli/src/dsh/`. Those names are the CLI's public contract and stay.
 

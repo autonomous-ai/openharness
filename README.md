@@ -71,14 +71,14 @@ for workloads, slow tails, connection failures and raw data.
 ## How it works
 
 In the workspace, a **harness** is one running session of an agent such as Codex
-or Claude Code, with its own conversation and working context. A **swarm** groups
-harnesses. Use **New Harness** to start one and **New Swarm** to group work.
-Enable **Settings → Experimental → Swarm collaboration** to let their agents
-consult peers in the same swarm; it is off by default.
+or Claude Code, with its own conversation and working context. A **tab** groups
+harnesses. Use **New Harness** to start one and **New Tab** to group work.
+Enable **Settings → Experimental → Tab collaboration** to let their agents
+consult peers in the same tab; it is off by default.
 
 The Store offers **harnesses** with instructions, tools, and optional viewers for
 specific crafts. Install a harness, then start it in your workspace. See the
-[terminology guide](docs/terminology.md) for the complete naming rules.
+[Naming System](docs/naming-system.md) for the complete naming rules.
 
 One daemon per machine runs your agents in tmux. It dials out, so no machine opens a port.
 

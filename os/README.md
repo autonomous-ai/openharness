@@ -9,6 +9,8 @@ primary interface. Compilers, databases and other software are installed when
 a task needs them. The product is Harness; “programmer OS” describes its initial
 audience, not its name.
 
+Product names and interface copy follow the [Naming System](../docs/naming-system.md).
+
 **Preview 3:** the installer finds its offline image after USB boot copies it into
 RAM, and excludes the boot USB even when it has been unmounted. Both optical-media
 and writable-USB tests pass BIOS/plain and UEFI/encrypted installation, reboot,
