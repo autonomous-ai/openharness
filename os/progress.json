@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T11:08:42.507975+00:00",
+  "last_updated_utc": "2026-10-03T11:12:50.086227+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -1059,9 +1059,8 @@
     "native_validation_complete_utc": null,
     "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
     "pending_source_changes": [
-      "Exact bigint executable identities on live OverlayFS; recorded real-inode collision regression.",
-      "OpenCode version-aware plugin migration; refresh before managed launch, preserve foreign files/model settings, defer legacy plugin until confirmed v1.",
-      "VM model check starts in ~/Projects; retain JSONL events; check discovery and plugin startup errors."
+      "Cap unsquashfs extraction caches at 64 MiB instead of the packaged default 512 MiB. Both 1 GiB failures show kernel OOM killing this process. Real low-memory installation must rerun on the resulting image.",
+      "Locate generated game controls by their visible keyboard instructions, not an undocumented .legend CSS class. All previous model-built project tests remain recorded; independent browser acceptance must rerun."
     ],
     "branding_review": {
       "status": "approved and documented",
@@ -1095,7 +1094,7 @@
       }
     },
     "next_step": "Run targeted boot diagnostics against the unchanged verified image; cap extraction memory and correct the independent game selector before the next image.",
-    "last_recorded_utc": "2026-10-03T11:08:42.507975+00:00",
+    "last_recorded_utc": "2026-10-03T11:12:50.086227+00:00",
     "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1205,7 +1204,15 @@
       "uefi_initrd_seconds_including_100s_wait": 210.533,
       "recovered_keyboard_ready_seconds": 116.847,
       "status": "unresolved",
-      "next_step": "Record unlock prompt/password/serial login/Harness readiness timestamps and installed/recovered initrd journals. Do not attribute the delay to Plymouth until logs establish the cause."
+      "next_step": "Record unlock prompt/password/serial login/Harness readiness timestamps and installed/recovered initrd journals. Do not attribute the delay to Plymouth until logs establish the cause.",
+      "diagnostic_run_id": 37118718782,
+      "diagnostic_test_source": "6fe521be4d98a1ae1a0da0005f517632a54177ae",
+      "diagnostic_started_utc": "2026-10-03T11:08:47Z"
+    },
+    "extraction_cache_reference": "https://github.com/plougher/squashfs-tools/blob/master/Documentation/4.7.5/USAGE-UNSQUASHFS",
+    "post_diagnostic_local_checks": {
+      "completed_utc": "2026-10-03T11:12:50.086227+00:00",
+      "result": "51 portable OS tests passed; Python/JSON/XML/shell checks and Node syntax for the browser acceptance script passed. Naming System relative links resolve. No new full CLI suite: CLI/runtime source is unchanged from passed run 37116593867."
     }
   },
   "previous_goal_turn_classification": {

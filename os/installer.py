@@ -176,7 +176,9 @@ def install(config, source, target):
             (target / name).mkdir()
             run('mount', '-o', f'subvol={subvol},compress=zstd:1,noatime', root_device, target / name)
         print('Copying the verified offline system...', flush=True)
-        run('unsquashfs', '-f', '-no-progress', '-d', target, source)
+        # Unsquashfs defaults to 512 MiB of caches. Bound them so installation
+        # still fits on a 1 GiB machine after trying the bundled agent/browser.
+        run('unsquashfs', '-mem', '64M', '-f', '-no-progress', '-d', target, source)
         # Extract on Btrfs first: FAT cannot represent the image's Unix metadata.
         # Copy boot contents without that metadata before regenerating initramfs.
         boot_staging = target / 'boot.from-image'
