@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 3 remains public. Preview 4 passed exact-image 1 GiB and 4 GiB USB installation, boot, recovery, first-agent conversations, projects and DSH checks. Matching guide and public release are being prepared.",
+  "status": "Harness preview 4 is public and all ten public downloads are fully checksum/size verified. Exact-image 1 GiB/4 GiB USB install, boot, recovery, first chats, projects and DSH checks passed. Physical Wi-Fi/suspend/NVIDIA, reliable Mac emulation and landing-page browser review remain unverified.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -628,23 +628,25 @@
   },
   "published_version": "0.1.0-preview.3",
   "latest_publication": {
-    "version": "0.1.0-preview.3",
-    "source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
-    "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3",
-    "published_at": "2026-10-03T07:53:11Z",
-    "verified_at": "2026-10-03T07:53:47.799570+00:00",
+    "version": "0.1.0-preview.4",
+    "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+    "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4",
+    "published_at": "2026-10-03T12:03:40Z",
+    "verified_at": "2026-10-03T12:04:09.527570+00:00",
     "verified_assets": [
       "boot-layout.txt",
+      "harness-0.1.0-preview.4-x86_64.iso",
+      "harness-0.1.0-preview.4-x86_64.iso.sha256",
+      "harness-examples.zip",
       "inspection.json",
+      "INSTALL.md",
       "machine-evidence.zip",
       "manifest.json",
       "packages.txt",
-      "programmer-os-0.1.0-preview.3-x86_64.iso",
-      "programmer-os-0.1.0-preview.3-x86_64.iso.sha256",
       "validation.json"
     ],
-    "receipt": "os/work/release-preview3/publication-ci/publication.json",
-    "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318"
+    "receipt": "os/work/release-preview4-37119543543/publication-ci/publication.json",
+    "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37121570059"
   },
   "physical_thinkpad": {
     "live_boot": {
@@ -922,10 +924,10 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "All required image and machine checks passed. Documentation, fresh screenshots and version-matched installation guide prepared; public release pending.",
+    "status": "Published and verified: all ten assets include matching guide, image, examples, inspection and machine evidence.",
     "implementation_complete_utc": "2026-10-03T11:24:15.435201+00:00",
     "validation_complete_utc": "2026-10-03T11:43:29Z",
-    "publication_utc": null,
+    "publication_utc": "2026-10-03T12:03:40Z",
     "requirements": [
       "Product name Harness; live and installed hostname harness",
       "Try launches bundled OpenCode; when disconnected offer network setup first; install remains usable offline",
@@ -981,9 +983,9 @@
       "Fresh installed home offers Start OpenCode, New terminal and Wi-Fi; live-only Install action removed after installation"
     ],
     "remaining": [
-      "Publish preview 4 and verify its full public asset set",
-      "Report release and manual ThinkPad instructions; physical Wi-Fi, suspend and NVIDIA remain unverified",
-      "Landing-page interactive review and reliable Mac VM experience remain blocked or unverified separately"
+      "Physical ThinkPad test of preview 4 Wi-Fi, suspend, brightness and actual boot time",
+      "NVIDIA/local AI validation on real GPU hardware",
+      "Reliable Mac emulation and landing-page interactive review; current site permission still blocks the latter"
     ],
     "native_run_id": 37116595898,
     "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37116595898",
@@ -1276,7 +1278,8 @@
       "status": "passed: image, native checks, 1 GiB BIOS/plain and UEFI/encrypted journeys",
       "initial_machine_memory_mib": 1024,
       "transport": "usb",
-      "required_followups": []
+      "required_followups": [],
+      "publishable": true
     },
     "previous_verified_image": {
       "run_id": 37116595898,
@@ -1290,7 +1293,7 @@
     },
     "release_preparation": {
       "at_utc": "2026-10-03T12:00:41.137169+00:00",
-      "status": "Matching os/INSTALL.md, README, landing-page copy and fresh screenshots ready. Publication script includes guide, exact evidence, and explicit disclosure of reused project sources.",
+      "status": "Complete; matching guide included and its public checksum matches the repository guide.",
       "changes": [
         "Include a version-matched INSTALL.md in the verified public asset set; reject a mismatched guide.",
         "Use harness-examples.zip for this new preview; preserve historical artifact URLs.",
@@ -1322,7 +1325,8 @@
       "encrypted_password_to_hn_seconds_4gib": 8.299,
       "project_checks": "31 unit tests and all independent keyboard/browser/API acceptance checks passed; three prior completed project sources reused, game agent ran again.",
       "dsh_checks": "Three fresh default-OpenCode turns passed: HTML viewer edit/reload, CSV tool, game play/pause/reset/export.",
-      "visual_review": "Inspected actual welcome, installer, first typed reply, masked disk unlock, installed home, game, mobile website and DSH game-viewer screenshots."
+      "visual_review": "Inspected actual welcome, installer, first typed reply, masked disk unlock, installed home, game, mobile website and DSH game-viewer screenshots.",
+      "public_receipt": "os/work/release-preview4-37119543543/publication-ci/publication.json"
     },
     "mac_compatibility": {
       "verified_utc": "2026-10-03T12:00:41.137169+00:00",
@@ -1333,18 +1337,57 @@
       "native_iso_install": "unsupported on this Apple Silicon Mac",
       "native_app_and_tui": "macOS binaries available for arm64 and x64",
       "vm_status": "Earlier emulation rendered a browser project, then reboot checks failed with guest soft-lockups. Preview 4 full Mac VM experience unverified."
+    },
+    "publication_trigger_utc": "2026-10-03T12:02:13Z",
+    "publication_run_id": 37121570059,
+    "publication_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37121570059",
+    "publication_source_commit": "1eb64ffe6e76505261f994fd2d530a8340f2a10c",
+    "merge_utc": null,
+    "publication_verified_utc": "2026-10-03T12:04:09.527570+00:00",
+    "publication_receipt": "os/work/release-preview4-37119543543/publication-ci/publication.json",
+    "publication_completion_reported_utc": "2026-10-03T12:05:00Z",
+    "publication_completion_reported_basis": "Approximate commentary time after live release and successful publication workflow were read; exact message timestamp unavailable.",
+    "elapsed_seconds": {
+      "first_recorded_work_to_verified_publication": 12944.453,
+      "implementation_and_overlapping_validation_or_diagnosis": 10550.361,
+      "final_machine_validation_after_implementation": 1153.565,
+      "evidence_review_and_docs_packaging_before_publication": 1124.0,
+      "publication_including_all_public_download_verification": 116.528,
+      "merge": null,
+      "notes": "Wall-clock intervals, not hands-on effort; earlier validation overlaps implementation. Actual user request timestamp unknown. Local optional image download and permission waiting are tracked separately, not subtracted."
     }
   },
   "previous_goal_turn_classification": {
     "status": "meaningful progress",
-    "at_utc": "2026-10-03T11:26:36.906384+00:00",
+    "at_utc": "2026-10-03T12:06:54.493802+00:00",
     "progress": [
-      "Naming System and cross-links verified; canonical product/workspace/OS terms documented.",
-      "Complete DSH BIOS/UEFI journey passed on prior image; preserved actual artifacts and screenshots.",
-      "Diagnosed 1 GiB installation OOM in unsquashfs; reduced extraction cache from 512 MiB default to 64 MiB.",
-      "Captured encrypted boot timings and initrd journal, isolated delay before prompt in serial-primary setup; next image tests tty0 primary and adds performance assertions.",
-      "Corrected independent game browser selector and diagnostic pager; new image/1 GiB machine run underway."
+      "Exact corrected image passes complete 1 GiB and 4 GiB BIOS/plain and UEFI/encrypted USB journeys.",
+      "Four project acceptance suites and three fresh DSH exercises passed; actual screenshots reviewed.",
+      "Prepared current installation guide, evidence, refreshed landing-page content and screenshots.",
+      "Published Harness 0.1.0-preview.4; all ten public assets verified by full size and SHA-256.",
+      "Confirmed current Mac is Apple M2 Max arm64; native x86 ISO installation unsupported."
     ],
     "blocking_condition_repeated": false
-  }
+  },
+  "publication_history": [
+    {
+      "version": "0.1.0-preview.3",
+      "source_commit": "bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0",
+      "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3",
+      "published_at": "2026-10-03T07:53:11Z",
+      "verified_at": "2026-10-03T07:53:47.799570+00:00",
+      "verified_assets": [
+        "boot-layout.txt",
+        "inspection.json",
+        "machine-evidence.zip",
+        "manifest.json",
+        "packages.txt",
+        "programmer-os-0.1.0-preview.3-x86_64.iso",
+        "programmer-os-0.1.0-preview.3-x86_64.iso.sha256",
+        "validation.json"
+      ],
+      "receipt": "os/work/release-preview3/publication-ci/publication.json",
+      "verification_run": "https://github.com/autonomous-ai/openharness/actions/runs/37107746318"
+    }
+  ]
 }
