@@ -98,6 +98,13 @@ class FastUpdates(unittest.TestCase):
             update.apply()
         restart.assert_not_called()
         self.assertEqual(update.selected(), self.bundled)
+        with self.feed(), patch.object(update, 'restart') as restart:
+            self.assertTrue(update.check())
+            self.assertEqual(update.verify(update.prepared())['versions'], {'hn': '1.1.0', 'cli': '1.1.0'})
+            self.assertEqual(update.selected(), self.bundled)
+            restart.assert_not_called()
+            update.apply()
+        self.assertNotEqual(update.selected(), self.bundled)
 
     def test_failed_activation_restores_previous_selection(self):
         with self.feed():

@@ -11,25 +11,29 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 4:** the USB welcome offers **Install Harness** or **Try without installing**.
+**Preview 5:** the USB welcome offers **Install Harness** or **Try without installing**.
 Install works offline. Try opens Wi-Fi setup when needed, then bundled OpenCode
 with its upstream default settings. The installer has four fields and one Install
 action; encrypted boot shows the Harness wordmark and a masked password prompt.
 Both the live and installed system use `me@harness`.
+`Super+U` opens Updates. Frequent hn/CLI releases download in the background;
+you choose when to reconnect the screen. Running agents and terminals stay alive.
 
-[Download preview 4](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4)
+[Download preview 5](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.5)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
-The exact image passed BIOS/plain and UEFI/encrypted USB installation, boot,
-update retry and recovery at 1 GiB and 4 GiB RAM. First-use model conversations,
-four programmer projects and three DSH exercises passed the checks described below.
-The release includes the matching installation guide and validation evidence.
+Each published image includes its matching installation guide and exact validation
+evidence. Preview 4 passed BIOS/plain and UEFI/encrypted USB installation, boot,
+update retry and recovery at 1 GiB and 4 GiB RAM. Its first-use model conversations,
+four programmer projects and three DSH exercises passed the checks described below;
+those historical measurements are labeled separately from each new image's receipt.
 
 The user confirmed preview 2 installation and boot from a physical ThinkPad's
 internal disk with the USB removed. Its first-use feedback informed this revision.
-Preview 4 still needs physical Wi-Fi, suspend and NVIDIA testing. A working older
+The user also confirmed preview 4 installation, boot and use on a ThinkPad.
+Physical Wi-Fi, suspend and NVIDIA validation remain outstanding. A working older
 installation does not need reinstalling solely for the USB payload-location fix.
 
 ## Design
@@ -110,7 +114,9 @@ or full-experience demonstration.
 
 Write the **whole ISO** to a USB stick using an image writer such as Etcher, then
 boot an x86-64 PC with Secure Boot disabled. TPM can remain enabled. A 32-bit-only
-ThinkPad cannot boot this image. The [installation guide](INSTALL.md) covers the
+ThinkPad cannot boot this image. Bundled OpenCode also requires SSE4.2: a Core 2
+machine can reach Harness but is not supported for the bundled agent trial.
+The [installation guide](INSTALL.md) covers the
 Mac download, checksum, flashing and ThinkPad boot menu in full.
 
 On the USB welcome, press **Enter** to install or **T** to try Harness. Installation
@@ -144,10 +150,18 @@ normal Linux administrator control.
 
 ## Updates and recovery
 
-The next build is adding automatic hn/CLI downloads and a small bottom-bar
-notice. `Super+U` opens Updates; applying an hn release reconnects the terminal
-surface without a computer reboot. This is under native validation and is not
-yet in the public preview 4 ISO. See [update development](DEVELOPMENT.md#fast-hn-updates-next-build-under-validation).
+Preview 5 prepares hn/CLI releases automatically and shows a small bottom-bar
+notice. `Super+U` opens Updates; Enter activates an available runtime and
+reconnects the screen without a computer reboot. **R** restores the previous
+runtime. System updates use **S**, ask for the account password, retain a
+checkpoint and offer a restart when ready. Neither channel automatically
+interrupts working agents. See [update development](DEVELOPMENT.md#fast-hn-updates).
+
+Preview 4 needs the matching bootstrap bundle from the
+[preview 5 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.5)
+once. Verify its `SHA256SUMS`, run `sudo python3 apply-update.py apply "$PWD"`
+from the extracted folder, and reboot. Later updates use the installed screen;
+routine updates do not require another USB flash.
 
 `sudo hn-os update` saves a checkpoint and upgrades the whole system to yesterday's
 complete Arch repository snapshot. Use `--snapshot YYYY/MM/DD` to choose a complete

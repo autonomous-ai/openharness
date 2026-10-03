@@ -102,7 +102,7 @@ results for current performance measurements.
 
 ## Small development updates
 
-### Fast hn updates (next build; under validation)
+### Fast hn updates
 
 The installed OS checks the existing public hn and CLI release channels every
 15 minutes, with a small randomized delay. Complete, checksum-verified runtimes
@@ -126,8 +126,8 @@ private download, makes a checkpoint, updates any required Arch base first, and
 rebuilds the encrypted boot image. System packages never apply or reboot on a
 timer. After an OS package changes, fast updates wait for a reboot. Publishing an
 ISO is not a requirement for a TUI update. The public preview
-4 ISO predates this feature and needs a small OS integration package once this
-candidate has passed native acceptance; it does not need to be flashed again.
+4 ISO predates this feature and needs the small integration bundle from the
+validated preview 5 release; it does not need to be flashed again.
 
 `development_update=true` builds a private, deliberately unpublished `999.0.1`
 hn/CLI fixture. The installed VM's actual timer stages it, then real Super+U and
@@ -248,7 +248,16 @@ validated Harness OS hardware target by preview 4.
 | Raspberry Pi | Evaluate a maintained ARM64 board kernel, firmware and boot image with the same Harness session | Separate board image required; not covered by the PC ISO or an ARM VM |
 | Native Harness app/TUI on macOS | Existing arm64 and x64 app/runtime releases | Separate from installing the Linux OS |
 
-The initial Intel scope excludes 32-bit-only CPUs/EFI. T2 machines need specific
+The initial Intel scope excludes 32-bit-only CPUs/EFI. The bundled OpenCode trial
+also requires SSE4.2. A preview 4 probe under actual Core 2 Duo TCG execution
+reached the USB welcome and successfully ran hn, Node and Chromium version
+commands, but OpenCode exited with SIGILL (132). This is an instruction-set
+finding, not physical Mac or full browser validation. Older CPUs need a separately
+validated agent path; do not describe them as ready for the default trial.
+[Bun's executable targets](https://bun.com/docs/bundler/executables) document the
+SSE4.2 baseline used by its compiled runtime.
+
+T2 machines need specific
 kernel support for built-in input and other hardware; their firmware and install
 preparation differs from an ordinary PC. The maintained references are the
 [t2linux Arch install guide](https://wiki.t2linux.org/distributions/arch/installation/),

@@ -6,7 +6,8 @@ in the installer; it erases the entire selected disk.
 
 ## 1. Prepare
 
-- An x86-64 Intel or AMD ThinkPad. A 32-bit-only CPU is not supported.
+- An x86-64 Intel or AMD ThinkPad with SSE4.2 for bundled OpenCode. Core 2 and
+  32-bit-only CPUs are outside the default agent trial's supported baseline.
 - A USB stick of at least 4 GB. Flashing replaces its contents.
 - An internal disk of at least 12 GiB, with important files backed up elsewhere.
 - AC power. Installation works offline; trying a cloud agent needs a connection.

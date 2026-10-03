@@ -261,6 +261,14 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
         current = selected()
         running = versions(current)
         ready = prepared()
+        if ready and ready != current:
+            try:
+                verify(ready)
+            except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+                # An interrupted or damaged staged build must be downloadable
+                # again. Keep the active runtime untouched while checking feeds.
+                (STATE / 'ready.json').unlink(missing_ok=True)
+                ready = None
         base = ready if ready and ready.exists() else current
         base_versions = verify(base)['versions'] if base != BUNDLED else running
         changes, target_versions, errors = {}, dict(base_versions), []
@@ -310,6 +318,13 @@ def check(feeds=None, progress=lambda _: None, force_system=False):
                 verify(folder)
                 identity = hashlib.sha256(json.dumps(record, sort_keys=True).encode() + BASE_ID.read_bytes()).hexdigest()
                 ready = builds / identity
+                if ready.exists() and ready != current:
+                    try:
+                        verify(ready)
+                    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+                        # This owned, inactive build failed verification. Replace
+                        # it with the complete, independently verified download.
+                        shutil.rmtree(ready)
                 if not ready.exists():
                     # TemporaryDirectory can safely clean its now-missing old name.
                     folder.rename(ready)
