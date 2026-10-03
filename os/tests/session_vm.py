@@ -44,9 +44,11 @@ def screen_text(vm, name):
 
 
 def wait_lock(vm, locked, timeout=15):
-    command = 'pgrep -u 1000 -x swaylock >/dev/null'
-    if not locked:
-        command = '! ' + command
+    # -f returns only after the compositor acknowledges the lock, then its child
+    # calls setsid(). A matching process alone includes the pre-lock parent/PAM
+    # helper and can race the screen and keyboard grab.
+    command = ("ps -u 1000 -o pid=,sid=,comm= | awk '$1 == $2 && $3 == \"swaylock\" {ready=1} END {exit !ready}'"
+               if locked else '! pgrep -u 1000 -x swaylock >/dev/null')
     vm.command('for n in $(seq 1 ' + str(timeout * 4) + '); do if ' + command + '; then exit 0; fi; sleep 0.25; done; exit 1', timeout=timeout + 5)
 
 
@@ -91,9 +93,11 @@ def installed_session(vm, config, result):
         wait_lock(vm, True)
         assert 'visible lock probe' not in screen_text(vm, name + '-locked'), 'Locked screen exposed terminal content'
         # These must go to the lock, never to the terminal or its agent.
-        vm.keys('esc')
-        vm.keys('ctrl', 'c')
-        vm.keys('ctrl', 'u')
+        for label, keys in [('escape', ('esc',)), ('interrupt', ('ctrl', 'c')), ('clear', ('ctrl', 'u'))]:
+            vm.keys(*keys)
+            wait_lock(vm, True, timeout=2)
+            work_survives()
+            vm.screenshot(name + '-after-' + label)
         vm.type_probe('wrong-password')
         vm.keys('ret')
         time.sleep(4)
@@ -209,7 +213,9 @@ def main():
         try:
             vm.screenshot('failure')
             if vm.shell_ready:
-                output, _ = vm.command('journalctl --user -b -u harness-idle --no-pager; ps -eo pid,comm,args', check=False, timeout=15)
+                output, _ = vm.command('sudo -n journalctl -b -o short-monotonic --no-pager; '
+                    'cat ~/.local/state/harness-os/display.log; ps -eo pid,ppid,sid,comm,args --width 240',
+                    check=False, timeout=15)
                 (folder / 'session-diagnostics.log').write_text(output)
         except Exception:
             pass
