@@ -17,15 +17,16 @@ def write(folder, name, text):
 
 
 def manifest(name, title, viewer=None):
-    # Explicit test model: never inherit an account, host credentials or a paid route.
+    # A disposable guest has no provider credentials. Leave model selection to
+    # upstream defaults, including for this package's custom primary agent.
     config = {'agent': {'os-check': {'description': 'Disposable OS acceptance task',
-              'mode': 'primary', 'model': 'opencode/big-pickle'}},
+              'mode': 'primary'}},
               'permission': {'question': 'deny', 'task': 'deny'}}
     result = {'spec': 1, 'id': f'os-lab/{name}', 'name': title, 'category': 'OS acceptance',
-              'author': 'Programmer OS test', 'engine': 'opencode',
+              'author': 'Harness OS test', 'engine': 'opencode',
               'workspace': {'template': 'template', 'marker': 'TASK.txt'},
               'agent': {'instructions': 'AGENTS.md',
-                        'args': ['--model', 'opencode/big-pickle', '--agent', 'os-check'],
+                        'args': ['--agent', 'os-check'],
                         'env': {'DSH_PERMISSION_MODE': 'auto', 'OPENCODE_CONFIG_CONTENT': json.dumps(config)}}}
     if viewer:
         result['viewer'] = {'use': viewer}
@@ -34,7 +35,7 @@ def manifest(name, title, viewer=None):
 
 hello = packages / 'hello'
 shutil.copytree(components / 'examples/hello-world', hello, dirs_exist_ok=True)
-write(hello, 'harness.json', json.dumps(manifest('hello', 'Hello Programmer', 'autonomous/web-viewer')))
+write(hello, 'harness.json', json.dumps(manifest('hello', 'Hello Harness', 'autonomous/web-viewer')))
 write(hello, 'template/TASK.txt', 'Change the existing heading in index.html to Hello, Ada! Preserve the rest of the page. Read the saved file back. Do not ask questions or use subagents.\n')
 
 logs = packages / 'logs'
@@ -55,7 +56,7 @@ write(game, 'template/TASK.txt', 'Extend the starter game: pressing R must call 
 write(game, 'template/index.html', '''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Packet Step</title>
 <style>*{box-sizing:border-box}body{height:100dvh;margin:0;padding:8px;background:#111821;color:#d3e8ed;font:18px monospace;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px}canvas{min-height:0;flex:1;width:100%;max-width:600px;object-fit:contain;background:#18232e}h1{font-size:24px;margin:0}p{font-size:15px;margin:0}</style>
 <h1>Packet Step</h1><p>Arrow keys move · R restarts · collect the green packet</p><canvas width="600" height="400" tabindex="0" aria-label="Packet Step game"></canvas><p id="score">Score 0</p><script type="module" src="./game.mjs"></script></html>''')
-write(game, 'template/studio.json', json.dumps({'title': 'Packet Step', 'description': 'A tiny keyboard game built inside Programmer OS.', 'controls': 'Arrow keys move · R restarts'}))
+write(game, 'template/studio.json', json.dumps({'title': 'Packet Step', 'description': 'A tiny keyboard game built inside Harness.', 'controls': 'Arrow keys move · R restarts'}))
 write(game, 'template/game.mjs', '''const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
 let state={x:1,y:1,score:0}, paused=false, mode='explore';
 function draw(){ctx.fillStyle='#18232e';ctx.fillRect(0,0,600,400);ctx.strokeStyle='#263746';for(let x=0;x<15;x++)for(let y=0;y<10;y++)ctx.strokeRect(x*40,y*40,40,40);ctx.fillStyle='#73e0a8';ctx.fillRect(3*40+10,50,20,20);ctx.fillStyle='#70bdff';ctx.fillRect(state.x*40+6,state.y*40+6,28,28);document.querySelector('#score').textContent='Score '+state.score;}

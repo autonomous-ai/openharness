@@ -1056,7 +1056,22 @@
     "next_step": "Follow exact-source build 37115159220. Inspect native terminal exit regressions, both first-use journeys, default OpenCode replies and encrypted unlock/retry before publication.",
     "last_recorded_utc": "2026-10-03T10:08:06.230343+00:00",
     "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys.",
-    "revision_ready_utc": "2026-10-03T10:03:53.212354+00:00"
+    "revision_ready_utc": "2026-10-03T10:03:53.212354+00:00",
+    "development_acceptance_revision": {
+      "status": "prepared; syntax and fixture generation passed; real guest runs pending",
+      "reason": "The bundled OpenCode first-use route must also support the requested programmer and DSH workflows with upstream model defaults.",
+      "changes": [
+        "Removed hardcoded model arguments/configuration from the disposable workload and DSH fixtures; kept their task permissions and independent acceptance checks.",
+        "Prepared a preview 4 manual installation guide at os/work/preview4-INSTALL.md; current public guide remains preview 3 until publication.",
+        "Added read-only live file-identity and registry diagnostics to investigate terminal rows appearing as OpenCode before an agent is launched. No discovery change is made without evidence."
+      ],
+      "required_checks": [
+        "Bash/Python syntax and disposable DSH fixture generation",
+        "After the base image journeys pass, run four project workloads and three DSH tasks on that exact ISO using the default model; keep those scopes in separate bounded VM runs."
+      ],
+      "validation_started_utc": "2026-10-03T10:13:49.119774+00:00"
+    },
+    "native_validation": "Native CLI/TUI validation including all ten terminal fixtures passed in run 37115159220; image assembly is still running."
   },
-  "previous_goal_turn_classification": "progress: documented and linked Naming System in acd6720bb; pushed terminal lifecycle and installer error retention in 5445fe1ff; 31 local installer checks passed and native image validation 37115159220 is running."
+  "previous_goal_turn_classification": "progress: exact-source native terminal checks passed; prepared updated manual guide and default-model programmer/DSH acceptance with live process diagnostics."
 }

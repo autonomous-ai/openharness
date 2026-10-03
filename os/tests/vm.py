@@ -342,6 +342,18 @@ def check_first_use(vm, user, folder):
     vm.keys('ret')
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
     vm.screenshot('01c-direct-terminal')
+    # Retain exact file identities to diagnose a live-overlay shell being
+    # misidentified as an agent, without relying on rounded JS inode numbers.
+    identity_probe = '''const fs = require('node:fs');
+for (const path of ['/usr/bin/opencode', '/usr/bin/bash', '/usr/bin/python3', '/usr/bin/nmtui', '/usr/bin/sudo']) {
+    const numeric = fs.statSync(path), exact = fs.statSync(path, {bigint: true});
+    console.log(JSON.stringify({path, numberKey: `${numeric.dev}:${numeric.ino}`, exactKey: `${exact.dev}:${exact.ino}`}));
+}
+const rows = JSON.parse(fs.readFileSync('/home/me/.harness/cli/data/registry.json', 'utf8'));
+for (const row of rows) console.log(JSON.stringify({agentId: row.agentId, engine: row.engine, active: row.active, processIdentity: row.processIdentity}));
+'''
+    output, _ = vm.command(user('node -e ' + shlex.quote(identity_probe)))
+    (folder / 'live-process-identities.txt').write_text(output)
     output, _ = vm.command(user('hn display-message -p "HN_FIRST_TERMINAL=#{pane_id}"'))
     pane = re.search(r'HN_FIRST_TERMINAL=(%\d+)', output)
     assert pane, 'New terminal must identify its actual pane'

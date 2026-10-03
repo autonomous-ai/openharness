@@ -4,26 +4,25 @@ set -uo pipefail
 INPUTS=$(cd -- "$(dirname -- "$0")" && pwd)
 WORK="$HOME/Projects/os-workloads"
 REPORT="$HOME/.local/state/harness-os/workloads"
-MODEL=${HN_TEST_MODEL:-opencode/big-pickle}
-export PATH="$HOME/.opencode/bin:$PATH"
-case "$MODEL" in opencode/big-pickle|opencode/*-free) ;; *) echo 'Use an explicitly free OpenCode model.' >&2; exit 2 ;; esac
+# The disposable guest has no provider credentials. Exercise the bundled
+# binary's upstream model choice, just as a clean first launch does.
 mkdir -p "$WORK" "$REPORT"
 if [[ -d "$INPUTS/seed" ]]; then
     cp -a "$INPUTS/seed/." "$WORK/"
     printf '%s\n' 'Reusing previously generated projects; only the interrupted game agent runs again.' > "$REPORT/reuse.txt"
 fi
 trap 'printf "%s\n" "$?" > "$REPORT/status"' EXIT
-opencode --version > "$REPORT/opencode-version.txt" || exit 1
-printf '%s\n' "$MODEL" > "$REPORT/model.txt"
+/usr/bin/opencode --version > "$REPORT/opencode-version.txt" || exit 1
+printf '%s\n' 'Upstream default; no model flag or configuration override.' > "$REPORT/model.txt"
 failed=0
 for scenario in terminal-tool website game fullstack; do
     project="$WORK/$scenario"
     mkdir -p "$project"
     cp "$INPUTS/$scenario.txt" "$project/TASK.txt"
     cat > "$project/opencode.json" <<EOF
-{"model":"$MODEL","permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","$HOME/Projects/**":"allow","/tmp/opencode/**":"allow","/usr/share/harness-os/**":"allow"}}}
+{"permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","$HOME/Projects/**":"allow","/tmp/opencode/**":"allow","/usr/share/harness-os/**":"allow"}}}
 EOF
-    printf '\nChecking %s with %s\n' "$scenario" "$MODEL"
+    printf '\nChecking %s with the upstream default model\n' "$scenario"
     if [[ -d "$INPUTS/seed" && "$scenario" != game ]]; then
         status=0
         printf '%s\n' 'Prior completed model turn reused; project checks run again.' > "$REPORT/$scenario-agent-reused.txt"
@@ -38,7 +37,7 @@ EOF
       fi
       (
         cd "$project" || exit 1
-        timeout --signal=TERM --kill-after=15s 12m opencode run --model "$MODEL" --format json \
+        timeout --signal=TERM --kill-after=15s 12m /usr/bin/opencode run --format json \
             "$prompt" \
             > "$REPORT/$scenario-agent.jsonl" 2>&1
     )
