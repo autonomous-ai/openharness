@@ -437,6 +437,7 @@ def screen(window):
         available = ready is not None and ready != selected()
         checked = read(STATE / 'check.json', {})
         system = read(STATE / 'system.json', {})
+        failed = read(STATE / 'transaction.json', {}).get('status') == 'failed'
         system_state = read(RESTART_REQUIRED, {}).get('status')
         reboot = system_state == 'ready'
         recovery = system_state == 'failed'
@@ -447,8 +448,10 @@ def screen(window):
         lines = ['harness', '', status or message or (
                  'Restore the previous system to recover.' if recovery else
                  'Restart to finish the system update.' if reboot else
-                 'The system is updating…' if system_state else 'An update is ready.' if available else summary), '',
-                 'Enter   Restart now' if reboot else 'Enter   Update now' if available else 'C       Check for updates',
+                 'The system is updating…' if system_state else
+                 'Update failed. Previous version restored.' if failed else 'An update is ready.' if available else summary), '',
+                 'Enter   Restart now' if reboot else 'Enter   Try update again' if available and failed else
+                 'Enter   Update now' if available else 'C       Check for updates',
                  'R       Restore previous system' if recovery else
                  'R       Restore previous version' if not system_state and read(STATE / 'applied.json') else '',
                  'S       System update ready' if system.get('available') else 'S       System updates', '', 'Esc     Back']

@@ -10,6 +10,7 @@ Type=exec
 Environment=ADAPTER_UPDATE_DISABLE=true
 Environment=HARNESS_TUI_BIN=/usr/lib/harness/hn
 Environment=HARNESS_TUI_NOTIFY=off
+Environment=HARNESS_TUI_DESK=off
 Environment=HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux.conf
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 Environment=npm_config_prefix=%h/.local

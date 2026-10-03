@@ -77,7 +77,7 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
         vm.command('python3 -c ' + shlex.quote(expression))
         vm.command('while read -r pid; do kill -0 "$pid" || exit 1; done < /tmp/fast-original-agent; '
                    'cmp /tmp/fast-original-boot /proc/sys/kernel/random/boot_id')
-        vm.command('hn select-window -t update-probe')
+        vm.command('for n in $(seq 1 80); do hn select-window -t update-probe && exit 0; sleep .25; done; exit 1')
         wait_text(vm, 'visible lock probe', name + '-restored')
         vm.type_probe(name)
         vm.keys('ret')
@@ -85,13 +85,27 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
                    ' ~/Projects/session-probe/input && exit 0; sleep .1; done; exit 1')
         vm.screenshot(name + '-accepted-input')
 
-    def activate():
+    def activate(expect_failure=False):
         vm.keys('meta_l', 'u')
-        wait_text(vm, 'an update is ready', 'fast-02-update-action')
+        # After a failed activation the same screen offers a retry.
+        wait_text(vm, 'system updates', 'fast-02-update-action')
         vm.keys('ret')
-        vm.command('for n in $(seq 1 120); do test ! -e ' + state + '/ready.json && test -s ' + state +
-                   '/applied.json && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
-                   'journalctl --user -u harness-apply-update --no-pager; exit 1', timeout=90)
+        condition = ('grep -q ' + shlex.quote('"status": "failed"') + ' ' + state + '/transaction.json' if expect_failure else
+                     'test ! -e ' + state + '/ready.json && test -s ' + state + '/applied.json')
+        vm.command('for n in $(seq 1 120); do ' + condition + ' && systemctl --user is-active --quiet hn-screen && exit 0; sleep .5; done; '
+                   'sudo journalctl _UID=1000 --no-pager; exit 1', timeout=90)
+
+    # A real systemd start failure for the new binary must restore the old
+    # selection and layout. The fault is a private guest-only unit override.
+    vm.command('mkdir -p ~/.config/systemd/user/hn-screen.service.d')
+    put(vm, '/tmp/hn-fail-new-screen.sh', '#!/bin/sh\n/usr/bin/hn --version | grep -q "hn 999.0.1 " && exit 1\nexit 0\n')
+    put(vm, '/tmp/hn-screen-fault.conf', '[Service]\nExecStartPre=/bin/sh /tmp/hn-fail-new-screen.sh\n')
+    vm.command('cp /tmp/hn-screen-fault.conf ~/.config/systemd/user/hn-screen.service.d/fixture.conf; systemctl --user daemon-reload')
+    activate(expect_failure=True)
+    vm.command('test ! -e ' + state + '/current; ! hn --version | grep -F "999.0.1"')
+    alive('failed-update-restored')
+    checks.append('A real new-screen start failure restores the previous binary and visible tabs while the same agent and terminal remain alive')
+    vm.command('rm ~/.config/systemd/user/hn-screen.service.d/fixture.conf; systemctl --user daemon-reload')
 
     activate()
     vm.command('hn --version | grep -F "999.0.1"')
@@ -111,7 +125,7 @@ assert (root/'heartbeat').stat().st_mtime_ns != before
     alive('after-rollback')
     checks.append('Rollback restores the prior CLI while retaining the fast hn release, live agent and terminal input')
     output, _ = vm.command('harness updates status; systemctl --user status harness-update.timer --no-pager; '
-                           'journalctl --user -u harness-update -u harness-apply-update -u harness-test-rollback --no-pager')
+                           'sudo journalctl _UID=1000 --no-pager')
     (vm.folder / 'fast-updates.log').write_text(output)
     receipt = {'status': 'passed', 'fixture': json.loads((fixture / 'fixture.json').read_text()), 'checks': checks}
     (vm.folder / 'fast-update-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')

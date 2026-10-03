@@ -102,8 +102,9 @@ def main():
         receipt['error'] = str(error)
         try:
             vm.screenshot('failure')
-            output, _ = vm.command('journalctl --user -u hn-screen -u harness-daemon -u harness-update -u harness-apply-update --no-pager; '
-                'cat ~/.local/state/harness-os/updates/*.json; ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
+            output, _ = vm.command('sudo journalctl _UID=1000 --no-pager; '
+                'cat ~/.local/state/harness-os/updates/*.json; hn list-windows -a; hn list-panes -a; '
+                'ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
             (folder / 'update-diagnostics.log').write_text(output)
         except Exception:
             pass

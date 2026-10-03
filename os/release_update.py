@@ -113,6 +113,9 @@ def apply(feed=FEED):
         (folder / 'package-manifest.json').write_text(json.dumps(manifest))
         with system.operation_lock():
             installation = system.installed()
+            previous = updater.latest()
+            if previous and previous['status'] not in ('applied', 'rolled-back'):
+                raise ValueError('Restore the previous Harness package before starting another system update.')
             base = json.loads(LOCK.read_text())
             updater.validate_bundle(folder, base)
             date = system.snapshot_date(manifest['arch_snapshot'])

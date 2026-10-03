@@ -108,6 +108,9 @@ The installed OS checks the existing public hn and CLI release channels every
 15 minutes, with a small randomized delay. Complete, checksum-verified runtimes
 are prepared under the user's state directory. The OS-owned copy remains an
 offline fallback. Neither downloading nor checking restarts working processes.
+OS windows use hn's local session storage (`HARNESS_TUI_DESK=off`), so their
+layout and pane references survive reconnects without signing into the cloud.
+This setting is confined to the OS launcher; ordinary hn installs are unchanged.
 
 `Update ready · Super+U` appears in the bottom bar. Super+U opens the keyboard
 update action (Ctrl+B, Shift+U remains an alias). Enter applies the prepared
@@ -142,6 +145,15 @@ Cross-version packages list the exact validated `upgrades_from` bases. Direct
 local bundles cannot skip a required full Arch upgrade. A lower or equal package
 version is never offered by the public channel. The publisher must retain exact
 source and native acceptance evidence before advancing that feed.
+
+After the matching ISO preview is published, prepare its update assets with
+`tools/publish-update.py --bundle BUNDLE --receipt receipt.json --run RUN --output OUTPUT`.
+Review the resulting metadata and bundle, then use `--publish` with a fresh
+output directory. The publisher requires the exact passing native source and
+package, uploads immutable versioned assets, verifies their public bytes, and
+only then advances the preview channel. Its first channel is uploaded and
+download-verified as a draft before publication. Retain `publication.json` as
+the publication receipt; this does not replace recording the total request time.
 
 ### Local OS integration bundles
 
