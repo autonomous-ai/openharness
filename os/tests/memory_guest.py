@@ -100,7 +100,7 @@ for i in range(10000):
                 assert survivor_pids() == original, 'A terminal owner was replaced'
                 for child in original.values():
                     os.kill(child, 0)
-                ticks = samples[-1]['cpu_ticks'] - before['cpu_ticks']
+                ticks = process(pid)['cpu_ticks'] - before['cpu_ticks']
                 ordered = sorted(latencies)
                 row = {'profile': name, 'repetition': repetition, 'flags': flags,
                        'pid': pid, 'command': command, 'ready_seconds': ready_seconds,
