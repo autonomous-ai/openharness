@@ -235,17 +235,23 @@ tmux_ send-keys -t t C-b x
 expect "C-b x asks first" "(y/n)"
 tmux_ send-keys -t t n
 # C-b c: the same task-first composer, with recent sessions below it.
-before=$(dial "(d.deleted || []).length")
 tmux_ send-keys -t t C-b c
 expect "C-b c: another new window" "2:"
 expect "C-b c: the creation form and secondary session browser" "Browse All Sessions"
-# Explicitly opening its terminal reuses the backing shell; C-b & kills it with the window.
+# Open Terminal may replace the backing shell if its resolved folder changed.
+# Assert the displayed shell is killed exactly once, independently of that retirement.
 tmux_ send-keys -t t Tab Tab Tab Tab Tab Tab Tab Tab Enter
-sleep 1
+expect "Open Terminal shows the new window's shell" "Mock terminal (mock)"
+wait_eq "the dial's new window has one shell" 1 dial "d.said.app_panes?.agentIds?.length"
+closing_window=$(hn display -p '#{window_id}')
+E2E_CLOSING_AGENT=$(dial "d.said.app_panes.agentIds[0]")
+export E2E_CLOSING_AGENT
 tmux_ send-keys -t t C-b '&'
 expect "C-b & asks first" "(y/n)"
 tmux_ send-keys -t t y
-wait_eq "C-b & kills the window's shell" $((before + 1)) dial "(d.deleted || []).length"
+wait_eq "C-b & kills the displayed shell exactly once" 1 dial "(d.deleted || []).filter(id => id === process.env.E2E_CLOSING_AGENT).length"
+closed_window() { hn list-windows -F '#{window_id}' | grep -qFx -- "$closing_window" || echo yes; }
+wait_eq "C-b & removes that window" yes closed_window
 # A question hook is bound to its original request, even when its shell test finishes later.
 # Hold the callback until the replacement question is visible, without relying on a timing race.
 hook_question() { push "{\"type\":\"commander_question\",\"agentId\":\"$claude\",\"dbSessionId\":\"$csess\",\"payload\":{\"requestId\":\"$1\",\"questions\":[{\"q\":\"$2\",\"options\":[\"Yes\",\"No\"]}]}}"; }
