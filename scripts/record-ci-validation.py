@@ -27,6 +27,71 @@ DESKTOP_JOBS = {"desktop-test-summary"} | {f"desktop-tests ({platform}, {index})
 SCOPES = {"cli": CLI_JOBS, "tui": TUI_JOBS, "backend": {"backend-desk"}, "desktop": DESKTOP_JOBS, "process": set()}
 SCOPES["full"] = CLI_JOBS | TUI_JOBS | SCOPES["backend"] | DESKTOP_JOBS
 
+# These are the source boundaries enforced by CI's sparse checkouts. Keep the
+# whole workflow/action and helper trees: a changed test, toolchain pin, cache
+# recipe or source contract must invalidate earlier evidence too.
+SOURCE_INPUTS = {
+    "process": (".github/", "scripts/", "desktop/scripts/", ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
+    # VM tests also read CLI protocol definitions, shared layout fixtures,
+    # daemon metadata and store catalog/artwork, including docs/images posters.
+    "desktop": (".github/", "scripts/", "desktop/", "cli/", "tests/", "daemons/", "store/", "docs/images/",
+                "mobile/pubspec.lock", ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
+}
+CHECKOUT_STEP = "Verify declared source checkout"
+
+
+def input_snapshot(root, commit, scope):
+    """Hash immutable Git objects, including missing optional files and modes."""
+    objects = []
+    for path in sorted(SOURCE_INPUTS[scope]):
+        name = path.rstrip("/")
+        data = subprocess.check_output(["git", "ls-tree", "-z", commit, "--", name],
+                                       cwd=root, stderr=subprocess.PIPE, timeout=10).decode()
+        entries = [entry for entry in data.split("\0") if entry]
+        if not entries:
+            if path.endswith("/"):
+                raise ValueError(f"required CI input directory is missing: {path}")
+            objects.append(dict(path=path, object=None))
+            continue
+        if len(entries) != 1:
+            raise ValueError(f"ambiguous CI input: {path}")
+        metadata, actual_path = entries[0].split("\t", 1)
+        mode, kind, oid = metadata.split()
+        if (actual_path != name or not re.fullmatch(r"[0-9a-f]{40}", oid)
+                or (path.endswith("/") and (mode, kind) != ("040000", "tree"))
+                or (not path.endswith("/") and (kind != "blob" or mode not in {"100644", "100755"}))):
+            raise ValueError(f"unexpected CI input object: {path}")
+        objects.append(dict(path=path, object=dict(mode=mode, kind=kind, oid=oid)))
+    payload = dict(scope=scope, objects=objects)
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return dict(payload, sha256=digest)
+
+
+def check_input_jobs(jobs, scope):
+    required = SCOPES[scope] | {"process-checks"}
+    for job in jobs:
+        if job["name"] in required:
+            matches = [step for step in job.get("steps", []) if step.get("name") == CHECKOUT_STEP]
+            if len(matches) != 1 or matches[0].get("conclusion") != "success":
+                raise ValueError(f"CI input checkout was not verified: {job['name']}")
+
+
+def read_input_summary(artifact, archive, run, root, scope):
+    summary = summary_contents(artifact, archive, run, "ci-source-inputs")
+    if (type(summary.get("schema")) is not int or summary["schema"] != 1
+            or summary.get("kind") != "ci-source-inputs" or summary.get("status") != "recorded"
+            or summary.get("source_sha") != run["head_sha"] or summary.get("dirty") is not False
+            or not isinstance(summary.get("scopes"), dict)
+            or any(type(summary.get(key)) is not int or summary[key] != run[field]
+                   for key, field in [("run_id", "id"), ("run_attempt", "run_attempt")])):
+        raise ValueError("CI input receipt has another source/run/attempt")
+    tree = subprocess.check_output(["git", "rev-parse", f"{run['head_sha']}^{{tree}}"],
+                                   cwd=root, stderr=subprocess.PIPE, timeout=10).decode().strip()
+    expected = input_snapshot(root, run["head_sha"], scope)
+    if summary.get("source_tree") != tree or summary.get("scopes", {}).get(scope) != expected:
+        raise ValueError("CI input receipt differs from the tested Git objects or input contract")
+    return expected
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
@@ -220,7 +285,7 @@ def collect(client, root, run_id, scope, target, output, pr_number=None, expecte
         raise ValueError("CI run changed between waiting and evidence collection")
     with ThreadPoolExecutor(max_workers=3) as pool:
         job_future = pool.submit(client.pages, f"actions/runs/{run_id}/jobs?filter=latest", "jobs")
-        artifact_future = pool.submit(client.pages, f"actions/runs/{run_id}/artifacts", "artifacts") if scope in {"cli", "desktop", "full"} else None
+        artifact_future = pool.submit(client.pages, f"actions/runs/{run_id}/artifacts", "artifacts") if scope in {"cli", "desktop", "full", "process"} else None
         pr_future = pool.submit(client.api, f"pulls/{pr_number}") if pr_number else None
         jobs = job_future.result()
         artifacts = artifact_future.result() if artifact_future else []
@@ -258,6 +323,23 @@ def collect(client, root, run_id, scope, target, output, pr_number=None, expecte
             raise ValueError("Desktop summary Git tree differs from the tested source")
         record["desktop_artifact"] = {key: artifact[key] for key in ["id", "name", "digest", "size_in_bytes"]}
         (output / "desktop-test-summary.zip").write_bytes(archive)
+    if scope in SOURCE_INPUTS:
+        matches = [artifact for artifact in artifacts if artifact["name"] == "ci-source-inputs"]
+        if len(matches) > 1:
+            raise ValueError("duplicate CI input receipts")
+        if matches:
+            artifact = matches[0]
+            if artifact.get("size_in_bytes", 65537) > 65536:
+                raise ValueError("CI input artifact is unexpectedly large")
+            archive = client.command("api", f"repos/{client.repository}/actions/artifacts/{artifact['id']}/zip", binary=True)
+            tested_inputs = read_input_summary(artifact, archive, run, root, scope)
+            check_input_jobs(jobs, scope)
+            target_inputs = input_snapshot(root, source["target_sha"], scope)
+            record["scope_reuse"] = dict(scope=scope, paths=sorted(SOURCE_INPUTS[scope]),
+                                         tested_sha256=tested_inputs["sha256"], target_sha256=target_inputs["sha256"],
+                                         same_inputs=tested_inputs == target_inputs)
+            record["input_artifact"] = {key: artifact[key] for key in ["id", "name", "digest", "size_in_bytes"]}
+            (output / "ci-source-inputs.zip").write_bytes(archive)
     if pr:
         record["pr"] = {"number": pr_number, "url": pr["html_url"], "head": pr["head"]["sha"], "base": pr["base"]["sha"]}
     # Detect reruns and moving PR heads after the independent downloads. Never
@@ -274,7 +356,8 @@ def collect(client, root, run_id, scope, target, output, pr_number=None, expecte
         raise ValueError("PR head/base changed during collection; review the new state")
     if source != source_comparison(root, run["head_sha"], target):
         raise ValueError("local source changed during collection")
-    if not source["same_tree"] or source["working_tree_dirty"] or (pr and pr["head"]["sha"] != source["target_sha"]):
+    covered = source["same_tree"] or record.get("scope_reuse", {}).get("same_inputs") is True
+    if not covered or source["working_tree_dirty"] or (pr and pr["head"]["sha"] != source["target_sha"]):
         record["status"] = "source_review_required"
     return record
 
@@ -310,6 +393,12 @@ def markdown(record):
             lines.append("The current working tree also contains changes outside this committed CI result.")
         if "pr" in record and record["pr"]["head"] != source["target_sha"]:
             lines.append(f"PR head `{record['pr']['head']}` differs from the selected target.")
+    elif not source["same_tree"]:
+        reuse = record["scope_reuse"]
+        lines.append(f"CI evidence reused for `{record['scope']}`: the declared source inputs match "
+                     f"(`{reuse['tested_sha256']}`). Receipt digest, Git objects and bounded checkouts verified.")
+        lines.append("Changed paths outside that CI scope: " + ", ".join(f"`{path.replace('`', '')}`" for path in source["changed_files"]) + ".")
+        lines.append("This covers the selected CI checks, not review or validation required by those other changes.")
     else:
         lines.append("The tested and target source trees match. Scope selection and code/merge review remain explicit.")
     if source["working_tree_dirty"] is None:

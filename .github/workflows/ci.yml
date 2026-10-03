@@ -55,8 +55,29 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/
+            /scripts/
+            /desktop/scripts/
+            /.gitattributes
+            /.gitignore
+            /.gitmodules
+            /Makefile
+          sparse-checkout-cone-mode: false
+      - name: Verify declared source checkout
+        run: python3 scripts/ci-source-inputs.py process
       - name: Validation deadlines, cleanup, receipts and release version guards
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+      - name: Record source inputs for CI evidence reuse
+        run: python3 scripts/ci-source-inputs.py process --record "$RUNNER_TEMP/ci-source-inputs.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-source-inputs
+          path: ${{ runner.temp }}/ci-source-inputs.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   # workflow_dispatch restricts the choice; reusable callers can pass any string.
   # Fail invalid calls rather than reporting success after skipping every check.
@@ -78,6 +99,24 @@ jobs:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/
+            /scripts/
+            /desktop/
+            /cli/
+            /tests/
+            /daemons/
+            /store/
+            /docs/images/
+            /mobile/pubspec.lock
+            /.gitattributes
+            /.gitignore
+            /.gitmodules
+            /Makefile
+          sparse-checkout-cone-mode: false
+      - name: Verify declared source checkout
+        run: python3 scripts/ci-source-inputs.py desktop
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
@@ -112,7 +151,10 @@ jobs:
           sparse-checkout: |
             /desktop/test/
             /scripts/
+            /.gitignore
           sparse-checkout-cone-mode: false
+      - name: Verify declared source checkout
+        run: python3 scripts/ci-source-inputs.py desktop --subset
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-shard-*

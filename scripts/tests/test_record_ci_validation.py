@@ -99,6 +99,134 @@ class EvidenceTests(unittest.TestCase):
         self.assertNotIn("cli_summary", result)
         self.assertFalse((self.output / "cli-test-summary.zip").exists())
 
+    def input_fixture(self, scope="process"):
+        for path in (".github/workflows/ci.yml", "scripts/check.py", "desktop/scripts/upload.sh", "desktop/scripts/keep.py",
+                     "cli/core.ts", "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json", "docs/images/poster.png"):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("tested input\n")
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "bounded inputs")
+        self.sha = self.git("rev-parse", "HEAD")
+        self.run["head_sha"] = self.pr["head"]["sha"] = self.pr["base"]["sha"] = self.sha
+        self.artifact["workflow_run"]["head_sha"] = self.sha
+        for job in self.jobs:
+            job["head_sha"] = self.sha
+        if scope == "desktop":
+            self.desktop_fixture()
+        else:
+            self.jobs = [job for job in self.jobs if job["name"] == "process-checks"]
+        for job in self.jobs:
+            job["steps"] = [dict(name=recorder.CHECKOUT_STEP, conclusion="success")]
+        self.input_summary = dict(schema=1, kind="ci-source-inputs", status="recorded", source_sha=self.sha,
+                                  source_tree=self.git("rev-parse", "HEAD^{tree}"), dirty=False, run_id=123, run_attempt=1,
+                                  scopes={name: recorder.input_snapshot(self.root, self.sha, name) for name in recorder.SOURCE_INPUTS})
+        self.input_artifact = dict(id=989, name="ci-source-inputs", expired=False,
+                                   workflow_run=dict(id=123, head_sha=self.sha))
+        self.artifacts = [self.artifact, self.input_artifact] if scope == "desktop" else [self.input_artifact]
+        self.archives = {"repos/owner/repo/actions/artifacts/987/zip": self.archive}
+        self.input_archive()
+
+    def input_archive(self):
+        archive = self.zip_summary(self.input_summary, "ci-source-inputs.json")
+        self.archives["repos/owner/repo/actions/artifacts/989/zip"] = archive
+        self.input_artifact.update(size_in_bytes=len(archive), digest="sha256:" + hashlib.sha256(archive).hexdigest())
+
+    def change_source(self, path, content="changed\n"):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+        self.commit_change()
+
+    def commit_change(self):
+        self.git("add", "-A")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "target change")
+        self.pr["head"]["sha"] = self.git("rev-parse", "HEAD")
+
+    def test_verified_process_inputs_allow_documentation_and_unrelated_component_changes(self):
+        self.input_fixture()
+        self.change_source("desktop/RELEASE.md")
+        self.change_source("cli/src/memory/store.ts")
+        result = self.collect(scope="process", with_pr=True)
+        self.assertEqual(result["status"], "passed")
+        self.assertFalse(result["source"]["same_tree"])
+        self.assertTrue(result["scope_reuse"]["same_inputs"])
+        self.assertIn("CI evidence reused", recorder.markdown(result))
+        self.assertIn("not review or validation", recorder.markdown(result))
+        self.assertTrue((self.output / "ci-source-inputs.zip").exists())
+
+    def test_desktop_summary_and_inputs_both_cover_reuse_across_a_firmware_change(self):
+        self.input_fixture("desktop")
+        self.change_source("devices/firmware/main.c")
+        result = self.collect(scope="desktop", with_pr=True)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["desktop_summary"]["source"]["commit"], self.sha)
+        self.assertTrue(result["scope_reuse"]["same_inputs"])
+        self.change_source("desktop/test/new_test.dart")
+        self.assertEqual(self.collect(scope="desktop")["status"], "source_review_required")
+
+    def test_desktop_shared_fixtures_protocols_and_catalogs_are_inputs(self):
+        self.input_fixture("desktop")
+        for path in ("cli/core.ts", "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json",
+                     "docs/images/poster.png", "mobile/pubspec.lock"):
+            with self.subTest(path=path):
+                self.git("reset", "--hard", self.sha)
+                self.change_source(path)
+                result = self.collect(scope="desktop")
+                self.assertEqual(result["status"], "source_review_required")
+                self.assertFalse(result["scope_reuse"]["same_inputs"])
+
+    def test_changed_input_contents_additions_deletions_and_modes_invalidate_reuse(self):
+        self.input_fixture()
+        for path in ("scripts/check.py", ".github/workflows/ci.yml", "desktop/scripts/new.sh", ".gitattributes"):
+            with self.subTest(path=path):
+                self.git("reset", "--hard", self.sha)
+                self.change_source(path)
+                result = self.collect(scope="process")
+                self.assertEqual(result["status"], "source_review_required")
+                self.assertFalse(result["scope_reuse"]["same_inputs"])
+        for mode in ("delete", "executable"):
+            with self.subTest(mode=mode):
+                self.git("reset", "--hard", self.sha)
+                path = self.root / "desktop/scripts/upload.sh"
+                if mode == "delete":
+                    path.unlink()
+                else:
+                    path.chmod(0o755)
+                self.commit_change()
+                self.assertEqual(self.collect(scope="process")["status"], "source_review_required")
+
+    def test_missing_input_receipt_keeps_different_source_unverified(self):
+        self.input_fixture()
+        self.artifacts = []
+        self.change_source("docs/guide.md")
+        self.assertEqual(self.collect(scope="process")["status"], "source_review_required")
+
+    def test_source_receipt_cannot_lie_about_inputs_identity_or_checkout(self):
+        self.input_fixture()
+        original = copy.deepcopy(self.input_summary)
+        for change in (dict(run_attempt=2), dict(run_id=True), dict(schema=True), dict(dirty=True),
+                       dict(source_tree="b" * 40), dict(scopes=None), dict(scopes={}), dict(source_sha="b" * 40)):
+            with self.subTest(change=change):
+                self.input_summary = dict(original, **change)
+                self.input_archive()
+                with self.assertRaises(ValueError):
+                    self.collect(scope="process")
+        self.input_summary = original
+        self.input_archive()
+        self.jobs[0]["steps"][0]["conclusion"] = "skipped"
+        with self.assertRaisesRegex(ValueError, "checkout was not verified"):
+            self.collect(scope="process")
+
+    def test_scoped_reuse_does_not_accept_dirty_work_or_a_different_pr_head(self):
+        self.input_fixture()
+        self.change_source("docs/guide.md")
+        self.pr["head"]["sha"] = self.sha
+        self.assertEqual(self.collect(scope="process", with_pr=True)["status"], "source_review_required")
+        self.pr["head"]["sha"] = self.git("rev-parse", "HEAD")
+        (self.root / "uncommitted.txt").write_text("unreviewed")
+        self.assertEqual(self.collect(scope="process", with_pr=True)["status"], "source_review_required")
+
     def desktop_fixture(self):
         self.jobs = [dict(self.jobs[0], id=i, name=name) for i, name in
                      enumerate(sorted(recorder.DESKTOP_JOBS | {"process-checks"}), 1)]

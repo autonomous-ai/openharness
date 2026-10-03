@@ -44,7 +44,7 @@ def preflight(client, root, number, head, base, ready=False):
             "url": pr["html_url"]}
 
 
-def confirm_merge(client, number, head, expected_tree, response):
+def confirm_merge(client, number, head, expected_tree, response, tested_tree=None):
     # A successful write can outlive an HTTP timeout. Observe the same PR;
     # never submit the mutation twice or assume that a timeout rejected it.
     for attempt in range(5):
@@ -64,7 +64,8 @@ def confirm_merge(client, number, head, expected_tree, response):
             tree = commit.get("tree", {}).get("sha")
             if not re.fullmatch(r"[0-9a-f]{40}", tree or ""):
                 raise ValueError("merge commit is missing its source tree")
-            return dict(commit=sha, tree=tree, same_tested_tree=tree == expected_tree,
+            return dict(commit=sha, tree=tree, same_reviewed_tree=tree == expected_tree,
+                        same_tested_tree=tree == (tested_tree or expected_tree),
                         merged_at=pr.get("merged_at"), parents=[p["sha"] for p in commit.get("parents", [])])
         if pr.get("state") == "closed" or attempt == 4:
             break
@@ -126,8 +127,9 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
             # Inspection gets a fresh bounded budget even if the write timed out.
             client.deadline = time.monotonic() + min(timeout, 30)
             record["merge"] = phase("verification", lambda: confirm_merge(
-                client, number, head, evidence["source"]["tested_tree"], response))
-            record["status"] = "merged" if record["merge"]["same_tested_tree"] else "merged_source_review_required"
+                client, number, head, evidence["source"]["target_tree"], response,
+                tested_tree=evidence["source"]["tested_tree"]))
+            record["status"] = "merged" if record["merge"]["same_reviewed_tree"] else "merged_source_review_required"
     except (OSError, RuntimeError, ValueError, KeyError, TypeError, subprocess.SubprocessError, ci.zipfile.BadZipFile) as error:
         record["error"] = str(error)
         record["status"] = "merge_not_confirmed" if "merge_requested_at" in record else "not_merged"
@@ -139,7 +141,8 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
         lines.append(record["error"])
     if "merge" in record:
         result = record["merge"]
-        lines.append(f"Merged commit `{result['commit']}`; tested tree matches: `{result['same_tested_tree']}`.")
+        lines.append(f"Merged commit `{result['commit']}`; reviewed target tree matches: `{result['same_reviewed_tree']}`; "
+                     f"full tested tree matches: `{result['same_tested_tree']}`.")
     if evidence is not None:
         lines += ["", ci.markdown(evidence)]
     (output / "merge.md").write_text("\n".join(lines) + "\n")

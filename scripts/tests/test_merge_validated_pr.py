@@ -67,6 +67,21 @@ class MergeTests(unittest.TestCase):
         self.assertIn("merge_request", result["phases"])
         self.assertIn("verification", result["phases"])
 
+    def test_scoped_ci_reuse_verifies_the_reviewed_target_without_claiming_equal_tested_trees(self):
+        collect = merger.ci.collect
+        def reused(*args, **kwargs):
+            evidence = collect(*args, **kwargs)
+            evidence["source"].update(tested_sha=self.base, tested_tree=self.git("rev-parse", f"{self.base}^{{tree}}"),
+                                      same_tree=False, changed_files=["docs/guide.md"])
+            evidence["scope_reuse"] = dict(same_inputs=True, tested_sha256="a" * 64)
+            return evidence
+        self.patch(merger.ci, "collect", side_effect=reused)
+        result = self.finish()
+        self.assertEqual(result["status"], "merged")
+        self.assertTrue(result["merge"]["same_reviewed_tree"])
+        self.assertFalse(result["merge"]["same_tested_tree"])
+        self.assertIn("CI evidence reused", (self.output / "merge.md").read_text())
+
     def test_wrong_pr_draft_target_or_head_stops_before_ci_or_mutation(self):
         original = copy.deepcopy(self.client.pr)
         for change in [dict(number=6), dict(state="closed"), dict(draft=True), dict(merged=True),
@@ -217,8 +232,8 @@ class FakeClient:
         raise AssertionError(path)
 
     def pages(self, path, key):
-        assert key == "jobs", key
-        return copy.deepcopy(self.jobs)
+        assert key in {"jobs", "artifacts"}, key
+        return copy.deepcopy(self.jobs) if key == "jobs" else []
 
     def command(self, *args, binary=False):
         self.writes.append(args)
