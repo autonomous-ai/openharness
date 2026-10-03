@@ -162,6 +162,45 @@ def login_events():
     return path.read_text().splitlines() if path.exists() else []
 
 
+def placement_restart_journey(command, alpha):
+    # Process creation and workspace publication have independent receipts. A client restart
+    # during an outage must keep the acknowledged process in its original pane and retry only
+    # its placement when the desk accepts writes again.
+    api({'action': 'config', 'patch': {'pruneOnClose': True, 'deskFailures': 99}})
+    original_layout = value('#{window_layout}')
+    original_window = value('#{window_id}')
+    original_panes = hn('list-panes', '-F', '#{pane_id}').splitlines()
+    hn('change-agent', '-t', alpha)
+    shown('Change agent')
+    tmux('send-keys', '-l', '-t', TARGET, 'Claude')
+    shown('› Claude')
+    click_text('Claude Code', before=85)
+    wait(lambda: value('#{pane_current_command}', alpha) == 'claude', 'acknowledged replacement attaches before restart')
+    wait(lambda: api()['deskFailures'] < 99, 'workspace publication failed')
+    assert len(requests('agent_create')) == 1
+    made = requests('agent_create')[0]['payload']['creationId']
+    replacement = next(a['id'] for a in api()['agents'][api()['local']] if a['name'] == 'Alpha task' and a['status'] != 'stopped')
+    snapshot('placement-pending-before-restart')
+    tmux('set-window-option', '-t', TARGET, 'remain-on-exit', 'on')
+    hn('hn-hand-over')
+    wait(lambda: tmux('display-message', '-p', '-t', TARGET, '#{pane_dead}').strip() == '1', 'client exits for placement restart')
+    tmux('respawn-pane', '-k', '-t', TARGET, command)
+    shown('Alpha task terminal')
+    assert value('#{pane_current_command}', alpha) == 'claude'
+    assert hn('list-panes', '-F', '#{pane_id}').splitlines() == original_panes
+    assert value('#{window_id}') == original_window
+    assert value('#{window_layout}') == original_layout
+    hn('workspace-menu')
+    shown('Retry workspace sync')
+    api({'action': 'config', 'patch': {'deskFailures': 0}})
+    click_text('Retry workspace sync')
+    wait(lambda: any(any(p['agentId'] == replacement for p in t['panes']) for t in api()['desk']['tabs']), 'restart retries placement after connectivity returns')
+    assert [r['payload']['creationId'] for r in requests('agent_create')] == [made]
+    assert len([r for r in requests('agent_close') if r['payload']['mode'] != 'inspect']) == 1
+    snapshot('placement-recovered-after-restart')
+    print('PASS workspace: restart retains a launched replacement until workspace publication succeeds', flush=True)
+
+
 def mirror_journey(command, source):
     global TARGET
     # Run setup inside the attached client, so the ordinary session belongs to that client.
@@ -244,6 +283,9 @@ try:
     alpha, beta = panes
     workspace = value('#{window_id}')
     snapshot('workspace')
+    if '--placement-restart' in sys.argv:
+        placement_restart_journey(command, alpha)
+        sys.exit(0)
     if '--mirrors' in sys.argv:
         mirror_journey(command, 'Alpha task')
         sys.exit(0)
@@ -460,6 +502,7 @@ try:
 
     # Idle sessions stop directly; no second meaning of X is introduced for owned harnesses.
     hn('select-window', '-t', 'Remote')
+    shown('Gamma remote task terminal')
     _, remote_y = map(int, value('#{pane_left} #{pane_top}').split())
     click_text('×', row=remote_y - 1)
     wait(lambda: not any(t['id'] == 'remote' for t in api()['desk']['tabs']), 'idle remote session is stopped and removed')

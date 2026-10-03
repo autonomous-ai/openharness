@@ -26,7 +26,7 @@ fn remove_views(tabs: &mut Vec<Tab>, removed: &HashSet<u64>) {
 }
 
 impl App {
-    pub(super) fn saved_identity(&self) -> Value { json!(self.daemon_identity) }
+    pub(crate) fn saved_identity(&self) -> Value { json!(self.daemon_identity) }
 
     pub(super) fn reconcile_account_machines(&mut self, rows: &[Value], stale: bool) {
         let ids: HashSet<_> = rows.iter().filter_map(|r| r["machineId"].as_str()).collect();
@@ -296,6 +296,101 @@ mod tests {
         app.desk_revision = 900; app.desk_loaded = true; app.desk_inflight = true;
         app.desk_pending.push(json!({"op":"tab.rename","id":"old-tab","name":"Never replay"}));
         app
+    }
+
+    #[tokio::test]
+    async fn pending_workspace_survives_restart_until_the_server_observes_its_pane() {
+        let mut source = app("account-a", true);
+        source.handed_over = true;
+        source.tabs[0].named = true;
+        source.tabs[0].zoomed = false;
+        source.tabs[0].root.as_mut().unwrap().split(1, 4, Dir::Horizontal);
+        source.tabs[0].focus = Some(4);
+        source.panes.insert(4, Pane::new(4, "account-a", "neighbor", 50, 29));
+        source.tabs[0].layout = json!({"tmux":source.tabs[0].root.as_ref().unwrap().to_tmux()});
+        let ops = vec![json!({"op":"pane.add","tabId":"tab-1","machineId":"account-a","agentId":"a1","index":0})];
+        crate::agent_switch::retain_placement(&mut source, "account-a", "a1", &ops);
+        let saved = crate::agent_switch::saved_placements(&source);
+        assert_eq!(saved.len(), 1);
+        let doc = json!({"pending_workspace":saved});
+        let mut restored = app("account-a", true);
+        restored.handed_over = true;
+        restored.tabs = vec![Tab::home()]; restored.panes.clear(); restored.desk_revision = -1;
+        restored.fleet.local_id.clear(); // The private daemon has not answered startup yet.
+        crate::agent_switch::restore_placements(&mut restored, &doc);
+        assert_eq!(restored.tabs.len(), 1);
+        assert_eq!(restored.tab().wid(), source.tabs[0].wid());
+        assert_eq!(restored.tab().panes(), vec![1, 4]);
+        assert_eq!(restored.tab().focus, Some(4));
+        assert_eq!(restored.tab().root.as_ref().unwrap().to_tmux(), source.tabs[0].root.as_ref().unwrap().to_tmux());
+        assert!(crate::agent_switch::sync_pending(&restored));
+        restored.fleet.local_id = "account-a".into();
+        let before = restored.desk_pending.clone();
+        restored.apply_desk(&json!({"revision":1,"tabs":[{"id":"tab-1","name":"Local work","panes":[{"machineId":"account-a","agentId":"neighbor"}]}]}));
+        assert!(crate::agent_switch::preserves(&restored, 1));
+        assert_eq!(restored.desk_pending, before, "restoration does not send a new process request");
+        assert!(restored.agent_switch.sent.is_empty());
+        let claimed = crate::agent_switch::merge_saved_placements(&restored, &doc, false);
+        assert_eq!(claimed.as_array().unwrap().len(), 1, "one owner claims the saved receipt without duplication");
+        restored.apply_desk(&json!({"revision":2,"tabs":[{"id":"tab-1","name":"Local work","panes":[{"machineId":"account-a","agentId":"a1"},{"machineId":"account-a","agentId":"neighbor"}],"layout":restored.tab().layout}]}));
+        assert!(!crate::agent_switch::sync_pending(&restored));
+        assert_eq!(crate::agent_switch::merge_saved_placements(&restored, &doc, false), json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_pending_view_stopped_elsewhere_is_not_republished_after_restart() {
+        let mut source = app("account-a", true);
+        source.handed_over = true;
+        crate::agent_switch::retain_placement(&mut source, "account-a", "a1", &[json!({"op":"pane.add","tabId":"tab-1","machineId":"account-a","agentId":"a1"})]);
+        let doc = json!({"pending_workspace":crate::agent_switch::saved_placements(&source)});
+        let mut restored = app("account-a", true);
+        restored.handed_over = true;
+        restored.tabs = vec![Tab::home()]; restored.panes.clear(); restored.desk_revision = -1;
+        crate::agent_switch::restore_placements(&mut restored, &doc);
+        // The fresh roster, rather than the saved active row, says another client stopped it.
+        restored.fleet.agents.get_mut(&("account-a".into(), "a1".into())).unwrap().status = "stopped".into();
+        crate::agent_switch::retry_sync(&mut restored);
+        assert!(!crate::agent_switch::sync_pending(&restored));
+        assert!(restored.agent_switch.sent.is_empty());
+        assert_eq!(crate::agent_switch::merge_saved_placements(&restored, &doc, true), json!([]));
+        restored.apply_desk(&json!({"revision":1,"tabs":[]}));
+        assert!(restored.panes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pending_workspace_cannot_cross_accounts_or_restore_a_removed_computer() {
+        let mut source = app("account-a", true);
+        source.handed_over = true;
+        crate::agent_switch::retain_placement(&mut source, "remote-old", "a2", &[json!({"op":"pane.add","tabId":"tab-2","machineId":"remote-old","agentId":"a2"})]);
+        let doc = json!({"pending_workspace":crate::agent_switch::saved_placements(&source)});
+        for (owner, removed) in [("account-b", false), ("account-a", true)] {
+            let mut restored = app(owner, true);
+            restored.handed_over = true;
+            restored.tabs = vec![Tab::home()]; restored.panes.clear();
+            if removed { restored.removed_machines.insert("remote-old".into()); }
+            crate::agent_switch::restore_placements(&mut restored, &doc);
+            assert!(restored.panes.is_empty());
+            assert!(!crate::agent_switch::sync_pending(&restored));
+            assert!(restored.agent_switch.sent.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn saving_one_client_keeps_another_clients_pending_workspace_receipt() {
+        let mut source = app("account-a", true);
+        source.handed_over = true;
+        crate::agent_switch::retain_placement(&mut source, "account-a", "a1", &[json!({"op":"pane.add","tabId":"tab-1","machineId":"account-a","agentId":"a1"})]);
+        let mut rows = crate::agent_switch::saved_placements(&source);
+        rows[0]["owner"] = json!("/tmp/hn-fixture-peer-not-running.sock");
+        let doc = json!({"pending_workspace":rows});
+        let mut peer = app("account-a", true);
+        peer.handed_over = true;
+        assert_eq!(crate::agent_switch::merge_saved_placements(&peer, &doc, false), doc["pending_workspace"]);
+        peer.tabs = vec![Tab::home()]; peer.panes.clear();
+        crate::agent_switch::restore_placements(&mut peer, &doc);
+        assert_eq!(crate::agent_switch::merge_saved_placements(&peer, &doc, true).as_array().unwrap().len(), 1);
+        peer.close_pane(1);
+        assert_eq!(crate::agent_switch::merge_saved_placements(&peer, &doc, true), json!([]), "a view closed after recovery cannot reappear on another restart");
     }
 
     #[tokio::test]
