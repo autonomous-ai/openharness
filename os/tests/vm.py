@@ -190,10 +190,13 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
     parser.add_argument('--workloads', action='store_true', help='Opt in to real free-model project builds and browser acceptance after --agents')
+    parser.add_argument('--dsh', action='store_true', help='Exercise three real DSH agents and shared viewers after --agents')
     parser.add_argument('--live-only', action='store_true', help='Development probe: stop after the live-session checks, without installing')
     args = parser.parse_args()
     if args.workloads and not args.agents:
         parser.error('--workloads requires --agents')
+    if args.dsh and not args.agents:
+        parser.error('--dsh requires --agents')
     folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
@@ -390,6 +393,30 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
                 archive.extractall(destination, filter='data')
             vm.command('test "$(cat ~/.local/state/harness-os/workloads/status)" = 0')
             result['checks'].append('Free OpenCode built four projects; independent CLI, keyboard browser, game and persistent API checks passed')
+        if args.dsh:
+            package = io.BytesIO()
+            with tarfile.open(fileobj=package, mode='w:gz') as archive:
+                archive.add(Path(__file__).with_name('dsh'), arcname='dsh')
+                store = Path(__file__).resolve().parents[2] / 'store'
+                for component in ['viewers/web-viewer', 'viewers/game-viewer', 'examples/hello-world']:
+                    archive.add(store / component, arcname='dsh/components/' + component)
+            encoded = base64.b64encode(package.getvalue()).decode()
+            vm.command(': > /tmp/hn-dsh.b64')
+            for offset in range(0, len(encoded), 2000):
+                vm.command('printf %s ' + encoded[offset:offset + 2000] + ' >> /tmp/hn-dsh.b64')
+            vm.command('base64 -d /tmp/hn-dsh.b64 | tar -xz -C /tmp; rm /tmp/hn-dsh.b64')
+            vm.command('hn new-window -n dsh-acceptance ' + shlex.quote('bash /tmp/dsh/run.sh > "$HOME/.local/state/harness-os/dsh-check.log" 2>&1'))
+            output, _ = vm.command('for n in $(seq 1 2700); do test -s ~/.local/state/harness-os/dsh-check/status && break; sleep 1; done; cat ~/.local/state/harness-os/dsh-check.log', timeout=2720)
+            (folder / 'dsh-check.log').write_text(output)
+            vm.command('tar --exclude=node_modules --exclude=.git --exclude=__pycache__ -czf /tmp/hn-dsh-results.tgz -C "$HOME" Projects/os-dsh .local/state/harness-os/dsh-check', timeout=60)
+            output, _ = vm.command("printf 'HN_DSH_ARCHIVE='; base64 -w0 /tmp/hn-dsh-results.tgz; printf '\\n'", timeout=120)
+            packed = base64.b64decode(re.search(r'HN_DSH_ARCHIVE=([A-Za-z0-9+/=]+)', output).group(1), validate=True)
+            destination = folder / 'dsh'
+            destination.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(packed), mode='r:gz') as archive:
+                archive.extractall(destination, filter='data')
+            vm.command('test "$(cat ~/.local/state/harness-os/dsh-check/status)" = 0')
+            result['checks'].append('Three managed DSH agents, terminal output, shared Web Viewer reload and Game Viewer keyboard play/export passed')
         result['status'] = 'passed'
     except Exception as error:
         result['status'] = 'failed'

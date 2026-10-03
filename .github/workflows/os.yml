@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      dsh:
+        description: 'Opt in to three free-model DSH agents and shared Web/Game Viewer acceptance in the disposable BIOS VM'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -25,7 +30,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -133,7 +138,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Boot, operate, install and reboot the real image
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ inputs.workloads && matrix.firmware == 'bios' && '--workloads' || '' }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ inputs.workloads && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }}
       - name: Show machine failure diagnostics
         if: failure()
         run: |
@@ -149,6 +154,7 @@ jobs:
             os/test-results/**/*.txt
             os/test-results/**/*.json
             os/test-results/**/workloads/**
+            os/test-results/**/dsh/**
           retention-days: 14
 
   publish:
