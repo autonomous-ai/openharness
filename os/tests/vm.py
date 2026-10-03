@@ -128,9 +128,12 @@ class VM:
             raise RuntimeError(f'Guest command failed ({status}): {command}\n{output[-2000:]}')
         return output[:match.start()], status
 
-    def login_installed(self, config):
+    def login_installed(self, config, unlock_delay=0):
         if config['encrypt']:
             self.wait(r'(?:passphrase|Passphrase|Password)[^\r\n]*:', timeout=180)
+            if unlock_delay:
+                time.sleep(unlock_delay)
+                self.screenshot('delayed-disk-unlock')
             self.send(config['password'] + '\n')
         self.wait(r'login:', timeout=180)
         self.send('programmer\n')
@@ -212,8 +215,8 @@ def main():
         vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
         result['live_hn_ready_seconds'] = round(time.monotonic() - vm.started, 3)
         result['checks'].append('Harness runtime reports discovery ready before hn startup is measured')
-        output, _ = vm.command("df -B1 --output=size /run/archiso/cowspace | tail -1")
-        scratch_bytes = int(output.strip())
+        output, _ = vm.command("printf 'HN_SCRATCH=%s\\n' \"$(df -B1 --output=size /run/archiso/cowspace | tail -1)\"")
+        scratch_bytes = int(re.search(r'HN_SCRATCH=\s*(\d+)', output).group(1))
         if scratch_bytes < args.memory * 1024 ** 2 * 0.45:
             raise RuntimeError('Live writable space is too small for on-demand agent installation.')
         result['live_scratch_mib'] = round(scratch_bytes / 1024 ** 2, 1)
@@ -272,10 +275,15 @@ def main():
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
-        vm.login_installed(config)
+        unlock_delay = 100 if config['encrypt'] else 0
+        vm.login_installed(config, unlock_delay=unlock_delay)
+        result['deliberate_unlock_delay_seconds'] = unlock_delay
+        if unlock_delay:
+            result['checks'].append('Encrypted disk still unlocks after waiting more than the default device timeout')
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         vm.command('test ! -e /etc/sudoers.d/10-live && ! sudo -n true')
         vm.command('! pgrep -x chromium')
+        vm.command('test "$(npm prefix -g)" = "$HOME/.local"')
         vm.command('findmnt -n -o FSTYPE / | grep -qx btrfs')
         vm.command('findmnt -n -o FSTYPE /boot | grep -qx vfat')
         output, _ = vm.command('cat /var/lib/harness-os/install.json; hn-os measure')

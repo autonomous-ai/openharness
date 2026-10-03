@@ -211,7 +211,10 @@ def install(config, source, target):
         if config['encrypt']:
             write(target, '/etc/systemd/system/getty@tty1.service.d/autologin.conf',
                   '[Service]\nExecStart=\n' + f'ExecStart=-/usr/bin/agetty --autologin {config["username"]} --noclear %I $TERM\n')
-        kernel_args = 'quiet loglevel=3 rootflags=subvol=@'
+        # An encrypted root cannot appear until its owner returns to unlock it.
+        # Do not send a person who paused at the prompt into emergency mode.
+        root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
+        kernel_args = f'quiet loglevel=3 rootflags={root_flags}'
         if config.get('serial_console'):
             kernel_args += ' console=tty0 console=ttyS0,115200'
         if luks_uuid:
