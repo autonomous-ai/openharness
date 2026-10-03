@@ -73,11 +73,11 @@ class EvidenceTests(unittest.TestCase):
                 raise AssertionError(path)
 
             def pages(self, path, key):
-                return copy.deepcopy(fixture.jobs if key == "jobs" else [fixture.artifact])
+                return copy.deepcopy(fixture.jobs if key == "jobs" else getattr(fixture, "artifacts", [fixture.artifact]))
 
             def command(self, *args, binary=False):
                 fixture.command_args = args
-                return fixture.archive
+                return fixture.archives[args[-1]] if hasattr(fixture, "archives") else fixture.archive
 
         return recorder.collect(FakeClient(), self.root, 123, scope, target, self.output, 5 if with_pr else None)
 
@@ -97,6 +97,75 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertNotIn("cli_summary", result)
         self.assertFalse((self.output / "cli-test-summary.zip").exists())
+
+    def desktop_fixture(self):
+        self.jobs = [dict(self.jobs[0], id=i, name=name) for i, name in
+                     enumerate(sorted(recorder.DESKTOP_JOBS | {"process-checks"}), 1)]
+        files = [f"test/{i}_test.dart" for i in range(4)]
+        self.summary = dict(schema=1, kind="desktop-vm-ci", status="passed",
+                            source=dict(commit=self.sha, tree=self.git("rev-parse", "HEAD^{tree}"), dirty=False),
+                            platforms=[dict(platform=name, files=4, passed=4, skipped=0, verified_files=files,
+                                            shards=[dict(shard=i, files=1, verified_files=1, passed=1, skipped=0,
+                                                         recovered_files=[], receipt_sha256="a" * 64) for i in range(1, 5)])
+                                       for name in sorted(recorder.DESKTOP_PLATFORMS)])
+        self.desktop_archive()
+
+    def desktop_archive(self):
+        self.archive = self.zip_summary(self.summary, "desktop-test-summary.json")
+        self.artifact.update(name="desktop-test-summary", size_in_bytes=len(self.archive),
+                             digest="sha256:" + hashlib.sha256(self.archive).hexdigest())
+
+    def test_desktop_scope_verifies_both_platforms_and_preserves_the_artifact(self):
+        self.desktop_fixture()
+        result = self.collect(scope="desktop", with_pr=True)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(len(result["desktop_summary"]["platforms"]), 2)
+        self.assertIn("Desktop VM `macos-15`", recorder.markdown(result))
+        self.assertEqual((self.output / "desktop-test-summary.zip").read_bytes(), self.archive)
+        self.assertNotIn("cli_summary", result)
+
+    def test_desktop_missing_platform_bad_counts_and_wrong_tree_are_rejected(self):
+        self.desktop_fixture()
+        original = copy.deepcopy(self.summary)
+        for change in [lambda s: s["platforms"].pop(),
+                       lambda s: s["source"].update(tree="b" * 40),
+                       lambda s: s["platforms"][0].update(passed=True),
+                       lambda s: s["platforms"][0]["shards"].pop(),
+                       lambda s: s["platforms"][0]["shards"][0].update(verified_files=0),
+                       lambda s: s["platforms"][0]["shards"][0].update(recovered_files=["test/absent_test.dart"])]:
+            self.summary = copy.deepcopy(original)
+            change(self.summary)
+            self.desktop_archive()
+            with self.assertRaises(ValueError):
+                self.collect(scope="desktop")
+
+    def test_desktop_recovery_is_explicit_and_every_matrix_job_is_required(self):
+        self.desktop_fixture()
+        self.summary["platforms"][0]["shards"][0]["recovered_files"] = ["test/0_test.dart"]
+        self.desktop_archive()
+        self.assertIn("1 explicitly recorded pre-test loader recoveries", recorder.markdown(self.collect(scope="desktop")))
+        self.jobs.pop()
+        with self.assertRaisesRegex(ValueError, "missing jobs"):
+            self.collect(scope="desktop")
+
+    def test_full_scope_requires_and_retains_cli_and_desktop_summaries(self):
+        cli_archive, cli_artifact = self.archive, copy.deepcopy(self.artifact)
+        self.desktop_fixture()
+        self.artifact["id"] = 988
+        self.artifacts = [cli_artifact, self.artifact]
+        self.archives = {"repos/owner/repo/actions/artifacts/987/zip": cli_archive,
+                         "repos/owner/repo/actions/artifacts/988/zip": self.archive}
+        self.jobs = [dict(self.jobs[0], id=i, name=name) for i, name in
+                     enumerate(sorted(recorder.SCOPES["full"] | {"process-checks"}), 1)]
+        result = self.collect(scope="full")
+        self.assertEqual(result["status"], "passed")
+        self.assertIn("cli_summary", result)
+        self.assertIn("desktop_summary", result)
+        self.assertEqual(result["artifact"]["id"], 987)
+        self.assertEqual(result["desktop_artifact"]["id"], 988)
+        self.artifacts.pop()
+        with self.assertRaisesRegex(ValueError, "Desktop coverage summary"):
+            self.collect(scope="full")
 
     def test_partial_scope_cannot_be_called_full_ci(self):
         with self.assertRaisesRegex(ValueError, "missing jobs"):

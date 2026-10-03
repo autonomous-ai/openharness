@@ -25,11 +25,26 @@ compiling, or starting a broad suite. Do not clean other sessions' files to make
 Run independent checks concurrently, with enough capacity for their workers;
 two commands each spawning every CPU is not useful parallelism.
 
-Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, or `full`
+Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`, or `full`
 (the default). `cli` includes typecheck, all CLI tests, updater coverage, release
 bundle checks, and the serial/login-shell OS/Node matrix. `tui` includes its native
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
 The workflow remains on demand; this change does not introduce new required gates.
+
+`desktop` runs all Desktop VM files on both macOS and Linux, split into four
+isolated runners per platform. It uses the release's pinned Flutter SDK and shared
+dependency caches. Each shard has four test workers and the bounded runner's
+ten-minute budget; startup recovery retains the same narrow rules below. `full`
+includes this matrix alongside the existing component checks. Changed Dart
+analysis and browser/native integration checks remain separate where relevant.
+
+The Desktop aggregate reads each raw test log, verifies its hash and complete-file
+result, and compares every shard's inventory with the checked-out test files.
+Every file must finish exactly once per platform. Failed jobs, missing or duplicate
+files, changed source/environment, malformed reports and incomplete tests fail it.
+Platform-specific skips and any pre-test loader recovery remain explicit in the
+summary. Logs, receipts and the summary are retained for seven days. Collect the
+result with `scripts/record-ci-validation.py RUN_ID --scope desktop --pr PR_NUMBER`.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
 its worker cap and isolation. Typecheck, lockfile checks, guard fuzz, registry and
@@ -193,6 +208,8 @@ point, not a fixed cap for a full suite. Choose and record a worker count that f
 the host and other running checks. The full-suite command below selects more
 workers on larger hosts; use an explicit lower count when other checks are active.
 Chrome and native integration tests ignore Flutter's concurrency option.
+Use `make desktop-test ARGS="--shard 1/4 --workers 4"` to reproduce one CI
+assignment locally. A shard alone does not validate the complete suite.
 Tests legitimately needing longer can declare that explicitly. Start a necessary
 broad desktop run early, with
 an outer limit (initial budget: 15 minutes); investigate a timeout instead of waiting
@@ -252,13 +269,15 @@ collect its record with one read-only command:
 python3 scripts/record-ci-validation.py RUN_ID --scope cli --pr PR_NUMBER
 ```
 
-Use the required CI scope (`cli`, `tui`, `backend`, `process`, or `full`). The command
+Use the required CI scope (`cli`, `tui`, `backend`, `desktop`, `process`, or `full`). The command
 writes a short `validation.md` and machine-readable `receipt.json` under ignored
 `.harness/validation/`; use the paragraph/table in the PR's verification section.
 It checks the exact run/repository/workflow, required jobs, completed steps, source
 trees, and an optional PR's head/base stability. For CLI it also downloads the
 coverage summary by immutable artifact ID and verifies its archive checksum and
-file/case totals. Network calls are bounded; the default collection budget is 90s.
+file/case totals. Desktop scope similarly verifies the summary for both platforms
+and preserves explicit startup-recovery counts. Network calls are bounded; the
+default collection budget is 90s.
 
 Exit 0 means the requested CI scope passed and its committed source tree matches
 the selected target (`HEAD` by default). Exit 3 still saves the record but flags

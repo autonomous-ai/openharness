@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -148,11 +149,29 @@ def select_files(desktop, paths):
     return sorted(set(selected))
 
 
+def shard_pair(value):
+    if not re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError("shard must be INDEX/TOTAL, starting at 1")
+    index, total = map(int, value.split("/"))
+    if index > total:
+        raise argparse.ArgumentTypeError("shard index exceeds total")
+    return index, total
+
+
+def partition(files, shard):
+    index, total = shard
+    selected = files[index - 1::total]
+    if not selected:
+        raise ValueError("shard has no test files; reduce the shard count")
+    return selected
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", help="desktop-relative test/foo_test.dart paths; default: every VM test")
     parser.add_argument("--flutter", default="flutter", help="Flutter executable (dependencies must already be installed)")
     parser.add_argument("--workers", type=int, default=default_workers())
+    parser.add_argument("--shard", type=shard_pair, default=(1, 1), help="run INDEX/TOTAL of the complete selected file inventory")
     parser.add_argument("--timeout", type=float, default=900, help="total attempt budget in seconds, including recovery (default: 900)")
     parser.add_argument("--no-loader-retry", action="store_true", help="retain the first failure without recovery")
     args = parser.parse_args(argv)
@@ -162,7 +181,8 @@ def main(argv=None):
         parser.error("workers and timeout must be positive and finite")
     root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()).resolve()
     desktop = root / "desktop"
-    selected = select_files(desktop, args.files)
+    inventory = select_files(desktop, args.files)
+    selected = partition(inventory, args.shard)
     flutter = shutil.which(args.flutter)
     if flutter is None:
         raise ValueError(f"Flutter executable unavailable: {args.flutter}")
@@ -173,7 +193,10 @@ def main(argv=None):
     deadline = started + args.timeout
     receipt = dict(schema=1, kind="desktop-vm", started_at=validation.utc_now(), source=validation.source_state(root),
                    workers=workers, logical_cpus=os.cpu_count(), timeout_seconds=args.timeout,
-                   selected_files=selected, checks=[], status="blocked")
+                   selected_files=selected, checks=[], status="blocked", platform=sys.platform,
+                   desktop_root=str(desktop.resolve()),
+                   shard=dict(index=args.shard[0], total=args.shard[1],
+                              inventory=[str(Path(path).relative_to(desktop)) for path in inventory]))
     # Reuse the common runner's source/toolchain/environment identity and owned
     # process cleanup. This driver never reuses results from an earlier invocation.
     identity_plan = {"checks": [{"name": "desktop-vm", "argv": [flutter, "test"], "cwd": "desktop",

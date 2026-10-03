@@ -23,6 +23,18 @@ class WorkerCountTests(unittest.TestCase):
             with self.subTest(cpus=cpus), mock.patch.object(driver.os, "cpu_count", return_value=cpus):
                 self.assertEqual(driver.default_workers(), expected)
 
+    def test_shards_cover_every_file_once_and_reject_invalid_or_empty_assignments(self):
+        files = [f"test/{i}_test.dart" for i in range(11)]
+        groups = [driver.partition(files, driver.shard_pair(f"{i}/4")) for i in range(1, 5)]
+        selected = [path for group in groups for path in group]
+        self.assertEqual(set(selected), set(files))
+        self.assertEqual(len(selected), len(set(selected)))
+        for value in ["0/4", "1/0", "5/4", "1", "-1/4", "1/4/2", "01/4"]:
+            with self.subTest(value=value), self.assertRaises(driver.argparse.ArgumentTypeError):
+                driver.shard_pair(value)
+        with self.assertRaises(ValueError):
+            driver.partition(files[:1], (2, 2))
+
 
 class ReporterTests(unittest.TestCase):
     def setUp(self):
@@ -136,6 +148,14 @@ class DesktopProcessTests(unittest.TestCase):
         self.assertFalse(any("browser_test" in arg for arg in calls[0]))
         self.assertEqual(receipt["source"], receipt["source_after"])
         self.assertEqual(receipt["identity"], receipt["identity_after"])
+
+    def test_shard_executes_only_its_files_and_records_the_full_inventory(self):
+        result, receipt, calls = self.run_driver(extra=("--shard", "2/2"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(receipt["shard"], dict(index=2, total=2, inventory=["test/one_test.dart", "test/two_test.dart"]))
+        self.assertEqual([Path(p).name for p in receipt["selected_files"]], ["two_test.dart"])
+        self.assertEqual([Path(p).name for p in calls[0] if p.endswith("_test.dart")], ["two_test.dart"])
+        self.assertEqual(receipt["coverage"], dict(files=1, verified_files=1, passed=1, skipped=1))
 
     def test_recovery_runs_only_the_failed_loader_once_and_preserves_both_logs(self):
         result, receipt, calls = self.run_driver("once")

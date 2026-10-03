@@ -22,8 +22,10 @@ CLI_JOBS = {"cli-contracts", "typecheck-test"} | {f"cli-tests ({i})" for i in ra
     f"serial-native ({system}, {node})" for system in ["ubuntu-latest", "macos-latest"] for node in ["20.19.0", "22.23.2"]
 }
 TUI_JOBS = {"tui-test (ubuntu-latest, x86_64-unknown-linux-musl)", "tui-test (ubuntu-24.04-arm, aarch64-unknown-linux-musl)"}
-SCOPES = {"cli": CLI_JOBS, "tui": TUI_JOBS, "backend": {"backend-desk"}, "process": set()}
-SCOPES["full"] = CLI_JOBS | TUI_JOBS | SCOPES["backend"]
+DESKTOP_PLATFORMS = {"ubuntu-22.04", "macos-15"}
+DESKTOP_JOBS = {"desktop-test-summary"} | {f"desktop-tests ({platform}, {index})" for platform in DESKTOP_PLATFORMS for index in range(1, 5)}
+SCOPES = {"cli": CLI_JOBS, "tui": TUI_JOBS, "backend": {"backend-desk"}, "desktop": DESKTOP_JOBS, "process": set()}
+SCOPES["full"] = CLI_JOBS | TUI_JOBS | SCOPES["backend"] | DESKTOP_JOBS
 
 
 def utc_now():
@@ -101,20 +103,25 @@ def check_jobs(run, jobs, scope):
             raise ValueError(f"job contains a failed or unfinished step: {job['name']}")
 
 
-def read_cli_summary(artifact, archive, run):
+def summary_contents(artifact, archive, run, name):
     provenance = artifact.get("workflow_run", {})
-    if (artifact.get("name") != "cli-test-summary" or artifact.get("expired") is not False
+    if (artifact.get("name") != name or artifact.get("expired") is not False
             or provenance.get("id") != run["id"] or provenance.get("head_sha") != run["head_sha"]):
-        raise ValueError("CLI summary artifact is expired or belongs to another source/run")
+        raise ValueError("summary artifact is expired or belongs to another source/run")
     digest = "sha256:" + hashlib.sha256(archive).hexdigest()
     if artifact.get("digest") != digest:
-        raise ValueError("CLI summary archive digest mismatch")
+        raise ValueError("summary archive digest mismatch")
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
-        if bundle.namelist() != ["cli-test-summary.json"] or bundle.infolist()[0].file_size > 8 * 1024 ** 2:
-            raise ValueError("unexpected CLI summary archive contents")
-        summary = json.loads(bundle.read("cli-test-summary.json"))
+        if bundle.namelist() != [name + ".json"] or bundle.infolist()[0].file_size > 8 * 1024 ** 2:
+            raise ValueError("unexpected summary archive contents")
+        summary = json.loads(bundle.read(name + ".json"))
     if not isinstance(summary, dict):
-        raise ValueError("invalid CLI summary object")
+        raise ValueError("invalid summary object")
+    return summary
+
+
+def read_cli_summary(artifact, archive, run):
+    summary = summary_contents(artifact, archive, run, "cli-test-summary")
     for key in ["files", "passed", "skipped", "todo"]:
         if type(summary.get(key)) is not int or summary[key] < 0:
             raise ValueError("invalid CLI summary counts")
@@ -125,6 +132,43 @@ def read_cli_summary(artifact, archive, run):
             or len(shards) != 4 or {shard["shard"] for shard in shards} != {1, 2, 3, 4}
             or any(sum(shard[key] for shard in shards) != summary[key] for key in ["files", "passed", "skipped", "todo"])):
         raise ValueError("CLI summary coverage is incomplete or inconsistent")
+    return summary
+
+
+def read_desktop_summary(artifact, archive, run):
+    summary = summary_contents(artifact, archive, run, "desktop-test-summary")
+    source = summary.get("source", {})
+    platforms = summary.get("platforms", [])
+    if (summary.get("schema") != 1 or summary.get("kind") != "desktop-vm-ci" or summary.get("status") != "passed"
+            or source.get("commit") != run["head_sha"] or source.get("dirty") is not False
+            or not re.fullmatch(r"[0-9a-f]{40}", source.get("tree", ""))
+            or not isinstance(platforms, list) or len(platforms) != len(DESKTOP_PLATFORMS)
+            or {p.get("platform") for p in platforms} != DESKTOP_PLATFORMS):
+        raise ValueError("Desktop summary source/platform coverage differs")
+    inventory = None
+    for platform in platforms:
+        for key in ["files", "passed", "skipped"]:
+            if type(platform.get(key)) is not int or platform[key] < 0:
+                raise ValueError("invalid Desktop summary count")
+        files, shards = platform.get("verified_files", []), platform.get("shards", [])
+        if (not platform["files"] or len(files) != platform["files"] or len(set(files)) != len(files)
+                or any(not isinstance(p, str) or not p.startswith("test/") or not p.endswith("_test.dart")
+                       or ".." in p.split("/") or p.startswith("test/web/") for p in files)
+                or len(shards) != 4 or {s["shard"] for s in shards} != {1, 2, 3, 4}):
+            raise ValueError("Desktop summary file/shard coverage is incomplete")
+        if inventory is not None and set(files) != inventory:
+            raise ValueError("Desktop platform inventories disagree")
+        inventory = set(files)
+        for shard in shards:
+            if (any(type(shard.get(k)) is not int or shard[k] < 0 for k in ["files", "verified_files", "passed", "skipped"])
+                    or not shard["files"] or shard["verified_files"] != shard["files"]
+                    or not re.fullmatch(r"[0-9a-f]{64}", shard.get("receipt_sha256", ""))
+                    or not isinstance(shard.get("recovered_files"), list)
+                    or len(set(shard["recovered_files"])) != len(shard["recovered_files"])
+                    or not set(shard["recovered_files"]) <= inventory):
+                raise ValueError("Desktop shard counts or recovery record differ")
+        if any(sum(s[k] for s in shards) != platform[k] for k in ["files", "passed", "skipped"]):
+            raise ValueError("Desktop summary totals disagree")
     return summary
 
 
@@ -145,7 +189,7 @@ def collect(client, root, run_id, scope, target, output, pr_number=None):
     check_run(run, client.repository, run_id)
     with ThreadPoolExecutor(max_workers=3) as pool:
         job_future = pool.submit(client.pages, f"actions/runs/{run_id}/jobs?filter=latest", "jobs")
-        artifact_future = pool.submit(client.pages, f"actions/runs/{run_id}/artifacts", "artifacts") if scope in {"cli", "full"} else None
+        artifact_future = pool.submit(client.pages, f"actions/runs/{run_id}/artifacts", "artifacts") if scope in {"cli", "desktop", "full"} else None
         pr_future = pool.submit(client.api, f"pulls/{pr_number}") if pr_number else None
         jobs = job_future.result()
         artifacts = artifact_future.result() if artifact_future else []
@@ -170,6 +214,19 @@ def collect(client, root, run_id, scope, target, output, pr_number=None):
         record["cli_summary"] = read_cli_summary(artifact, archive, run)
         record["artifact"] = {key: artifact[key] for key in ["id", "name", "digest", "size_in_bytes"]}
         (output / "cli-test-summary.zip").write_bytes(archive)
+    if scope in {"desktop", "full"}:
+        matches = [artifact for artifact in artifacts if artifact["name"] == "desktop-test-summary"]
+        if len(matches) != 1:
+            raise ValueError("expected one nonexpired Desktop coverage summary artifact")
+        artifact = matches[0]
+        if artifact.get("size_in_bytes", 16 * 1024 ** 2 + 1) > 16 * 1024 ** 2:
+            raise ValueError("Desktop coverage artifact is unexpectedly large")
+        archive = client.command("api", f"repos/{client.repository}/actions/artifacts/{artifact['id']}/zip", binary=True)
+        record["desktop_summary"] = read_desktop_summary(artifact, archive, run)
+        if record["desktop_summary"]["source"]["tree"] != source["tested_tree"]:
+            raise ValueError("Desktop summary Git tree differs from the tested source")
+        record["desktop_artifact"] = {key: artifact[key] for key in ["id", "name", "digest", "size_in_bytes"]}
+        (output / "desktop-test-summary.zip").write_bytes(archive)
     if pr:
         record["pr"] = {"number": pr_number, "url": pr["html_url"], "head": pr["head"]["sha"], "base": pr["base"]["sha"]}
     # Detect reruns and moving PR heads after the independent downloads. Never
@@ -202,6 +259,12 @@ def markdown(record):
     if "cli_summary" in record:
         c = record["cli_summary"]
         lines.append(f"CLI default suite: **{c['files']} files verified exactly once; {c['passed']:,} passed, {c['skipped']} skipped, {c['todo']} todo**. Summary artifact digest verified.")
+    if "desktop_summary" in record:
+        for platform in record["desktop_summary"]["platforms"]:
+            recovered = sum(len(s["recovered_files"]) for s in platform["shards"])
+            recovery = f" Includes {recovered} explicitly recorded pre-test loader recoveries." if recovered else ""
+            lines.append(f"Desktop VM `{platform['platform']}`: **{platform['files']} files verified exactly once; "
+                         f"{platform['passed']:,} passed, {platform['skipped']} skipped**. Summary artifact digest verified.{recovery}")
     lines += ["", "| Job | Result | Time |", "| --- | --- | ---: |"]
     for job in record["jobs"]:
         name = job["name"].replace("|", "\\|").replace("\n", " ")
