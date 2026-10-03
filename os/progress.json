@@ -1359,13 +1359,12 @@
   },
   "previous_goal_turn_classification": {
     "status": "meaningful progress",
-    "at_utc": "2026-10-03T12:06:54.493802+00:00",
+    "at_utc": "2026-10-03T13:03:55.739443+00:00",
     "progress": [
-      "Exact corrected image passes complete 1 GiB and 4 GiB BIOS/plain and UEFI/encrypted USB journeys.",
-      "Four project acceptance suites and three fresh DSH exercises passed; actual screenshots reviewed.",
-      "Prepared current installation guide, evidence, refreshed landing-page content and screenshots.",
-      "Published Harness 0.1.0-preview.4; all ten public assets verified by full size and SHA-256.",
-      "Confirmed current Mac is Apple M2 Max arm64; native x86 ISO installation unsupported."
+      "Preview 4 ISO downloaded to the Mac and checksum verified",
+      "Small 7.4 MB OS update built and exercised on an encrypted installed VM, including failure, rollback and live process/project preservation",
+      "All three new public update assets downloaded and fully verified",
+      "Shared hn behavior explained; user explicitly approved immediate Terminal creation across platforms"
     ],
     "blocking_condition_repeated": false
   },
@@ -1393,7 +1392,7 @@
   "mac_support_and_feedback_loop": {
     "first_recorded_utc": "2026-10-03T12:08:01Z",
     "request_received_utc": null,
-    "status": "Support targets and development/test approach documented; Mac OS ports and incremental runtime updater are not implemented.",
+    "status": "Mac targets documented; small development update/rollback implemented, validated and publicly available for installed preview 4. Mac hardware ports remain unimplemented.",
     "document": "os/DEVELOPMENT.md",
     "documented_utc": "2026-10-03T12:12:18.648429+00:00",
     "targets": [
@@ -1402,7 +1401,7 @@
       "Apple Silicon arm64 via Asahi platform integration, initially explicitly supported M1/M2 models"
     ],
     "recommended_feedback_loop": "One preview 4 install on the ThinkPad for daily work; native x86 KVM server VMs for repeatable installer/boot tests; Mac as development/control machine. M2 x86 emulation is not the primary feedback loop.",
-    "current_gap": "hn-os update upgrades Arch packages but does not replace the pinned Harness runtime. A small versioned deployment/rollback path is needed for rapid interface changes.",
+    "current_gap": "Physical ThinkPad update test and native Mac hardware integration remain unverified. Remote VM options have portable checks only.",
     "next_implementation": [
       "Remote interactive test VM mode with SSH-tunneled display and optional localhost guest SSH forwarding",
       "Versioned and checksummed development deployment to a dedicated test machine with rollback and preserved projects",
@@ -1431,9 +1430,9 @@
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T12:12:18.648429+00:00",
     "implementation_ready_utc": "2026-10-03T12:51:11.390514+00:00",
-    "status": "Implemented; 65 portable checks passed. Native package/update lifecycle workflow not yet run.",
+    "status": "Published optional 7.4 MB update bundle on preview 4 release. Native encrypted update/failure/rollback/reboot and preserved-work checks passed; all three public assets verified.",
     "merge_utc": null,
-    "publication_utc": null,
+    "publication_utc": "2026-10-03T13:02:00.808820+00:00",
     "validation_plan": [
       "Portable package identity, hash, architecture, source, archive path and rollback guards; Python/shell/JSON/XML syntax and workflow actionlint",
       "Build exact-source Linux runtime and standalone native package; apply it offline to published preview 4 in an encrypted disposable KVM guest",
@@ -1457,6 +1456,79 @@
       "url": "https://chatgpt.com/space/page_d5d04ee40e348191b2b1aa9274b14e53",
       "status": "page_read_forbidden; content not read, update implementation proceeds independently"
     },
-    "shared_runtime_scope": "No cli/ or tui/ edits in this update. Earlier shared chooser/agent fixes remain on OS branch, not merged to main or published in a general TUI release."
+    "shared_runtime_scope": "No cli/ or tui/ edits in this update. Earlier shared chooser/agent fixes remain on OS branch, not merged to main or published in a general TUI release.",
+    "source_commit": "42c22cece04cc49c1e2b6227ae5e40481072e779",
+    "validation_started_utc": "2026-10-03T12:51:36Z",
+    "native_run": {
+      "id": 37124241039,
+      "url": "https://github.com/autonomous-ai/openharness/actions/runs/37124241039",
+      "status": "passed"
+    },
+    "reused_source_trees": {
+      "cli": "d4cc9cddff97f0479b5a06a810d8535c557f44b6",
+      "tui": "ce54bd22a684d65b8433378468cfd56479612069",
+      "unchanged_since": "67958156da30d2983daee22ddab48c43970fa244"
+    },
+    "validation_complete_utc": "2026-10-03T12:56:11Z",
+    "native_result": {
+      "status": "passed",
+      "checks": [
+        "Truncated download rejected before runtime or package identity changed; running work survives",
+        "Real pacman failure records recoverable state; retry cannot replace it; rollback restores the original package",
+        "Small package installed offline and verified without restarting the existing terminal process",
+        "Repeated apply recognizes the installed build without another transaction",
+        "The same terminal process and project survive restarting both Harness daemon and screen",
+        "Rollback restores the prior package and source identity; the same process and project survive both service restarts again"
+      ],
+      "previous_package": "harness-os 0.1.0pre4-1",
+      "candidate": {
+        "name": "harness-os-0.1.0pre4.r1.g42c22cece0-1-x86_64.pkg.tar.gz",
+        "version": "0.1.0pre4.r1.g42c22cece0-1",
+        "bytes": 7364206,
+        "sha256": "99a00490fab414dc2cfc2ef1398f4b9f66714ed9b16397cbea016dfb6c1b8fab"
+      },
+      "source_commit": "42c22cece04cc49c1e2b6227ae5e40481072e779",
+      "apply_seconds": 3.089,
+      "rollback_seconds": 1.083
+    },
+    "visual_review": [
+      "Updated graphical hn received keyboard input and displayed its response",
+      "Encrypted reboot shows Harness wordmark and masked password prompt"
+    ],
+    "publication": {
+      "status": "verified",
+      "verified_at": "2026-10-03T13:02:00.808820+00:00",
+      "release": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4",
+      "source_commit": "42c22cece04cc49c1e2b6227ae5e40481072e779",
+      "assets": [
+        {
+          "name": "harness-update-preview.4-42c22cece-x86_64-validation.json",
+          "bytes": 2034,
+          "sha256": "383e195799c63972721435c0ee7d34832ee5f822f172a8453d75a784d14a1262"
+        },
+        {
+          "name": "harness-update-preview.4-42c22cece-x86_64.zip",
+          "bytes": 7387295,
+          "sha256": "2f621ab2287585fd9ccb5b1b67cb5127d575d6372cd5cdb06c88d041eecabd6c"
+        },
+        {
+          "name": "harness-update-preview.4-42c22cece-x86_64.zip.sha256",
+          "bytes": 112,
+          "sha256": "ed5776b4b6d06a16c2b501a30cbad9b68fd0db65c587d315eafb37ff04dfe15f"
+        }
+      ]
+    },
+    "publication_time_basis": "Verification completion; exact upload start was not recorded.",
+    "publication_completion_reported_utc": "2026-10-03T13:03:55.739254+00:00",
+    "public_artifact": "https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.4/harness-update-preview.4-42c22cece-x86_64.zip",
+    "elapsed_seconds": {
+      "first_recorded_planning_to_verified_publication": 2982.160391,
+      "native_validation_including_runtime_build": 275,
+      "evidence_review_packaging_and_publication_after_ci": 349.80882,
+      "merge": null,
+      "notes": "Original user request timestamp unavailable. Implementation overlaps portable checks. Public packaging/transfer/verification follow native CI, not included in its duration. No main merge or general TUI publication."
+    },
+    "shared_terminal_behavior_approved": true,
+    "future_packaging_note": "Development versions include revision count and full source identity. CI shallow checkout yielded r1; before an automatic ordered update channel exists, replace the count with a source-date ordering key. Current explicit local pacman installs and rollback are validated."
   }
 }

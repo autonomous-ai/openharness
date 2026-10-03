@@ -151,6 +151,13 @@ run an updater or download anything on a schedule.
 The bundled hn and OS integration are pinned to this preview's source build;
 this command updates Arch packages, not the bundled Harness runtime.
 
+An optional [7.4 MB development bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.4/harness-update-preview.4-42c22cece-x86_64.zip)
+adds small Harness package updates and rollback to an installed preview 4 system.
+It includes its bootstrap, checksums, instructions and native VM evidence; see
+[development updates](DEVELOPMENT.md#small-development-updates). It is separate
+from the ISO and from ordinary hn on Mac/Linux. The first bundle's terminal and
+CLI binaries match the ISO; future interface fixes can use this update path.
+
 A failed or interrupted update blocks ordinary package transactions until
 `sudo hn-os update` completes successfully. Fix the reported
 cause and retry; it keeps the original recovery checkpoint, including across

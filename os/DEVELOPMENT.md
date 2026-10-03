@@ -5,9 +5,9 @@ boot changes. Reflashing is a release/install test, not the intended way to try
 every interface fix. Keep the development tools on the build/test host; the
 installed OS keeps the same minimal interface.
 
-This plan was recorded on October 3, 2026. Preview 4 is published. The small-package
-updater and remote-launcher options are implemented on the OS branch; their native
-integration checks are tracked below and in `progress.json` before distribution.
+This plan was recorded on October 3, 2026. Preview 4 and its optional small-package
+update are published. Native update/rollback acceptance passed; remote-launcher
+argument tests passed but remote display/SSH interaction is still unverified.
 
 ## The feedback loop
 
@@ -69,8 +69,11 @@ standalone bootstrap for preview 4. This is an explicit development installation
 from a trusted build, not an automatic public update channel. Checksums detect
 corruption; they do not authenticate an unknown publisher.
 
-Copy the complete bundle to a dedicated installed test machine. After native
-acceptance passes for that bundle, the bootstrap command is:
+The first [verified development bundle](https://github.com/autonomous-ai/openharness/releases/download/os-v0.1.0-preview.4/harness-update-preview.4-42c22cece-x86_64.zip)
+is 7.4 MB and targets installed preview 4. Its terminal and CLI binaries match the
+ISO byte for byte; it establishes the update path for future interface fixes.
+Copy the complete extracted bundle to a dedicated installed test machine. The
+bootstrap command is:
 
 ```sh
 cd /path/to/bundle
@@ -98,12 +101,18 @@ builds the candidate and tests it against the published preview 4 image. Require
 acceptance covers truncated downloads, a real failed pacman transaction, apply,
 rollback, package identity, project preservation, the same terminal process
 through daemon/screen restarts, and an encrypted reboot with keyboard input.
-Portable guards pass locally; native acceptance is pending for the initial build.
+All 65 portable checks and workflow lint passed. [Native acceptance on source
+42c22cece](https://github.com/autonomous-ai/openharness/actions/runs/37124241039)
+passed every case above. In that 2 GiB encrypted VM, apply took 3.089 seconds and
+rollback took 1.083 seconds. Actual post-update keyboard and masked-unlock captures
+were reviewed. Public package/guide/evidence downloads were fully SHA-256 and size
+verified. Physical ThinkPad update behavior and timings remain unverified.
 
 Shared hn changes in preview 4 are still on the OS branch. Ordinary Mac/Linux hn
 keeps its usual home and detach/quit behavior; live USB and installed OS welcome
 actions require explicit OS mode. Opening Terminal directly is a shared chooser
-change. It needs normal TUI release review along with the shared agent-discovery
+change, explicitly approved for all platforms. It needs normal TUI release review
+along with the shared agent-discovery
 and OpenCode compatibility fixes; publishing the ISO did not release these through
 the general TUI channel. The small updater adds no changes to `tui/` or `cli/`.
 
@@ -121,9 +130,8 @@ Stopped-VM snapshot/restore remains future work. Never snapshot a running disk
 by blindly copying its file.
 
 `hn-os update` currently upgrades Arch packages and keeps a recovery checkpoint;
-it does **not** update the pinned Harness runtime. Preview 4 does not yet contain
-the small updater. Until the development bundle passes its native checks, use
-the published image for an end-to-end test of new OS interface code.
+it does **not** update the pinned Harness runtime. Preview 4's ISO does not contain
+the small updater; install its separately validated development bundle to add it.
 
 ## Mac support targets
 
