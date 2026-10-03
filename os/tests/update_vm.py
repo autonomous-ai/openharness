@@ -98,6 +98,7 @@ def main():
             receipt['checks'].append('The OS-channel update boots its rebuilt encrypted image and accepts keyboard input')
         receipt['status'] = 'passed'
     except BaseException as error:
+        receipt['status'] = 'failed'
         receipt['error'] = str(error)
         try:
             vm.screenshot('failure')
