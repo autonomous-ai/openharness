@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 1 remains published and verified. Preview 2 keyboard installer and update-retry guard are implemented; 34 portable checks passed. Fresh ISO and native BIOS/UEFI installation validation follow before publication. Local visual access is still blocked.",
+  "status": "Preview 2 published; all eight public downloads verified by full SHA-256 and size. New installer and both native machine paths passed. Local computer-use and physical ThinkPad checks remain unverified. USB flashing is a manual handoff after macOS disk denial and Etcher 2.1.7 helper crash.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -255,9 +255,9 @@
   "remaining": [
     "Landing-page visual and keyboard validation: user approved, but saved browser permission still blocks localhost access",
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
-    "Build and validate preview 2 update failure/retry behavior in disposable native x86 machines"
+    "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T05:44:11.773434+00:00",
+  "last_updated_utc": "2026-10-03T07:09:06.191273+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -375,7 +375,7 @@
     "implementation_started_utc": null,
     "implementation_ready_utc": "2026-10-03T04:13:24.219808+00:00",
     "candidate_version": "0.1.0-preview.2",
-    "published_version": "0.1.0-preview.1",
+    "published_version": "0.1.0-preview.2",
     "changes": [
       "Persist incomplete full-update state before repository or package changes.",
       "Block ordinary package transactions until a full-update retry succeeds.",
@@ -412,8 +412,8 @@
     "native_validation_started_utc": "2026-10-03T04:13:46Z",
     "native_validation_completed_utc": "2026-10-03T04:53:50Z",
     "merge_utc": null,
-    "publication_utc": null,
-    "limitations": "The prior me@harness/update-retry candidate passed both native machine rows. The new interactive form changes that source and requires a fresh image and machine validation. Preview 1 remains the public download until this candidate passes and is published.",
+    "publication_utc": "2026-10-03T07:04:33Z",
+    "limitations": "Preview 2 keyboard installer image and both native machine paths passed on a155a16850438e04315a1959b1bfd1c387d8bf99; all eight public downloads passed full size/SHA-256 verification. Historical real-model project/DSH and 1 GiB results remain tied to preview 1. Physical hardware and local computer-use review remain unverified.",
     "implementation_revised_utc": "2026-10-03T04:28:01.749594+00:00",
     "installer_defaults": {
       "username": "me",
@@ -472,9 +472,9 @@
       "request_time_basis": "First implementation action after explicit approval; design discussion and prior draft started earlier.",
       "implementation_ready_utc": "2026-10-03T05:44:11.773434+00:00",
       "required_validation_started_utc": "2026-10-03T05:44:11.852041+00:00",
-      "required_validation_completed_utc": null,
+      "required_validation_completed_utc": "2026-10-03T06:12:04Z",
       "merge_utc": null,
-      "publication_utc": null,
+      "publication_utc": "2026-10-03T07:04:33Z",
       "publication_requested": "User will wait for the new public download, then write it to USB and install on a ThinkPad.",
       "validation_plan": [
         "Portable installer/recovery/publication/serial tests and syntax with a bounded source receipt",
@@ -487,7 +487,7 @@
         "19 installer tests passed during implementation",
         "Real macOS PTY with fixture-only disk inventory: disk picker, encryption toggle, masked passwords, Back/Esc and explicit confirmation returned the expected config; no real disk was exposed"
       ],
-      "limitations": "Local computer-use review of the page and VM remains blocked. Native guest terminal and machine behavior will be validated in CI. No new real-model project or DSH generation is required for this installer-only change; historical results remain tied to preview 1.",
+      "limitations": "Native guest-terminal installer and machine checks passed. CI screenshots were visually inspected. Local computer-use review of the landing page and Mac VM remains blocked; physical ThinkPad, Wi-Fi, suspend and NVIDIA remain unverified. Historical real-model project and DSH results remain tied to preview 1.",
       "local_validation_receipt": {
         "path": ".harness/validation/20261003T054411.851664Z-23170/receipt.json",
         "status": "passed",
@@ -496,7 +496,153 @@
         "working_changes_sha256": "0875172f2f8736a8289199158f01d918cd134039e9b8d900e4d0f4b74373e086",
         "finished_at_utc": "2026-10-03T05:44:12.850298+00:00",
         "coverage": "All runtime and test edits in this commit; only progress metadata changed after the receipt."
-      }
+      },
+      "source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+      "native_run_id": 37101103529,
+      "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37101103529",
+      "native_validation_started_utc": "2026-10-03T05:50:12Z",
+      "native_attempts": [
+        {
+          "attempt": 1,
+          "started_utc": "2026-10-03T05:50:12Z",
+          "failed_step_utc": "2026-10-03T05:56:33.447257Z",
+          "result": "failed before image production; machine checks not run",
+          "passed": "34 portable tests, workflow lint, runtime build, CLI typecheck/affected tests, hn unit tests and native terminal fixtures",
+          "reason": "archive.archlinux.org package/signature downloads timed out at less than 1 byte/sec for 10 seconds; pacstrap stopped before package installation",
+          "evidence": "os/test-results/ci-37101103529-build/attempt-1.log",
+          "response": "One bounded failed-job rerun on unchanged source and package snapshot, started 2026-10-03T05:58:31Z."
+        },
+        {
+          "attempt": 2,
+          "started_utc": "2026-10-03T05:58:26Z",
+          "completed_utc": "2026-10-03T06:12:04Z",
+          "status": "passed",
+          "image_source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+          "test_source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+          "iso_sha256": "7eae886e3f9a77cc5831fae591d4de1f095ff16e43a412f0c714a09042b933d2",
+          "scope": "Image inspection; 34 portable tests; CLI typecheck and 89 affected tests (1 unavailable row skipped); 335 hn tests (1 benchmark ignored); ten native terminal fixtures; BIOS/plain and UEFI/encrypted keyboard installer, offline installation, reboot, update failure/retry, checkpoint recovery; BIOS compiler and four agent executables."
+        }
+      ],
+      "native_validation_completed_utc": "2026-10-03T06:12:04Z",
+      "machine_measurements": [
+        {
+          "firmware": "bios",
+          "encrypted": false,
+          "status": "passed",
+          "receipt": "os/work/release-preview2/machines/bios/bios-plain/receipt.json",
+          "checks_passed": 18,
+          "install_seconds": 30.418,
+          "installed_hn_ready_seconds_including_test_login": 17.819,
+          "deliberate_unlock_delay_seconds": 0,
+          "idle_mib": [
+            404.37,
+            403.89,
+            401.02
+          ],
+          "idle_cpu_percent": [
+            1.0,
+            1.0,
+            0.75
+          ]
+        },
+        {
+          "firmware": "uefi",
+          "encrypted": true,
+          "status": "passed",
+          "receipt": "os/work/release-preview2/machines/uefi/uefi-encrypted/receipt.json",
+          "checks_passed": 17,
+          "install_seconds": 49.341,
+          "installed_hn_ready_seconds_including_test_login": 111.696,
+          "deliberate_unlock_delay_seconds": 100,
+          "idle_mib": [
+            400.12,
+            395.05,
+            396.91
+          ],
+          "idle_cpu_percent": [
+            1.25,
+            0.25,
+            0.0
+          ]
+        }
+      ],
+      "publication_trigger_utc": "2026-10-03T06:25:51.506554+00:00",
+      "usb_flash": {
+        "status": "Not flashed by assistant; raw disk write denied before any image bytes, then Etcher startup crash during user attempt",
+        "target": "Kingston DataTraveler 3.0, 124 GB external USB",
+        "source_iso_sha256": "7eae886e3f9a77cc5831fae591d4de1f095ff16e43a412f0c714a09042b933d2",
+        "authorization": "User asked the assistant to flash the plugged-in clean USB. macOS administrator authorization completed, but raw disk open failed with Operation not permitted.",
+        "result": "Source hash and device identity verified; disk unmounted; dd failed before writing; original volume remounted. User offered Etcher or disk-access troubleshooting.",
+        "local_iso": "~/Downloads/programmer-os-0.1.0-preview.2-x86_64.iso",
+        "public_receipt": false,
+        "etcher": {
+          "installed_version": "2.1.7",
+          "path": "/Applications/balenaEtcher.app",
+          "computer_use": "cua.getApp rejected access: Computer Use was not approved to use balenaEtcher. No alternate UI route used.",
+          "user_observed_error": "Error opening source: (0 , h.requestMetadata) is not a function",
+          "iso_recheck": "Downloads ISO matches released source: 1525678080 bytes, SHA-256 7eae886e3f9a77cc5831fae591d4de1f095ff16e43a412f0c714a09042b933d2",
+          "diagnosis": "macOS crash report confirms etcher-util ARM64 aborted at startup in V8 Heap::SetUp/FatalProcessOutOfMemory. Installed helper has an empty entitlement dictionary. Upstream 2.1.7 hardening commit 26ad031b removed the helper JIT entitlements. This suggests a packaging regression; no OS image or USB write was reached by that helper.",
+          "workaround": "Official 2.1.6 ARM64 DMG downloaded to ~/Downloads/balenaEtcher-2.1.6-arm64.dmg and verified against GitHub asset SHA-256 ecf71fb5e74803ea8d7d16c54378a6a8d964e9808594b867c088222a8cfe3d2b. User instructed to quit 2.1.7 and replace it through Finder. GUI success remains unverified."
+        }
+      },
+      "publication_attempts": [
+        {
+          "result": "Draft created; seven small assets uploaded; ISO upload failed with TLS handshake timeout",
+          "evidence": "os/work/release-preview2/publication.log"
+        },
+        {
+          "result": "Bounded ISO-only upload retry completed; all eight GitHub asset sizes and SHA-256 digests match local verified assets",
+          "evidence": "os/work/release-preview2/upload-retry.log"
+        },
+        {
+          "result": "Existing draft published; all eight anonymous public downloads verified by full size and SHA-256",
+          "evidence": "os/work/release-preview2/public-verification.log"
+        }
+      ],
+      "publication_verified_utc": "2026-10-03T07:07:19.173864+00:00",
+      "publication_receipt": "os/work/release-preview2/publication.json",
+      "publication_completion_reported_utc": "2026-10-03T07:09:06.191273+00:00",
+      "installation_guide": "os/INSTALL.md",
+      "documentation_validation": "Relative Markdown links and code fences; static page assets, anchors, fonts and image dimensions; JSON; git diff --check passed. Local page visual review remains blocked.",
+      "elapsed_seconds": {
+        "first_implementation_action_to_verified_publication": 6428.174,
+        "implementation": 1440.773,
+        "required_validation": 1672.148,
+        "artifact_transfer_and_release_preparation": 827.507,
+        "publication_including_failed_transfer_retry_and_public_downloads": 2487.667,
+        "merge": null
+      },
+      "waiting": [
+        {
+          "started_utc": "2026-10-03T05:56:33.447257Z",
+          "ended_utc": "2026-10-03T05:58:26Z",
+          "reason": "One bounded retry after Arch package/signature download timeout; source unchanged."
+        },
+        {
+          "started_utc": "2026-10-03T06:12:04Z",
+          "ended_utc": "2026-10-03T07:07:19.173864+00:00",
+          "reason": "Artifact transfer, publication upload/TLS timeout and retry, then public download verification. Documentation and USB/Etcher troubleshooting continued during transfer waits. This overlaps publication and is not subtracted from total elapsed."
+        }
+      ]
     }
+  },
+  "published_version": "0.1.0-preview.2",
+  "latest_publication": {
+    "version": "0.1.0-preview.2",
+    "source_commit": "a155a16850438e04315a1959b1bfd1c387d8bf99",
+    "release_url": "https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2",
+    "published_at": "2026-10-03T07:04:33Z",
+    "verified_at": "2026-10-03T07:07:19.173864+00:00",
+    "verified_assets": [
+      "boot-layout.txt",
+      "inspection.json",
+      "machine-evidence.zip",
+      "manifest.json",
+      "packages.txt",
+      "programmer-os-0.1.0-preview.2-x86_64.iso",
+      "programmer-os-0.1.0-preview.2-x86_64.iso.sha256",
+      "validation.json"
+    ],
+    "receipt": "os/work/release-preview2/publication.json"
   }
 }

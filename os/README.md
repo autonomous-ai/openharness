@@ -4,20 +4,18 @@ Boot into `hn`. Talk to agents in their own terminal panes. Review their diffs,
 tests and output there. The browser opens only when requested. Development
 toolchains are installed by the agents as needed.
 
-**Published preview 1:** the actual image passes BIOS/plain and UEFI/encrypted
-installation, reboot, recovery, compiler and four-agent executable checks.
-Real OpenCode agents and shared DSH viewers have also run inside the installed OS.
+**Preview 2:** the keyboard installer passes real BIOS/plain and UEFI/encrypted
+installation, reboot, update retry and recovery checks. The form has a disk picker,
+encryption on by default, password twice, and a separate erase confirmation.
+The installed account is `me@harness`.
+
+[Download preview 2](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.2)
+· [Mac → USB → ThinkPad installation guide](INSTALL.md)
+· [Standalone HTML/CSS landing page](site/README.md)
+
 Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.
-The release's `validation.json` identifies the exact image and coverage.
-
-[Download the verified preview](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.1)
-or [run the standalone HTML/CSS landing page](site/README.md).
-
-The branch is preparing preview 2 with interrupted-update protection and a simpler
-installer: `me@harness`, a keyboard disk picker, encryption checked by default,
-password twice, and a separate erase confirmation.
-Candidate machine checks are pending; the published download and measurements
-below remain preview 1.
+The release's `validation.json` identifies the exact image and coverage. Real
+OpenCode project and DSH exercises were validated separately on preview 1.
 
 ## Design
 
@@ -106,16 +104,15 @@ Inside hn, open a Terminal pane and run:
 sudo hn-os install
 ```
 
-The preview 2 installer uses `me@harness`. Select the disk from a keyboard list;
+The installer uses `me@harness`. Select the disk from a keyboard list;
 the encryption checkbox sits directly underneath and starts checked. Enter your
 password twice, then choose **Continue** to review the disk. **Back** is selected
 initially; choose **Erase and install** to begin. Selecting a disk or continuing
 does not write to it. Tab moves between fields, Space toggles encryption, and
 Esc returns from the picker or confirmation (or cancels from the main form).
-No username, computer-name or disk-path typing is needed. The published preview 1
-still uses the older prompts, including a typed disk-path confirmation.
-Both versions perform a **whole-disk installation**;
-they do not resize another operating system.
+No username, computer-name or disk-path typing is needed.
+The installer performs a **whole-disk installation**;
+it does not resize another operating system.
 The live USB and disks with mounted filesystems are rejected. Installation itself
 works offline; agent installation and cloud authentication require networking.
 
@@ -140,8 +137,8 @@ run an updater or download anything on a schedule.
 The bundled hn and OS integration are pinned to this preview's source build;
 this command updates Arch packages, not the bundled Harness runtime.
 
-In the preview 2 candidate, a failed or interrupted update blocks ordinary package
-transactions until `sudo hn-os update` completes successfully. Fix the reported
+A failed or interrupted update blocks ordinary package transactions until
+`sudo hn-os update` completes successfully. Fix the reported
 cause and retry; it keeps the original recovery checkpoint, including across
 reboots. If the installed system cannot complete the update, recover that
 checkpoint from the live USB. This guard applies to updates run through `hn-os`;
@@ -203,36 +200,40 @@ separately in `progress.json`.
 
 ## Measured preview footprint
 
-These measurements cover image `dfbb815f05a0cbe3c01e474ff83edce5315f6142`,
-tested in [the complete image run](https://github.com/autonomous-ai/openharness/actions/runs/37083780202).
+These measurements cover preview 2 image `a155a16850438e04315a1959b1bfd1c387d8bf99`,
+tested in [the complete image run](https://github.com/autonomous-ai/openharness/actions/runs/37101103529).
 The guests have two virtual CPUs and 2 GiB RAM. Browser and agents are closed
 for idle measurements; the measurement process is included.
 
 | Measurement | Result |
 | --- | --- |
 | Hybrid ISO | 1,525,678,080 bytes (1.42 GiB) |
-| Installed root filesystem used | 2,099,101,696 bytes (1.95 GiB) |
-| Settled RAM, six samples across both firmware modes | 396.62–400.62 MiB |
-| Settled CPU, six two-second samples | 0–0.75% |
-| Offline BIOS/plain installation | 36.5 seconds |
-| Offline UEFI/encrypted installation | 57.7 seconds |
-| Installed BIOS boot through hn process readiness, including test login | 19.3 seconds |
+| Installed root filesystem used, including home and snapshots | 1.90–1.97 GiB |
+| Settled RAM, six samples across both firmware modes | 395.05–404.37 MiB |
+| Settled CPU, six two-second samples | 0–1.25% |
+| Offline BIOS/plain installation | 30.4 seconds |
+| Offline UEFI/encrypted installation | 49.3 seconds |
+| Installed BIOS boot through hn process readiness, including test login | 17.8 seconds |
 
 The encrypted boot check deliberately waits 100 seconds before entering the disk
-password; its total is 111 seconds. These are VM observations, not laptop power-on
-benchmarks. The Mac's x86 emulation is substantially slower and is for trying the
+password; its total is 111.7 seconds (11.7 excluding that deliberate wait). These
+are VM observations, not laptop power-on benchmarks. The Mac's x86 emulation is
+substantially slower and is for trying the
 installation and interface. The image shrank by 304 MiB (17%) during testing by
 removing duplicated live-initramfs graphics payload, while retaining the installed
 firmware and drivers. Software rendering is selected only for a detected 2D
 virtio display; physical GPUs retain their normal acceleration path.
 
-The same image also passed complete BIOS/plain and UEFI/encrypted machine checks
-with [1 GiB RAM](https://github.com/autonomous-ai/openharness/actions/runs/37086919917),
+The earlier preview 1 image also passed complete BIOS/plain and UEFI/encrypted
+machine checks with [1 GiB RAM](https://github.com/autonomous-ai/openharness/actions/runs/37086919917),
 including browser switching, a compiler build and the four agent executables.
 Concurrent live model workloads were tested at 2 GiB, not 1 GiB. Leave additional
 memory for projects, browser tabs and local model weights.
 
 ## Real programmer exercises
+
+These real-model project and DSH results cover preview 1. Preview 2 reran OS,
+compiler and agent executable checks, without new model turns.
 
 Opt-in tests use free OpenCode model turns inside a freshly installed OS. They
 create a Python log-analysis CLI, a keyboard-accessible conference website, a

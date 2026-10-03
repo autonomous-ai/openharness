@@ -15,13 +15,15 @@ any static host. Asset paths are relative so a subdirectory works too.
 
 ## Content and assets
 
-- Download links target the verified `os-v0.1.0-preview.1` release. Update the
+- Download links target the verified `os-v0.1.0-preview.2` release. Update the
   version, measurements, evidence links, and screenshots together for a release.
 - `assets/hn.png` is the actual hn screen from image validation run
-  [37083780202](https://github.com/autonomous-ai/openharness/actions/runs/37083780202).
+  [37101103529](https://github.com/autonomous-ai/openharness/actions/runs/37101103529).
 - `assets/signal-run.png` is actual project output from the successful workload run
   [37086423516](https://github.com/autonomous-ai/openharness/actions/runs/37086423516).
-  It loads lazily inside a native HTML disclosure.
+  It covers preview 1 and loads lazily inside a native HTML disclosure.
+- Current footprint, installation and boot measurements cover preview 2. The
+  1 GiB, real-model project and DSH claims are labeled as preview 1 evidence.
 - Geist and Geist Mono are the repository's existing fonts, converted to WOFF.
   Their SIL Open Font License is included in `assets/OFL.txt`.
 - The prompt mark is a small local SVG. There are no remote asset requests.
