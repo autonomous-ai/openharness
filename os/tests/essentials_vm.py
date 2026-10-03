@@ -131,7 +131,9 @@ def wireless(vm, result):
 
 def sound(vm, result):
     print('Checking PipeWire, media keys and audible samples from the virtual codec', flush=True)
-    vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 30); do wpctl get-volume @DEFAULT_AUDIO_SINK@ && exit 0; sleep 1; done; exit 1'))
+    # wpctl get-volume can return zero while printing an unresolved default ID.
+    # Wait for an actual output value as WirePlumber finishes codec discovery.
+    vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 30); do wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q "^Volume:" && exit 0; sleep 1; done; exit 1'))
     def volume():
         output, _ = vm.command(USER_ENV + 'wpctl get-volume @DEFAULT_AUDIO_SINK@')
         match = re.search(r'Volume: ([0-9.]+)([^\r\n]*)', output)
