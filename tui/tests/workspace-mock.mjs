@@ -32,7 +32,7 @@ const device = brightness => ({ attached: true, id: 'same-usb', mac: 'AA:BB:CC',
 const hardware = { [LOCAL]: { revision: 1, devices: [device(40)] }, [REMOTE]: { revision: 1, devices: [device(70)] } }
 const status = machine => ({ attached: hardware[machine].devices.some(d => d.attached), devices: hardware[machine].devices })
 const state = { requests: [], inputs: [], operations: [], deskAttempts: [], deskOwners: [], currentLocal: LOCAL, visibleMachines: [LOCAL, REMOTE], activities: { alpha: 'idle', beta: 'working', gamma: 'idle' },
-  closeFailure: null, closeDelay: 0, pruneOnClose: false, loseCreateReply: false, deviceConfirm: true, deviceDelay: 1500, modelDelay: 0, deskFailures: 0, deskNoops: 0 }
+  closeFailure: null, closeDelay: 0, pruneOnClose: false, loseCreateReply: false, deviceConfirm: true, deviceDelay: 1500, modelDelay: 0, deskFailures: 0, deskNoops: 0, machinesStale: false }
 const peers = new Set(), receipts = new Map()
 function send(ws, type, payload) { if (ws.readyState === 1) ws.send(JSON.stringify({ type, payload })) }
 function broadcast(machine, type, payload) { for (const p of peers) if (!machine || p.machine === machine) send(p.ws, type, payload) }
@@ -55,6 +55,7 @@ const server = http.createServer(async (req, res) => {
       for (const peer of peers) peer.ws.terminate()
     } else if (update.action === 'machines') {
       state.visibleMachines = update.remote ? [state.currentLocal, REMOTE] : [state.currentLocal]
+      state.machinesStale = update.stale === true
       broadcast(state.currentLocal, 'machines_changed', {})
     } else if (update.action === 'desk-refresh') deskChanged()
     else if (update.action === 'disconnect') { for (const peer of peers) if (peer.machine === update.machine) peer.ws.terminate() }
@@ -73,7 +74,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true })
   }
   if (req.url === '/api/status') return json(res, { machineId: state.currentLocal, computerId: LOCAL, signedIn: signedIn(), version: 'workspace-fixture' })
-  if (req.url === '/api/machines') return json(res, { machines: state.visibleMachines.map(machineId => ({ machineId, name: machineId === state.currentLocal ? 'Studio' : 'Remote', status: 'running' })) })
+  if (req.url === '/api/machines') return json(res, { stale: state.machinesStale, machines: state.visibleMachines.map(machineId => ({ machineId, name: machineId === state.currentLocal ? (state.machinesStale ? 'Studio cached' : 'Studio') : 'Remote', status: 'running' })) })
   if (req.url === '/api/auth/me') return json(res, { user: signedIn() ? { id: state.currentLocal, email: state.currentLocal.endsWith('4') ? 'other@example.test' : 'review@example.test' } : null })
   if (req.url === '/api/desk' && req.method === 'GET') return json(res, desk)
   if (req.url === '/api/desk/ops') {
