@@ -240,6 +240,7 @@ def mirror_journey(command, source):
     click_text('Codex', row=0)
     shown('Change agent')
     tmux('send-keys', '-l', '-t', TARGET, 'Claude')
+    shown('› Claude')
     click_text('Claude Code', before=85)
     wait(lambda: 'Claude Code' in tmux('capture-pane', '-p', '-t', 'test:0').splitlines()[0], 'agent replacement reaches session owner')
     shown('Claude Code')
@@ -260,6 +261,28 @@ def mirror_journey(command, source):
     stop_calls = [r['payload']['mode'] for r in requests('agent_close')[before_stop:] if r['payload']['agentId'] == replacement_agent]
     assert stop_calls == ['inspect', 'now'], stop_calls
     print('PASS workspace: confirmed Stop from a second client closes both views and sends one stop', flush=True)
+
+
+def overlay_dismiss_journey(alpha):
+    for command, title in [('workspace-menu', 'New Harness'), ('account', 'Your Harness account')]:
+        hn(command)
+        shown(title)
+        before = len(api()['inputs'])
+        x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
+        click(x + 4, y + 4)
+        wait(lambda: title not in screen(), 'outside click dismisses ' + command)
+        time.sleep(.1)
+        assert len(api()['inputs']) == before, ('overlay dismissal leaked into the terminal', command, api()['inputs'][before:])
+    for label, zoomed in [('Zoom pane', '1'), ('Restore pane size', '0')]:
+        hn('pane-menu', '-t', alpha)
+        shown(label)
+        before = len(api()['inputs'])
+        click_text(label)
+        wait(lambda: value('#{window_zoomed_flag}') == zoomed, label)
+        wait(lambda: 'New Harness beside' not in screen(), 'pane action dismisses its menu')
+        time.sleep(.1)
+        assert len(api()['inputs']) == before, ('menu action leaked into the terminal', label, api()['inputs'][before:])
+    print('PASS workspace: overlay dismissal and pane actions consume the complete mouse click', flush=True)
 
 
 mock = None
@@ -298,6 +321,10 @@ try:
         sys.exit(0)
     if '--mirrors' in sys.argv:
         mirror_journey(command, 'Alpha task')
+        sys.exit(0)
+    if '--mouse-dismiss' in sys.argv:
+        api({'action': 'terminal-mouse'})
+        overlay_dismiss_journey(alpha)
         sys.exit(0)
 
     # Local use is complete before any sign-in. The tiny footer entry explains the benefit,
@@ -439,6 +466,7 @@ try:
     # Mouse reporting inside the program is still the program's. Header controls consume their
     # own press/release pair without leaking either into the terminal stream.
     api({'action': 'terminal-mouse'})
+    overlay_dismiss_journey(alpha)
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
     before = len(api()['inputs'])
     click(x + 4, y + 4)

@@ -14,7 +14,7 @@ pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64), Agent(u64), Mo
 #[derive(Default)]
 pub struct State {
     pub hits: RefCell<Vec<(Rect, Action)>>,
-    /// The release of a chrome click belongs to that control, even if it opened a new modal.
+    /// The release of a UI click belongs to that control, even if it opened or dismissed a modal.
     pub pressed: Option<MouseButton>,
     target: Option<MenuTarget>,
     workspace_open: bool,

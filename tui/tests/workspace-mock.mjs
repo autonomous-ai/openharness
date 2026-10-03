@@ -64,7 +64,9 @@ const server = http.createServer(async (req, res) => {
       hardware[update.machine].revision++
       broadcast(update.machine, 'harness_devices_changed', { status: status(update.machine), revision: hardware[update.machine].revision })
     } else if (update.action === 'terminal-mouse') for (const peer of peers) for (const [streamId, stream] of peer.streams) {
-      peer.ws.send(frame(2, streamId, stream.seq++, Buffer.from('\x1b[?1000h\x1b[?1006h')))
+      const mouseMode = '\x1b[?1000h\x1b[?1006h'
+      stream.screen += mouseMode // Resizing returns a full snapshot, including the program's modes.
+      peer.ws.send(frame(2, streamId, stream.seq++, Buffer.from(mouseMode)))
     } else if (update.action === 'config') for (const [key, value] of Object.entries(update.patch || {})) {
       if (['closeFailure', 'closeDelay', 'pruneOnClose', 'loseCreateReply', 'deviceConfirm', 'deviceDelay', 'modelDelay', 'deskFailures', 'deskNoops'].includes(key)) state[key] = value
     }
