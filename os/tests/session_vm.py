@@ -189,6 +189,8 @@ def main():
                         help='QEMU display; bochs VGA has suspend/resume callbacks in the pinned LTS kernel')
     parser.add_argument('--session-file', type=Path,
                         help='Explicitly test this candidate launcher over the verified base ISO; records its hash and reboots before checking')
+    parser.add_argument('--theme-directory', type=Path,
+                        help='Explicitly test the candidate Plymouth theme after regenerating the installed initramfs')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
         parser.error('Use native x86 KVM for session and suspend acceptance.')
@@ -246,6 +248,18 @@ def main():
             put(vm, '/tmp/session-candidate', candidate.decode())
             vm.command('test "$(sha256sum /tmp/session-candidate | cut -d " " -f 1)" = ' + shlex.quote(result['candidate_session']['sha256']))
             vm.command('sudo install -o root -g root -m 755 /tmp/session-candidate /usr/lib/harness-os/session; sync')
+        if args.theme_directory and config['encrypt']:
+            result['candidate_theme'] = {'path': str(args.theme_directory), 'files': {}}
+            for name in ['harness.plymouth', 'harness.script']:
+                candidate = (args.theme_directory / name).read_bytes()
+                checksum = hashlib.sha256(candidate).hexdigest()
+                result['candidate_theme']['files'][name] = checksum
+                put(vm, '/tmp/' + name, candidate.decode())
+                vm.command('test "$(sha256sum /tmp/' + name + ' | cut -d " " -f 1)" = ' + shlex.quote(checksum))
+                vm.command('sudo install -o root -g root -m 644 /tmp/' + name + ' /usr/share/plymouth/themes/harness/' + name)
+            output, _ = vm.command('sudo mkinitcpio -P && lsinitcpio -l /boot/initramfs-linux-lts.img | grep -E "Plymouth.*ttf|harness\\.(script|plymouth)"', timeout=180)
+            (folder / 'candidate-initramfs.txt').write_text(output)
+        if args.session_file or (args.theme_directory and config['encrypt']):
             vm.stop()
             vm.start(live=False)
             vm.login_installed(config)

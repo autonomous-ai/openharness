@@ -189,7 +189,7 @@ def main():
         vm.shell_ready = True
         vm.command('stty -echo')
         vm.command(USER_ENV + '/usr/lib/harness-os/wait-runtime')
-        vm.command(USER_ENV + 'systemctl --user is-active --quiet hn-screen')
+        vm.command(USER_ENV + 'sh -c ' + shlex.quote('for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x foot >/dev/null && exit 0; sleep .25; done; exit 1'))
         sound(vm, result)
         wireless(vm, result)
         vm.stop()

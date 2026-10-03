@@ -4,7 +4,9 @@ Window.SetBackgroundTopColor(0.063, 0.063, 0.063);
 Window.SetBackgroundBottomColor(0.063, 0.063, 0.063);
 
 logo_text = "█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀\n█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█";
-logo_image = Image.Text(logo_text, 0.85, 0.78, 0.1, 1, "DejaVu Sans Mono 24", "left");
+# The initramfs embeds this theme's MonospaceFont. Request that embedded face,
+# rather than a named font family whose fallback may lack block characters.
+logo_image = Image.Text(logo_text, 0.85, 0.78, 0.1, 1, "monospace 24", "left");
 logo = Sprite(logo_image);
 logo.SetPosition(Window.GetX() + (Window.GetWidth() - logo_image.GetWidth()) / 2,
                  Window.GetY() + Window.GetHeight() / 2 - logo_image.GetHeight() - 24, 1);
