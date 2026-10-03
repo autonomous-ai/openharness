@@ -1069,3 +1069,23 @@ This improves recovery diagnosis; it does not unblock the installed stopped
 conversation, change the selected provider, or establish successful real-user
 learning. The separate in-process diagnostic storage-error classification and the
 two unsupported private-example memories remain open.
+
+### Separate reasoning quality from completion time — October 3
+
+A [local comparison](../research/2026-10-03-memory-reasoning.md) kept production
+extraction v6 unchanged and varied only the reference model's reasoning budget.
+The control completed seven of eight frozen synthetic cases. A 1,024-token budget
+preserved the first case's manual override but timed out on the second. One
+adaptive 512-token follow-up completed all eight, with six of six stored memories
+judged supported/useful, six correct positive recalls and eighteen abstentions.
+The reviewer was the implementing agent, and these already-inspected examples
+remain development evidence. Source-excerpt recall, already shipped separately,
+preserved qualifications that the control's generated summary omitted.
+
+The approved offline private follow-up timed out on its first excerpt, committed
+no memory there, and did not run the other four. Its quality remains unmeasured;
+it does not replace the earlier four-of-six private finding. Original inputs were
+unchanged, external networking was blocked, and all private artifacts stay local.
+No production prompt, model/effort selection, deadline, admission rule or live
+memory changed. Lower extraction overhead is the next investigation; stronger
+reasoning by itself is not a verified live-learning fix.

@@ -1,0 +1,330 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "a5cec77cfe76b84b79d34eeb529aad5da7da8ed24e2821bbad8a64714d8eb1ed",
+  "suiteSha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "reviewer": {
+    "id": "implementing-agent",
+    "kind": "agent",
+    "independent": false
+  },
+  "cases": [
+    {
+      "id": "default-with-user-override",
+      "records": [
+        {
+          "id": "0df090ea-94fd-469c-b4e7-03bea70bc3cd",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "The claim preserves the compact default, permitted manual expansion, and current-visit limit. The future action protects only the default and does not forbid that override."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "0df090ea-94fd-469c-b4e7-03bea70bc3cd"
+          ],
+          "requiredIds": [
+            "0df090ea-94fd-469c-b4e7-03bea70bc3cd"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The source-excerpt context preserves the original qualifications and contains supported project-specific memory."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "firm-request-with-unresolved-placement",
+      "records": [
+        {
+          "id": "5fdd5f58-a129-4750-ba29-94f5b7c4e570",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the explicit build-log request without choosing the unsettled history-control placement or asserting implementation."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "5fdd5f58-a129-4750-ba29-94f5b7c4e570"
+          ],
+          "requiredIds": [
+            "5fdd5f58-a129-4750-ba29-94f5b7c4e570"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The source-excerpt context preserves the original qualifications and contains supported project-specific memory."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "polite-request",
+      "records": [
+        {
+          "id": "6b7e80a5-50d3-4d4e-baa4-f48ac52ab013",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Preserves the requested focus behavior within the project and explicitly distinguishes requested behavior from an implemented fact."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "6b7e80a5-50d3-4d4e-baa4-f48ac52ab013"
+          ],
+          "requiredIds": [
+            "6b7e80a5-50d3-4d4e-baa4-f48ac52ab013"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The source-excerpt context preserves the original qualifications and contains supported project-specific memory."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "exploratory-question",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "tentative-number",
+      "records": [],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "accepted-number",
+      "records": [
+        {
+          "id": "543186b0-af58-4479-8408-b7bc1240f179",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains the agreed project policy for completed logs and its 14-day duration, without treating the decision as operational verification."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "543186b0-af58-4479-8408-b7bc1240f179"
+          ],
+          "requiredIds": [
+            "543186b0-af58-4479-8408-b7bc1240f179"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The source-excerpt context preserves the original qualifications and contains supported project-specific memory."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "quoted-plan-and-user-correction",
+      "records": [
+        {
+          "id": "74806977-2d04-4c47-8e1b-ce86db740093",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Retains visible failure reporting without adopting or prohibiting the unmeasured assistant-proposed delay."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "74806977-2d04-4c47-8e1b-ce86db740093"
+          ],
+          "requiredIds": [
+            "74806977-2d04-4c47-8e1b-ce86db740093"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The source-excerpt context preserves the original qualifications and contains supported project-specific memory."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    },
+    {
+      "id": "limited-control-set",
+      "records": [
+        {
+          "id": "2d36c731-0832-4fc0-8e83-a8ae4e688af8",
+          "revision": 1,
+          "supported": true,
+          "specific": true,
+          "useful": true,
+          "note": "Names the requested removals and retained actions, explicitly limits the edit to the conflict prompt, and preserves other export actions. It does not turn the named actions into an exhaustive inventory."
+        }
+      ],
+      "probes": [
+        {
+          "id": "same-project",
+          "relevantIds": [
+            "2d36c731-0832-4fc0-8e83-a8ae4e688af8"
+          ],
+          "requiredIds": [
+            "2d36c731-0832-4fc0-8e83-a8ae4e688af8"
+          ],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "The source-excerpt context preserves the original qualifications and contains supported project-specific memory."
+        },
+        {
+          "id": "different-project",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        },
+        {
+          "id": "unrelated-topic",
+          "relevantIds": [],
+          "requiredIds": [],
+          "missingRequiredMemory": false,
+          "faithfulContext": true,
+          "note": "Correct abstention for an unrelated project/topic or an unresolved choice."
+        }
+      ]
+    }
+  ]
+}

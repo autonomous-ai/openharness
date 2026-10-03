@@ -1,0 +1,26 @@
+{
+  "started_at": "2026-10-03T00:52:00Z",
+  "hypothesis": "The 1024-token reasoning budget preserved the first qualification but timed out on the second case. Test one smaller budget against the unchanged completed control; do not retry timeouts or change the 90-second deadline.",
+  "suite": "docs/research/2026-10-02-memory-meaning-cases.json",
+  "suite_sha256": "657aae9de4f301b660cc2c57dce0f80ae801f49e71921a2365b862ba15d0023e",
+  "arms": [
+    {
+      "id": "reasoning512",
+      "thinking": true,
+      "reasoning_tokens": 512
+    }
+  ],
+  "model": "Qwen3.8-27B-Q4_0.gguf",
+  "runtime": "llama.cpp 9870 (2d973636e)",
+  "max_calls": 8,
+  "max_output_tokens": 4096,
+  "context_tokens": 16384,
+  "timeout_per_call_ms": 90000,
+  "temperature": 0,
+  "seed": 42,
+  "retries": 0,
+  "production_writes": false,
+  "corpus": "synthetic only; private follow-up only if this comparison improves fidelity without losing abstention",
+  "decision": "Inspect stored claims, future actions, qualifiers, relevance and missing knowledge against frozen criteria. Do not promote a prompt change or provider setting from this local-reference result. Independent real-history release gates remain separate.",
+  "adaptive_after": "The 1024-token arm timed out on the second case; the control was reused unchanged."
+}
