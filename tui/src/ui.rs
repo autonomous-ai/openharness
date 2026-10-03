@@ -584,7 +584,7 @@ fn box_style(app: &App, id: u64) -> Style {
 const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
 
 fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
-    if app.os_session && (app.os_live || home_rows(app).is_empty()) { os_welcome(buf, app, area); return }
+    if crate::input::os_home(app) { os_welcome(buf, app, area); return }
     let rows = home_rows(app);
     let (_, theme_fg, _) = crate::theme::palette();
     let width = area.width.min(84).saturating_sub(4);
@@ -719,19 +719,24 @@ mod os_welcome_tests {
     use super::*;
 
     #[test]
-    fn usb_prioritizes_install_and_installed_home_never_offers_it() {
+    fn ordinary_hn_installed_os_and_live_usb_have_separate_homes() {
         for (width, height) in [(80, 24), (60, 18), (120, 40)] {
             let (sink, _) = tokio::sync::mpsc::unbounded_channel();
             let mut app = App::new(19789, sink, (width, height));
             app.handed_over = true;
-            app.os_session = true;
-            for live in [true, false] {
+            for (os, live) in [(false, false), (false, true), (true, false), (true, true)] {
+                app.os_session = os;
                 app.os_live = live;
                 let area = Rect::new(0, 0, width, height);
                 let mut buf = Buffer::empty(area);
                 empty_window(&mut buf, &app, area);
                 let text = (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
-                if live {
+                if !os {
+                    for action in ["Install Harness", "Try without installing", "Start OpenCode", "Wi-Fi", "Super+B"] {
+                        assert!(!text.contains(action), "ordinary hn must not offer {action}: {text}");
+                    }
+                    assert!(text.contains("detach"), "{text}");
+                } else if live {
                     assert!(text.contains("Enter  Install Harness"), "{text}");
                     assert!(text.contains("T      Try without installing"), "{text}");
                     assert!(!text.contains("Nothing running"), "{text}");

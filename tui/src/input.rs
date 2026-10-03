@@ -524,23 +524,30 @@ pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Pl
     });
 }
 
+/// The OS opts in through its session launcher. Ordinary hn on macOS or any
+/// other Linux keeps its normal home, even with a stray live-session flag.
+pub fn os_home(app: &App) -> bool {
+    app.os_session && (app.os_live || home_rows(app).is_empty())
+}
+
+fn os_home_command(app: &App, key: KeyEvent) -> Option<Option<&'static str>> {
+    if !os_home(app) || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) { return None }
+    match key.code {
+        KeyCode::Enter if app.os_live => Some(Some("sudo /usr/bin/harness install")),
+        KeyCode::Char('i' | 'I') if app.os_live => Some(Some("sudo /usr/bin/harness install")),
+        KeyCode::Enter => Some(Some("/usr/bin/hn-os try")),
+        KeyCode::Char('t' | 'T') if app.os_live => Some(Some("/usr/bin/hn-os try")),
+        KeyCode::Char('w' | 'W') => Some(Some("/usr/bin/hn-os wifi")),
+        KeyCode::Char('t' | 'T') => Some(None),
+        _ => None,
+    }
+}
+
 /// A window with no harness in it has no pane to take keys from, so plain letters work here.
 fn home_key(app: &mut App, key: KeyEvent) {
-    if app.os_session && (app.os_live || home_rows(app).is_empty()) {
-        let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-        if plain {
-            let command = match key.code {
-                KeyCode::Enter if app.os_live => Some(Some("sudo /usr/bin/harness install")),
-                KeyCode::Char('i' | 'I') if app.os_live => Some(Some("sudo /usr/bin/harness install")),
-                KeyCode::Enter => Some(Some("/usr/bin/hn-os try")),
-                KeyCode::Char('t' | 'T') if app.os_live => Some(Some("/usr/bin/hn-os try")),
-                KeyCode::Char('w' | 'W') => Some(Some("/usr/bin/hn-os wifi")),
-                KeyCode::Char('t' | 'T') => Some(None),
-                _ => None,
-            };
-            if let Some(command) = command {
-                new_shell_from(app, None, Placement::Auto(None), None, command.map(str::to_string));
-            }
+    if os_home(app) {
+        if let Some(command) = os_home_command(app, key) {
+            new_shell_from(app, None, Placement::Auto(None), None, command.map(str::to_string));
         }
         return;
     }
@@ -3289,6 +3296,37 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn os_actions_are_unavailable_in_ordinary_hn_and_install_is_live_only() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (80, 24));
+        app.handed_over = true;
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.os_session = false;
+        for live in [false, true] {
+            app.os_live = live;
+            assert!(!os_home(&app));
+            for code in [KeyCode::Enter, KeyCode::Char('i'), KeyCode::Char('I'), KeyCode::Char('t'), KeyCode::Char('T'), KeyCode::Char('w'), KeyCode::Char('W')] {
+                assert_eq!(os_home_command(&app, key(code)), None);
+            }
+        }
+        app.os_session = true;
+        app.os_live = false;
+        assert_eq!(os_home_command(&app, key(KeyCode::Enter)), Some(Some("/usr/bin/hn-os try")));
+        assert_eq!(os_home_command(&app, key(KeyCode::Char('T'))), Some(None));
+        for code in [KeyCode::Char('i'), KeyCode::Char('I')] {
+            assert_eq!(os_home_command(&app, key(code)), None);
+        }
+        app.os_live = true;
+        for code in [KeyCode::Enter, KeyCode::Char('i'), KeyCode::Char('I')] {
+            assert_eq!(os_home_command(&app, key(code)), Some(Some("sudo /usr/bin/harness install")));
+        }
+        assert_eq!(os_home_command(&app, key(KeyCode::Char('T'))), Some(Some("/usr/bin/hn-os try")));
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
+            assert_eq!(os_home_command(&app, KeyEvent::new(KeyCode::Enter, modifiers)), None);
+        }
+    }
 
     #[tokio::test]
     async fn created_harness_stays_in_the_current_window() {

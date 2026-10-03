@@ -122,7 +122,8 @@ def field_position(label):
     left, top, width, height = form_bounds(lines)
     for y, line in enumerate(lines[top:top+height], top):
         # Labels begin at the field column; "Harness" in the dialog title is not a field.
-        m = re.match(r'^[ ›]{3}(' + re.escape(label) + r')(?= {2,}|$)', line[left:left+width])
+        # Like field_at, accept alternatives such as Agent|Harness.
+        m = re.match(r'^[ ›]{3}(' + label + r')(?= {2,}|$)', line[left:left+width])
         if m: return left + m.start(1), y
 def field(label):
     wait(lambda: field_position(label), f'field {label}')

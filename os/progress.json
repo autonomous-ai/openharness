@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "ready for native validation",
+    "status": "fixing native fixture and adding ordinary hn isolation regression coverage",
     "implementation_complete_utc": "2026-10-03T08:55:37.599357+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -938,7 +938,8 @@
       "Encrypted boot should show Harness branding and a friendly masked password prompt before entering hn",
       "Keyboard-first interface with optional mouse support; hide pointer while typing",
       "USB welcome prioritizes Enter = Install Harness; T = Try without installing. Network setup is only required by Try, never by offline installation.",
-      "Bundle OpenCode with its upstream default setup. Do not pin any specific model or override its model selection. Verify its actual clean first launch."
+      "Bundle OpenCode with its upstream default setup. Do not pin any specific model or override its model selection. Verify its actual clean first launch.",
+      "Ordinary hn on macOS or other Linux must retain its regular interface. Installation UI and actions are exclusive to the live OS session; installed Harness never offers Install."
     ],
     "validation_plan": [
       "Portable installer safety and first-use helper tests, shell/Python/JSON/XML syntax and workflow lint",
@@ -946,7 +947,8 @@
       "Inspect actual SquashFS for bundled signed OpenCode package, live marker/account and exact runtime",
       "Boot USB with BIOS/plain and UEFI/encrypted; physically activate Wi-Fi, Try, Install and direct terminal; verify single-form offline install, friendly encrypted unlock, and removal of live-only actions after install",
       "Clean-profile real free-model turn with bundled OpenCode and old-CPU startup check; distinguish virtual network checks from physical Wi-Fi",
-      "Inspect screenshots; verify published assets using the existing publication receipt without duplicate full downloads"
+      "Inspect screenshots; verify published assets using the existing publication receipt without duplicate full downloads",
+      "Explicit normal hn / installed OS / live USB render and action regressions, including stray live flag and modified keys"
     ],
     "waiting": [],
     "local_validation": "45 portable tests plus Python/JSON/XML/shell syntax and git diff --check passed. Native TUI and image/machine validation pending.",
@@ -966,6 +968,22 @@
       "BIOS/plain old-CPU and UEFI/encrypted USB journeys including real default OpenCode replies",
       "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
       "Update release/download documentation and publish only after required evidence passes"
-    ]
+    ],
+    "native_run_id": 37111342650,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37111342650",
+    "source_commit": "11a8010acc9491356eaa3a45d295638277660627",
+    "native_validation_started_utc": "2026-10-03T08:56:02Z",
+    "validation_attempts": [
+      {
+        "run_id": 37111342650,
+        "source_commit": "11a8010acc9491356eaa3a45d295638277660627",
+        "started_utc": "2026-10-03T08:56:02Z",
+        "failed_utc": "2026-10-03T09:00:42Z",
+        "result": "failed: native New Harness fixture looked for literal Agent|Harness because field_position escaped its regular expression",
+        "passed": "45 portable tests, workflow lint, exact runtime build, CLI typecheck, 89 affected CLI tests (1 skipped), 336 Rust tests (1 ignored), 9 of 10 native fixtures",
+        "remedy": "Use the same field pattern convention in field_position and field_at; rerun affected native behavior as part of image validation"
+      }
+    ],
+    "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00"
   }
 }

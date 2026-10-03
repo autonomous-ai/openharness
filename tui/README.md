@@ -26,6 +26,11 @@ hn follows tmux 3.5a's keys, commands, formats and `~/.tmux.conf`, with your har
 every machine behind them. What tmux users have asked for over the years, and what hn does
 about it: [docs/tmux-improved.md](docs/tmux-improved.md).
 
+The [Harness OS image](../os/README.md) uses the same hn binary with an explicit OS session
+mode. Its live USB offers Install and Try; an installed OS offers agents, terminals and Wi-Fi.
+These screens and installation shortcuts are absent from ordinary hn on macOS and other Linux
+systems. Installing or updating hn alone does not turn a computer into Harness OS.
+
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
 ![C-b s: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)
