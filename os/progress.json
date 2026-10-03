@@ -1548,7 +1548,7 @@
     "integration_commit": "dd8fb89c8a5e665153f5783d1651440d4d3321d9",
     "narrative": "Agents are the new apps. Conversation is the interface. Terminal and optional browser are the working surfaces.",
     "implementation_ready_utc": "2026-10-03T13:33:48.223860+00:00",
-    "validation_started_utc": "2026-10-03T13:24:16Z",
+    "validation_started_utc": "2026-10-03T13:21:52Z",
     "validation_completed_utc": null,
     "merge_utc": null,
     "publication_utc": null,
