@@ -76,6 +76,7 @@ import 'take_over.dart';
 import '../widgets/engine_identity.dart'
     show allEngines, engineIdentity, isTerminalEngine;
 import '../store/store_screen.dart' show openStoreAgent;
+import 'attention_state.dart';
 import 'dial_status.dart';
 import 'grid_pictures.dart';
 import 'model_start_watch.dart';
@@ -2941,6 +2942,13 @@ class AppNotifier extends ChangeNotifier {
   /// frames from the local daemon; its own notifier, so the row rebuilds
   /// without dragging the whole rail through a machine-list rebuild.
   final DialState dial;
+
+  /// Per-agent attention from the local daemon's `attention` frame (cli/src/fleet/control.ts):
+  /// drives the pane frame and the fleet overview.
+  final AttentionState attention = AttentionState();
+
+  /// Whether the fleet overview panel is showing (lib/fleet/fleet_overview.dart).
+  final ValueNotifier<bool> fleetOverviewOpen = ValueNotifier(false);
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
 
@@ -14987,6 +14995,10 @@ class AppNotifier extends ChangeNotifier {
       // ── the dial, over the cable, forwarded by the local daemon ──────────────────────────────────
       // Local-only frames (backend.sendLocal in the harness CLI): they describe a hand at THIS desk, so
       // they never reach the cloud web audience, who may be sitting at another computer entirely.
+      case 'attention':
+        // What each agent needs from a person; drives the pane frame and the fleet overview.
+        attention.apply(payload);
+        return;
       case 'dial_status':
         // The dial came, went, or started taking an update. Its own notifier —
         // see [dial] — so nothing else in the window rebuilds for it.

@@ -2,6 +2,8 @@ import 'dart:ui' show Brightness;
 
 import 'package:flutter/painting.dart';
 
+import '../../theme/omarchy_theme.dart';
+
 /// Coordinated workspace colors. These feed the existing design-system tokens,
 /// native tabs/search, and terminal defaults; they do not change agent state.
 ///
@@ -81,6 +83,20 @@ enum HarnessPalette {
     search: Color(0xff3c3129),
     accent: Color(0xffe6c39e),
   ),
+  // Follows the Omarchy theme on this computer (theme/omarchy_theme.dart; first written by Fred Nix
+  // in the nixfred fork). These constants are Graphite's, the fallback for a missing file or key.
+  omarchy(
+    'Omarchy',
+    'Follows your Omarchy theme',
+    background: Color(0xff181818),
+    panel: Color(0xff141414),
+    card: Color(0xff1e1e1e),
+    hover: Color(0xff252525),
+    workspace: Color(0xff282828),
+    tabBar: Color(0xff1c1c1c),
+    search: Color(0xff2c2c2c),
+    accent: Color(0xffbdcbdc),
+  ),
   // The light palettes mirror the dark ones' layering: the workspace gutter and
   // tab bar sit a step darker than the terminal ground, cards a step lighter.
   // Their accents are deep rather than pale, since an accent is drawn as text,
@@ -118,22 +134,42 @@ enum HarnessPalette {
     this.label,
     this.description, {
     this.brightness = Brightness.dark,
-    this.foreground = const Color(0xfff5f5f5),
-    required this.background,
-    required this.panel,
-    required this.card,
-    required this.hover,
-    required this.workspace,
-    required this.tabBar,
-    required this.search,
-    required this.accent,
+    this._foreground = const Color(0xfff5f5f5),
+    required this._background,
+    required this._panel,
+    required this._card,
+    required this._hover,
+    required this._workspace,
+    required this._tabBar,
+    required this._search,
+    required this._accent,
   });
 
   final String label, description;
   final Brightness brightness;
-  final Color foreground;
-  final Color background, panel, card, hover, workspace, tabBar, search, accent;
+  final Color _foreground;
+  final Color _background, _panel, _card, _hover, _workspace, _tabBar, _search, _accent;
+
+  // Every preset answers with its own constants; `omarchy` answers from the live Omarchy theme file,
+  // falling back to its constants when the file is missing or a key is absent.
+  Color _live(String key, Color fallback) =>
+      this == omarchy ? (OmarchyLivePalette.color(key) ?? fallback) : fallback;
+  Color get foreground => _live('foreground', _foreground);
+  Color get background => _live('background', _background);
+  Color get panel => _live('darker_background', _panel);
+  Color get card => _live('lighter_background', _card);
+  Color get hover => _live('lighter_background', _hover);
+  Color get workspace => _live('dark_background', _workspace);
+  Color get tabBar => _live('darker_background', _tabBar);
+  Color get search => _live('lighter_background', _search);
+  Color get accent => _live('accent', _accent);
   bool get isDark => brightness == Brightness.dark;
+
+  /// The palettes the picker offers here: Omarchy only where there is a theme to follow.
+  static List<HarnessPalette> get offered => [
+    for (final palette in values)
+      if (palette != omarchy || omarchyInstalled()) palette,
+  ];
 
   static HarnessPalette fromId(String? id) =>
       values.where((palette) => palette.name == id).firstOrNull ?? graphite;
@@ -148,4 +184,12 @@ enum HarnessPalette {
     // `NSApp.appearance`, which the window sets from this.
     'dark': isDark ? 1 : 0,
   };
+}
+
+/// The Omarchy theme's colours, read once and on demand. `refresh()` re-reads the file (the palette
+/// picker calls it when Omarchy is chosen, so a theme switch shows on the next pick).
+abstract final class OmarchyLivePalette {
+  static Map<String, Color>? _colors;
+  static Color? color(String key) => (_colors ??= readOmarchyColors())[key];
+  static void refresh() => _colors = readOmarchyColors();
 }

@@ -1169,3 +1169,20 @@ describe('hook notify Command Code re-registration', () => {
     expect(requests.map((r) => r.url)).toEqual(['/api/hook/turn-stop'])
   })
 })
+
+// The destructive-action gate (cli/src/lib/actionPolicy.ts; first written by Fred Nix in the nixfred fork).
+describe('claude PreToolUse gate', () => {
+  const input = { hook_event_name: 'PreToolUse', session_id: 'claude-session', tool_name: 'Bash', tool_use_id: 'toolu_1', tool_input: { command: 'git push origin main' } }
+  it('turns the daemon\'s ask verdict into Claude\'s own permission prompt', async () => {
+    const { port, requests } = await collect({ ok: true, gate: { decision: 'ask', rule: 'git push', reason: 'git push needs your approval' } })
+    const stdout = await runHook({ port, tmuxPane: '%7', input })
+    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: {
+      hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'Harness gate: git push needs your approval',
+    } })
+    expect(requests.find((r) => r.url === '/api/hook/tool-start')?.body).toMatchObject({ sessionId: 'claude-session', toolName: 'Bash', input: { command: 'git push origin main' } })
+  })
+  it('stays silent (allow) when the daemon says nothing about the call', async () => {
+    const { port } = await collect({ ok: true })
+    expect(await runHook({ port, tmuxPane: '%7', input })).toBe('')
+  })
+})

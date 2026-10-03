@@ -305,6 +305,7 @@ import {
 import { probeGatewayRuntime } from './lib/gatewayRuntime.js'
 import { probeGridAssignment, sameGridAssignment } from './lib/gridAssignment.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from './lib/agentFrame.js'
+import { FleetControl, type FleetSessionLike } from './fleet/control.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { SessionInputController } from './lib/sessionInput.js'
 import { DeviceResultJournal } from './lib/autonomous-device/resultJournal.js'
@@ -455,7 +456,24 @@ Machine:
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
-  harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness attention [--kanban] every agent's state: working, waiting on you, needs permission, failed, done
+  harness stop-all [--except=<agentId>]
+                               cancel every agent's turn on this computer (the panic stop)
+  harness gate init|install|uninstall|status|reload
+                               opt-in Claude guard: ask before git push, rm -rf, sudo …; refuse disk
+                               writes and ~/.ssh (policy: ~/.harness/cli/data/action-policy.json)
+  harness spend status|set --agent-usd=N --day-usd=N|on|off
+                               per-agent and per-day spend caps; a pane over its cap is held (off by default)
+  harness capabilities         this computer's GPU, load, power, heat, lid and toolchains
+  harness placement [--gpu] [--min-vram=MB] [--interactive]
+                               whether this computer should take a job like that
+  harness subs [--force] | subs set <claude|codex|grok|kimi> <on|off>
+                               each AI plan's weekly use, banked against an even pace, and which to use next
+  harness dispatch --machine=<id> --repo=<path there> [--engine=claude] [--branch=x] "brief"
+                               hand a bounded job to a linked machine; \`harness dispatches\` lists them
+  harness clip push --machine=<id> [--file=<path>] [text]
+                               clipboard or a file (25 MB) to a linked machine, sealed end to end
+  harness logs export      zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
@@ -2478,6 +2496,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   ): void => {
     if (events.length) queuedSessionEvents.push({ sessionId, events, opts })
   }
+  // The fleet controls (attention, stop-all, local commands; cli/src/fleet/control.ts). Built next to the
+  // hook server below; the taps before that point reach it through this slot, so an event that lands
+  // during start-up is dropped instead of reaching an object that does not exist yet.
+  let fleetControlRef: FleetControl | null = null
   /**
    * A turn died inside the engine instead of finishing. Neither devin nor commandcode has a StopFailure
    * hook, so nothing else would tell the clients: the web would sit on the typing indicator and the
@@ -2491,6 +2513,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deviceMessage = message,
   ): void => {
     console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${preview(message)}`)
+    fleetControlRef?.attention.failed(agentIdFor(sessionId), message)
     backend.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
     backend.sendCommander({
       type: 'commander_event',
@@ -2945,7 +2968,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Hold the working state across the gap too: the CLI needs a moment to move to the next question, and
     // that gap is exactly where the stale recap used to flash back.
     const target = payload.sessionId || payload.agentId
-    if (typeof target === 'string' && target) showAwaitingAnswer(target)
+    if (typeof target === 'string' && target) { showAwaitingAnswer(target); fleetControlRef?.attention.answered(agentIdFor(target)) }
     // Returned so the client that answered hears a refusal — STALE_QUESTION when the dialog changed
     // before its answer arrived — as `question_response_result`.
     return questions.answer(payload)
@@ -2964,6 +2987,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped, detail) => {
       deviceInput.setUserAction(agentIdFor(sessionId), true)
+      fleetControlRef?.attention.question(agentIdFor(sessionId), detail?.permission === true, shaped[0]?.q ?? '')
       questions.remember(requestId, sessionId)
       showAwaitingAnswer(sessionId)
       const asked = {
@@ -3218,6 +3242,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.dshFrameProvider = dshFrameContext
   backend.onDshRemove = (id) => removeDsh(id)
+  backend.onClipPush = (push) => fleetControlRef ? fleetControlRef.clipReceive(push) : Promise.resolve({ ok: false as const, error: 'STARTING' })
   // `harness remote` names the tile it was typed in by its tmux pane; the registry knows whose it is.
   backend.onTerminalHandoff = (tmuxPane) => registry.advertised()
     .find((session) => session.tmuxPane === tmuxPane
@@ -3324,6 +3349,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The phone notifies on neither. Absent = false, so a client that predates these reads every end as
       // it always did.
       if (event.type === 'turn_ended') {
+        if (!opts?.resumed && !opts?.replay) fleetControlRef?.attention.turnEnded(agentId, { aborted: event.payload.aborted === true })
         if (opts?.resumed || opts?.replay) frame.replay = true
         // The pair harness is the daemon talking to you, not work finishing: no app notifies on it.
         if (isSubagentSession(sessionId) || isPairHarnessSession(sessionId)) frame.subagent = true
@@ -3339,6 +3365,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       if (event.type === 'turn_started') {
         if (daemons.on()) zooTurnCounter.started(sessionId, { replay: !!(opts?.resumed || opts?.replay) })
+        if (!opts?.resumed && !opts?.replay) fleetControlRef?.attention.turnStarted(agentId, event.payload.userMessage)
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${registry.bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
@@ -4185,6 +4212,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return { status: 200, body: withStaleMarker(cached.body, cached.fetchedAt) }
   }
 
+  // Built here so the hook server below can hand it tool calls, and everything after can tap it.
+  const fleetSession = (s: RegisteredSession): FleetSessionLike => ({
+    agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, active: s.active, tmuxPane: s.tmuxPane,
+    cwd: s.cwd ?? undefined, transcriptPath: s.transcriptPath ?? undefined, model: (s as { model?: string | null }).model ?? null, name: projectDisplayName(s),
+  })
+  const fleetControl = new FleetControl({
+    machineId: () => backend.machineId,
+    machineName: () => terminalHintMachineName(),
+    sessions: () => registry.advertised().map(fleetSession),
+    sendLocal: (frame) => backend.sendLocal(frame),
+    sendError: (agentId, dbSessionId, message) => backend.send({ type: 'error', agentId, dbSessionId, payload: { message } }),
+    cancelAgent: (agentId, confirmed) => cancelAgent(agentId, confirmed),
+    tokenUsage: (s) => { const r = registry.resolve(s.agentId); return r ? agentTokenUsage.get(r) : null },
+    // A getter: the port is known once the hook server below has bound, and only `gate install` asks.
+    hookPort: () => hookPort,
+  })
+  fleetControlRef = fleetControl
 
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onPromptContext: async (agentId, prompt) => {
@@ -4207,6 +4251,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return result
     },
     onCommandBar: commandBarService,
+    onAttention: () => fleetControl.attentionPayload(),
+    onSubscriptions: () => fleetControl.subs.collect(),
+    onStopAll: (except) => fleetControl.stopAll(except),
+    onFleet: (action, args) => fleetControl.command(action, args),
     onAutonomousDeviceRequest: async (method, target, body) => {
       if (!autonomousDeviceService) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
       return autonomousDeviceLocalRequest({
@@ -4304,10 +4352,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     onToolStart: ({ sessionId, toolUseId, toolName, input: toolInput }) => {
       if (toolName === 'Task') onCursorTaskStart(sessionId, toolUseId, toolInput)
+      // The destructive-action gate: classify against the machine policy; the verdict rides back to the
+      // hook script, which turns ask/deny into the engine's own permission prompt.
+      return fleetControl.gate(sessionId, agentIdFor(sessionId), toolName, toolInput)
     },
     onTurnStop: ({ sessionId, status }) => {
       const session = registry.resolve(sessionId)
       if (!session) return
+      if (status === 'error') fleetControl.attention.failed(session.agentId, 'engine ended the turn with an error')
       if (session.engine === 'cursor') {
         void (async () => {
           await cursorTaskHooks.wait(sessionId)
@@ -4674,6 +4726,27 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       },
     },
   )
+  // The fleet dispatcher and clip push ride the same pool the window uses to reach a linked machine:
+  // one E2EE-terminated session per machine, frames fanned out to whoever attached.
+  fleetControl.setRelayLink(async (machineId) => {
+    const listeners = new Set<(frame: { type: string; payload: Record<string, unknown> }) => void>()
+    const sink = {
+      sendFrame: (frame: Record<string, unknown>) => {
+        const payload = (frame.payload && typeof frame.payload === 'object' ? frame.payload : {}) as Record<string, unknown>
+        // The event correlator puts agentId on the frame and in the payload; keep it reachable either way.
+        const shaped = { type: String(frame.type ?? ''), payload: typeof frame.agentId === 'string' && !payload.agentId ? { ...payload, agentId: frame.agentId } : payload }
+        for (const cb of listeners) cb(shaped)
+        return true
+      },
+      sendBinary: () => true,
+    }
+    const session = await relayPool.acquire(machineId, env.AUTONOMOUS_ENV, { type: 'machine_select', payload: { machineId } }, sink, () => { listeners.clear() })
+    return {
+      send: (frame) => session.send(frame as unknown as Record<string, unknown>),
+      onFrame: (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } },
+      close: () => session.detach(),
+    }
+  })
   // Every machine and phone linked to this one, directly or through another member, trusts every other:
   // rosters are swapped over any session that opens, and pushed on whenever they change.
   groupSyncer = new GroupSyncer({
@@ -5321,7 +5394,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The window looked at a harness, so the dial's drawer row for it is stale.
     // The dial's own tap already reaches the window (`agent.open`); this is the
     // return leg, and the pair is what keeps the badge and the pill equal.
-    onAgentSeen: (agentId, readToken) => { void cableRef?.agentSeen(agentId, readToken) },
+    onAgentSeen: (agentId, readToken) => { fleetControlRef?.attention.seen(agentId); void cableRef?.agentSeen(agentId, readToken) },
     // Agents the window has a tile for. A finished turn on one of these is
     // already in front of the person, so the dial updates its tile in silence
     // rather than beeping about something being looked at.
@@ -6062,6 +6135,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const sessionId = record?.sessionId ?? id
     const st = turnStates.get(sessionId)
     if (st) st.turnOpen = false
+    fleetControlRef?.attention.cancelled(record?.agentId ?? sessionId)
     codexNormalizers.get(sessionId)?.closeTurn()
     cursorNormalizers.get(sessionId)?.closeTurn()
     opencodeReaders.get(sessionId)?.closeTurn()
@@ -7115,6 +7189,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
+    // The spend brake (off until `harness spend set`): a pane over its cap is held and the web is told why.
+    if (record && fleetControl.spendCheck(fleetSession(record)).action === 'pause') {
+      console.log(`[msg] ${sid(sessionId)} held by the spend brake`)
+      return
+    }
     input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
   }
   backend.onMessage = (id, content, deliveryId, tabId) => submitAgent(id, content, deliveryId, tabId)
@@ -7935,6 +8014,98 @@ async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown):
   }
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
   return { res, json }
+}
+
+/**
+ * The fleet commands (cli/src/fleet/control.ts; first written by Fred Nix in the nixfred fork): every one
+ * is a POST to the daemon's local /api/fleet with an action name, so the CLI never needs the registry or
+ * the E2EE state. `--json` prints the raw reply.
+ */
+async function fleetCommand(cmd: string, args: string[], flags: string[]): Promise<void> {
+  const json = flags.includes('--json')
+  const flag = (name: string): string | undefined => flags.find((f) => f.startsWith(`--${name}=`))?.slice(name.length + 3)
+  const num = (name: string): number | null | undefined => { const v = flag(name); if (v === undefined) return undefined; if (v === 'off' || v === 'null') return null; const n = Number(v); return Number.isFinite(n) ? n : undefined }
+  let action = cmd
+  let body: Record<string, unknown> = {}
+  switch (cmd) {
+    case 'attention': break
+    case 'stop-all': body = { except: flag('except') ?? args[0] ?? null }; break
+    case 'gate': action = `gate-${args[0] ?? 'status'}`; break
+    case 'spend': {
+      action = `spend-${args[0] ?? 'status'}`
+      if (action === 'spend-set') body = { perAgentUsd: num('agent-usd'), perAgentTokens: num('agent-tokens'), perDayUsd: num('day-usd'), perDayTokens: num('day-tokens'), warnAt: num('warn-at') ?? undefined, ...(flags.includes('--off') ? { enabled: false } : flags.includes('--on') ? { enabled: true } : {}) }
+      if (action === 'spend-off') { action = 'spend-set'; body = { enabled: false } }
+      if (action === 'spend-on') { action = 'spend-set'; body = { enabled: true } }
+      break
+    }
+    case 'dispatch': {
+      const brief = args.join(' ')
+      if (!brief || !flag('machine') || !flag('repo')) { console.error('Usage: harness dispatch --machine=<machineId> --repo=</path/on/that/machine> [--engine=claude] [--branch=name] [--dsh=id] "brief"'); process.exit(1) }
+      body = { machine: flag('machine'), repo: flag('repo'), engine: flag('engine') ?? 'claude', branch: flag('branch') ?? '', dsh: flag('dsh') ?? '', brief }
+      break
+    }
+    case 'dispatches': break
+    case 'clip': {
+      // harness clip push --machine=<id> [--file=path] [text]; with neither text nor file, the local clipboard is sent.
+      if (args[0] !== 'push' || !flag('machine')) { console.error('Usage: harness clip push --machine=<machineId> [--file=<path>] [text]'); process.exit(1) }
+      action = 'clip-push'
+      const filePath = flag('file')
+      if (filePath) {
+        const { readFileSync: rf, statSync: st } = await import('node:fs')
+        if (st(filePath).size > 25 * 1024 * 1024) { console.error('✗ file is over 25 MB'); process.exit(1) }
+        body = { machine: flag('machine'), file: { name: filePath.split('/').pop() ?? 'file', base64: rf(filePath).toString('base64') } }
+      } else {
+        let text = args.slice(1).join(' ')
+        if (!text) {
+          const { execFileSync } = await import('node:child_process')
+          for (const [tool, a] of [['wl-paste', ['--no-newline']], ['xclip', ['-selection', 'clipboard', '-o']], ['pbpaste', []]] as Array<[string, string[]]>) {
+            try { text = execFileSync(tool, a, { encoding: 'utf8', timeout: 3000 }); break } catch { /* next tool */ }
+          }
+        }
+        if (!text) { console.error('✗ nothing to push: give text, --file, or put something on the clipboard'); process.exit(1) }
+        body = { machine: flag('machine'), text }
+      }
+      break
+    }
+    case 'capabilities': break
+    case 'placement': body = { needsGpu: flags.includes('--gpu'), interactive: flags.includes('--interactive'), minFreeVramMb: num('min-vram') ?? undefined }; break
+    case 'subs': {
+      // harness subs [--json] [--force]  |  harness subs set <claude|codex|grok|kimi> <on|off>
+      if (args[0] === 'set') {
+        if (!args[1] || !['on', 'off'].includes(args[2] ?? '')) { console.error('Usage: harness subs set <claude|codex|grok|kimi> <on|off>'); process.exit(1) }
+        action = 'subs-set'; body = { id: args[1], enabled: args[2] }
+      } else body = { force: flags.includes('--force') }
+      break
+    }
+    default: action = args[0] ?? ''; body = {}; if (!action) { console.error('Usage: harness fleet <action> [--key=value ...]'); process.exit(1) }
+      for (const f of flags) { const m = /^--([a-zA-Z-]+)=(.*)$/.exec(f); if (m) body[m[1]!] = m[2] }
+  }
+  const { res, json: reply } = await daemonCall('POST', '/api/fleet', { action, ...body })
+  if (json) { console.log(JSON.stringify(reply, null, 2)); process.exit(res.ok ? 0 : 1) }
+  if (!res.ok || reply.ok === false) { console.error(`✗ ${String(reply.error ?? res.statusText)}`); process.exit(1) }
+  const result = reply.result as unknown
+  if (action === 'attention' && result && typeof result === 'object') {
+    const r = result as { hostname: string; summary: { state: string; count: number }; agents: Array<{ glyph: string; name: string; engine: string; state: string; label: string; detail: string }> }
+    if (flags.includes('--kanban')) {
+      // Columns in the order a person works them: what needs me, what broke, what finished, what runs.
+      const columns: Array<[string, string[]]> = [['NEEDS YOU', ['permission', 'waiting']], ['FAILED', ['failed']], ['DONE, UNREVIEWED', ['done']], ['WORKING', ['working']], ['IDLE', ['idle', 'offline']]]
+      for (const [title, states] of columns) {
+        const rows = r.agents.filter((a) => states.includes(a.state))
+        if (!rows.length) continue
+        console.log(`${title} (${rows.length})`)
+        for (const a of rows) console.log(`  ${a.glyph} ${a.name.padEnd(28)} ${a.engine.padEnd(10)}${a.detail ? `  ${a.detail}` : ''}`)
+      }
+      return
+    }
+    console.log(`${r.hostname}: ${r.summary.count} ${r.summary.state}`)
+    for (const a of r.agents) console.log(`  ${a.glyph} ${a.name.padEnd(28)} ${a.engine.padEnd(10)} ${a.label}${a.detail ? `  ${a.detail}` : ''}`)
+    return
+  }
+  if ((action === 'subs' || action === 'subs-set') && result && typeof result === 'object' && Array.isArray((result as { lines?: unknown }).lines)) {
+    for (const line of (result as { lines: string[] }).lines) console.log(line)
+    return
+  }
+  console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2))
 }
 
 /** `harness pair <code>` — send a browser/device pairing code to the running daemon (localhost). */
@@ -9161,6 +9332,10 @@ switch (cmd) {
     break
   case 'reset':
     resetCommand().catch(onError)
+    break
+  case 'attention': case 'stop-all': case 'gate': case 'spend': case 'capabilities': case 'placement': case 'subs':
+  case 'dispatch': case 'dispatches': case 'clip': case 'fleet':
+    fleetCommand(cmd, args, flags).catch(onError)
     break
   case 'status':
     status().catch(onError)

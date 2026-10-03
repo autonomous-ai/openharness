@@ -186,6 +186,11 @@ const DEVICE_AGENT_NAME_MAX_BYTES = 39 // device project_t.name[40], including t
 const DEVICE_ELLIPSIS = '…'
 
 export type Frame = Record<string, unknown>
+
+/** A `clip_push` payload after validation (fleet/control.ts; first written by Fred Nix in the nixfred fork). */
+export interface ClipPush { text?: string; file?: { name: string; base64: string }; from: string }
+export const CLIP_TEXT_MAX = 1_000_000
+export const CLIP_FILE_MAX_B64 = 34_000_000 // ~25 MB decoded
 type OutboundEnvelope = Record<string, unknown>
 
 export interface LocalClientSink {
@@ -556,6 +561,8 @@ export class BackendSocket {
     Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }>) | null = null
   /** Called on `dsh_remove` — cli.ts uninstalls the harness from this machine. */
   onDshRemove: ((id: string) => { ok: true } | { ok: false; error: string; detail: string }) | null = null
+  /** A paired peer pushed text or a file to this machine's clipboard / drop folder (`harness clip push`). */
+  onClipPush: ((push: ClipPush) => Promise<{ ok: true; detail: string } | { ok: false; error: string }>) | null = null
   /** Called on `remote_terminal_handoff` — cli.ts names the agent whose tile is that tmux pane, or null. */
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
@@ -2560,6 +2567,21 @@ export class BackendSocket {
           void refreshDshRegistry()
             .then(catalog => reply(type, requestId, { dsh: dshListRows(undefined, catalog) }))
             .catch(error => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
+          return
+        }
+
+        case 'clip_push': {
+          // Sealed end to end (a MACHINE_REQUESTS type), so only a paired peer reaches here. Sizes are
+          // bounded before anything touches the clipboard or the disk.
+          if (!this.onClipPush) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          const text = typeof payload.text === 'string' ? payload.text : undefined
+          const file = payload.file && typeof payload.file === 'object' ? payload.file as { name?: unknown; base64?: unknown } : undefined
+          if (text !== undefined && text.length > CLIP_TEXT_MAX) { reply(type, requestId, { error: 'CLIP_TOO_LARGE', detail: `text over ${CLIP_TEXT_MAX} chars` }); return }
+          if (file && (typeof file.name !== 'string' || typeof file.base64 !== 'string' || file.base64.length > CLIP_FILE_MAX_B64)) { reply(type, requestId, { error: 'CLIP_TOO_LARGE', detail: `file over ${Math.round(CLIP_FILE_MAX_B64 * 3 / 4 / 1048576)} MB or malformed` }); return }
+          if (text === undefined && !file) { reply(type, requestId, { error: 'CLIP_EMPTY' }); return }
+          void this.onClipPush({ text, file: file ? { name: file.name as string, base64: file.base64 as string } : undefined, from: typeof payload.from === 'string' ? payload.from.slice(0, 64) : 'peer' })
+            .then((out) => reply(type, requestId, out))
+            .catch((error) => reply(type, requestId, { error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) }))
           return
         }
 

@@ -79,6 +79,9 @@ function argValue(name, fallback) {
   return fallback
 }
 
+// Set by the claude PreToolUse gate branch; written to stdout at exit (see the finally block).
+let gateOutput = null
+
 function argEngine() {
   const i = process.argv.indexOf('--engine')
   const value = i !== -1 ? process.argv[i + 1] : ''
@@ -233,6 +236,35 @@ function readStdin() {
     process.stdin.on('error', () => resolve(data))
     // Safety: if stdin never ends, don't hang.
     setTimeout(() => resolve(data), 1000)
+  })
+}
+
+// Like post(), but resolves the parsed JSON reply (or null). Used where the daemon's answer matters:
+// the destructive-action gate hands a permissionDecision back through PreToolUse.
+function postJson(port, path, body) {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(body)
+    const credential = readHookCredential()
+    if (!credential) { resolve(null); return }
+    const req = http.request(
+      {
+        host: '127.0.0.1', port, path, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'X-Harness-Hook-Token': credential },
+        timeout: Math.max(1, Math.min(1500, remainingBudget())),
+      },
+      (res) => {
+        let text = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => { if (text.length < 65536) text += chunk })
+        res.on('end', () => {
+          if (!((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300)) { resolve(null); return }
+          try { resolve(JSON.parse(text)) } catch { resolve(null) }
+        })
+      },
+    )
+    req.on('error', () => resolve(null))
+    req.on('timeout', () => { req.destroy(); resolve(null) })
+    req.end(payload)
   })
 }
 
@@ -1481,6 +1513,33 @@ async function main() {
     return
   }
 
+  // Claude's PreToolUse is installed ONLY by `harness gate install` (lib/hooks.ts installGateHook). The
+  // daemon classifies the tool call against the machine's action policy; a non-allow verdict goes back
+  // on stdout in the shape Claude Code reads, so the engine shows its own permission prompt (which the
+  // question watcher mirrors to the device). Silence, on any failure, means allow: the gate must never
+  // wedge a session because the daemon was busy.
+  if (engine === 'claude' && event === 'PreToolUse') {
+    if (typeof input.tool_use_id !== 'string' || typeof input.tool_name !== 'string') return
+    const reply = await postJson(port, '/api/hook/tool-start', {
+      sessionId: input.session_id,
+      toolUseId: input.tool_use_id,
+      toolName: input.tool_name,
+      input: input.tool_input,
+      ...mutationFields,
+    })
+    const gate = reply && reply.gate
+    if (gate && (gate.decision === 'ask' || gate.decision === 'deny')) {
+      gateOutput = JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: gate.decision,
+          permissionDecisionReason: `Harness gate: ${gate.reason || gate.rule || 'machine policy'}`,
+        },
+      })
+    }
+    return
+  }
+
   if (engine === 'cursor' && event === 'preToolUse') {
     if (input.tool_name === 'Task' && typeof input.tool_use_id === 'string') {
       await persistCursorTask(input)
@@ -1617,5 +1676,6 @@ main()
       Promise.resolve(acknowledgeMemoryOutput()).catch(() => {}).finally(() => process.exit(0))
     })
     else if (e === 'cursor' || e === 'hermes' || e === 'agy' || e === 'copilot') process.stdout.write('{}\n', () => process.exit(0))
+    else if (gateOutput) process.stdout.write(gateOutput + '\n', () => process.exit(0)) // claude PreToolUse gate verdict
     else process.exit(0)
   })

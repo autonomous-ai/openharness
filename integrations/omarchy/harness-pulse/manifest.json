@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "id": "pi.harness-pulse",
+  "name": "Harness Pulse",
+  "version": "0.3.0",
+  "author": "Fred Nix",
+  "description": "One ring per coding agent on every linked Harness machine. Working throws a comet, waiting breathes a halo toward you, permission strobes red with a glitch, done fills with a burst, failed flashes then holds, offline sits dim. Right-click for a live fleet view: machines with agents in orbit, spend gauges, an activity ticker and a hold-to-stop hexagon. Reads the local Harness daemon's attention feed; nothing leaves the machine.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Harness Pulse",
+    "description": "Agent attention rings for OpenHarness: which agent is working, which one is waiting on you, which one finished. Right-click for the fleet view.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 1,
+      "maxAgents": 8,
+      "reducedMotion": false,
+      "showMachine": true,
+      "focusWindowClass": "com.autonomous.harness",
+      "ringSize": 18,
+      "avatar": "Auto",
+      "avatarPath": "",
+      "avatarInitials": "",
+      "logo": "Harness",
+      "logoPath": "",
+      "workingColor": "Accent",
+      "barMode": "Summary"
+    },
+    "schema": [
+      {
+        "key": "barMode",
+        "type": "enum",
+        "label": "Bar layout",
+        "options": [
+          "Summary",
+          "Rings"
+        ],
+        "description": "Summary: one ring for the most urgent agent and a count. Rings: one ring per agent.",
+        "defaultValue": "Summary"
+      },
+      {
+        "key": "reducedMotion",
+        "type": "boolean",
+        "label": "Reduced motion",
+        "description": "Stops every animation on the bar and in the fleet view. States still read from colour, a glyph and a word.",
+        "defaultValue": false
+      },
+      {
+        "key": "workingColor",
+        "type": "enum",
+        "label": "Working ring colour",
+        "options": [
+          "Accent",
+          "Cyan",
+          "Green"
+        ],
+        "description": "Colour of a ring while its agent works. Accent follows your theme.",
+        "defaultValue": "Accent"
+      },
+      {
+        "key": "ringSize",
+        "type": "integer",
+        "label": "Ring size (px)",
+        "min": 12,
+        "max": 28,
+        "step": 1,
+        "defaultValue": 18
+      },
+      {
+        "key": "maxAgents",
+        "type": "integer",
+        "label": "Rings on the bar",
+        "description": "Most urgent first; the rest are in the fleet view.",
+        "min": 1,
+        "max": 24,
+        "step": 1,
+        "defaultValue": 8
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 1,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 1
+      },
+      {
+        "key": "showMachine",
+        "type": "boolean",
+        "label": "Show machine in tooltips",
+        "defaultValue": true
+      },
+      {
+        "key": "focusWindowClass",
+        "type": "string",
+        "label": "Harness window class",
+        "description": "Left-click on a ring focuses the window with this class.",
+        "defaultValue": "com.autonomous.harness"
+      },
+      {
+        "key": "avatar",
+        "type": "enum",
+        "label": "Face in a waiting ring",
+        "options": [
+          "Auto",
+          "Initials",
+          "None"
+        ],
+        "description": "Auto: the picture below, else ~/.face, else your initials. Initials: always initials. None: a plain ring.",
+        "defaultValue": "Auto"
+      },
+      {
+        "key": "avatarPath",
+        "type": "path",
+        "label": "Avatar picture",
+        "description": "Any square-ish image; it is round-cropped. Empty uses ~/.face.",
+        "defaultValue": ""
+      },
+      {
+        "key": "avatarInitials",
+        "type": "string",
+        "label": "Initials",
+        "description": "One or two letters. Empty uses the first letter of your user name.",
+        "defaultValue": ""
+      },
+      {
+        "key": "logo",
+        "type": "enum",
+        "label": "Idle and connecting logo",
+        "options": [
+          "Harness",
+          "Omarchy",
+          "Custom",
+          "None"
+        ],
+        "description": "Shown in the fleet view when there are no agents or the daemon is not answering. Omarchy reads /usr/share/omarchy/logo.svg at runtime.",
+        "defaultValue": "Harness"
+      },
+      {
+        "key": "logoPath",
+        "type": "path",
+        "label": "Custom logo",
+        "description": "Image used when the logo is Custom (SVG or PNG).",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

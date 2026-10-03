@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../branding/brand_section.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../appearance/palette_section.dart';
 import '../../shared/theme/appearance_prefs_store.dart';
@@ -21,6 +22,8 @@ class AppearanceSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           PaletteSection(store: store),
+          // Boot logo (off by default) and the avatar shown to agents waiting on you.
+          const BrandSection(),
           // Room under the last card so a scrolled-to-bottom pane does not end
           // flush against the window edge.
           const SizedBox(height: 8),
