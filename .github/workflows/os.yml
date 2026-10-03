@@ -290,8 +290,9 @@ jobs:
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
           make -C os runtime
           python3 os/tools/build-package.py --runtime os/work/runtime --output os/work/development-update --development
+          python3 os/tests/build-update-fixture.py
       - name: Exercise apply, rollback, running work and encrypted reboot
-        run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update
+        run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update --fast-fixture os/work/fast-update-fixture
       - name: Show update failure diagnostics
         if: failure()
         run: |

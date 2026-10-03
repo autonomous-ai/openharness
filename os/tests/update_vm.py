@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--bundle', type=Path, required=True)
+    parser.add_argument('--fast-fixture', type=Path)
     parser.add_argument('--output', type=Path, default=Path('os/test-results/runtime-update'))
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
@@ -33,6 +34,8 @@ def main():
     served = folder / 'served'
     shutil.copytree(bundle, served)
     shutil.copyfile(Path(__file__).with_name('update_guest.py'), served / 'update_guest.py')
+    if args.fast_fixture:
+        shutil.copytree(args.fast_fixture, served / 'fast')
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(served)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -80,11 +83,18 @@ def main():
         vm.command('test -s ~/Projects/update-survivor/keep.txt')
         receipt['keyboard'] = check_graphical_keyboard(vm, 'updated')
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
+        if args.fast_fixture:
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            from fast_update_vm import exercise
+            receipt['fast_updates'] = exercise(vm, args.fast_fixture, url)
         receipt['status'] = 'passed'
     except BaseException as error:
         receipt['error'] = str(error)
         try:
             vm.screenshot('failure')
+            output, _ = vm.command('journalctl --user -u hn-screen -u harness-daemon -u harness-update -u harness-apply-update --no-pager; '
+                'cat ~/.local/state/harness-os/updates/*.json; ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
+            (folder / 'update-diagnostics.log').write_text(output)
         except Exception:
             pass
         raise

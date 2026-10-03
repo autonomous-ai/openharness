@@ -144,10 +144,15 @@ normal Linux administrator control.
 
 ## Updates and recovery
 
+The next build is adding automatic hn/CLI downloads and a small bottom-bar
+notice. `Super+U` opens Updates; applying an hn release reconnects the terminal
+surface without a computer reboot. This is under native validation and is not
+yet in the public preview 4 ISO. See [update development](DEVELOPMENT.md#fast-hn-updates-next-build-under-validation).
+
 `sudo hn-os update` saves a checkpoint and upgrades the whole system to yesterday's
 complete Arch repository snapshot. Use `--snapshot YYYY/MM/DD` to choose a complete
-snapshot at or after the current one. Packages remain signed by Arch; the OS does not
-run an updater or download anything on a schedule.
+snapshot at or after the current one. Packages remain signed by Arch; this full
+system transaction runs only when requested.
 The bundled hn and OS integration are pinned to this preview's source build;
 this command updates Arch packages, not the bundled Harness runtime.
 

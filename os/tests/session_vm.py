@@ -260,6 +260,9 @@ def main():
             output, _ = vm.command('sudo mkinitcpio -P && sudo lsinitcpio -l /boot/initramfs-linux-lts.img | grep -E "Plymouth.*ttf|harness\\.(script|plymouth)"', timeout=180)
             (folder / 'candidate-initramfs.txt').write_text(output)
         if args.session_file or (args.theme_directory and config['encrypt']):
+            # VM.stop is a power cut, not an orderly guest shutdown. Flush the
+            # rebuilt initramfs before testing that exact candidate at boot.
+            vm.command('sync')
             vm.stop()
             vm.start(live=False)
             vm.login_installed(config)

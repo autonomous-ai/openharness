@@ -13,7 +13,8 @@ argument tests passed but remote display/SSH interaction is still unverified.
 
 The next preview improves the complete experience before expanding the interface.
 Keep the existing terminal, agents and optional browser. Hardware integration must
-not introduce a desktop, control panel, background updater or extra launcher.
+not introduce a desktop, control panel or extra launcher. Update checks use a
+short-lived user timer; there is no resident update process.
 
 1. Refine USB welcome, offline installation, Wi-Fi setup, trial, first conversation
    and disk unlock. Review actual screens, keyboard navigation, narrow displays,
@@ -100,6 +101,34 @@ results for current performance measurements.
 [QEMU documents these acceleration options](https://www.qemu.org/docs/master/system/introduction.html).
 
 ## Small development updates
+
+### Fast hn updates (next build; under validation)
+
+The installed OS checks the existing public hn and CLI release channels every
+15 minutes, with a small randomized delay. Complete, checksum-verified runtimes
+are prepared under the user's state directory. The OS-owned copy remains an
+offline fallback. Neither downloading nor checking restarts working processes.
+
+`Update ready · Super+U` appears in the bottom bar. Super+U opens the keyboard
+update action (Ctrl+B, Shift+U remains an alias). Enter applies the prepared
+runtime through a transient user service. An hn-only change reconnects just the
+screen; a CLI change also restarts its supervised service. Failure restores the
+previous selection. Restore previous version holds the rejected versions until
+a newer release arrives. Ordinary macOS/Linux hn shortcuts are unchanged.
+
+This fast track is independent of OS releases. System updates remain a separate
+action in the same screen, using the existing full Arch upgrade and checkpoint
+path. Publishing an ISO is not a requirement for a TUI update. The public preview
+4 ISO predates this feature and needs a small OS integration package once this
+candidate has passed native acceptance; it does not need to be flashed again.
+
+`development_update=true` builds a private, deliberately unpublished `999.0.1`
+hn/CLI fixture. The installed VM's actual timer stages it, then real Super+U and
+Enter keys apply hn and CLI independently. Acceptance checks the same terminal
+process, a live OpenCode process, keyboard input, rollback and an unchanged boot
+ID. Those fixture binaries are never included in the package or public channel.
+
+### Local OS integration bundles
 
 `tools/build-package.py` assembles the same `harness-os` package used by the ISO.
 On a clean x86 Linux checkout, build a bundle with:

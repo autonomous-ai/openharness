@@ -1,0 +1,9 @@
+[Unit]
+Description=Check and prepare Harness updates
+ConditionPathExists=!/etc/harness-live
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/live_update.py check
+TimeoutStartSec=3min
+Nice=10

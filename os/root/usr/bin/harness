@@ -11,5 +11,11 @@ if [ "${1:-}" = rollback ]; then
     shift
     exec /usr/bin/python3 /usr/lib/harness-os/runtime_update.py rollback "$@"
 fi
+if [ "${1:-}" = updates ]; then
+    shift
+    exec /usr/bin/python3 /usr/lib/harness-os/live_update.py "$@"
+fi
+. /usr/lib/harness-os/runtime-path
+# The OS owns activation so an update cannot race its systemd supervisor.
 export ADAPTER_UPDATE_DISABLE=true
-exec /usr/bin/node /usr/lib/harness/cli.mjs "$@"
+exec /usr/bin/node "$harness_runtime/cli.mjs" "$@"

@@ -1,5 +1,5 @@
 #!/bin/sh
-export HARNESS_TUI_BIN=/usr/lib/harness/hn
+. /usr/lib/harness-os/runtime-path
 # The OS already supervises the daemon. Run the native client directly instead
 # of keeping a second Node process resident for the lifetime of the screen.
 export HARNESS_CLI=/usr/bin/harness
@@ -10,4 +10,4 @@ if [ -f /etc/harness-live ]; then
 else
     unset HARNESS_OS_LIVE
 fi
-exec /usr/lib/harness/hn "$@"
+exec "$harness_runtime/hn" "$@"

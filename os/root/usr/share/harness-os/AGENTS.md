@@ -10,6 +10,12 @@ is required.
 
 ## System operations
 
+- `Super+U` opens Updates inside hn; `harness updates` is the shell equivalent.
+  The user timer checks hn and CLI releases and prepares verified downloads.
+  Activation is explicit. An hn-only change restarts its screen, keeping terminal
+  owners and agents alive. System packages use the separate checkpointed action.
+  Do not replace `/usr/lib/harness` manually or enable the CLI's independent
+  daemon handoff updater: this OS supervises activation with systemd.
 - This is Arch Linux with systemd, the LTS kernel, labwc, foot and Chromium.
 - Use the ordinary package manager; no private package ecosystem is required.
   On the live USB, `sudo systemctl start harness-keyring` waits for its one-time
