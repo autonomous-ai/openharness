@@ -39,7 +39,7 @@ pub fn handle(app: &mut App, event: CEvent) {
         }
         // (A resize also writes the whole screen again: other diff renderers do the same, since a
         // terminal reflows its own cells and the diff then trusts a screen that is not there.)
-        CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.redraw_all = true; app.fit_panes(); crate::commands::notify(app, "client-resized", None, None) }
+        CEvent::Resize(cols, rows) => { app.size = (cols, rows); app.redraw_all = true; app.fit_panes(); crate::workspace_menu::resize(app); crate::commands::notify(app, "client-resized", None, None) }
         // The terminal in front: the dial follows its pane again (and hears it is in front).
         // (A repaint of the whole screen too: whatever the terminal drew wrongly while it was behind goes.)
         CEvent::FocusGained => { app.terminal_focused = true; app.redraw_all = true; app.welcome_back(); crate::account::refresh(app, false); crate::dial::announce(app, false); app.announce_focus(); crate::commands::notify(app, "client-focus-in", None, None) }
@@ -1789,7 +1789,7 @@ fn prompt_menu(app: &App, p: &Prompt, items: Vec<crate::modal::MenuItem>, list: 
     let y = if app.status_top { lines } else { app.size.1.saturating_sub(3 + height) };
     let x = (offset + unicode_width::UnicodeWidthStr::width(p.label.as_str())).saturating_sub(2) as u16;
     let x = x.min(app.size.0.saturating_sub(width + 4));
-    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None,
+    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None, responsive: None,
         complete: Some(Box::new(crate::modal::Complete { prompt: p.clone(), list, flag, window_target })) }
 }
 

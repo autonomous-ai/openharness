@@ -519,9 +519,12 @@ try:
     remote_close = [r['payload']['mode'] for r in requests('agent_close') if r['payload']['agentId'] == 'gamma']
     assert remote_close == ['inspect', 'idle'], remote_close
     # The peer removes its desk entry before the intentionally delayed stop acknowledgement.
-    # Wait for the lifecycle dialog to finish before clicking the workspace behind it.
-    wait(lambda: 'Saving and stopping' not in screen(), 'idle stop acknowledgement dismisses its dialog')
+    # Wait for the final painted workspace: the old footer still has a different + position,
+    # and a missing progress phrase alone can also mean its frame has not been drawn yet.
     hn('select-window', '-t', workspace)
+    wait(lambda: 'Alpha task terminal' in (painted := screen())
+         and 'Stop Harness' not in painted and 'Remote' not in painted.splitlines()[-1],
+         'idle stop paints the remaining workspace and dismisses its dialog')
 
     # The quiet + has the desktop tab-bar meaning and opens the task-first welcome form.
     click_text('+', row=43)
@@ -541,18 +544,19 @@ try:
     hn('select-window', '-t', workspace)
 
     # Account and pane menus remain reachable with compact terminal sizes.
+    hn('workspace-menu')
     for cols, rows in [(80, 24), (40, 12)]:
         tmux('resize-window', '-t', 'test', '-x', str(cols), '-y', str(rows))
         wait(lambda: value('#{client_width}') == str(cols), 'resize terminal')
-        hn('workspace-menu')
         shown('New Harness')
         shown('Commands')
         snapshot(f'workspace-menu-{cols}x{rows}')
-        keys('Escape')
-        hn('account')
+        click_text('Account')
         shown('Back to workspace')
         snapshot(f'account-{cols}x{rows}')
         keys('Escape')
+        hn('workspace-menu')
+    keys('Escape')
     print('PASS workspace: idle stop and compact 80x24 / 40x12 menus', flush=True)
 
     # Real sign-in changes the daemon's computer identity to its account identity. The UI
@@ -625,11 +629,26 @@ finally:
                 pass
         hn('kill-server', ok=False)
         tmux('kill-server', ok=False)
-    if mock:
-        mock.terminate()
+    def clients():
+        rows = subprocess.check_output(['ps', '-ax', '-o', 'pid=,command='], text=True).splitlines()
+        return [int(parts[0]) for row in rows if len(parts := row.strip().split(None, 1)) == 2
+                and parts[1].startswith(str(HN) + ' ') and f'-L {PREFIX} ' in parts[1]]
+    for pid in clients():
         try:
-            mock.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            mock.kill()
-            mock.wait(timeout=3)
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        deadline = time.monotonic() + 5
+        while clients() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert not clients(), 'workspace fixture client did not exit'
+    finally:
+        if mock:
+            mock.terminate()
+            try:
+                mock.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                mock.kill()
+                mock.wait(timeout=3)
     shutil.rmtree(BASE)
