@@ -11,7 +11,7 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 5:** the USB welcome offers **Install Harness** or **Try without installing**.
+**Preview 6:** the USB welcome offers **Install Harness** or **Try without installing**.
 Install works offline. Try opens Wi-Fi setup when needed, then bundled OpenCode
 with its upstream default settings. The installer has four fields and one Install
 action; encrypted boot shows the Harness wordmark and a masked password prompt.
@@ -19,16 +19,17 @@ Both the live and installed system use `me@harness`.
 `Super+U` opens Updates. Frequent hn/CLI releases download in the background;
 you choose when to reconnect the screen. Running agents and terminals stay alive.
 
-[Download preview 5](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.5)
+[Download preview 6](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.6)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
 
 Each published image includes its matching installation guide and exact validation
-evidence. Preview 4 passed BIOS/plain and UEFI/encrypted USB installation, boot,
-update retry and recovery at 1 GiB and 4 GiB RAM. Its first-use model conversations,
-four programmer projects and three DSH exercises passed the checks described below;
-those historical measurements are labeled separately from each new image's receipt.
+evidence. Preview 6 passed BIOS/plain and UEFI/encrypted USB installation, boot,
+update retry and recovery at 1 GiB and 4 GiB RAM. First-use model conversations,
+four programmer projects and three harness/viewer exercises passed the checks
+described below. Selected Broadcom packages are available offline for experimental
+Intel Mac testing; generic installations do not retain that optional toolchain.
 
 The user confirmed preview 2 installation and boot from a physical ThinkPad's
 internal disk with the USB removed. Its first-use feedback informed this revision.
@@ -233,23 +234,22 @@ separately in `progress.json`.
 
 ## Measured preview footprint
 
-These measurements cover preview 4 image `21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8`.
-The ISO is 1,612,300,288 bytes (1.50 GiB), with 405 installed packages. Both test
-environments have two virtual CPUs. [1 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37119543543)
-boot from the mounted medium; [4 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37120135497)
+These measurements cover preview 6 image `3c15fe540de02db8a3b37d565ce8b4001b872779`.
+The ISO is 1,748,402,176 bytes (1.63 GiB). The table records two-vCPU, 1 GiB VMs.
+[1 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37149350400)
+boot from the mounted medium; [4 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37150118908)
 exercise automatic copy-to-RAM. Idle samples are taken on the installed disk,
 with agents and browser closed and the measurement process included.
 
-| Measurement | 1 GiB VM | 4 GiB VM |
-| --- | --- | --- |
-| Installed root used, including home and snapshots | 2.03–2.07 GiB | 2.06–2.08 GiB |
-| Settled RAM, six samples across both firmware modes | 396.02–399.43 MiB | 480.62–511.13 MiB |
-| Settled CPU, six two-second samples | 0.25–1.74% | 0–1.5% |
-| Offline BIOS/plain installation | 35.8 seconds | 30.0 seconds |
-| Offline UEFI/encrypted installation | 57.8 seconds | 44.6 seconds |
-| Installed BIOS boot through hn readiness, including automated login | 16.3 seconds | 17.3 seconds |
-| Encrypted boot to password prompt | 4.9 seconds | 4.6 seconds |
-| Password submission to hn readiness, including diagnostic login | 8.1 seconds | 8.3 seconds |
+| Measurement | 1 GiB VM |
+| --- | --- |
+| Installed root used, including home and snapshots | 2.03–2.04 GiB |
+| Settled RAM, six samples across both firmware modes | 367.90–395.57 MiB |
+| Offline BIOS/plain installation | 36.290 seconds |
+| Offline UEFI/encrypted installation | 69.347 seconds |
+| Installed BIOS boot through hn readiness, including automated login | 16.228 seconds |
+| Encrypted boot to password prompt | 6.046 seconds |
+| Password submission to hn readiness, including diagnostic login | 8.436 seconds |
 
 Encrypted tests also wait 100 seconds before attempting a wrong password and
 then the correct one. The raw totals include that wait, retry and automated typing;
@@ -269,25 +269,31 @@ virtio display.
 
 ## Real programmer exercises
 
-[Four project checks](https://github.com/autonomous-ai/openharness/actions/runs/37120135497)
-passed on this image: a Python log-analysis CLI, a keyboard-accessible conference
-website, a canvas game and a Fastify/SQLite issue tracker. Three completed projects
-from the earlier preview 4 validation were reused; the game agent ran again and
-all 31 project unit tests and independent checks reran on this exact image.
+[Four projects](https://github.com/autonomous-ai/openharness/actions/runs/37154010202)
+were built by fresh OpenCode runs inside preview 6: a Python log-analysis CLI,
+a keyboard-accessible conference website, a canvas game and a Fastify/SQLite
+issue tracker. All 33 project unit tests passed. The first independent checker
+incorrectly required the game's canvas-drawn controls to be HTML text; that run
+remains failed. [Corrected acceptance](https://github.com/autonomous-ai/openharness/actions/runs/37155632007)
+passed on the same retained projects without further model calls, checking the
+actual rendered controls at 1024×768 and 1280×800 with host-side OCR.
+A [final agent pass](https://github.com/autonomous-ai/openharness/actions/runs/37156180888)
+fixed a clipped help sentence; all checks passed again. That run retried only the
+BIOS job after a GitHub artifact download timed out before boot.
 The independent tester checks file/stdin behavior, keyboard navigation, mobile
 layout, game controls and state, API validation, CRUD and persistence across a
 server restart. A separate compiler check installs gcc/make and builds C.
 
-[Three fresh DSH exercises](https://github.com/autonomous-ai/openharness/actions/runs/37120138348)
+[Three fresh harness/viewer exercises](https://github.com/autonomous-ai/openharness/actions/runs/37154011980)
 use the repository's Web Viewer and Game Viewer. They materialize managed agent
 workspaces, edit and reload HTML, build a terminal CSV tool, and change/play/export
 a game. Tests use the OS's sandboxed Chromium. OpenCode uses upstream model
-defaults; availability can change. Project source, screenshots and receipts ship
-in `harness-examples.zip` and `machine-evidence.zip`. Test projects and test tools
-are separate from the minimal ISO.
+defaults; availability can change. Project source, screenshots and receipts are
+available in the release's supplementary `harness-examples-preview6.zip` download.
+Test projects and test tools are separate from the minimal ISO.
 
 To repeat these exercises, dispatch **Harness OS** with
-`image_run_id=37119543543` and either `workloads=true` or `dsh=true`, using
+`image_run_id=37149350400` and either `workloads=true` or `dsh=true`, using
 `memory_mib=4096` and `live_transport=usb`. `memory_mib=1024` selects the constrained
 base-machine journey. Model calls have deadlines; agent completion and independent
 acceptance are recorded separately. The publisher rejects failed or mismatched

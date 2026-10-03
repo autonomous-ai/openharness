@@ -34,9 +34,9 @@ the [website pipeline](../../README.md#releasing).
 - `assets/install.png` and `assets/unlock.png` are unmodified screenshots from the
   encrypted UEFI journey in that run: `01b-direct-install-offline.png` and
   `disk-unlock-2-masked.png`. Passwords are masked. Images link to their full size.
-- `assets/signal-run.png` is actual project output from the successful workload run
-  [37120135497](https://github.com/autonomous-ai/openharness/actions/runs/37120135497).
-  It covers preview 4 and loads lazily inside a native HTML disclosure.
+- `assets/signal-run.png` is actual project output from the preview 6 workload
+  [layout repair and acceptance run](https://github.com/autonomous-ai/openharness/actions/runs/37156180888).
+  It loads lazily inside the existing native HTML disclosure.
 - Footprint, installation and boot measurements cover the exact preview 6 ISO
   (`efa4e740989770ef7fa40e259f4055d670c5531fcecdf4fcf23f1ae31bb8d380`)
   in 2-vCPU, 1-GiB VMs booted from virtual USB. BIOS/plain installation took
@@ -47,11 +47,19 @@ the [website pipeline](../../README.md#releasing).
   6.046 seconds; readiness followed the correct password submission by 8.436
   seconds. The deliberate 100-second wait and wrong-password retry are excluded
   from that post-password interval. These are CI VM observations.
-- The generated project evidence remains explicitly tied to preview 4.
-  Its unit tests and independent acceptance checks passed on that image;
-  three project sources were retained from earlier work and the game agent ran again.
-  [Three fresh DSH exercises](https://github.com/autonomous-ai/openharness/actions/runs/37120138348)
-  cover this image and its shared viewers too.
+- Preview 6's four projects came from fresh OpenCode turns in
+  [37154010202](https://github.com/autonomous-ai/openharness/actions/runs/37154010202).
+  All 33 unit tests passed, but its game checker incorrectly required the controls
+  to be HTML text. That failed run is retained. Corrected checks in
+  [37155632007](https://github.com/autonomous-ai/openharness/actions/runs/37155632007)
+  passed without another model turn. Visual review then caught a clipped help
+  sentence; the linked repair run asks the agent to fix it and reruns acceptance.
+  Its first BIOS job failed downloading a GitHub artifact before boot; only that
+  job was retried. No uninterrupted passing suite is implied.
+  [Three fresh harness/viewer exercises](https://github.com/autonomous-ai/openharness/actions/runs/37154011980)
+  cover the same image. `harness-examples-preview6.zip` retains project source,
+  screenshots and provenance separately from the immutable ISO and its original
+  `validation.json`. Check its accompanying SHA-256 before linking a new bundle.
 - The preview 4 ThinkPad install/boot/use success is a user report from October 3,
   2026, not a measured hardware benchmark. Wi-Fi, suspend, Mac, and NVIDIA claims
   require their own hardware evidence.
