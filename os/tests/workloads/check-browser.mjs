@@ -106,7 +106,7 @@ try {
     let child = start('fullstack', 'npm', ['start'], env);
     const page = await context.newPage();
     const request = (path, method = 'GET', data) => fetch(url + path, { method,
-      headers: { 'content-type': 'application/json' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+      ...(data === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) }) });
     try {
       await available(url);
       assert.equal((await request('/api/issues', 'POST', { title: '' })).status, 400);

@@ -21,6 +21,10 @@ on:
         required: false
         default: false
         type: boolean
+      workload_seed_run_id:
+        description: 'Optional: reuse the generated projects from this workload run; finish its game agent and rerun all acceptance checks'
+        required: false
+        type: string
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -137,8 +141,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Restore prior generated workload projects
+        if: ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' }}
+        uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-vm-bios
+          path: os/work/workload-seed
+          run-id: ${{ inputs.workload_seed_run_id }}
+          github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ inputs.workloads && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }}
+        env:
+          OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
       - name: Show machine failure diagnostics
         if: failure()
         run: |

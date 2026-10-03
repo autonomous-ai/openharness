@@ -8,6 +8,10 @@ MODEL=${HN_TEST_MODEL:-opencode/big-pickle}
 export PATH="$HOME/.opencode/bin:$PATH"
 case "$MODEL" in opencode/big-pickle|opencode/*-free) ;; *) echo 'Use an explicitly free OpenCode model.' >&2; exit 2 ;; esac
 mkdir -p "$WORK" "$REPORT"
+if [[ -d "$INPUTS/seed" ]]; then
+    cp -a "$INPUTS/seed/." "$WORK/"
+    printf '%s\n' 'Reusing previously generated projects; only the interrupted game agent runs again.' > "$REPORT/reuse.txt"
+fi
 trap 'printf "%s\n" "$?" > "$REPORT/status"' EXIT
 opencode --version > "$REPORT/opencode-version.txt" || exit 1
 printf '%s\n' "$MODEL" > "$REPORT/model.txt"
@@ -17,16 +21,25 @@ for scenario in terminal-tool website game fullstack; do
     mkdir -p "$project"
     cp "$INPUTS/$scenario.txt" "$project/TASK.txt"
     cat > "$project/opencode.json" <<EOF
-{"model":"$MODEL","permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","/usr/share/harness-os/**":"allow"}}}
+{"model":"$MODEL","permission":{"question":"deny","task":"deny","external_directory":{"*":"deny","$HOME/Projects/**":"allow","/tmp/opencode/**":"allow","/usr/share/harness-os/**":"allow"}}}
 EOF
-    printf '\nBuilding %s with %s\n' "$scenario" "$MODEL"
-    (
+    printf '\nChecking %s with %s\n' "$scenario" "$MODEL"
+    if [[ -d "$INPUTS/seed" && "$scenario" != game ]]; then
+        status=0
+        printf '%s\n' 'Prior completed model turn reused; project checks run again.' > "$REPORT/$scenario-agent-reused.txt"
+        # Dependencies are deliberately absent from the retained source artifact.
+        if [[ "$scenario" == fullstack ]]; then
+            (cd "$project" && npm ci --no-audit --no-fund) || exit 1
+        fi
+    else
+      (
         cd "$project" || exit 1
         timeout --signal=TERM --kill-after=15s 12m opencode run --model "$MODEL" --format json \
-            'Read TASK.txt, implement the complete task, run its tests, and fix failures. Work now without questions or subagents.' \
+            'Read TASK.txt, implement the complete task, run its tests, and fix failures. Work now without questions or subagents. If a project already exists, finish and verify it. Browser acceptance runs separately with sandboxed system Chromium; finish after your unit tests and do not launch a browser or long-running server.' \
             > "$REPORT/$scenario-agent.jsonl" 2>&1
     )
-    status=$?
+      status=$?
+    fi
     printf '%s\n' "$status" > "$REPORT/$scenario-agent.status"
     # The agent's process exit alone is not evidence it made working software.
     (
