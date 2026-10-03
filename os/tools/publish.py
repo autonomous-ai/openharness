@@ -159,6 +159,10 @@ def main():
     notes = root / 'release-notes.md'
     interactive_install = all(any(c.startswith('Keyboard disk selection, encryption checkbox') for c in r['checks']) for r in receipts)
     update_retry = all(any(c.startswith('Failed full update blocks package changes') for c in r['checks']) for r in receipts)
+    project_source_runs = sorted({str(r['workload_project_source_run_id']) for r in receipts if r.get('workload_project_source_run_id')})
+    reuse_note = ('Completed project sources were retained from ' + ', '.join(
+        f'[run {source}](https://github.com/{args.repo}/actions/runs/{source})' for source in project_source_runs) +
+        '. The game agent ran again; all four projects\' unit tests and independent acceptance checks reran on this exact image.') if project_source_runs else ''
     notes.write_text(f'''Boot directly into hn. Open agents with Ctrl+B, then N. Super+B opens Chromium or returns to hn.
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
@@ -172,6 +176,8 @@ To try it: follow the included `INSTALL.md` for Mac → USB → ThinkPad instruc
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
 {'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `harness-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
+
+{reuse_note}
 
 {'Three DSHs also passed: a live HTML greeting, a terminal CSV tool, and a game using the existing shared viewers, including keyboard play, pause and standalone export.' if 'dsh' in examples else ''}
 

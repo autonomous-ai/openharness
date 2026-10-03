@@ -11,24 +11,25 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 3:** the installer finds its offline image after USB boot copies it into
-RAM, and excludes the boot USB even when it has been unmounted. Both optical-media
-and writable-USB tests pass BIOS/plain and UEFI/encrypted installation, reboot,
-update retry and recovery. The form has a disk picker, encryption on by default,
-password twice, and a separate erase confirmation. The account is `me@harness`.
+**Preview 4:** the USB welcome offers **Install Harness** or **Try without installing**.
+Install works offline. Try opens Wi-Fi setup when needed, then bundled OpenCode
+with its upstream default settings. The installer has four fields and one Install
+action; encrypted boot shows the Harness wordmark and a masked password prompt.
+Both the live and installed system use `me@harness`.
 
-Already using preview 2? Its [source-path workaround](INSTALL.md#5-install) works;
-this installer fix does not require reinstalling a working system.
-
-[Download preview 3](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3)
+[Download preview 4](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](site/README.md)
 
-The user confirmed preview 2 installation with the workaround and boot into hn
-from a physical ThinkPad's internal disk with the USB removed. Further issues
-have been reported and await details. Wi-Fi, suspend and NVIDIA remain unverified.
-The release's `validation.json` identifies the exact image and coverage. Real
-OpenCode project and DSH exercises were validated separately on preview 1.
+The exact image passed BIOS/plain and UEFI/encrypted USB installation, boot,
+update retry and recovery at 1 GiB and 4 GiB RAM. First-use model conversations,
+four programmer projects and three DSH exercises passed the checks described below.
+The release includes the matching installation guide and validation evidence.
+
+The user confirmed preview 2 installation and boot from a physical ThinkPad's
+internal disk with the USB removed. Its first-use feedback informed this revision.
+Preview 4 still needs physical Wi-Fi, suspend and NVIDIA testing. A working older
+installation does not need reinstalling solely for the USB payload-location fix.
 
 ## Design
 
@@ -45,12 +46,12 @@ OpenCode project and DSH exercises were validated separately on preview 1.
 - Chromium is installed but does not start at boot. `Super+B` opens/focuses it or
   returns to hn. `Super+Enter` focuses hn; `Alt+Tab` switches available windows.
   Browser sandboxing and hardware acceleration remain enabled.
-- `Ctrl+B`, then `N` opens an existing hn agent/terminal entry. The normal session
+- `Ctrl+B`, then `N` opens the agent picker; `Ctrl+B`, then `T` opens a terminal directly. The normal session
   has no interactive parent shell to exit into. Shells remain available in hn panes. This is
   an interface policy, not confinement against someone with shell/admin access.
 - NetworkManager, fonts, clipboard, audio, locking, firmware and zram provide
-  the support needed by actual development machines. No IDEs, model weights,
-  CUDA SDK, containers, databases or language stacks are preinstalled.
+  the support needed by actual development machines. OpenCode is bundled. Compilers, IDEs, model weights, CUDA, containers and
+  databases are installed when needed. Python and Node support the OS and Harness runtime.
 - Btrfs root, separate home and snapshot subvolumes, BIOS and UEFI boot, and
   optional LUKS2 encryption (default on). The installer extracts its immutable
   payload locally instead of downloading and installing each package again.
@@ -100,46 +101,45 @@ and projects add more. Run the same installer described below, selecting
 from the virtual disk. The left Command key supplies the Super shortcuts.
 Apple Silicon uses x86 emulation: this tests the PC image's behavior, while boot
 and application timings need separate native x86 measurements.
-The current Mac check is partial: the installed VM rendered a project in Chromium,
-and the refreshed hn/CLI binaries match the published hashes, but subsequent
-background reboot checks missed readiness deadlines with guest soft-lockup reports.
-Use the native x86 VM results for the preview's measured performance. Mac emulation
-is not yet a reliably validated demonstration environment.
+Earlier Mac checks rendered a project in Chromium, but subsequent background
+reboots missed readiness deadlines with guest soft-lockup reports. Preview 4 has
+not been validated interactively on this Mac. Use the native x86 VM evidence for
+measured performance; Apple Silicon emulation is not yet a reliable performance
+or full-experience demonstration.
 
-After an image has passed the VM gates, write the **whole ISO** to a USB stick
-using an image writer such as Etcher, boot the USB, and try hn before installing.
-The initial image targets x86-64 PCs with Secure Boot disabled. TPM can remain
-enabled. A 32-bit-only ThinkPad cannot boot this image.
+Write the **whole ISO** to a USB stick using an image writer such as Etcher, then
+boot an x86-64 PC with Secure Boot disabled. TPM can remain enabled. A 32-bit-only
+ThinkPad cannot boot this image. The [installation guide](INSTALL.md) covers the
+Mac download, checksum, flashing and ThinkPad boot menu in full.
 
-Inside hn, open a Terminal pane and run:
+On the USB welcome, press **Enter** to install or **T** to try Harness. Installation
+needs no network or terminal command. Trying a cloud agent requires a connection;
+network setup opens when needed. Work in the live USB session is temporary and is
+not copied during installation.
 
-```sh
-sudo hn-os install
-```
+The installer uses `me@harness`. Choose **Disk**, leave **Encryption** enabled or
+change it, then enter **Password** and **Repeat password**. **Install immediately
+erases the selected disk**, as disclosed in the form. There is no second
+confirmation screen. The live USB and mounted disks are excluded. Selecting a
+disk alone does not write to it. Passwords must be nonempty; this preview uses a
+US keyboard layout, including at disk unlock.
 
-The installer uses `me@harness`. Select the disk from a keyboard list;
-the encryption checkbox sits directly underneath and starts checked. Enter your
-password twice, then choose **Continue** to review the disk. **Back** is selected
-initially; choose **Erase and install** to begin. Selecting a disk or continuing
-does not write to it. Tab moves between fields, Space toggles encryption, and
-Esc returns from the picker or confirmation (or cancels from the main form).
-No username, computer-name or disk-path typing is needed.
-The installer performs a **whole-disk installation**;
-it does not resize another operating system.
-The live USB and disks with mounted filesystems are rejected. Installation itself
-works offline; agent installation and cloud authentication require networking.
+Completion stays visible until **Shut down** or **Back to Harness** is chosen.
+Remove the USB after shutdown and boot the internal disk. An encrypted install
+shows the Harness logo and **Enter your password**, then enters hn. An unencrypted
+install requires login as `me`. The password initially protects both the account
+and, when enabled, the disk. There is no first-boot account wizard.
 
-You can uncheck encryption for a disposable VM or unattended machine.
-`sudo hn-os install --no-encryption` starts the form with that choice unchecked.
-`--username NAME` and `--hostname NAME` override the defaults. With an unattended
-`--config` file, set `username`, `hostname` and `encrypt` there instead.
+The command equivalent is `sudo harness install`. Advanced overrides remain:
+`--no-encryption`, `--username NAME`, and `--hostname NAME`. With an unattended
+`--config` file, set `username`, `hostname` and `encrypt` in that file instead.
+Ordinary hn on macOS or another Linux distribution does not expose OS installation.
 
-Remove the USB after shutting down. An encrypted install asks for its disk
-password and then enters hn. An unencrypted install requires console login.
-The installation password initially protects both the account and, when enabled,
-the encrypted disk. There is no first-boot account wizard.
-`Super+L` locks the session. Recovery remains possible through another console
-or the USB; the machine's owner retains normal Linux administrator control.
+On the installed system's empty home, Enter starts OpenCode. `Ctrl+B`, then `W`
+opens network setup; `Ctrl+B`, then `T` opens a shell directly. Capital letters
+in these prefix shortcuts mean Shift + letter. `Super+L` locks the session.
+Recovery remains available through another console or the USB; the owner retains
+normal Linux administrator control.
 
 ## Updates and recovery
 
@@ -182,8 +182,8 @@ and [NVIDIA's supported GPUs](https://github.com/NVIDIA/open-gpu-kernel-modules)
 No NVIDIA hardware validation has been performed yet. Verify `nvidia-smi` and the
 actual AI workload on each physical machine before treating it as supported.
 
-Agent executables are installed through hn's existing engine install recipes
-when selected. Accounts, API credentials and model downloads are supplied by the
+OpenCode is bundled; other agent executables are installed through hn's existing
+engine install recipes when selected. Accounts, API credentials and model downloads are supplied by the
 owner. System guidance for agents lives at `/usr/share/harness-os/AGENTS.md`.
 
 ## Validation plan
@@ -195,7 +195,7 @@ owner. System guidance for agents lives at `/usr/share/harness-os/AGENTS.md`.
    until requested. Test browser toggle, clipboard, terminal input, reconnect,
    last-pane behavior and frontend restart without terminating agent work.
 4. Operate the real installer form on a guest terminal: disk picker, encryption
-   toggle, masked passwords, Back/Esc, and explicit erase confirmation.
+   toggle, masked passwords, Back/Esc, a single explicit Install action and persistent completion.
    Install from the offline image to disposable VM disks, encrypted and plain;
    reboot from each disk, verify accounts/permissions/bootloaders and defaults.
 5. Exercise real agent executables, dependency installation, parallel panes and
@@ -213,60 +213,62 @@ separately in `progress.json`.
 
 ## Measured preview footprint
 
-These measurements cover preview 3 image `bbf6442d9c62fc8a4e9ad9acf5668159f35c99f0`.
-The ISO is 1,525,678,080 bytes (1.42 GiB). Both test environments have two virtual
-CPUs. [Optical-media tests](https://github.com/autonomous-ai/openharness/actions/runs/37106807986)
-use 2 GiB RAM; [writable-USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37107310576)
-use 4 GiB to trigger automatic RAM copying. Idle and installed-boot measurements
-are taken after booting the installed disk without the live medium. Browser and
-agents are closed; the measurement process is included.
+These measurements cover preview 4 image `21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8`.
+The ISO is 1,612,300,288 bytes (1.50 GiB), with 405 installed packages. Both test
+environments have two virtual CPUs. [1 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37119543543)
+boot from the mounted medium; [4 GiB USB tests](https://github.com/autonomous-ai/openharness/actions/runs/37120135497)
+exercise automatic copy-to-RAM. Idle samples are taken on the installed disk,
+with agents and browser closed and the measurement process included.
 
-| Measurement | 2 GiB VM, optical installer | 4 GiB VM, USB installer |
+| Measurement | 1 GiB VM | 4 GiB VM |
 | --- | --- | --- |
-| Installed root used, including home and snapshots | 1.91–1.94 GiB | 1.93–1.97 GiB |
-| Settled RAM, six samples across both firmware modes | 397.77–407.73 MiB | 469.92–513.75 MiB |
-| Settled CPU, six two-second samples | 0–1.5% | 0–0.75% |
-| Offline BIOS/plain installation | 33.8 seconds | 34.7 seconds |
-| Offline UEFI/encrypted installation | 47.0 seconds | 42.1 seconds |
-| Installed BIOS boot through hn process readiness, including test login | 17.5 seconds | 18.1 seconds |
+| Installed root used, including home and snapshots | 2.03–2.07 GiB | 2.06–2.08 GiB |
+| Settled RAM, six samples across both firmware modes | 396.02–399.43 MiB | 480.62–511.13 MiB |
+| Settled CPU, six two-second samples | 0.25–1.74% | 0–1.5% |
+| Offline BIOS/plain installation | 35.8 seconds | 30.0 seconds |
+| Offline UEFI/encrypted installation | 57.8 seconds | 44.6 seconds |
+| Installed BIOS boot through hn readiness, including automated login | 16.3 seconds | 17.3 seconds |
+| Encrypted boot to password prompt | 4.9 seconds | 4.6 seconds |
+| Password submission to hn readiness, including diagnostic login | 8.1 seconds | 8.3 seconds |
 
-Encrypted boot checks deliberately wait 100 seconds before entering the disk
-password. Totals are 112.0 seconds at 2 GiB and 111.0 seconds at 4 GiB (12.0 and
-11.0 excluding that wait). These are VM observations, not laptop power-on
-benchmarks. The Mac's x86 emulation is
-substantially slower and is for trying the
-installation and interface. The image shrank by 304 MiB (17%) during testing by
-removing duplicated live-initramfs graphics payload, while retaining the installed
-firmware and drivers. Software rendering is selected only for a detected 2D
-virtio display; physical GPUs retain their normal acceleration path.
+Encrypted tests also wait 100 seconds before attempting a wrong password and
+then the correct one. The raw totals include that wait, retry and automated typing;
+`boot-events.jsonl` records each stage so human interaction is not reported as OS
+startup time. A previous instrumented run made the serial port the primary console
+and delayed the graphical prompt; keeping the screen primary corrected the test
+configuration. Ordinary installations do not add the diagnostic serial console.
 
-The earlier preview 1 image also passed complete BIOS/plain and UEFI/encrypted
-machine checks with [1 GiB RAM](https://github.com/autonomous-ai/openharness/actions/runs/37086919917),
-including browser switching, a compiler build and the four agent executables.
-Concurrent live model workloads were tested at 2 GiB, not 1 GiB. Leave additional
-memory for projects, browser tabs and local model weights.
+The installer limits its extraction caches to 64 MiB. This fixed an actual
+out-of-memory failure after trying OpenCode and Chromium in the 1 GiB live session.
+The 1 GiB runs now pass installation, boot, recovery and the first model conversation.
+Leave more memory for browser tabs, concurrent agents and local model weights.
+These are native x86 VM observations, not physical laptop power-on benchmarks.
+The BIOS agent checks use a Nehalem CPU profile without AVX2. Physical GPUs keep
+hardware acceleration; software rendering is selected only for a detected 2D
+virtio display.
 
 ## Real programmer exercises
 
-These real-model project and DSH results cover preview 1. Previews 2 and 3 reran OS,
-compiler and agent executable checks, without new model turns.
+[Four project checks](https://github.com/autonomous-ai/openharness/actions/runs/37120135497)
+passed on this image: a Python log-analysis CLI, a keyboard-accessible conference
+website, a canvas game and a Fastify/SQLite issue tracker. Three completed projects
+from the earlier preview 4 validation were reused; the game agent ran again and
+all 31 project unit tests and independent checks reran on this exact image.
+The independent tester checks file/stdin behavior, keyboard navigation, mobile
+layout, game controls and state, API validation, CRUD and persistence across a
+server restart. A separate compiler check installs gcc/make and builds C.
 
-Opt-in tests use free OpenCode model turns inside a freshly installed OS. They
-create a Python log-analysis CLI, a keyboard-accessible conference website, a
-canvas game, and a Fastify/SQLite issue tracker. The independent tester checks
-file/stdin behavior, keyboard navigation, mobile layout, game controls and state,
-API validation, CRUD, and persistence across a server restart. Compiler and
-package checks separately build a C program after installing gcc/make on demand.
+[Three fresh DSH exercises](https://github.com/autonomous-ai/openharness/actions/runs/37120138348)
+use the repository's Web Viewer and Game Viewer. They materialize managed agent
+workspaces, edit and reload HTML, build a terminal CSV tool, and change/play/export
+a game. Tests use the OS's sandboxed Chromium. OpenCode uses upstream model
+defaults; availability can change. Project source, screenshots and receipts ship
+in `harness-examples.zip` and `machine-evidence.zip`. Test projects and test tools
+are separate from the minimal ISO.
 
-The DSH exercises use the repository's existing Web Viewer and Game Viewer. They
-materialize real managed agent workspaces, edit and reload HTML, build a
-terminal-only CSV tool, and change/play/export a game. Playwright uses the OS's
-system Chromium with its sandbox enabled. Project source, screenshots and
-receipts are retained as workflow artifacts; none of these projects, testing
-tools, or downloaded agent binaries is preinstalled in the ISO.
-
-Dispatch the **Harness OS** workflow at the preview 1 source with `image_run_id=37083780202` and either
-`workloads=true` or `dsh=true` to repeat the corresponding exercise. These use
-network-accessible free models and may fail or exceed their bounded deadline;
-agent exits and independent checks are reported separately. `memory_mib=1024`
-selects the additional constrained-memory machine check.
+To repeat these exercises, dispatch **Harness OS** with
+`image_run_id=37119543543` and either `workloads=true` or `dsh=true`, using
+`memory_mib=4096` and `live_transport=usb`. `memory_mib=1024` selects the constrained
+base-machine journey. Model calls have deadlines; agent completion and independent
+acceptance are recorded separately. The publisher rejects failed or mismatched
+machine evidence and a guide that names a different ISO.

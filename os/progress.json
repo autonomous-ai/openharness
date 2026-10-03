@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 3 remains public. Preview 4 first-use behavior and Naming System are implemented; validation found an encrypted boot delay and low-memory installation failure.",
+  "status": "Preview 3 remains public. Preview 4 passed exact-image 1 GiB and 4 GiB USB installation, boot, recovery, first-agent conversations, projects and DSH checks. Matching guide and public release are being prepared.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T11:26:36.906384+00:00",
+  "last_updated_utc": "2026-10-03T11:39:35.289044+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,9 +922,9 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "New image building with bounded installer caches and graphical-primary diagnostic console; existing Naming System and full CLI evidence remain valid. Preview 4 not published.",
+    "status": "All required image and machine checks passed. Documentation, fresh screenshots and version-matched installation guide prepared; public release pending.",
     "implementation_complete_utc": "2026-10-03T11:24:15.435201+00:00",
-    "validation_complete_utc": null,
+    "validation_complete_utc": "2026-10-03T11:43:29Z",
     "publication_utc": null,
     "requirements": [
       "Product name Harness; live and installed hostname harness",
@@ -950,7 +950,13 @@
       "Inspect screenshots; verify published assets using the existing publication receipt without duplicate full downloads",
       "Explicit normal hn / installed OS / live USB render and action regressions, including stray live flag and modified keys"
     ],
-    "waiting": [],
+    "waiting": [
+      {
+        "started_utc": "2026-10-03T11:36:33Z",
+        "ended_utc": null,
+        "reason": "Local 1.6 GB image artifact download still active; small machine evidence already downloaded. CI publication uses its own artifact transfer and is not blocked by this local download."
+      }
+    ],
     "local_validation": {
       "completed_utc": "2026-10-03T10:29:26.198461+00:00",
       "toolchain": "Node 22.23.2, tmux 3.7c on macOS arm64",
@@ -975,10 +981,9 @@
       "Fresh installed home offers Start OpenCode, New terminal and Wi-Fi; live-only Install action removed after installation"
     ],
     "remaining": [
-      "Exact-source native TUI build/tests and artifact inspection",
-      "BIOS/plain old-CPU and UEFI/encrypted USB journeys including real default OpenCode replies",
-      "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
-      "Update release/download documentation and publish only after required evidence passes"
+      "Publish preview 4 and verify its full public asset set",
+      "Report release and manual ThinkPad instructions; physical Wi-Fi, suspend and NVIDIA remain unverified",
+      "Landing-page interactive review and reliable Mac VM experience remain blocked or unverified separately"
     ],
     "native_run_id": 37116595898,
     "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37116595898",
@@ -1047,6 +1052,42 @@
         "result": "Both VMs failed only at first-use cleanup: the test incorrectly required OpenCode 2 shared service to exit along with the TUI.",
         "passed": "Live executable identities no longer conflate Bash/Python with agents; actual OpenCode TUI starts without the plugin error; both default clean-profile model calls returned 42. Both screenshots show return to the USB welcome after closing the TUI.",
         "remedy": "Verify disappearance of the exact interactive pane, not every process named opencode. Test-only correction; reuse the verified image/runtime."
+      },
+      {
+        "scope": "four programmer projects plus complete BIOS/UEFI USB journey",
+        "run_id": 37117491184,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117491184",
+        "started_utc": "2026-10-03T10:46:10Z",
+        "memory_mib": 4096,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "failed",
+        "result": "UEFI complete journey passed. All four agents completed and project unit tests passed; independent game browser check wrongly assumes a .legend class absent from the task contract. Website and fullstack browser/API checks passed."
+      },
+      {
+        "scope": "three DSH exercises plus complete BIOS/UEFI USB journey",
+        "run_id": 37117493096,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117493096",
+        "started_utc": "2026-10-03T10:46:12Z",
+        "memory_mib": 4096,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "passed",
+        "result": "Both complete USB installation/recovery journeys passed, plus three real default-model DSH exercises and shared viewer checks."
+      },
+      {
+        "scope": "constrained complete BIOS/UEFI USB journey and bundled default-model chat",
+        "run_id": 37117494883,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117494883",
+        "started_utc": "2026-10-03T10:46:14Z",
+        "memory_mib": 1024,
+        "image_run_id": 37116595898,
+        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
+        "status": "failed",
+        "result": "Both 1 GiB installations exhausted memory during unsquashfs extraction; kernel killed the extractor (about 384\u2013441 MiB resident plus swap). First live model conversations passed."
       }
     ],
     "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
@@ -1095,7 +1136,7 @@
       }
     },
     "next_step": "Build and inspect a fresh exact-source image with bounded extraction caches and corrected diagnostic console order; run native 4 GiB and constrained 1 GiB installation/recovery and project/DSH acceptance. Reuse passed full CLI evidence because CLI/TUI sources and dependencies are unchanged.",
-    "last_recorded_utc": "2026-10-03T11:26:36.906384+00:00",
+    "last_recorded_utc": "2026-10-03T11:39:35.289044+00:00",
     "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1115,14 +1156,16 @@
     },
     "native_validation": "Run 37115159220 passed CLI typecheck, 89 affected CLI tests (1 skipped), 337 Rust tests (1 ignored), all 10 native fixtures, image assembly and SquashFS inspection. Both VM journeys failed at the default chat test before installation.",
     "last_image": {
-      "run_id": 37116595898,
-      "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
-      "iso_bytes": 1612300288,
-      "iso_sha256": "52c14dd1aab5498141e260915798dd59c6f4d525115d86fd1fad8e9ffdaa328f",
-      "package_count": 405,
-      "native_validation": "337 Rust tests (1 ignored), 89 affected CLI tests (1 skipped), all 10 native TUI fixtures, portable tests, workflow lint and actual SquashFS inspection passed. Full CLI suite passed separately on the same runtime source.",
-      "manifest_from_log": "os/work/preview4-build-37116595898/manifest-from-build-log.json",
-      "publishable": false
+      "run_id": 37119543543,
+      "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+      "iso": {
+        "name": "harness-0.1.0-preview.4-x86_64.iso",
+        "bytes": 1612300288,
+        "sha256": "d111c2127e503818e4fccba62b8460e6160063bbf3b48e004e51516416229a92"
+      },
+      "status": "Image build and actual SquashFS inspection passed; 337 native tests passed with one ignored, ten terminal fixtures passed, affected CLI 89 passed with one skipped. Full CLI evidence reused from unchanged source. Machine validation pending.",
+      "publishable": false,
+      "manifest_from_log": "os/work/preview4-build-37119543543/manifest-from-build-log.json"
     },
     "current_validation_plan": [
       "Pinned Node 22.23.2 typecheck and affected discovery, launch, hooks, plugin and version tests.",
@@ -1163,40 +1206,40 @@
     },
     "active_machine_runs": [
       {
-        "scope": "four programmer projects plus complete BIOS/UEFI USB journey",
-        "run_id": 37117491184,
-        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117491184",
-        "started_utc": "2026-10-03T10:46:10Z",
-        "memory_mib": 4096,
-        "image_run_id": 37116595898,
-        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
-        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
-        "status": "failed",
-        "result": "UEFI complete journey passed. All four agents completed and project unit tests passed; independent game browser check wrongly assumes a .legend class absent from the task contract. Website and fullstack browser/API checks passed."
-      },
-      {
-        "scope": "three DSH exercises plus complete BIOS/UEFI USB journey",
-        "run_id": 37117493096,
-        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117493096",
-        "started_utc": "2026-10-03T10:46:12Z",
-        "memory_mib": 4096,
-        "image_run_id": 37116595898,
-        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
-        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
-        "status": "passed",
-        "result": "Both complete USB installation/recovery journeys passed, plus three real default-model DSH exercises and shared viewer checks."
-      },
-      {
-        "scope": "constrained complete BIOS/UEFI USB journey and bundled default-model chat",
-        "run_id": 37117494883,
-        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37117494883",
-        "started_utc": "2026-10-03T10:46:14Z",
+        "scope": "1 GiB complete USB installation/recovery and actual first model chat",
+        "run_id": 37119543543,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37119543543",
+        "started_utc": "2026-10-03T11:24:19Z",
         "memory_mib": 1024,
-        "image_run_id": 37116595898,
-        "image_source_commit": "67958156da30d2983daee22ddab48c43970fa244",
-        "test_source_commit": "5001600ca051e07152be9000b2470512ebddb5c4",
-        "status": "failed",
-        "result": "Both 1 GiB installations exhausted memory during unsquashfs extraction; kernel killed the extractor (about 384\u2013441 MiB resident plus swap). First live model conversations passed."
+        "image_run_id": 37119543543,
+        "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "test_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "status": "passed",
+        "completed_utc": "2026-10-03T11:41:22Z"
+      },
+      {
+        "scope": "4 GiB RAM-copy install/recovery, retained four project sources and independent acceptance",
+        "run_id": 37120135497,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37120135497",
+        "started_utc": "2026-10-03T11:35:21Z",
+        "memory_mib": 4096,
+        "image_run_id": 37119543543,
+        "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "test_source_commit": "ba221cbf993833f7cb6ffbacdd4fce4c0223787d",
+        "status": "passed",
+        "completed_utc": "2026-10-03T11:43:07Z"
+      },
+      {
+        "scope": "4 GiB RAM-copy install/recovery, three real DSH exercises and shared viewers",
+        "run_id": 37120138348,
+        "url": "https://github.com/autonomous-ai/openharness/actions/runs/37120138348",
+        "started_utc": "2026-10-03T11:35:24Z",
+        "memory_mib": 4096,
+        "image_run_id": 37119543543,
+        "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+        "test_source_commit": "ba221cbf993833f7cb6ffbacdd4fce4c0223787d",
+        "status": "passed",
+        "completed_utc": "2026-10-03T11:43:29Z"
       }
     ],
     "boot_performance_investigation": {
@@ -1204,8 +1247,8 @@
       "evidence_run_id": 37117493096,
       "uefi_initrd_seconds_including_100s_wait": 210.533,
       "recovered_keyboard_ready_seconds": 116.847,
-      "status": "unresolved",
-      "next_step": "Record unlock prompt/password/serial login/Harness readiness timestamps and installed/recovered initrd journals. Do not attribute the delay to Plymouth until logs establish the cause.",
+      "status": "resolved in test instrumentation; exact new image passed",
+      "next_step": "No additional boot diagnostic run required. Measure the physical ThinkPad separately.",
       "diagnostic_run_id": 37118718782,
       "diagnostic_test_source": "6fe521be4d98a1ae1a0da0005f517632a54177ae",
       "diagnostic_started_utc": "2026-10-03T11:08:47Z",
@@ -1216,7 +1259,9 @@
       "harness_ready_seconds": 220.004,
       "finding": "Delay precedes the graphical prompt. The initrd journal shows serial-primary virtual console setup stalled around 30-second intervals. The test adds console=tty0 console=ttyS0; ordinary installation does not add a serial console. Change diagnostic argument order to keep tty0 primary and test the resulting image before attributing a physical-device regression.",
       "diagnostic_fix": "Disable systemd-analyze paging, retain journals and boot-stage events, and enforce a sub-30-second unlock-prompt gate on native x86 VMs.",
-      "serial_console_reference": "https://www.kernel.org/doc/html/latest/admin-guide/serial-console.html"
+      "serial_console_reference": "https://www.kernel.org/doc/html/latest/admin-guide/serial-console.html",
+      "resolution": "Keep tty0 primary after the diagnostic serial console; ordinary installations never add serial output. New encrypted prompt is 4.9 seconds at 1 GiB and 4.6 seconds at 4 GiB. Password submission to Harness is 8.1/8.3 seconds including diagnostic login.",
+      "verified_run_id": 37119543543
     },
     "extraction_cache_reference": "https://github.com/plougher/squashfs-tools/blob/master/Documentation/4.7.5/USAGE-UNSQUASHFS",
     "post_diagnostic_local_checks": {
@@ -1228,15 +1273,66 @@
       "url": "https://github.com/autonomous-ai/openharness/actions/runs/37119543543",
       "source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
       "started_utc": "2026-10-03T11:24:19Z",
-      "status": "in progress",
+      "status": "passed: image, native checks, 1 GiB BIOS/plain and UEFI/encrypted journeys",
       "initial_machine_memory_mib": 1024,
       "transport": "usb",
-      "required_followups": [
-        "Inspect native/image results",
-        "Complete 1 GiB install/recovery and measure prompt latency",
-        "4 GiB RAM-copy journey with retained completed projects and independent browser/API checks",
-        "Three real DSH exercises and shared viewers against this exact image"
-      ]
+      "required_followups": []
+    },
+    "previous_verified_image": {
+      "run_id": 37116595898,
+      "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
+      "iso_bytes": 1612300288,
+      "iso_sha256": "52c14dd1aab5498141e260915798dd59c6f4d525115d86fd1fad8e9ffdaa328f",
+      "package_count": 405,
+      "native_validation": "337 Rust tests (1 ignored), 89 affected CLI tests (1 skipped), all 10 native TUI fixtures, portable tests, workflow lint and actual SquashFS inspection passed. Full CLI suite passed separately on the same runtime source.",
+      "manifest_from_log": "os/work/preview4-build-37116595898/manifest-from-build-log.json",
+      "publishable": false
+    },
+    "release_preparation": {
+      "at_utc": "2026-10-03T12:00:41.137169+00:00",
+      "status": "Matching os/INSTALL.md, README, landing-page copy and fresh screenshots ready. Publication script includes guide, exact evidence, and explicit disclosure of reused project sources.",
+      "changes": [
+        "Include a version-matched INSTALL.md in the verified public asset set; reject a mismatched guide.",
+        "Use harness-examples.zip for this new preview; preserve historical artifact URLs.",
+        "Include installed/recovered boot journals with timing evidence.",
+        "New development/example test copy uses Harness."
+      ],
+      "validation": "52 portable OS tests, Python/JSON/XML/shell checks, git diff --check and static site/doc assets/links passed after final edits. Actual CI guest screenshots reviewed. Browser layout/interaction remains unverified due the saved permission block; no new full CLI/TUI suite required for these docs/packaging-only edits.",
+      "completed_utc": "2026-10-03T12:01:42.412522+00:00"
+    },
+    "final_machine_evidence": {
+      "iso_sha256": "d111c2127e503818e4fccba62b8460e6160063bbf3b48e004e51516416229a92",
+      "image_source_commit": "21aa5de0bd1a9a8a21cb4be06f83bf65c072a1b8",
+      "iso_bytes": 1612300288,
+      "package_count": 405,
+      "memory_1gib_idle_mib": [
+        396.02,
+        399.43
+      ],
+      "memory_4gib_idle_mib": [
+        480.62,
+        511.13
+      ],
+      "bios_install_seconds_1gib": 35.774,
+      "encrypted_install_seconds_1gib": 57.81,
+      "bios_install_seconds_4gib": 29.965,
+      "encrypted_install_seconds_4gib": 44.577,
+      "bios_boot_hn_seconds_4gib": 17.318,
+      "encrypted_prompt_seconds_4gib": 4.618,
+      "encrypted_password_to_hn_seconds_4gib": 8.299,
+      "project_checks": "31 unit tests and all independent keyboard/browser/API acceptance checks passed; three prior completed project sources reused, game agent ran again.",
+      "dsh_checks": "Three fresh default-OpenCode turns passed: HTML viewer edit/reload, CSV tool, game play/pause/reset/export.",
+      "visual_review": "Inspected actual welcome, installer, first typed reply, masked disk unlock, installed home, game, mobile website and DSH game-viewer screenshots."
+    },
+    "mac_compatibility": {
+      "verified_utc": "2026-10-03T12:00:41.137169+00:00",
+      "host_model": "Mac14,6",
+      "host_cpu": "Apple M2 Max",
+      "host_architecture": "arm64",
+      "iso_architecture": "x86_64",
+      "native_iso_install": "unsupported on this Apple Silicon Mac",
+      "native_app_and_tui": "macOS binaries available for arm64 and x64",
+      "vm_status": "Earlier emulation rendered a browser project, then reboot checks failed with guest soft-lockups. Preview 4 full Mac VM experience unverified."
     }
   },
   "previous_goal_turn_classification": {

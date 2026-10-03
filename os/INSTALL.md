@@ -1,172 +1,166 @@
 # Install Harness on a ThinkPad
 
-These instructions are for **0.1.0-preview.3**, using a Mac to prepare the USB.
-The USB boots a live system first. It changes the ThinkPad's disk only after you
-choose **Erase and install** in the installer.
+These instructions are for **0.1.0-preview.4**, using a Mac to prepare the USB.
+The USB starts a live session. Installation begins only when you choose **Install**
+in the installer; it erases the entire selected disk.
 
 ## 1. Prepare
 
-- An x86-64 Intel or AMD ThinkPad. This image does not support a 32-bit-only CPU.
+- An x86-64 Intel or AMD ThinkPad. A 32-bit-only CPU is not supported.
 - A USB stick of at least 4 GB. Flashing replaces its contents.
-- An internal disk of at least 12 GiB, with anything important backed up elsewhere.
-  Installation erases the **entire selected disk**, including another OS.
-- AC power. Ethernet is useful for the first test; installation itself works offline.
+- An internal disk of at least 12 GiB, with important files backed up elsewhere.
+- AC power. Installation works offline; trying a cloud agent needs a connection.
 
-Start with 2 GiB RAM or more. The earlier preview passed base VM checks at 1 GiB,
-but that did not establish comfortable browser or concurrent agent use at 1 GiB.
-A user has installed preview 2 on a ThinkPad and booted hn with the USB removed.
-Further hardware issues are being investigated; Wi-Fi and suspend remain unverified.
+Start with 2 GiB RAM or more. This preview passed installation, reboot, recovery
+and a first OpenCode conversation in 1 GiB VMs. Allow more memory for browser
+tabs, concurrent agents and local models.
+Preview 2 was installed and booted on a physical ThinkPad. Wi-Fi, suspend and GPU
+compute still need testing on the actual hardware.
 
 ## 2. Download and verify on the Mac
 
-From the [preview 3 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.3),
+From the [preview 4 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.4),
 download both files into the same folder:
 
-- `programmer-os-0.1.0-preview.3-x86_64.iso`
-- `programmer-os-0.1.0-preview.3-x86_64.iso.sha256`
+- `harness-0.1.0-preview.4-x86_64.iso`
+- `harness-0.1.0-preview.4-x86_64.iso.sha256`
 
 If they are in Downloads, open Terminal and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c programmer-os-0.1.0-preview.3-x86_64.iso.sha256
+shasum -a 256 -c harness-0.1.0-preview.4-x86_64.iso.sha256
 ```
 
-The result must say `programmer-os-0.1.0-preview.3-x86_64.iso: OK`.
-If it does not, stop and download again.
+The result must say `harness-0.1.0-preview.4-x86_64.iso: OK`.
+If it does not, download the files again before flashing.
 
 ## 3. Flash the USB
 
-1. Install and open [balenaEtcher](https://etcher.balena.io/).
+1. Open [balenaEtcher](https://etcher.balena.io/).
 2. Choose **Flash from file** and select the ISO.
 3. Choose **Select target** and select your USB by its name and capacity.
-4. Choose **Flash**. If Etcher requests administrator authentication, enter your
-   Mac login password in its macOS dialog. Let validation finish.
+4. Choose **Flash**. If macOS asks for administrator authentication, enter your
+   Mac password in its dialog. Let Etcher finish validation.
 5. Eject the USB.
 
-Use the image writer; copying the ISO onto a formatted USB does not make the
-bootable installation media. If macOS says the flashed disk is unreadable, choose
-**Ignore** or **Eject**, not Initialize. The Linux partitions are expected.
+Use an image writer; copying the ISO onto a formatted USB does not create bootable
+installation media. If macOS calls the flashed disk unreadable, choose **Ignore**
+or **Eject**. Do not initialize it.
 
 ## 4. Boot the ThinkPad from USB
 
 1. Shut down the ThinkPad and insert the USB.
 2. Power on and tap **F12** at the Lenovo logo. Depending on the model, use
    **Fn+F12**, or **Enter** first and then **F12**.
-3. Select the USB. Prefer its UEFI entry when available; the image also supports
-   legacy BIOS boot.
+3. Select the USB. Prefer its UEFI entry when available; legacy BIOS also works.
 4. If firmware rejects the image, enter setup with **F1** and disable **Secure
    Boot**. This preview is unsigned. Leave TPM enabled.
-5. Choose the default Programmer OS boot entry and wait for hn.
+5. Choose the default **Harness** boot entry.
 
 The exact menu wording varies by model. See Lenovo's
 [boot-menu instructions](https://docs.lenovocdrt.com/ref/bios/startup_menu/).
-If the USB is absent from the menu, try another USB port and check that USB boot
-is enabled in firmware.
+If the USB is absent, try another USB port and check that USB boot is enabled.
+
+The welcome screen offers **Enter — Install Harness** and **T — Try without
+installing**. No account or password is needed to use the live session. Work in
+the USB session is temporary and is not copied during installation.
 
 ## 5. Install
 
-In hn, press **Ctrl+B**, release both keys, then press **N** and choose **Terminal**.
-Run:
+Press **Enter** on the welcome screen. You do not need to open a terminal or type
+a command. The form has four fields:
 
-```sh
-sudo hn-os install
-```
+1. **Disk:** press Enter, choose the internal disk by its model and capacity, and
+   press Enter again. The live USB is excluded from the choices.
+2. **Encryption:** enabled initially. Use Space to change it if needed.
+3. **Password:** enter the password for your new system.
+4. **Repeat password:** enter it again.
 
-**Preview 2 workaround:** if this reports `Live system payload is missing` after
-booting the USB, the live image may have been copied into RAM. Run:
+Use Tab or the arrow keys to move between fields. This preview uses a **US keyboard
+layout**, including at disk unlock. Passwords cannot be empty; there is no minimum
+length restriction.
+
+Check the selected disk, then choose **Install** and press Enter. **This immediately
+erases that disk. There is no second confirmation screen.** Choosing a disk alone
+does not start installation. Esc leaves the picker or cancels the main form.
+
+The account and computer name are set to **`me@harness`**. Installation works offline.
+When **Harness is installed.** appears, choose **Shut down**. Once the ThinkPad is
+off, remove the USB and power it on.
+
+While trying the live system, **Ctrl+B**, then **I** opens the same installer.
+The equivalent terminal command is `sudo harness install`.
+
+## 6. First boot
+
+With encryption enabled, the Harness logo appears with **Enter your password**.
+Enter the installation password. Harness then opens without another account
+setup or login prompt. With encryption disabled, log in as **`me`** using that
+password.
+
+The password initially protects both the account and, when enabled, the encrypted
+disk. Changing the account password later does not change the disk password.
+There is no cloud account that resets the disk password.
+
+On the empty home screen, press **Enter** to start OpenCode. If there is no network
+connection, the keyboard network picker opens first. Select your Wi-Fi network
+and enter its password there. **Ctrl+B**, then **W** opens network setup from any
+pane. Ethernet connects automatically when available.
+
+OpenCode is already installed and uses its upstream defaults. Available models
+may change. Other agents install when selected and follow their own account and
+model setup. A Linux account does not sign you into an agent provider.
+
+## 7. Use it
+
+**Super** means the Windows-logo key on a typical ThinkPad. For a Ctrl+B shortcut,
+press Ctrl+B, release both keys, then press the indicated letter. Capital letters
+below mean **Shift + letter**.
+
+| Keys or command | Action |
+| --- | --- |
+| Ctrl+B, then N | New Harness: choose an agent |
+| Ctrl+B, then T | New terminal: open a shell directly |
+| Ctrl+B, then W | Connect to Wi-Fi |
+| Super+B | Open/focus Chromium, or return to Harness |
+| Super+Enter | Focus Harness |
+| Super+L | Lock; unlock with the account password |
+| `hn-browser http://localhost:3000` | Open a local project in the browser |
+| `sudo systemctl poweroff` | Shut down |
+
+Claude Code, Codex, OpenCode and pi each run in their own pane. Let the agent
+install the tools the project needs. Save work under `~/Projects`.
+
+## 8. First manual test
+
+1. Boot with the USB removed. Confirm disk unlock and the Harness home screen.
+2. Connect Wi-Fi, open a terminal, type a command, and exit with Ctrl+D.
+3. Start OpenCode and ask it to build a small website in `~/Projects/hello`, run
+   its server, and give you the address. Open it with `hn-browser ADDRESS`.
+4. Ask an agent to build and test a command-line program, installing tools as needed.
+5. Switch between Harness and the browser. Lock and unlock the computer.
+6. Reboot. Confirm that the files remain and Harness opens again.
+7. Try brightness keys, lid-close/suspend and resume. Report failures with the
+   ThinkPad model; these need physical testing.
+
+Measure installation from pressing Install to the completion screen, separately
+from flashing and filling in the form. For encrypted boot, record the time to the
+unlock screen and the time from submitting the password to Harness separately.
+
+If something fails, keep the exact error and ThinkPad model. `hn-os status` and
+`hn-os measure` provide system information. Keep passwords and agent tokens private.
+The [OS README](https://github.com/autonomous-ai/openharness/blob/os/boot-to-hn/os/README.md#updates-and-recovery) describes updates and recovery.
+
+## Older USB images
+
+Preview 2 may report `Live system payload is missing` after copying the image into
+RAM. If `/run/archiso/copytoram/airootfs.sfs` exists, its workaround is:
 
 ```sh
 sudo hn-os install --source /run/archiso/copytoram/airootfs.sfs
 ```
 
-Use this path only when that file exists. In preview 2's RAM mode, the USB can
-also appear in the disk list: select the ThinkPad's internal disk by model and
-capacity. Preview 3 detects both locations and excludes the boot USB. If preview 2
-is already installed and boots normally, this fix does not require reinstalling it.
-
-The live session does not need an account password. In the form:
-
-1. Press **Enter** on Disk, use the arrow keys to choose the ThinkPad's internal
-   disk by model and capacity, then press **Enter**. Do not choose another attached
-   drive. Preview 3 excludes the live USB from installation targets in both boot modes.
-2. Leave **Encrypt disk** checked, or use **Tab** and **Space** to uncheck it.
-3. Enter your password twice. Use at least eight characters. This preview uses a
-   **US keyboard layout**, including at the boot unlock prompt.
-4. Choose **Continue**. Review the disk model, capacity and device identifier.
-5. **Back** is selected initially. Press **Tab** to select **Erase and install**,
-   then **Enter** when the target is correct.
-
-No disk-path, username or computer-name typing is needed. The account will be
-**`me@harness`**. Selecting a disk or choosing Continue does not write to it.
-Esc goes back from the picker or confirmation, and cancels from the main form.
-
-Wait for `Installed in ... Shut down, remove the USB, and boot the disk.`
-Then run:
-
-```sh
-sudo systemctl poweroff
-```
-
-Once the ThinkPad is off, remove the USB and power it on.
-
-## 6. First boot
-
-With encryption enabled, type the installation password at the disk-unlock prompt.
-The machine then enters hn without another account-creation screen or login prompt.
-With encryption disabled, log in as **`me`** using that password.
-
-The password initially protects both your local account and, when enabled, the
-encrypted disk. Later account-password changes do not automatically change the
-disk password. Keep the disk password: there is no cloud account that resets it.
-
-Connect Ethernet, or open a Terminal pane and connect Wi-Fi:
-
-```sh
-nmcli device wifi list
-sudo nmcli --ask device wifi connect "YOUR WI-FI NAME"
-```
-
-The second command asks for credentials without putting them in shell history.
-If no wireless device appears, retain the output of `nmcli device status` for
-hardware diagnosis. Installation does not require a connection; downloading agents
-and using cloud models do.
-
-## 7. Use it
-
-**Super** means the Windows-logo key on a typical ThinkPad.
-
-| Keys or command | Action |
-| --- | --- |
-| Ctrl+B, then N | Start an agent or ordinary terminal pane |
-| Super+B | Open/focus Chromium, or switch back to hn |
-| Super+Enter | Focus hn |
-| Super+L | Lock the session; unlock with your account password |
-| `hn-browser http://localhost:3000` | View a local project at that address |
-| `sudo systemctl poweroff` | Shut down |
-
-Choose Claude Code, Codex, OpenCode or pi from hn. The first use installs the
-selected tool and follows its setup. Agent accounts and model access are separate
-from your local Linux account. Toolchains are installed when a project needs them.
-Save projects under `~/Projects`.
-
-## 8. A useful first manual test
-
-1. Boot from the internal disk with the USB removed. Confirm password unlock and hn.
-2. Open a terminal, type normally, connect the network, and switch to Chromium and back.
-3. Start an agent and ask it to create a small website in `~/Projects/hello`, run a
-   local server, and tell you the address. Open it with `hn-browser ADDRESS`.
-4. Ask the agent to create and test a small command-line program, installing its
-   compiler or runtime if needed.
-5. Reboot. Confirm the files remain and the machine returns to hn.
-6. Try brightness keys, locking, lid-close/suspend and resume. These need physical
-   hardware testing; report any failures with the ThinkPad model.
-
-For timing, record installation after the erase confirmation separately from USB
-flashing and prompts. Record boot to the unlock prompt and unlock to hn separately,
-so time spent entering a password is not counted as OS startup.
-
-If something fails, keep the exact error and ThinkPad model. In a working terminal,
-`hn-os status` and `hn-os measure` provide system/session information. Do not share
-passwords or agent tokens. The [OS README](README.md#updates-and-recovery) documents
-updates and recovery using the retained USB.
+Preview 2 can also list the boot USB as a target in RAM mode; choose the internal
+disk carefully. Preview 3 and later detect both payload locations and exclude the
+boot USB. A working installed system does not need reinstalling solely for that fix.

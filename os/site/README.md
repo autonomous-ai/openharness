@@ -15,16 +15,19 @@ any static host. Asset paths are relative so a subdirectory works too.
 
 ## Content and assets
 
-- Download links target the verified `os-v0.1.0-preview.3` release. Update the
+- Download links target `os-v0.1.0-preview.4`. Update the
   version, measurements, evidence links, and screenshots together for a release.
 - `assets/hn.png` is the actual hn screen from image validation run
-  [37107310576](https://github.com/autonomous-ai/openharness/actions/runs/37107310576).
+  [37120135497](https://github.com/autonomous-ai/openharness/actions/runs/37120135497).
 - `assets/signal-run.png` is actual project output from the successful workload run
-  [37086423516](https://github.com/autonomous-ai/openharness/actions/runs/37086423516).
-  It covers preview 1 and loads lazily inside a native HTML disclosure.
-- Current footprint, installation and boot measurements cover preview 3 USB tests
-  at 4 GiB RAM. The separate 2 GiB measurements link to the same image’s optical
-  test run through the OS README. The 1 GiB, real-model project and DSH claims are labeled as preview 1 evidence.
+  [37120135497](https://github.com/autonomous-ai/openharness/actions/runs/37120135497).
+  It covers preview 4 and loads lazily inside a native HTML disclosure.
+- Footprint, installation and boot measurements cover preview 4 USB tests at
+  4 GiB RAM. The separate 1 GiB measurements link to the same image’s test run
+  through the OS README. All project acceptance checks reran on this image;
+  three completed project sources were retained and the game agent ran again.
+  [Three fresh DSH exercises](https://github.com/autonomous-ai/openharness/actions/runs/37120138348)
+  cover this image and its shared viewers too.
 - Geist and Geist Mono are the repository's existing fonts, converted to WOFF.
   Their SIL Open Font License is included in `assets/OFL.txt`.
 - The prompt mark is a small local SVG. There are no remote asset requests.
