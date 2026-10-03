@@ -155,6 +155,9 @@ pub fn fill(app: &App, picker: &mut Picker) {
         },
     }
     rows.push(Row::new("account:back", if matches!(app.account.status, Status::SignedIn { .. }) { "Back to workspace" } else { "Keep using locally" }));
+    // These are page actions, not a growing search result list. Keep Back last
+    // across sign-in phases; set_rows still preserves the selected action by ID.
+    picker.rows.clear();
     picker.set_rows(rows);
     picker.busy = matches!(app.account.phase, Phase::Starting | Phase::Completing | Phase::Committed).then(|| "waiting".into());
 }
