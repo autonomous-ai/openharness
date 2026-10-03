@@ -9,8 +9,8 @@ def exercise(vm, manifest):
     # public preview. It has no updater; this is its one-time migration path.
     vm.command('mkdir -p /tmp/system-channel; cp /usr/lib/harness-os/release_update.py '
                '/usr/lib/harness-os/runtime_update.py /tmp/system-channel/')
-    vm.command('cp /tmp/update-bundle/package-manifest.json /tmp/fast-updates/; '
-               'cp /tmp/update-bundle/' + shlex.quote(manifest['package']['name']) + ' /tmp/fast-updates/')
+    vm.command('cp /home/me/update-bundle/package-manifest.json /tmp/fast-updates/; '
+               'cp /home/me/update-bundle/' + shlex.quote(manifest['package']['name']) + ' /tmp/fast-updates/')
     builder = '''import hashlib, json, pathlib
 root = pathlib.Path('/tmp/fast-updates')
 manifest = json.loads((root/'package-manifest.json').read_text())

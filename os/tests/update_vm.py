@@ -59,15 +59,17 @@ def main():
         vm.login_installed(config)
         receipt['checks'].append('Published preview 4 installs offline and boots from its encrypted internal disk')
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
-        vm.command('mkdir /tmp/update-bundle')
+        # Reuse the exact bundle after encrypted reboot; /tmp is intentionally
+        # volatile on the installed system.
+        vm.command('mkdir /home/me/update-bundle')
         url = f'http://10.0.2.2:{server.server_port}'
         for name in [p.name for p in served.iterdir() if p.is_file()]:
             vm.command('curl --fail --silent --show-error --max-time 90 ' + shlex.quote(url + '/' + name) +
-                       ' -o ' + shlex.quote('/tmp/update-bundle/' + name), timeout=100)
-        vm.command('cd /tmp/update-bundle && sha256sum -c SHA256SUMS')
+                       ' -o ' + shlex.quote('/home/me/update-bundle/' + name), timeout=100)
+        vm.command('cd /home/me/update-bundle && sha256sum -c SHA256SUMS')
         # The actual update/rollback must not require a package repository or network.
         vm.command('sudo nmcli networking off')
-        output, status = vm.command('python3 /tmp/update-bundle/update_guest.py /tmp/update-bundle', timeout=600, check=False)
+        output, status = vm.command('python3 /home/me/update-bundle/update_guest.py /home/me/update-bundle', timeout=600, check=False)
         (folder / 'update.log').write_text(output)
         assert status == 0, 'Update acceptance failed; see update.log'
         marker = 'HN_UPDATE_ACCEPTANCE='
