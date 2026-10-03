@@ -144,6 +144,9 @@ pub struct Menu {
     /// A prompt's completion menu (status_prompt_complete_list_menu): the prompt under it, back
     /// when it closes, the chosen word put in it.
     pub complete: Option<Box<Complete>>,
+    /// Harness menus reflow from their original labels when the terminal changes size.
+    /// Explicit tmux display-menu coordinates keep tmux's existing behavior.
+    pub responsive: Option<Box<crate::workspace_menu::Layout>>,
 }
 
 /// What a completion menu completes: the prompt, the words its items stand for, the flag they

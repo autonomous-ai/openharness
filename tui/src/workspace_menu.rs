@@ -5,6 +5,9 @@ use crate::app::App;
 use crate::modal::{Menu, MenuItem, Modal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+#[derive(Clone, Debug)]
+pub struct Layout { items: Vec<MenuItem>, anchor: Option<(u16, u16)> }
+
 /// Labels from a machine or conversation are text, not tmux format instructions.
 pub fn literal(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect::<String>().replace('#', "##")
@@ -20,21 +23,43 @@ pub fn note(label: &str) -> MenuItem {
 
 /// The menu stays inside the terminal. Callers with long lists use a picker instead.
 pub fn open(app: &mut App, title: &str, items: Vec<MenuItem>, at: Option<(u16, u16)>, choice: Option<usize>) -> bool {
-    if app.size.0 < 12 || app.size.1 < items.len() as u16 + 2 {
-        app.say("Make the terminal larger to show this menu", crate::theme::WARN);
-        return false;
-    }
-    let width = items.iter().map(|i| crate::draw::format_width(&i.label) as usize + if i.key.is_empty() { 0 } else { i.key.width() + 3 })
-        .chain([title.width()]).max().unwrap_or(1).min(app.size.0.saturating_sub(4) as usize) as u16;
-    let (items, choice) = wrap_notes(items, choice, width as usize, app.size.1.saturating_sub(2) as usize);
-    let height = items.len() as u16 + 2;
-    let (x, y) = at.unwrap_or(((app.size.0 - width - 4) / 2, (app.size.1 - height) / 2));
+    let layout = Layout { items:items.clone(), anchor:at };
+    let mut menu = Menu { title:literal(title), items, choice, x:0, y:0, width:0,
+        stay_open:true, no_mouse:false, mouse:None, tree:None, complete:None, responsive:Some(Box::new(layout)) };
+    if !fit(&mut menu, app.size) { app.say("Make the terminal larger to show this menu", crate::theme::WARN); return false }
     app.toast = None;
-    app.modal = Some(Modal::Menu(Menu {
-        title: literal(title), items, choice, x: x.min(app.size.0 - width - 4), y: y.min(app.size.1 - height), width,
-        stay_open: true, no_mouse: false, mouse: None, tree: None, complete: None,
-    }));
+    app.modal = Some(Modal::Menu(menu));
     true
+}
+
+fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
+    let Some(layout) = &menu.responsive else { return true };
+    let actions = layout.items.iter().filter(|i| !(i.disabled && i.command.is_empty() && !i.separator)).count();
+    if size.0 < 12 || size.1 < actions as u16 + 2 { return false }
+    let choice = menu.choice.and_then(|at| menu.items.get(at)).and_then(|chosen| layout.items.iter().position(|i|
+        !i.disabled && !i.separator && i.command == chosen.command && i.key == chosen.key));
+    let width = layout.items.iter().map(|i| crate::draw::format_width(&i.label) as usize + if i.key.is_empty() { 0 } else { i.key.width() + 3 })
+        .chain([crate::draw::format_width(&menu.title) as usize]).max().unwrap_or(1).min(size.0.saturating_sub(4) as usize) as u16;
+    let (items, choice) = wrap_notes(layout.items.clone(), choice, width as usize, size.1.saturating_sub(2) as usize);
+    let height = items.len() as u16 + 2;
+    let (x, y) = layout.anchor.unwrap_or(((size.0 - width - 4) / 2, (size.1 - height) / 2));
+    menu.x = x.min(size.0 - width - 4); menu.y = y.min(size.1 - height);
+    menu.width = width; menu.items = items; menu.choice = choice;
+    true
+}
+
+pub fn resize(app: &mut App) {
+    if let Some(Modal::Menu(menu)) = &mut app.modal {
+        if !fit(menu, app.size) {
+            app.modal = None;
+            app.say("Make the terminal larger to show this menu", crate::theme::WARN);
+        }
+    }
+}
+
+pub fn replace_items(menu: &mut Menu, items: Vec<MenuItem>, size: (u16, u16)) -> bool {
+    if let Some(layout) = &mut menu.responsive { layout.items = items; fit(menu, size) }
+    else { menu.items = items; true }
 }
 
 fn wrap_notes(items: Vec<MenuItem>, choice: Option<usize>, width: usize, height: usize) -> (Vec<MenuItem>, Option<usize>) {
@@ -70,6 +95,28 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resize_reflows_diagnostics_without_changing_the_confirmed_action() {
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19799, tx, (160, 32));
+        let text = "Could not save this conversation because the machine disconnected. Wait for it to reconnect and try again.";
+        assert!(open(&mut app, "Stop harness", vec![note(text), item("Cancel", "Escape", "cancel"), item("Stop", "s", "stop")], None, Some(1)));
+        for size in [(40, 8), (160, 32)] {
+            app.size = size; resize(&mut app);
+            let Some(Modal::Menu(menu)) = &app.modal else { panic!("lost confirmation"); };
+            assert_eq!(menu.items[menu.choice.unwrap()].command, "cancel");
+            assert_eq!(menu.items.last().unwrap().command, "stop");
+            assert!(menu.x + menu.width + 4 <= size.0 && menu.y + menu.items.len() as u16 + 2 <= size.1);
+        }
+        let Some(Modal::Menu(menu)) = &mut app.modal else { unreachable!() };
+        assert_eq!(menu.items[0].label, text, "enlarging restores the original diagnostic");
+        menu.responsive = None;
+        let position = (menu.x, menu.y, menu.width);
+        app.size = (40, 8); resize(&mut app);
+        let Some(Modal::Menu(menu)) = &app.modal else { unreachable!() };
+        assert_eq!((menu.x, menu.y, menu.width), position, "explicit tmux menus retain their coordinate behavior");
+    }
+
     #[test]
     fn long_diagnostic_wraps_with_cancel_selected_and_stop_always_reachable() {
         let notes = vec![note("Could not save 界面 because the machine disconnected. #[fg=red] is literal."), item("Cancel", "Escape", "cancel"), item("Stop", "s", "stop")];

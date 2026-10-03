@@ -219,8 +219,11 @@ pub fn refresh_workspace(app: &mut App) {
     if matches!(&app.modal, Some(crate::modal::Modal::Menu(m)) if m.title == "Harness" && m.items.first().is_some_and(|i| i.command == "new-harness")) {
         let items = workspace_items(app);
         if let Some(crate::modal::Modal::Menu(m)) = &mut app.modal {
-            m.items = items;
-            m.y = m.y.min(app.size.1.saturating_sub(m.items.len() as u16 + 2));
+            if !menu::replace_items(m, items, app.size) {
+                app.modal = None;
+                app.say("Make the terminal larger to show this menu", theme::WARN);
+                return;
+            }
             if m.choice.is_some_and(|n| n >= m.items.len()) { m.choice = Some(m.items.len().saturating_sub(1)); }
         }
     } else { app.controls.workspace_open = false; }
@@ -301,6 +304,20 @@ mod tests {
     use super::*;
     use crossterm::event::{Event, KeyModifiers};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn workspace_menu_stays_visible_when_the_terminal_shrinks() {
+        let mut app = app(170);
+        workspace_menu(&mut app, Some((160, 30)));
+        crate::input::handle(&mut app, Event::Resize(40, 12));
+        let Some(crate::modal::Modal::Menu(menu)) = &app.modal else { panic!("workspace menu disappeared"); };
+        assert!(menu.x + menu.width + 4 <= 40, "menu extends beyond the resized terminal");
+        assert!(menu.y + menu.items.len() as u16 + 2 <= 12);
+        let row = menu.items.iter().position(|item| item.command == "account").unwrap();
+        let (x, y) = (menu.x + 3, menu.y + 1 + row as u16);
+        crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind:MouseEventKind::Down(MouseButton::Left), column:x, row:y, modifiers:KeyModifiers::NONE }));
+        assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind:crate::modal::PickerKind::Account, .. })));
+    }
 
     #[tokio::test]
     async fn workspace_menu_mouse_actions_reach_their_registered_commands() {

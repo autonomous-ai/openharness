@@ -3471,7 +3471,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let from = (starting as usize).min(n - 1);
                 (0..n).map(|k| (from + k) % n).find(|k| !items[*k].disabled && !items[*k].separator)
             };
-            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None }));
+            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None, responsive: None }));
             app.wait_cli = app.capture.is_some();
         }
         "customize-mode" => {
