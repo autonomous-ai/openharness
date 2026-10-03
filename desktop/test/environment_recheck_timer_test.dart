@@ -52,6 +52,20 @@ class _ScriptedProvisioner extends EnvironmentProvisioner {
   }
 }
 
+/// What a Linux host without tmux is offered: a package install that needs a
+/// password, so setup waits for the person's Install action instead of starting.
+const _linuxHostPlan = [
+  EnvironmentPlanItem(
+    step: EnvironmentStep.tmux,
+    title: 'Linux host dependencies',
+    detail: 'tmux · one apt transaction',
+    command: 'sudo apt-get install -y tmux',
+    requiresTerminal: true,
+    packages: ['tmux'],
+  ),
+  EnvironmentPlanItem.harnessCli,
+];
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -79,6 +93,7 @@ void main() {
           step: EnvironmentStepStatus.failed,
       },
       phase: EnvironmentSetupPhase.review,
+      plan: _linuxHostPlan,
     );
     final waiting = review.copyWith(
       phase: EnvironmentSetupPhase.waitingForTerminal,
@@ -126,6 +141,7 @@ void main() {
         EnvironmentStep.tmux: EnvironmentStepStatus.failed,
       },
       phase: EnvironmentSetupPhase.review,
+      plan: _linuxHostPlan,
     );
     final waiting = review.copyWith(
       phase: EnvironmentSetupPhase.waitingForTerminal,

@@ -245,11 +245,14 @@ both themes and enlarged text at the minimum window size without running an inst
 
 Read-only dependency probes own their subprocesses and have a ten-second deadline covering startup,
 exit, and output-pipe closure. A timeout reports a failed check, not a missing tool; Retry after the
-initial check stays read-only. Only an explicit install action permits automatic installation to
-continue after a Terminal handoff, and a failed recheck stops that continuation. Readiness requires
-the final ready phase and every required step, so old successful step values cannot flash a ready
-screen during a new verification. The preflight status is a live region and uses a static waiting
-icon when Reduce Motion is enabled.
+initial check probes read-only first. When every item in the probed plan installs in-app (no
+`requiresTerminal` — always the case on macOS), the app installs it straight after the probe, at
+launch and after an automatic-mode Retry, without showing the review or its Install button; a plan
+that needs Terminal (Linux apt) waits on that button, and manual mode never installs. Only an
+install the app or the person started may continue after a Terminal handoff, and a failed recheck
+stops that continuation. Readiness requires the final ready phase and every required step, so old
+successful step values cannot flash a ready screen during a new verification. The preflight status
+is a live region and uses a static waiting icon when Reduce Motion is enabled.
 
 ### Boot and state
 

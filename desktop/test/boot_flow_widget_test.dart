@@ -282,25 +282,99 @@ void main() {
     },
   );
 
+  test('boot installs an in-app plan without asking', () async {
+    final missing = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      message: 'Review what Harness will install before continuing.',
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final ready = EnvironmentReadiness(
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.ready,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([missing, ready]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    );
+    final painted = <(AppStatus, EnvironmentSetupPhase)>[];
+    app.addListener(
+      () => painted.add((app.status, app.environmentReadiness.phase)),
+    );
+
+    await app.bootstrap();
+
+    // The launch probe is still read-only; the install follows it unasked.
+    expect(provisioner.installCalls, [isFalse, isTrue]);
+    // The install resumes from the progress screen, not from the review: no
+    // review copy and no red "Missing" on the row being installed.
+    final resumed = provisioner.resumeFromCalls.last!;
+    expect(resumed.phase, EnvironmentSetupPhase.installing);
+    expect(resumed.message, isNot(missing.message));
+    expect(
+      resumed.steps[EnvironmentStep.harness],
+      EnvironmentStepStatus.running,
+    );
+    expect(resumed.steps[EnvironmentStep.tmux], EnvironmentStepStatus.ready);
+    expect(app.environmentInstallRequested, isTrue);
+    // A signed-out DESKTOP window lands on the desk as a guest: everything on this
+    // computer is served by the daemon over the loopback, and the sign-in is a sheet
+    // raised when the person reaches for another machine.
+    expect(app.status, AppStatus.authenticated);
+    expect(app.isGuest, isTrue);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.ready);
+    // The review — the screen with the Install button — is never painted.
+    expect(
+      painted,
+      isNot(
+        contains((
+          AppStatus.preparingEnvironment,
+          EnvironmentSetupPhase.review,
+        )),
+      ),
+    );
+    expect(
+      painted,
+      isNot(
+        contains((AppStatus.preparingEnvironment, EnvironmentSetupPhase.ready)),
+      ),
+    );
+    app.dispose();
+  });
+
   test(
-    'boot probes read-only and installs only after explicit confirmation',
+    'boot waits for the Install action when the plan needs Terminal',
     () async {
-      final missing = EnvironmentReadiness(
+      final linuxReview = EnvironmentReadiness(
         steps: {
           EnvironmentStep.harness: EnvironmentStepStatus.failed,
-          EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+          EnvironmentStep.tmux: EnvironmentStepStatus.failed,
         },
         phase: EnvironmentSetupPhase.review,
+        plan: [
+          EnvironmentPlanItem(
+            step: EnvironmentStep.tmux,
+            title: 'Linux host dependencies',
+            detail: 'tmux · one apt transaction',
+            command: 'sudo apt-get install -y tmux',
+            requiresTerminal: true,
+            packages: ['tmux'],
+          ),
+          EnvironmentPlanItem.harnessCli,
+        ],
       );
-      final ready = EnvironmentReadiness(
-        steps: {
-          for (final step in EnvironmentStep.values)
-            step: EnvironmentStepStatus.ready,
-        },
-        phase: EnvironmentSetupPhase.ready,
-        mode: EnvironmentSetupMode.automatic,
-      );
-      final provisioner = _ScriptedEnvironmentProvisioner([missing, ready]);
+      final provisioner = _ScriptedEnvironmentProvisioner([linuxReview]);
       final app = _GuestApp(
         config: AppConfig.dev,
         authSession: AuthSession(),
@@ -310,34 +384,82 @@ void main() {
       );
 
       await app.bootstrap();
-      expect(provisioner.installCalls, [isFalse]);
-      expect(app.status, AppStatus.preparingEnvironment);
 
-      app.selectEnvironmentSetupMode(EnvironmentSetupMode.automatic);
-      final painted = <(AppStatus, EnvironmentSetupPhase)>[];
-      app.addListener(
-        () => painted.add((app.status, app.environmentReadiness.phase)),
-      );
-      await app.startEnvironmentSetup();
-      expect(provisioner.installCalls, [isFalse, isTrue]);
-      // A signed-out DESKTOP window lands on the desk as a guest: everything on this
-      // computer is served by the daemon over the loopback, and the sign-in is a sheet
-      // raised when the person reaches for another machine.
-      expect(app.status, AppStatus.authenticated);
-      expect(app.isGuest, isTrue);
-      expect(app.environmentReadiness.phase, EnvironmentSetupPhase.ready);
-      expect(
-        painted,
-        isNot(
-          contains((
-            AppStatus.preparingEnvironment,
-            EnvironmentSetupPhase.ready,
-          )),
-        ),
-      );
+      expect(provisioner.installCalls, [isFalse]);
+      expect(app.environmentInstallRequested, isFalse);
+      expect(app.status, AppStatus.preparingEnvironment);
+      expect(app.environmentReadiness.phase, EnvironmentSetupPhase.review);
       app.dispose();
     },
   );
+
+  test('a failed unattended install stops on the failure screen', () async {
+    final missing = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final failed = missing.copyWith(
+      phase: EnvironmentSetupPhase.failed,
+      mode: EnvironmentSetupMode.automatic,
+      failure: const EnvironmentFailure(
+        step: EnvironmentStep.harness,
+        title: 'Could not install Harness',
+        detail: 'Check your connection, then retry setup.',
+      ),
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([missing, failed]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    );
+
+    await app.bootstrap();
+
+    expect(provisioner.installCalls, [isFalse, isTrue]);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.failed);
+    expect(app.environmentInstallRequested, isTrue);
+    expect(app.environmentSetupInFlight, isFalse);
+    // No automatic retry loop: the next install waits for Retry.
+    expect(app.environmentRecheckPending, isFalse);
+    app.dispose();
+  });
+
+  test('Check again in manual setup never installs', () async {
+    final manualReview = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      mode: EnvironmentSetupMode.manual,
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([manualReview]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    )..status = AppStatus.preparingEnvironment;
+    app.environmentReadiness = manualReview;
+
+    await app.retryEnvironmentSetup();
+
+    expect(provisioner.installCalls, [isFalse]);
+    expect(app.environmentInstallRequested, isFalse);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.review);
+    app.dispose();
+  });
 
   test(
     'recheckEnvironmentStep succeeds and continues past environment setup',
@@ -1283,6 +1405,286 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
+
+  testWidgets(
+    'a failed install at launch leaves Retry and Switch to Manual usable',
+    (tester) async {
+      final missing = EnvironmentReadiness(
+        steps: {
+          EnvironmentStep.harness: EnvironmentStepStatus.failed,
+          EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+        },
+        phase: EnvironmentSetupPhase.review,
+        plan: [EnvironmentPlanItem.harnessCli],
+      );
+      final failed = missing.copyWith(
+        phase: EnvironmentSetupPhase.failed,
+        mode: EnvironmentSetupMode.automatic,
+        failure: const EnvironmentFailure(
+          step: EnvironmentStep.harness,
+          title: 'Setup could not finish',
+          detail: 'Check your connection, then retry setup.',
+        ),
+      );
+      final provisioner = _ScriptedEnvironmentProvisioner([missing, failed]);
+      final app = _GuestApp(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: ConfigStore(storage: _FakeKeyValueStore()),
+        cliLogin: _FakeCliLogin(loggedIn: false),
+        environmentProvisioner: provisioner,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWithValue(app)],
+          child: HarnessApp(authenticatedScreen: _swarm),
+        ),
+      );
+      await tester.pump();
+
+      await app.bootstrap();
+      await tester.pump();
+
+      // The window was mounted while the launch install ran; once it fails the
+      // person must be able to act on the failure without anything else
+      // nudging a rebuild.
+      expect(find.text('Install 1 tool'), findsNothing);
+      expect(find.text('Setup could not finish'), findsOneWidget);
+      final retry = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Retry'),
+      );
+      expect(retry.onPressed, isNotNull);
+      final manual = tester.widget<TextButton>(
+        find.widgetWithText(TextButton, 'Switch to Manual'),
+      );
+      expect(manual.onPressed, isNotNull);
+
+      // One click is one more install, and nothing runs on its own after it.
+      await tester.tap(find.widgetWithText(FilledButton, 'Retry'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 6));
+      expect(provisioner.installCalls, [false, true, true]);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  test('nothing re-enters setup while the launch install is running', () async {
+    final missing = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final ready = EnvironmentReadiness(
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.ready,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    final gate = Completer<void>();
+    final provisioner = _GatedInstallProvisioner(missing, ready, gate);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    );
+
+    final boot = app.bootstrap();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    // Mid-install: the progress screen, owned by the launch run.
+    expect(provisioner.installCalls, [false, true]);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.installing);
+    expect(app.environmentSetupInFlight, isTrue);
+    expect(app.environmentInstallRequested, isTrue);
+
+    await app.startEnvironmentSetup();
+    await app.retryEnvironmentSetup();
+    await app.recheckEnvironmentStep(EnvironmentStep.harness);
+    expect(provisioner.installCalls, [false, true]);
+
+    gate.complete();
+    await boot;
+    expect(provisioner.installCalls, [false, true]);
+    expect(app.status, AppStatus.authenticated);
+    expect(app.environmentSetupInFlight, isFalse);
+    app.dispose();
+  });
+
+  test('a Terminal plan stays on the review through Retry', () async {
+    final linuxReview = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.failed,
+      },
+      phase: EnvironmentSetupPhase.review,
+      plan: [
+        EnvironmentPlanItem(
+          step: EnvironmentStep.tmux,
+          title: 'Linux host dependencies',
+          detail: 'tmux · one apt transaction',
+          command: 'sudo apt-get install -y tmux',
+          requiresTerminal: true,
+          packages: ['tmux'],
+        ),
+        EnvironmentPlanItem.harnessCli,
+      ],
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([linuxReview]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    )..status = AppStatus.preparingEnvironment;
+    app.environmentReadiness = linuxReview.copyWith(
+      phase: EnvironmentSetupPhase.failed,
+      mode: EnvironmentSetupMode.automatic,
+    );
+
+    await app.retryEnvironmentSetup();
+
+    // Retry in automatic mode probes, finds a password-gated plan, and stops.
+    expect(provisioner.installCalls, [false]);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.review);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(app.environmentSetupInFlight, isFalse);
+    app.dispose();
+  });
+
+  test('a failed launch check never starts an install', () async {
+    final probeFailed = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.failed,
+      plan: [EnvironmentPlanItem.harnessCli],
+      failure: const EnvironmentFailure(
+        title: 'Checking this computer took too long',
+        detail: 'A required tool did not respond.',
+      ),
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([probeFailed]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    );
+
+    await app.bootstrap();
+
+    // Only a review of what is missing is installed; a check that did not
+    // finish waits for Retry.
+    expect(provisioner.installCalls, [isFalse]);
+    expect(app.environmentInstallRequested, isFalse);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(app.environmentReadiness.phase, EnvironmentSetupPhase.failed);
+    expect(app.environmentSetupInFlight, isFalse);
+    app.dispose();
+  });
+
+  test('an unattended install that ends waiting for Terminal polls, then carries on', () async {
+    final missing = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final waiting = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.needsTerminal,
+      },
+      phase: EnvironmentSetupPhase.waitingForTerminal,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    final ready = EnvironmentReadiness(
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.ready,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([
+      missing,
+      waiting,
+      ready,
+    ]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    );
+
+    await app.bootstrap();
+
+    // The install the app started hands off to Terminal like one the person
+    // started: it stays on the waiting screen and keeps polling.
+    expect(provisioner.installCalls, [isFalse, isTrue]);
+    expect(app.status, AppStatus.preparingEnvironment);
+    expect(
+      app.environmentReadiness.phase,
+      EnvironmentSetupPhase.waitingForTerminal,
+    );
+    expect(app.environmentInstallRequested, isTrue);
+    expect(app.environmentRecheckPending, isTrue);
+    expect(app.environmentSetupInFlight, isFalse);
+
+    await app.recheckEnvironmentStep(EnvironmentStep.tmux);
+
+    expect(provisioner.installCalls, [isFalse, isTrue, isFalse]);
+    expect(app.status, AppStatus.authenticated);
+    expect(app.environmentRecheckPending, isFalse);
+    app.dispose();
+  });
+}
+
+/// Probe answers [probed] at once; the install blocks on [gate] and then answers [done].
+class _GatedInstallProvisioner extends EnvironmentProvisioner {
+  _GatedInstallProvisioner(this.probed, this.done, this.gate)
+    : super(isMacOS: true);
+  final EnvironmentReadiness probed;
+  final EnvironmentReadiness done;
+  final Completer<void> gate;
+  final installCalls = <bool>[];
+
+  @override
+  Future<EnvironmentReadiness> ensureReady({
+    required void Function(EnvironmentReadiness value) onProgress,
+    EnvironmentReadiness? resumeFrom,
+    bool install = true,
+    EnvironmentSetupMode? mode,
+  }) async {
+    installCalls.add(install);
+    if (!install) {
+      onProgress(probed);
+      return probed;
+    }
+    onProgress(
+      (resumeFrom ?? probed).copyWith(phase: EnvironmentSetupPhase.installing),
+    );
+    await gate.future;
+    onProgress(done);
+    return done;
+  }
 }
 
 /// The screen the desktop app mounts once signed in — the argument `HarnessApp`

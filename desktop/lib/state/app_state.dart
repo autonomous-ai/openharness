@@ -3933,8 +3933,14 @@ class AppNotifier extends ChangeNotifier {
     environmentReadiness = EnvironmentReadiness.initial();
     notifyListeners();
     try {
-      // Always read-only here. Installation starts only after explicit confirmation in the wizard.
-      final result = await _runProvisioner(install: false);
+      // The probe is always read-only. What it finds missing is installed
+      // straight away when the whole plan runs in-app; only a plan that needs
+      // a password in Terminal waits on the wizard's Install action.
+      var result = await _runProvisioner(install: false);
+      if (!result.isReady && _canInstallUnattended(result, mode: null)) {
+        status = AppStatus.preparingEnvironment;
+        result = await _installUnattended(result);
+      }
       if (!result.isReady) {
         status = AppStatus.preparingEnvironment;
         notifyListeners();
@@ -3945,6 +3951,50 @@ class AppNotifier extends ChangeNotifier {
     } finally {
       _environmentSetupInFlight = false;
     }
+  }
+
+  /// Whether [probed] can be installed with nobody at the keyboard: it is a
+  /// review of what is missing, the person has not chosen manual setup, and
+  /// no step needs a password in Terminal (Linux apt). On macOS every step is
+  /// in-app, so a fresh Mac never stops on an Install button.
+  bool _canInstallUnattended(
+    EnvironmentReadiness probed, {
+    required EnvironmentSetupMode? mode,
+  }) =>
+      probed.phase == EnvironmentSetupPhase.review &&
+      (mode ?? probed.mode) != EnvironmentSetupMode.manual &&
+      !probed.plan.any((item) => item.requiresTerminal);
+
+  /// The install [startEnvironmentSetup] runs, for a caller that already holds
+  /// [_environmentSetupInFlight].
+  Future<EnvironmentReadiness> _installUnattended(
+    EnvironmentReadiness probed,
+  ) async {
+    _environmentInstallRequested = true;
+    // Straight to the install progress: the review and its Install button
+    // are never painted for a step nobody needs to approve. This is also the
+    // state the provisioner resumes from — it re-probes every step — so its
+    // first frame does not bring back the review's copy and red "Missing".
+    final planned = {for (final item in probed.plan) item.step};
+    environmentReadiness = probed.copyWith(
+      phase: EnvironmentSetupPhase.installing,
+      mode: EnvironmentSetupMode.automatic,
+      message: 'Installing only the missing required tools.',
+      steps: {
+        for (final entry in probed.steps.entries)
+          entry.key: planned.contains(entry.key)
+              ? EnvironmentStepStatus.running
+              : entry.value,
+      },
+    );
+    notifyListeners();
+    final result = await _runProvisioner(
+      resumeFrom: environmentReadiness,
+      install: true,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    if (!result.isReady) _scheduleEnvironmentRecheck();
+    return result;
   }
 
   /// Shared with [_prepareEnvironment]: runs the provisioner, updates
@@ -4096,16 +4146,19 @@ class AppNotifier extends ChangeNotifier {
     await _continueAfterEnvironmentReady();
   }
 
-  /// A manual repair always returns to a read-only probe.
+  /// A manual repair always returns to a read-only probe. In automatic setup
+  /// the probe is followed by the install when it can run unattended, as at
+  /// launch.
   Future<void> retryEnvironmentSetup() async {
     if (_environmentSetupInFlight) return;
     _environmentSetupInFlight = true;
     notifyListeners();
     try {
-      final result = await _runProvisioner(
-        install: false,
-        mode: environmentReadiness.mode,
-      );
+      final mode = environmentReadiness.mode;
+      var result = await _runProvisioner(install: false, mode: mode);
+      if (!result.isReady && _canInstallUnattended(result, mode: mode)) {
+        result = await _installUnattended(result);
+      }
       if (result.isReady) await _continueAfterEnvironmentReady();
     } finally {
       _environmentSetupInFlight = false;
