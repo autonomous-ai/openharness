@@ -32,6 +32,26 @@ cleanup() {
   tmux_ kill-server 2>/dev/null || true
   kill "$mock" 2>/dev/null || true
   wait "$mock" 2>/dev/null || true
+  # kill-server acknowledges before the UI's final session write. Wait for only
+  # this fixture's clients before removing HOME, so writers cannot recreate it.
+  python3 - "$bin" "$client" <<'PY'
+import os, signal, subprocess, sys, time
+binary, client = sys.argv[1:]
+def clients():
+    rows = subprocess.check_output(['ps', '-ax', '-o', 'pid=,command='], text=True).splitlines()
+    return [int(parts[0]) for row in rows if len(parts := row.strip().split(None, 1)) == 2
+            and parts[1].startswith(binary + ' ')
+            and any(f'-L {name} ' in parts[1] for name in (client, client + '-2'))]
+for pid in clients():
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+deadline = time.monotonic() + 5
+while clients() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert not clients(), 'e2e fixture client did not exit; retaining its HOME'
+PY
   rm -rf "$home"
 }
 trap cleanup EXIT
