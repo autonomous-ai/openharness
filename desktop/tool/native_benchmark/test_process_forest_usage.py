@@ -90,6 +90,20 @@ class ForestUsageTests(unittest.TestCase):
                                delta=max(0.06, actual * 0.1))
         self.assertGreater(measured['summary']['processCountMax'], 1)
         self.assertEqual(measured['summary']['processCountMin'], 1)
+        # Exercise the new API on real processes without claiming that parent
+        # instruction/energy counters contain the exited children's work.
+        for sample in measured['samples']:
+            for row in sample['processes']:
+                self.assertIn(row['rusageFlavor'], [4, 6])
+                if row['rusageFlavor'] == 6:
+                    self.assertLessEqual(row['performanceUserTicks'], row['userTicks'])
+                    self.assertLessEqual(row['performanceSystemTicks'], row['systemTicks'])
+                    self.assertLessEqual(row['performanceInstructions'], row['instructions'])
+                    self.assertLessEqual(row['performanceCycles'], row['cycles'])
+                    self.assertLessEqual(row['performanceCpuEnergyNanojoules'], row['cpuEnergyNanojoules'])
+                else:
+                    self.assertNotIn('cpuEnergyNanojoules', row)
+                    self.assertNotIn('performanceUserTicks', row)
 
     def test_idle_tree_is_quiet(self):
         independent, measured = self.measure('idle')

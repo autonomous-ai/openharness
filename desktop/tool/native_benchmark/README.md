@@ -72,6 +72,15 @@ physical footprints can include shared mappings. Neither this sampler nor the
 single-process sampler measures GPU joules, battery discharge, or macOS's
 “Using Significant Energy” classification.
 
+On supported macOS kernels the sampler also records per-process instructions,
+cycles, performance-core time and kernel-accounted CPU energy through
+`RUSAGE_INFO_V6`. These are raw diagnostic counters, not additions to the forest
+summary: unlike CPU time, they have no exited-child rollup in this API. Compare
+matching PID/birth identities that persist throughout the measured interval.
+Older kernels fall back to V4 and omit the V6 fields; zero hardware counters can
+also mean unsupported hardware. CPU energy excludes GPU, shared system services
+and battery discharge. See Apple's [counter mapping](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c).
+
 Use `prepare.py --source /path/to/baseline/desktop` and `connected_run.py
 --bundle /path/to/baseline/cli/dist/cli.js` to compare a second source variant
 with the same tooling. The copied build records its source revision, production

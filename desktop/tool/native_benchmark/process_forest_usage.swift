@@ -42,6 +42,15 @@ struct ProcessRow: Codable {
   let childPackageIdleWakeups: UInt64
   let diskReadBytes: UInt64
   let diskWriteBytes: UInt64
+  let rusageFlavor: Int32
+  let instructions: UInt64
+  let cycles: UInt64
+  let performanceUserTicks: UInt64?
+  let performanceSystemTicks: UInt64?
+  let performanceInstructions: UInt64?
+  let performanceCycles: UInt64?
+  let cpuEnergyNanojoules: UInt64?
+  let performanceCpuEnergyNanojoules: UInt64?
 }
 struct Sample: Codable {
   let elapsedSeconds: Double
@@ -110,11 +119,22 @@ func sample() -> Sample {
     var rows: [ProcessRow] = []
     var missed = false
     for id in owners.keys.sorted() {
-      var u = rusage_info_v4()
-      let status = withUnsafeMutablePointer(to: &u) { pointer in
-        pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
-          proc_pid_rusage(id, RUSAGE_INFO_V4, $0)
+      var u = rusage_info_v6()
+      var flavor = RUSAGE_INFO_V6
+      func readUsage() -> Int32 {
+        withUnsafeMutablePointer(to: &u) { pointer in
+          pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+            proc_pid_rusage(id, flavor, $0)
+          }
         }
+      }
+      var status = readUsage()
+      if status != 0 {
+        // The V4 prefix still supplies the original forest accounting on older
+        // kernels. Absent V6 counters remain unknown, never a measured zero.
+        u = rusage_info_v6()
+        flavor = RUSAGE_INFO_V4
+        status = readUsage()
       }
       if status != 0 { missed = true; break }
       if roots.contains(id) {
@@ -131,7 +151,14 @@ func sample() -> Sample {
         residentBytes: u.ri_proc_exit_abstime == 0 ? u.ri_resident_size : 0,
         interruptWakeups: u.ri_interrupt_wkups, childInterruptWakeups: u.ri_child_interrupt_wkups,
         packageIdleWakeups: u.ri_pkg_idle_wkups, childPackageIdleWakeups: u.ri_child_pkg_idle_wkups,
-        diskReadBytes: u.ri_diskio_bytesread, diskWriteBytes: u.ri_diskio_byteswritten))
+        diskReadBytes: u.ri_diskio_bytesread, diskWriteBytes: u.ri_diskio_byteswritten,
+        rusageFlavor: flavor, instructions: u.ri_instructions, cycles: u.ri_cycles,
+        performanceUserTicks: flavor == RUSAGE_INFO_V6 ? u.ri_user_ptime : nil,
+        performanceSystemTicks: flavor == RUSAGE_INFO_V6 ? u.ri_system_ptime : nil,
+        performanceInstructions: flavor == RUSAGE_INFO_V6 ? u.ri_pinstructions : nil,
+        performanceCycles: flavor == RUSAGE_INFO_V6 ? u.ri_pcycles : nil,
+        cpuEnergyNanojoules: flavor == RUSAGE_INFO_V6 ? u.ri_energy_nj : nil,
+        performanceCpuEnergyNanojoules: flavor == RUSAGE_INFO_V6 ? u.ri_penergy_nj : nil))
     }
     let after = inventory()
     let same = owners == owned(after) && owners.keys.allSatisfy {
@@ -193,6 +220,7 @@ let output: [String: Any] = [
   "schema": 1, "success": true, "roots": roots, "label": args[3], "startedAt": startedAt,
   "boundary": "Owned live process trees plus kernel-accounted exited children. CPU 100% = one core. No GPU energy, battery discharge or escaped/reparented workers. Summed process footprints can include shared mappings.",
   "cpuClock": ["unit": "mach_absolute_time", "timebaseNumer": timebase.numer, "timebaseDenom": timebase.denom] as [String: Any],
+  "hardwareCounterBoundary": "Per-process counters, not child rollups. Compare the same PID/birth across samples; exited helpers' instructions, cycles and CPU energy are not rolled into their parent. V6 fields are absent on V4 fallback; zero hardware counters may mean unsupported hardware. CPU energy is kernel-accounted nanojoules, not whole-device/GPU energy or battery discharge.",
   "summary": summary,
   "samples": try JSONSerialization.jsonObject(with: JSONEncoder().encode(samples)),
 ]
