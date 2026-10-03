@@ -41,6 +41,14 @@ jobs:
           sudo chmod a+rw /dev/kvm
       - name: Build, reinstall offline, and load on the constrained image
         run: python3 os/tests/broadcom_vm.py --iso os/dist/*.iso
+      - name: Archive package filenames unchanged
+        if: always()
+        run: |
+          # Arch epochs put ':' in package names; upload-artifact rejects those
+          # names directly. Keep original names and signatures inside one tar.
+          if [ -d os/test-results/broadcom/bundle ]; then
+            tar -cf os/test-results/broadcom/driver-bundle.tar -C os/test-results/broadcom/bundle .
+          fi
       - name: Retain exact package, module, license and experiment evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -48,6 +56,7 @@ jobs:
           name: harness-broadcom-preparation
           path: |
             os/test-results/broadcom/
+            !os/test-results/broadcom/bundle/**
             !os/test-results/broadcom/**/*.qcow2
             !os/test-results/broadcom/**/OVMF_VARS.fd
           retention-days: 14
