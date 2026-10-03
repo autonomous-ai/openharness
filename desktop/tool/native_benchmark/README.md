@@ -52,6 +52,16 @@ cursor, foreground output, hidden-app idle, and hidden-app output. Active
 workers redraw eight rows at 20 Hz. Output must reach every retained terminal,
 connections must remain controlling, and actual output counts and skipped ticks
 are retained. A focus, visibility or geometry change during a phase rejects it.
+Native visibility alone is insufficient: foreground phases require Flutter
+`resumed` with frames enabled, and hidden phases require Flutter `hidden` with
+frames disabled and no new drawn frames after settling. The fixture records
+framework lifecycle transitions/frame counts and native occlusion independently.
+Rebuild older fixture apps that lack those observations. A missing or contradictory
+lifecycle rejects the run and retains the rejected state and cleanup outcome.
+Run `python3 tool/native_benchmark/test_connected_visibility.py` for that guard's
+regression checks. An [October 3 diagnostic](../../../docs/performance/2026-10-02-daemon-process-discovery.md#lifecycle-diagnostic-and-stricter-acceptance)
+reproduced a null framework lifecycle with continued hidden rendering; older
+native-only background checks do not establish normal product background behavior.
 This controls terminal traffic, not model behavior, inference or cloud latency.
 Use `--background-only` for the two hidden-app phases when foreground focus
 cannot be held. Compare it only with the same mode: it starts idle directly,

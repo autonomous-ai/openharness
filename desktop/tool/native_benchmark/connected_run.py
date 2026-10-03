@@ -48,6 +48,29 @@ def wait_for(path, process, seconds=45):
         time.sleep(0.1)
 
 
+def validate_visibility(snapshot, visibility, *, previous=None):
+    """Reject native-only visibility evidence before accepting resource data."""
+    native = snapshot['native']
+    framework = snapshot.get('framework')
+    if not isinstance(framework, dict):
+        raise RuntimeError('Rebuild the connected fixture with framework lifecycle diagnostics')
+    expected = {'foreground': 'resumed', 'background': 'hidden'}[visibility]
+    if framework.get('lifecycle') != expected:
+        raise RuntimeError(
+            f'{visibility} phase requires Flutter {expected}; got {framework.get("lifecycle")!r}')
+    if framework.get('framesEnabled') is not (visibility == 'foreground'):
+        raise RuntimeError('Framework frame scheduling does not match phase visibility')
+    if type(framework.get('drawnFrames')) is not int or framework['drawnFrames'] < 0:
+        raise RuntimeError('Framework frame count is missing or invalid')
+    if visibility == 'foreground' and not (native['key'] and native['active']):
+        raise RuntimeError('Foreground phase lost focus')
+    if visibility == 'background' and not native['hidden']:
+        raise RuntimeError('Background phase is not hidden')
+    if (visibility == 'background' and previous is not None
+            and previous['framework']['drawnFrames'] != framework['drawnFrames']):
+        raise RuntimeError('The hidden framework drew frames during sampling')
+
+
 def run(args):
     tooling = Path(__file__).resolve().parent
     root = args.root.resolve()
@@ -126,11 +149,11 @@ def run(args):
                 rpc(root / f'worker-{index}.sock', {'mode': mode})
             time.sleep(args.settle)
             before = rpc(control, {'operation': 'status'})
+            # Retain rejected observations too; a missing lifecycle transition
+            # must not leave only a generic error after the private app exits.
+            result['pendingPhase'] = {'label': label, 'before': before}
+            validate_visibility(before, visibility)
             native_state = before['native']
-            if visibility == 'foreground' and not (native_state['key'] and native_state['active']):
-                raise RuntimeError('Foreground phase lost focus before sampling')
-            if visibility == 'background' and not native_state['hidden']:
-                raise RuntimeError('Background phase is not hidden')
             workers_before = [rpc(root / f'worker-{index}.sock', {}) for index in range(args.terminals)]
             output = root / (label + '.json')
             sampler = subprocess.Popen([str(args.sampler.resolve()), roots, str(args.seconds), label, str(output)],
@@ -140,6 +163,8 @@ def run(args):
                 raise RuntimeError(f'Sampler failed: {stderr}')
             workers_after = [rpc(root / f'worker-{index}.sock', {}) for index in range(args.terminals)]
             after = rpc(control, {'operation': 'status', 'includeText': True})
+            result['pendingPhase']['after'] = after
+            validate_visibility(after, visibility, previous=before)
             for field in ['key', 'active', 'hidden', 'focusLosses', 'width', 'height', 'scale']:
                 if native_state[field] != after['native'][field]:
                     raise RuntimeError(f'Native state changed during {label}: {field}')
@@ -161,6 +186,7 @@ def run(args):
                      'workersBefore': workers_before, 'workersAfter': workers_after,
                      'resources': output.name, 'summary': resource['summary']}
             result['phases'].append(phase)
+            del result['pendingPhase']
             (root / 'run-progress.json').write_text(json.dumps(result, indent=2))
             print(json.dumps({'phase': label, **resource['summary']}), flush=True)
         result['success'] = True

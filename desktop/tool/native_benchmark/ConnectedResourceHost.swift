@@ -1,5 +1,14 @@
 // Compiled only into a copied benchmark host. Never included in Runner.
 private enum ConnectedResourceHost {
+  private static var delegateBeforeEngine: [String: Any] = [:]
+
+  private static func delegateState() -> [String: Any] {
+    [
+      "class": NSApp.delegate.map { String(describing: type(of: $0)) } ?? "nil",
+      "lifecycleProvider": NSApp.delegate is FlutterAppLifecycleProvider,
+    ]
+  }
+
   static func validateEnvironment() {
     let env = ProcessInfo.processInfo.environment
     guard Bundle.main.bundleIdentifier == "ai.autonomous.harness.benchmark",
@@ -12,6 +21,7 @@ private enum ConnectedResourceHost {
       fputs("Connected fixture requires its private launcher environment\n", stderr)
       exit(78)
     }
+    delegateBeforeEngine = delegateState()
   }
 
   static func install(window: NSWindow, messenger: FlutterBinaryMessenger) {
@@ -33,6 +43,11 @@ private enum ConnectedResourceHost {
         result([
           "key": window.isKeyWindow, "active": NSApp.isActive,
           "visible": window.isVisible, "hidden": NSApp.isHidden,
+          "appOcclusionVisible": NSApp.occlusionState.contains(.visible),
+          "windowOcclusionVisible": window.occlusionState.contains(.visible),
+          "miniaturized": window.isMiniaturized,
+          "delegateBeforeEngine": delegateBeforeEngine,
+          "delegateCurrent": delegateState(),
           "focusLosses": focusLosses, "width": window.contentView?.bounds.width ?? 0,
           "height": window.contentView?.bounds.height ?? 0, "scale": window.backingScaleFactor,
         ])

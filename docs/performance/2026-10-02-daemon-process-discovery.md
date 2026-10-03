@@ -6,6 +6,12 @@ resource improvement. **Keep [PR #657](https://github.com/autonomous-ai/openharn
 in draft pending investigation.** Nothing from this experiment was released or
 installed into the running app or daemon.
 
+**Additional measurement limitation:** later diagnostics found a hidden test app
+drawing frames without ever receiving a Flutter lifecycle state. Earlier trials
+did not record that state, so their background figures cannot establish normal
+hidden-app behavior. The runner now rejects that condition; see the lifecycle
+diagnostic below. No production visibility defect has yet been established.
+
 ## Fresh-process comparison
 
 Three pairs used the same native Release app, ten private tmux terminals and
@@ -54,6 +60,67 @@ Both modes used the candidate parser and deadlines, plus the same instrumentatio
 The actual hook and transformed runner are retained in the data so the original
 runner's hash is not mistaken for the entire executed experiment. This diagnostic
 does not resolve the fresh-process CPU increase or establish an energy saving.
+
+## Hardware-counter follow-up
+
+Six further fresh-process trials used the same app, CLI bundles, workloads,
+30-second phases and alternating order, with the sampler extended to record
+macOS `RUSAGE_INFO_V6` counters. All six passed output and cleanup checks. The
+[separate data](2026-10-03-process-discovery-counters.json) retain every pair,
+process identity, raw counter boundary and source/artifact hash.
+
+| Workload | Median combined CPU before → after | Relative change | Individual paired CPU changes |
+| --- | ---: | ---: | --- |
+| Background idle, hidden cursors | 5.25 → 4.92% of one core | −6.3% | −1.8%, −6.3%, −14.8% |
+| Background active output | 42.54 → 46.07% of one core | **+8.3%** | +9.0%, −1.6%, +9.7% |
+
+Hardware counters cover only matching processes present throughout a phase:
+unlike the CPU-time accounting above, this API does not roll up exited helpers'
+instructions or energy. Those persistent processes account for about 22–24% of
+idle CPU time and 92–94% of active CPU time. Their median kernel-accounted active
+CPU energy was 4.625 → 4.542 joules, but individual pairs changed by −0.8%, +3.4%
+and −5.9%. This is mixed, incomplete CPU-energy evidence, not a battery or GPU
+measurement. It cannot establish a total idle-energy improvement when most idle
+CPU work belongs to short-lived helpers outside that counter boundary.
+
+The unchanged app's median active instruction count increased 18.28 → 19.44
+billion (+6.4%), with more instructions in every pair. Its median CPU time and
+kernel-accounted CPU energy also increased. Core scheduling can make CPU time
+and energy disagree, but it does not explain away the additional instructions.
+The smaller CPU increase than in the first experiment does not resolve the
+regression concern; the candidate remains in draft.
+
+A separate five-second native stack sample observed Flutter rasterization and
+Impeller text rendering while AppKit reported the benchmark hidden and its
+window invisible before and after the phase. Profiling overlapped the workload,
+so that diagnostic's timings are excluded from comparisons.
+
+## Lifecycle diagnostic and stricter acceptance
+
+Two new isolated builds added observation only: Flutter lifecycle/frame counts,
+AppKit occlusion and the native delegate identity. Both diagnostic runs completed
+their terminal-output checks and cleaned up. In the first, the hidden app drew
+**343 frames in ten seconds** of active output. A second reproduced the same
+condition, drawing **196 frames in five seconds**. In both, Flutter's lifecycle
+remained null and frame scheduling stayed enabled. AppKit reported the app and
+window occluded even at startup, and the app never became active.
+
+The native `AppDelegate` existed and conformed to `FlutterAppLifecycleProvider`
+before engine construction and afterwards. That rules out the simple missing-
+delegate hypothesis in this fixture; it does not establish whether the missing
+notifications arise from the launcher/environment or affect the shipped app.
+The app log also reports unavailable persistent GPU disk caching in this sandbox.
+These short runs diagnose the measurement boundary, not performance improvements.
+The [retained observations](2026-10-03-connected-lifecycle-diagnostic.json)
+include both independent state sources and source/build hashes.
+
+The runner now requires Flutter `resumed` with frames enabled for foreground
+phases, and `hidden` with frames disabled for background phases. It also rejects
+frames drawn during a settled hidden phase. Missing observations require a new
+fixture build. Rejected observations are saved with cleanup results. Previous
+trials passed their then-existing native checks, but cannot be retroactively
+certified against this additional framework check. Establishing a representative
+lifecycle transition is required before further background comparisons.
 
 ## Candidate and command-level evidence
 

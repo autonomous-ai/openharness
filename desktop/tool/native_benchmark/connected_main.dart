@@ -29,6 +29,36 @@ import 'package:harness/ws/local_cli_discovery.dart';
 
 const _host = MethodChannel('harness/connected_resource_fixture');
 
+// Observe the framework's visibility decision independently of AppKit. A native
+// hidden window alone does not prove that Flutter has stopped drawing frames.
+class _ResourceBinding extends HarnessWidgetsBinding {
+  int drawnFrames = 0;
+  final lifecycleChanges = <Map<String, Object>>[];
+
+  @override
+  void handleAppLifecycleStateChanged(AppLifecycleState state) {
+    super.handleAppLifecycleStateChanged(state);
+    lifecycleChanges.add({
+      'state': state.name,
+      'at': DateTime.now().toUtc().toIso8601String(),
+    });
+    if (lifecycleChanges.length > 32) lifecycleChanges.removeAt(0);
+  }
+
+  @override
+  void drawFrame() {
+    drawnFrames++;
+    super.drawFrame();
+  }
+
+  Map<String, Object?> get snapshot => {
+    'lifecycle': lifecycleState?.name,
+    'framesEnabled': framesEnabled,
+    'drawnFrames': drawnFrames,
+    'lifecycleChanges': lifecycleChanges,
+  };
+}
+
 class _PreparedEnvironment extends EnvironmentProvisioner {
   @override
   Future<EnvironmentReadiness> ensureReady({
@@ -85,7 +115,7 @@ String _tail(TerminalSession session) {
 }
 
 Future<void> main() async {
-  HarnessWidgetsBinding();
+  final binding = _ResourceBinding();
   final root = Platform.environment['HARNESS_CONNECTED_ROOT']!;
   if (kUnderTest || Platform.environment['HOME'] != '$root/home') {
     throw StateError(
@@ -215,6 +245,7 @@ Future<void> main() async {
                   'native': await _host.invokeMapMethod<String, dynamic>(
                     'captureState',
                   ),
+                  'framework': binding.snapshot,
                   'panes': [
                     for (final pane in app.allPanes)
                       {
