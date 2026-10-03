@@ -78,6 +78,15 @@ When installation is needed, hosted jobs use the extracted SDK directly instead
 of copying it into the runner's discarded local tool cache. Authentication still
 runs normally; self-hosted runners retain the upstream tool-cache behavior.
 
+Closing a PR removes caches scoped to that PR's merge ref. Deleting a branch
+removes caches scoped to that absent branch. These finished-work caches cannot
+warm future releases from `main`; retaining them crowds the repository's cache
+storage. Cleanup uses default-branch code, checks the PR/branch state before and
+after listing, and deletes only IDs returned for that exact ref. The default
+branch, tags, open PRs and existing branches are preserved. For a read-only preview,
+run `python3 scripts/prune-finished-caches.py --repo OWNER/REPO --pull-request N`
+or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
+
 ### Package Desktop while final checks run
 
 When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
