@@ -15,7 +15,7 @@ class PublicationGuards(unittest.TestCase):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'},
                     'hardware': {'broadcom': {'kernel': 'exact-kernel',
                     'packages': {'driver.pkg.tar.zst': {'name': 'driver', 'version': '1'}}}}}
-        receipt = dict(status='passed', iso_sha256='image-one', image_source_commit='source-one',
+        receipt = dict(status='passed', iso_sha256='image-one', image_source_commit='source-one', test_source_commit='source-one',
                        installed_offline_rebuild_seconds=12,
                        keyboard={'confirmed_seconds_since_boot': 20},
                        post_rebuild_keyboard={'confirmed_seconds_since_boot': 40},
@@ -23,7 +23,7 @@ class PublicationGuards(unittest.TestCase):
                            optional_packages={'driver': '1'}, corrupted_bundle_rejected=True,
                            cache_removed=True, base_packages_unchanged=True, native_drivers_preserved=True))
         publish.validate_hardware(manifest, receipt)
-        for change in [dict(status='failed'), dict(iso_sha256='other'), dict(image_source_commit='other'),
+        for change in [dict(status='failed'), dict(iso_sha256='other'), dict(image_source_commit='other'), dict(test_source_commit='other'),
                        dict(keyboard={}), dict(post_rebuild_keyboard={}), dict(installed_offline_rebuild_seconds=0)]:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 publish.validate_hardware(manifest, dict(receipt, **change))
@@ -95,6 +95,13 @@ class PublicationGuards(unittest.TestCase):
                           'On-demand gcc/make installation and local preview passed'])
                     for fw, encrypted in [('bios', False), ('uefi', True)]]
         publish.validate_receipts(manifest, receipts)
+        hardware_manifest = dict(manifest, capabilities=['broadcom-offline'])
+        with self.assertRaisesRegex(ValueError, 'optional-driver exclusion'):
+            publish.validate_receipts(hardware_manifest, receipts)
+        hardware_receipts = copy.deepcopy(receipts)
+        for row in hardware_receipts:
+            row['checks'].append('Unrelated hardware receives no optional Wi-Fi packages and retains no USB driver cache')
+        publish.validate_receipts(hardware_manifest, hardware_receipts)
         for change in [dict(status='failed'), dict(scope='live session only'), dict(iso_sha256='another-image'),
                        dict(image_source_commit='another-source'), dict(checks=['Live hn ready;']), dict(encrypted=False)]:
             bad = copy.deepcopy(receipts)

@@ -45,7 +45,8 @@ def validate_install_guide(manifest, guide):
 
 def validate_hardware(manifest, receipt):
     if (receipt.get('status') != 'passed' or receipt.get('iso_sha256') != manifest['iso']['sha256'] or
-            receipt.get('image_source_commit') != manifest['source_commit']):
+            receipt.get('image_source_commit') != manifest['source_commit'] or
+            receipt.get('test_source_commit') != manifest['source_commit']):
         raise ValueError('Hardware installation evidence covers a different image or did not pass.')
     installed = receipt.get('installation', {})
     if installed.get('status') != 'passed' or installed.get('kernel') != manifest['hardware']['broadcom']['kernel']:
@@ -75,6 +76,9 @@ def validate_receipts(manifest, receipts):
         checks = receipt.get('checks', [])
         if any(not any(check.startswith(prefix) for check in checks) for prefix in REQUIRED_CHECKS):
             raise ValueError('A required live, installation or recovery check is absent.')
+        if 'broadcom-offline' in manifest.get('capabilities', []) and not any(
+                check.startswith('Unrelated hardware receives no optional Wi-Fi packages') for check in checks):
+            raise ValueError('The generic installation has not passed optional-driver exclusion.')
     if not any(check.startswith('Harness unlock screen renders, masks input, accepts a retry') for check in rows[('uefi', True)]['checks']):
         raise ValueError('The encrypted graphical unlock and retry checks have not passed.')
     if not any(check.startswith('Claude Code, Codex and pi install on demand; bundled OpenCode') for check in rows[('bios', False)]['checks']):

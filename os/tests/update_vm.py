@@ -57,7 +57,7 @@ def main():
         vm.stop()
         vm.start(live=False)
         vm.login_installed(config)
-        receipt['checks'].append('Published preview 4 installs offline and boots from its encrypted internal disk')
+        receipt['checks'].append('Published ' + image['version'] + ' installs offline and boots from its encrypted internal disk')
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
         # Reuse the exact bundle after encrypted reboot; /tmp is intentionally
         # volatile on the installed system.
