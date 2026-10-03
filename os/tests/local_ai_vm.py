@@ -75,7 +75,8 @@ def main():
                 'test -f /home/me/local-ai-check/chat-passed && exit 0; sleep 1; done; exit 1', timeout=135, check=False)
             assert status == 0, 'Physical-keyboard local model conversation did not finish'
             output, _ = vm.command('hn capture-pane -p')
-            assert 'Local model answered: 42' in output
+            assert 'Local model answered:' in output
+            vm.command('test -s /home/me/local-ai-check/chat-passed && test "$(nmcli networking)" = disabled')
             (folder / 'local-model-pane.txt').write_text(output)
             vm.screenshot('offline-local-model')
             result['offline_keyboard_conversation'] = 'passed'
@@ -100,7 +101,7 @@ def main():
         raise
     finally:
         if vm.shell_ready:
-            for name in ['probe.json', 'commands.log', 'chat.jsonl', 'chat.err', 'offline-api.json', 'supported-gpus.json']:
+            for name in ['probe.json', 'commands.log', 'chat.jsonl', 'chat.err', 'offline-api.json', 'supportedchips.html']:
                 try:
                     output, _ = vm.command('cat /home/me/local-ai-check/' + name, timeout=15, check=False)
                     (folder / ('guest-' + name)).write_text(output)

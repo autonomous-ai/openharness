@@ -2,6 +2,7 @@
 """Optional local inference and driver assessment in a disposable installed guest."""
 import argparse
 import hashlib
+import html
 import json
 from pathlib import Path
 import re
@@ -57,10 +58,9 @@ def nvidia():
         run('modprobe', '--show-depends', name)
     assert len({row['version'] for row in result['modules'].values()}) == 1
     files = run('pacman', '-Qlq', 'nvidia-utils').stdout.splitlines()
-    support = next(Path(p) for p in files if p.endswith('/supported-gpus.json'))
-    supported = json.loads(support.read_text())
-    (ROOT / 'supported-gpus.json').write_text(json.dumps(supported, indent=2) + '\n')
-    encoded = json.dumps(supported)
+    support = next(Path(p) for p in files if p.endswith('/html/supportedchips.html'))
+    (ROOT / 'supportedchips.html').write_bytes(support.read_bytes())
+    encoded = ' '.join(html.unescape(re.sub(r'<[^>]*>', ' ', support.read_text())).split())
     targets = ['GeForce RTX 4090', 'GeForce RTX 5090', 'RTX 6000 Ada Generation', 'RTX PRO 6000 Blackwell']
     assert all(target in encoded for target in targets), 'Target absent from the packaged support list'
     result['packaged_support_list_targets'] = targets
@@ -113,11 +113,11 @@ def local_ai():
     (ROOT / 'chat.sh').write_text('#!/bin/bash\nset -euo pipefail\ncd /home/me/local-ai-check\n'
         'opencode run --format json ' + __import__('shlex').quote(prompt) +
         ' > chat.jsonl 2> chat.err\npython3 verify-chat.py\n')
-    (ROOT / 'verify-chat.py').write_text('''import json
+    (ROOT / 'verify-chat.py').write_text('''import json,re
 from pathlib import Path
 events=[json.loads(line) for line in Path('chat.jsonl').read_text().splitlines() if line.startswith('{')]
 reply=''.join(row.get('part',{}).get('text','') for row in events if row.get('type')=='text').strip()
-assert reply == '42', repr(reply)
+assert re.fullmatch(r'(?:6\\s*[×*x]\\s*7\\s*=\\s*)?42[.!]?',reply), repr(reply)
 Path('chat-passed').write_text(reply+'\\n')
 print('Local model answered: '+reply)
 ''')
@@ -136,7 +136,10 @@ print('Local model answered: '+reply)
         'messages': [{'role': 'user', 'content': 'What is six times seven? Reply with only the number.'}],
         'options': {'temperature': 0, 'num_predict': 32}})
     (ROOT / 'offline-api.json').write_text(json.dumps(response, indent=2) + '\n')
-    assert response.get('done') and response['message']['content'].strip() == '42', response
+    # Check the independently known answer, allowing the small model to show
+    # its equation. This assesses inference transport, not formatting skill.
+    assert response.get('done') and re.fullmatch(
+        r'(?:6\s*[×*x]\s*7\s*=\s*)?42[.!]?', response['message']['content'].strip()), response
     result['offline_api_seconds'] = round(time.monotonic() - started, 3)
     result['offline_reply'] = response['message']['content']
     result['inference'] = {k: response[k] for k in ['eval_count', 'eval_duration', 'prompt_eval_count', 'prompt_eval_duration'] if k in response}
@@ -163,7 +166,7 @@ def main():
         result.update(nvidia() if args.probe == 'nvidia' else local_ai())
         result['status'] = 'passed'
     except BaseException as error:
-        result.update(status='failed', error=str(error))
+        result.update(status='failed', error=repr(error))
         raise
     finally:
         result['finished_at'] = time.time()
