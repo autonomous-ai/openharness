@@ -373,6 +373,18 @@ if (rows.some(row => row.engine !== 'terminal')) throw new Error('A plain shell 
     screen, _ = vm.command(user('hn capture-pane -p'))
     (folder / 'bundled-opencode-screen.txt').write_text(screen)
     assert 'Plugin failed:' not in screen and 'plugin failed /plugins' not in screen, 'Bundled OpenCode must open without a plugin error'
+    # Exercise what a first-time user actually does after choosing Try: type
+    # into the visible agent and receive its answer, without a CLI/API shortcut.
+    vm.type_probe('what is six times seven reply with digits only')
+    vm.keys('ret')
+    _, interactive_status = vm.command(user('sh -c ' + shlex.quote(
+        'for n in $(seq 1 120); do hn capture-pane -p > /tmp/hn-first-tui.txt; '
+        "grep -Eq '^[^[:alnum:]]*42[^[:alnum:]]*$' /tmp/hn-first-tui.txt && exit 0; "
+        'sleep 1; done; exit 1')), timeout=140, check=False)
+    screen, _ = vm.command('cat /tmp/hn-first-tui.txt')
+    (folder / 'first-opencode-interactive.txt').write_text(screen)
+    vm.screenshot('01e-first-agent-reply')
+    assert interactive_status == 0, 'The visible bundled agent must accept keyboard input and display its reply'
     # No model flag/config, API key, account, or installer. Validate a real
     # upstream-default reply; preserve all events rather than just the exit code.
     prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
@@ -542,6 +554,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         check_first_use(vm, user, folder)
         result['checks'].append('USB Enter opens Install offline; Try opens network setup while disconnected; direct terminal accepts physical keyboard input')
         result['checks'].append('Installer errors remain visible until acknowledged; exiting a direct terminal removes its pane')
+        result['checks'].append('USB first agent conversation accepts physical keyboard input and displays the expected reply')
         result['checks'].append('Bundled OpenCode starts offline and its upstream-default clean-profile conversation returns the independently checked answer')
         vm.keys('meta_l', 'b')
         vm.command("for n in $(seq 1 45); do pgrep -x chromium >/dev/null && break; sleep 1; done; pgrep -x chromium", timeout=60)

@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T10:31:49.184447+00:00",
+  "last_updated_utc": "2026-10-03T10:38:15.965197+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -1044,7 +1044,9 @@
     ],
     "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
     "positioning": "Harness is built around agents as the primary interface: conversation directs work; terminal output, diffs and browser make results inspectable. Programmers first; broader uses later. Product name remains Harness.",
-    "post_build_source_changes": [],
+    "post_build_source_changes": [
+      "Test-only: operate the visible default OpenCode TUI through virtual keyboard input and require its reply; publication guard now requires that evidence. Runtime and image source remain 67958156d."
+    ],
     "post_build_local_checks": "31 installer tests passed; changed Python files compile and git diff --check passed. Native terminal regression and updated machine journey require the new source build.",
     "native_validation_complete_utc": null,
     "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
@@ -1085,7 +1087,7 @@
       }
     },
     "next_step": "Follow CI 37116593867 and OS 37116595898; inspect fresh first-use screens and both complete USB install/unlock/recovery journeys. Then run default-model workload and DSH acceptance separately on the same exact image before publication.",
-    "last_recorded_utc": "2026-10-03T10:31:49.184447+00:00",
+    "last_recorded_utc": "2026-10-03T10:38:15.965197+00:00",
     "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1114,20 +1116,34 @@
       "Pinned Node 22.23.2 typecheck and affected discovery, launch, hooks, plugin and version tests.",
       "Private tmux 3.7c real discovery/restart/login-shell fixtures on this Mac; unavailable engines recorded as skipped.",
       "Portable OS tests/syntax, workflow lint in image CI, full CLI CI including supported OS/Node matrix.",
-      "Fresh exact-source ISO and native TUI checks; both full USB machine journeys, then separate workload/DSH default-model acceptance against the same image."
+      "Fresh exact-source ISO and native TUI checks; both full USB machine journeys, then separate workload/DSH default-model acceptance against the same image.",
+      "Measure the constrained 1-GiB base and bundled default-agent journey after the 4-GiB RAM-copy journeys; preview 1 low-memory evidence does not cover the newly bundled OpenCode 2."
     ],
     "full_cli_ci": {
       "run_id": 37116593867,
       "url": "https://github.com/autonomous-ai/openharness/actions/runs/37116593867",
       "source_commit": "67958156da30d2983daee22ddab48c43970fa244",
       "started_utc": "2026-10-03T10:29:38Z",
-      "status": "in progress",
+      "status": "passed",
       "passed_so_far": [
         "Repository process checks",
         "Linux and macOS native serial/login-shell matrix on Node 20.19.0 and 22.23.2"
       ],
-      "remaining": "Full default suite, fuzz, coverage/release checks"
+      "completed_utc": "2026-10-03T10:35:29Z",
+      "result": "8761 full-suite tests passed, 62 skipped; 40 separately scheduled fuzz tests passed. Supported Linux/macOS Node matrix, release bundle migration and updater coverage checks passed; updater coverage reports 100%. No second full local suite required."
+    },
+    "browser_visual_review": {
+      "attempted_utc": "2026-10-03T10:38:15.965197+00:00",
+      "status": "blocked by saved site permission",
+      "tool": "cua.getTab",
+      "url": "http://127.0.0.1:18092/",
+      "reason": "Browser Use rejected the exact previously authorized URL because of a saved user permission setting. No alternate browser, raw CDP, or rendering workaround attempted.",
+      "impact": "Landing-page visual and interactive checks remain unverified; static source review and separate authorized CI guest VM work continue."
     }
   },
-  "previous_goal_turn_classification": "progress: exact-source native terminal checks passed; prepared updated manual guide and default-model programmer/DSH acceptance with live process diagnostics."
+  "previous_goal_turn_classification": {
+    "classification": "progress",
+    "evidence": "Committed and pushed bigint OverlayFS identities, OpenCode plugin migration, corrected default-model cwd and DSH v2 flags; local affected/real tests passed and exact-source CI was dispatched.",
+    "recorded_utc": "2026-10-03T10:38:15.965197+00:00"
+  }
 }

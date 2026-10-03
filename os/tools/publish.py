@@ -13,6 +13,7 @@ import zipfile
 
 REQUIRED_CHECKS = ['Live hn ready;', 'Wayland clipboard round trip',
                    'USB Enter opens Install offline;',
+                   'USB first agent conversation accepts physical keyboard input',
                    'Bundled OpenCode starts offline and its upstream-default clean-profile conversation',
                    'Keyboard disk selection, encryption checkbox, masked password entry and a single Install action',
                    'Browser starts only on shortcut', 'Dated package repositories are queryable',

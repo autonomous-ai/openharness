@@ -74,7 +74,7 @@ class PublicationGuards(unittest.TestCase):
         incomplete[0]['checks'] = [row for row in incomplete[0]['checks'] if not row.startswith('On-demand')]
         with self.assertRaises(ValueError):
             publish.validate_receipts(manifest, incomplete)
-        for prefix, index in [('USB Enter', 0), ('Bundled OpenCode', 0), ('Harness unlock', 1), ('Claude Code', 0)]:
+        for prefix, index in [('USB Enter', 0), ('USB first agent', 0), ('Bundled OpenCode', 0), ('Harness unlock', 1), ('Claude Code', 0)]:
             incomplete = copy.deepcopy(receipts)
             incomplete[index]['checks'] = [row for row in incomplete[index]['checks'] if not row.startswith(prefix)]
             with self.subTest(missing=prefix), self.assertRaises(ValueError):
