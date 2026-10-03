@@ -51,11 +51,35 @@ def validate_receipts(manifest, receipts):
         raise ValueError('The real compiler and local web development check has not passed.')
 
 
+def validate_examples(folder, kind):
+    """Reject missing/failed independent application evidence before publishing it."""
+    reports = list(folder.rglob(f'{kind}/reports'))
+    if len(reports) != 1:
+        raise ValueError(f'Expected one {kind} report directory.')
+    report = reports[0]
+    if kind == 'dsh':
+        rows = read(report / 'results.json')
+        if len(rows) != 3 or {r['name'] for r in rows} != {'hello', 'logs', 'game'} or any(r['status'] != 'passed' for r in rows):
+            raise ValueError('All three real DSH exercises must pass.')
+    else:
+        for name in ['terminal-tool', 'website', 'game', 'fullstack']:
+            for stage in ['agent', 'checks']:
+                if (report / f'{name}-{stage}.status').read_text().strip() != '0':
+                    raise ValueError(f'{name} {stage} did not complete successfully.')
+        rows = read(report / 'browser-receipt.json')['results']
+        names = {'website keyboard filtering and help', 'game movement pause restart and state restoration',
+                 'fullstack browser CRUD validation and persistence'}
+        if len(rows) != 3 or {r['name'] for r in rows} != names or any(r['status'] != 'passed' for r in rows):
+            raise ValueError('All independent browser/API checks must pass.')
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, required=True)
     parser.add_argument('--tests', type=int, required=True)
     parser.add_argument('--image', type=int, required=True)
+    parser.add_argument('--dsh', type=int, default=0)
     parser.add_argument('--repo', required=True)
     args = parser.parse_args()
     root = args.input.resolve()
@@ -79,18 +103,39 @@ def main():
         raise ValueError('The machine workflow did not finish successfully.')
     if image['head_sha'] != manifest['source_commit'] or not any(j['name'] == 'image' and j['conclusion'] == 'success' for j in jobs['jobs']):
         raise ValueError('The image does not match a successful build job.')
+    examples = {}
+    if list((root / 'machines').rglob('workloads/reports')):
+        examples['workloads'] = {'run': run['html_url'], 'browser_checks': validate_examples(root / 'machines', 'workloads')}
+    if args.dsh:
+        dsh_run = json.loads(gh('api', f'repos/{args.repo}/actions/runs/{args.dsh}'))
+        if dsh_run['conclusion'] != 'success' or dsh_run['status'] != 'completed' or dsh_run['path'] != '.github/workflows/os.yml':
+            raise ValueError('The DSH workflow did not finish successfully.')
+        dsh_receipts = [read(path) for path in (root / 'dsh-machines').rglob('receipt.json')]
+        validate_receipts(manifest, dsh_receipts)
+        examples['dsh'] = {'run': dsh_run['html_url'], 'machines': dsh_receipts,
+                           'checks': validate_examples(root / 'dsh-machines', 'dsh')}
     limitations = ['Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.',
-                   'Agent installation/startup is tested; account-authenticated model turns remain unverified.',
+                   'Account-authenticated Claude/Codex model turns remain unverified; free OpenCode turns are recorded separately.',
                    'Timing and memory measurements describe these VMs, not physical laptop power-on time.']
     validation = {'status': 'passed', 'image_run': image['html_url'], 'machine_run': run['html_url'],
-                  'machines': receipts, 'limitations': limitations}
+                  'machines': receipts, 'examples': examples, 'limitations': limitations}
     (folder / 'validation.json').write_text(json.dumps(validation, indent=2) + '\n')
     manifest['validation'] = {'status': 'passed', 'receipt': 'validation.json', 'machine_run': run['html_url'], 'limitations': limitations}
     (folder / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     with zipfile.ZipFile(folder / 'machine-evidence.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted((root / 'machines').rglob('*')):
-            if path.is_file() and path.suffix in {'.png', '.json', '.txt'}:
-                archive.write(path, path.relative_to(root / 'machines'))
+        for directory in ['machines', 'dsh-machines']:
+            for path in sorted((root / directory).rglob('*')):
+                if path.is_file() and path.suffix in {'.png', '.json', '.txt', '.jsonl'} and 'Projects' not in path.relative_to(root / directory).parts:
+                    archive.write(path, path.relative_to(root))
+    if examples:
+        with zipfile.ZipFile(folder / 'programmer-examples.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for directory, kind in [('machines', 'workloads'), ('dsh-machines', 'dsh')]:
+                if kind not in examples:
+                    continue
+                for project_root in (root / directory).rglob('Projects'):
+                    for path in sorted(project_root.rglob('*')):
+                        if path.is_file() and not set(path.relative_to(project_root).parts) & {'node_modules', '.git', '.harness', '__pycache__'}:
+                            archive.write(path, path.relative_to(project_root))
     assets = sorted(p for p in folder.iterdir() if p.is_file())
     identities = {p.name: {'sha256': digest(p), 'bytes': p.stat().st_size} for p in assets}
     tag = 'os-v' + version
@@ -102,6 +147,10 @@ Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No deskto
 To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. In an hn Terminal pane, run `sudo hn-os install`. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
 
 BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM also installed a compiler on demand, built C, served a local Node preview, and installed and started the four agent executables. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
+
+{'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `programmer-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
+
+{'Three DSHs also passed: a live HTML greeting, a terminal CSV tool, and a game using the existing shared viewers, including keyboard play, pause and standalone export.' if 'dsh' in examples else ''}
 
 {chr(10).join('- ' + item for item in limitations)}
 

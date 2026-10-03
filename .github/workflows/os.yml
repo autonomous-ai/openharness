@@ -11,6 +11,10 @@ on:
         description: 'Publish a previously passed and visually reviewed machine-test run; image_run_id may identify its image build'
         required: false
         type: string
+      dsh_run_id:
+        description: 'Optional for publication: successful DSH machine run for the same image'
+        required: false
+        type: string
       workloads:
         description: 'Opt in to real free OpenCode model calls, four project builds and browser/API acceptance in the disposable BIOS VM'
         required: false
@@ -192,12 +196,21 @@ jobs:
           path: os/release-input/machines
           run-id: ${{ inputs.publish_run_id }}
           github-token: ${{ github.token }}
+      - name: Include separately validated DSH examples
+        if: ${{ inputs.dsh_run_id != '' }}
+        uses: actions/download-artifact@v6
+        with:
+          pattern: programmer-os-vm-*
+          path: os/release-input/dsh-machines
+          run-id: ${{ inputs.dsh_run_id }}
+          github-token: ${{ github.token }}
       - name: Verify prior evidence, publish preview and verify public downloads
         env:
           GH_TOKEN: ${{ github.token }}
           OS_TEST_RUN: ${{ inputs.publish_run_id }}
           OS_IMAGE_RUN: ${{ inputs.image_run_id || inputs.publish_run_id }}
-        run: python3 os/tools/publish.py --input os/release-input --tests "$OS_TEST_RUN" --image "$OS_IMAGE_RUN" --repo "$GITHUB_REPOSITORY"
+          OS_DSH_RUN: ${{ inputs.dsh_run_id }}
+        run: python3 os/tools/publish.py --input os/release-input --tests "$OS_TEST_RUN" --image "$OS_IMAGE_RUN" --dsh "${OS_DSH_RUN:-0}" --repo "$GITHUB_REPOSITORY"
       - name: Retain publication receipt
         if: always()
         uses: actions/upload-artifact@v6

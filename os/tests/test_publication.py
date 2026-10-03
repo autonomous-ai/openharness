@@ -1,6 +1,8 @@
 import copy
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location('hn_publish', Path(__file__).parents[1] / 'tools/publish.py')
@@ -9,6 +11,48 @@ spec.loader.exec_module(publish)
 
 
 class PublicationGuards(unittest.TestCase):
+    def test_failed_or_incomplete_project_work_cannot_be_published_as_passed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / 'bios/workloads/reports'
+            report.mkdir(parents=True)
+            for name in ['terminal-tool', 'website', 'game', 'fullstack']:
+                for stage in ['agent', 'checks']:
+                    (report / f'{name}-{stage}.status').write_text('0\n')
+            rows = [{'name': name, 'status': 'passed'} for name in [
+                'website keyboard filtering and help', 'game movement pause restart and state restoration',
+                'fullstack browser CRUD validation and persistence']]
+            browser = report / 'browser-receipt.json'
+            browser.write_text(json.dumps({'results': rows}))
+            publish.validate_examples(root, 'workloads')
+            (report / 'game-agent.status').write_text('124\n')
+            with self.assertRaises(ValueError):
+                publish.validate_examples(root, 'workloads')
+            (report / 'game-agent.status').write_text('0\n')
+            browser.write_text(json.dumps({'results': [rows[0]] * 3}))
+            with self.assertRaises(ValueError):
+                publish.validate_examples(root, 'workloads')
+            browser.write_text(json.dumps({'results': rows[:2]}))
+            with self.assertRaises(ValueError):
+                publish.validate_examples(root, 'workloads')
+
+    def test_all_three_dsh_results_are_required(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / 'bios/dsh/reports'
+            report.mkdir(parents=True)
+            rows = [{'name': name, 'status': 'passed'} for name in ['hello', 'logs', 'game']]
+            results = report / 'results.json'
+            results.write_text(json.dumps(rows))
+            publish.validate_examples(root, 'dsh')
+            rows[-1]['status'] = 'failed'
+            results.write_text(json.dumps(rows))
+            with self.assertRaises(ValueError):
+                publish.validate_examples(root, 'dsh')
+            results.write_text(json.dumps(rows[:2]))
+            with self.assertRaises(ValueError):
+                publish.validate_examples(root, 'dsh')
+
     def test_only_complete_matching_machine_evidence_can_publish(self):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'}}
         receipts = [dict(firmware=fw, encrypted=encrypted, status='passed', iso_sha256='image-one',
