@@ -1,10 +1,35 @@
 """Reject misleading background measurements, including the observed null lifecycle."""
+import plistlib
+import subprocess
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from connected_run import validate_visibility
+from connected_run import console_session_state, validate_visibility
 
 
 class ConnectedVisibilityTest(unittest.TestCase):
+    def test_console_lock_metadata_accepts_both_registry_shapes_without_account_data(self):
+        for locked in [True, False, None]:
+            session = {'kCGSSessionOnConsoleKey': True, 'kCGSSessionUserNameKey': 'private-user'}
+            if locked is not None:
+                session['CGSSessionScreenIsLocked'] = locked
+            root = {'IOConsoleUsers': [session]}
+            for registry in [root, [root]]:
+                with self.subTest(locked=locked, array=isinstance(registry, list)), \
+                        patch('connected_run.subprocess.run', return_value=SimpleNamespace(
+                            stdout=plistlib.dumps(registry))):
+                    state = console_session_state()
+                    self.assertIs(state['screenLocked'], locked)
+                    self.assertEqual(state['onConsoleSessions'], 1)
+                    self.assertNotIn('private-user', str(state))
+
+    def test_unavailable_console_probe_is_unknown_and_does_not_bypass_visibility_checks(self):
+        with patch('connected_run.subprocess.run', side_effect=subprocess.TimeoutExpired('ioreg', 5)):
+            self.assertIsNone(console_session_state()['screenLocked'])
+        with patch('connected_run.subprocess.run', return_value=SimpleNamespace(stdout=b'bad plist')):
+            self.assertIsNone(console_session_state()['screenLocked'])
+
     def test_observed_hidden_native_window_without_framework_lifecycle_is_rejected(self):
         # Reproduced in the native fixture: AppKit had hidden the window, while
         # Flutter drew 343 frames in ten seconds with no lifecycle notification.

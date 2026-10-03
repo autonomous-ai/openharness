@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import shlex
 import shutil
 import signal
@@ -17,6 +18,29 @@ import subprocess
 import time
 
 from isolation import validate_benchmark_bundle
+
+
+def console_session_state():
+    """Read only lock metadata; never retain console account names or identifiers."""
+    observed = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    try:
+        probe = subprocess.run(['/usr/sbin/ioreg', '-n', 'Root', '-d', '1', '-a'],
+                               capture_output=True, check=True, timeout=5)
+        registry = plistlib.loads(probe.stdout)
+        roots = [registry] if isinstance(registry, dict) else registry
+        sessions = [session for root in roots if isinstance(root, dict)
+                    for session in root.get('IOConsoleUsers', [])
+                    if isinstance(session, dict) and session.get('kCGSSessionOnConsoleKey') is True]
+        locked = [session.get('CGSSessionScreenIsLocked') for session in sessions]
+        # This registry field is not a public API contract. Treat absence as
+        # unknown, not unlocked; runtime framework visibility checks still apply.
+        state = True if any(value is True for value in locked) else (
+            False if locked and all(value is False for value in locked) else None)
+        return {'source': 'ioreg IOConsoleUsers', 'observedAt': observed,
+                'screenLocked': state, 'onConsoleSessions': len(sessions)}
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, plistlib.InvalidFileException) as error:
+        return {'source': 'ioreg IOConsoleUsers', 'observedAt': observed,
+                'screenLocked': None, 'unavailable': type(error).__name__}
 
 
 def rpc(path, command):
@@ -93,6 +117,15 @@ def run(args):
                                for path in [Path(__file__), tooling / 'connected_stack.mjs',
                                             tooling / 'connected_worker.mjs', args.sampler.resolve()]},
               'startedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+    result['consoleSession'] = console_session_state()
+    if result['consoleSession']['screenLocked'] is True:
+        result['error'] = 'Unlock the desktop before starting a native resource comparison'
+        # Do not create the run directory: connected_stack owns its creation.
+        # Preserve this rejection beside it, without replacing prior evidence.
+        receipt = root.with_name(root.name + '.preflight.json')
+        with receipt.open('x') as output:
+            json.dump(result, output, indent=2)
+        raise RuntimeError(f'{result["error"]}; preflight: {receipt}')
     # Validate/hash every required input before starting an owned process. A
     # missing sampler must not leave an unattended daemon/tmux launcher behind.
     helper = subprocess.Popen(helper_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

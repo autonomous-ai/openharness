@@ -1,16 +1,45 @@
 # macOS executable-discovery experiment
 
-The proposed nonblocking `lsof` probe reduced the command's measured CPU cost,
-but the connected workspace measurements did not establish a consistent overall
-resource improvement. **Keep [PR #657](https://github.com/autonomous-ai/openharness/pull/657)
-in draft pending investigation.** Nothing from this experiment was released or
-installed into the running app or daemon.
+The nonblocking `lsof` probe reduced command CPU by 49.2%. A subsequent comparison
+isolating the daemon reduced idle CPU by 14.9%, with lower CPU in all three pairs.
+This supports the narrow executable-discovery change in
+[PR #657](https://github.com/autonomous-ai/openharness/pull/657). The connected
+workspace measurements did not establish consistent whole-app savings. Nothing
+from this experiment was released or installed into the running app or daemon.
 
 **Additional measurement limitation:** later diagnostics found a hidden test app
 drawing frames without ever receiving a Flutter lifecycle state. Earlier trials
 did not record that state, so their background figures cannot establish normal
 hidden-app behavior. The runner now rejects that condition; see the lifecycle
 diagnostic below. No production visibility defect has yet been established.
+
+## Daemon-only comparison
+
+After diagnosing the native benchmark's invalid visibility state, six further
+runs isolated the daemon from the GUI. Each used the original, unmodified CLI
+bundles below, a private tmux server and ten idle terminal shells. There was no
+desktop or model process. Each fresh stack settled for 20 seconds, then ran the
+calibrated process-forest sampler for 30 seconds. Order was baseline/current,
+current/baseline, baseline/current. All six completed and cleaned up.
+
+| Metric | Median before → after |
+| --- | ---: |
+| Combined daemon/tmux/shell CPU, percent of one core | **3.51 → 2.99 (−14.9%)** |
+| Interrupt wakeups/s | 7.97 → 7.77 |
+| Summed physical footprint MiB | 102.56 → 102.75 |
+
+Individual paired CPU changes were **−15.3%, −19.8%, −5.4%**. Wakeups were mixed
+across pairs; there is no demonstrated memory improvement. The CPU boundary
+includes exited helpers through kernel child counters. This is evidence of a
+daemon component saving, not of GPU, battery or whole-app energy savings.
+
+The [data and executed runner](2026-10-03-daemon-idle-component.json) retain all
+six summaries, pair calculations, host load, hashes and cleanup results. The
+comparison ran 02:22:08–02:27:23 UTC on October 3. Other real work remained
+running; short read-only Git/receipt operations and a 0.004-second Python guard
+suite overlapped, but no build or CPU-heavy test suite did. Later main-branch
+memory-learning changes were not in these bundles; the measurement describes
+these exact snapshots, not every later daemon build.
 
 ## Fresh-process comparison
 
@@ -88,7 +117,8 @@ billion (+6.4%), with more instructions in every pair. Its median CPU time and
 kernel-accounted CPU energy also increased. Core scheduling can make CPU time
 and energy disagree, but it does not explain away the additional instructions.
 The smaller CPU increase than in the first experiment does not resolve the
-regression concern; the candidate remains in draft.
+connected-workspace comparison. Its visibility gap, investigated below, prevents
+interpreting those figures as representative hidden-app performance.
 
 A separate five-second native stack sample observed Flutter rasterization and
 Impeller text rendering while AppKit reported the benchmark hidden and its
@@ -121,6 +151,33 @@ fixture build. Rejected observations are saved with cleanup results. Previous
 trials passed their then-existing native checks, but cannot be retroactively
 certified against this additional framework check. Establishing a representative
 lifecycle transition is required before further background comparisons.
+
+### Locked console and installed-app observation
+
+At 01:52:57 UTC on October 3, the on-console session explicitly reported its
+screen locked. It still reported locked at 02:17:30 UTC. That is a concrete
+environmental obstacle to establishing the fixture's foreground transition;
+older runs did not record lock metadata, so this observation cannot establish
+their console state retrospectively. The runner now rejects a known locked
+console before creating its app, daemon or tmux. An actual invocation exercised
+that rejection without starting any fixture processes. Missing lock metadata
+remains unknown and does not bypass the independent lifecycle acceptance checks.
+
+A read-only five-second sample of the already running installed Harness 1.2.54
+at 02:18:10 UTC found its raster and I/O threads waiting in all 3,809 observations
+of each thread. The main thread mostly waited for events. Its executable/PID/start
+identity was unchanged across the sample; no app controls, restart, or session
+changes were made. This short sample did not reproduce the fresh fixture's
+continuous hidden rendering. It is neither a before/after comparison nor proof
+that every product background workload is inexpensive.
+
+A separate 35-second profile of the private daemon with ten idle shells found
+99.3% of sampled JavaScript time idle. Its external process helpers still ran:
+after the first five seconds, eight full process-table queries, seven executable
+image queries and fifteen tmux inventory/title queries were observed. One
+external Codex inventory query also ran during startup. Their recorded durations
+are wall time, and instrumentation perturbs them; the profile identifies work
+to investigate rather than establishing a resource saving.
 
 ## Candidate and command-level evidence
 

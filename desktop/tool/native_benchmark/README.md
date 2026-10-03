@@ -41,6 +41,12 @@ The launcher refuses an existing root or a normal installed app. Its additional
 macOS sandbox allows writes only inside that run and terminal devices, and
 outbound networking only over loopback or its private Unix sockets. macOS's
 setuid `/bin/ps` has a narrow execution exception for read-only discovery.
+Keep the desktop unlocked for native runs. Before creating any fixture process,
+the launcher checks console lock metadata. A known locked session produces a
+sibling `RUN_NAME.preflight.json` rejection receipt without creating the run
+directory. This registry field is not a public API contract: unavailable metadata
+is recorded as unknown, and never substitutes for the framework/native visibility
+checks below. Console account names and identifiers are not retained.
 Closing the owning launcher's stdin stops its daemon and its explicitly named
 tmux server; `cleanup.json` verifies the private socket has stopped listening.
 The app also refuses startup without the matching private-home environment.
@@ -108,9 +114,10 @@ hidden-cursor idle improvement and higher foreground active-output CPU. It does
 not establish overall energy savings.
 
 The [macOS discovery experiment](../../../docs/performance/2026-10-02-daemon-process-discovery.md)
-records a cheaper executable-image probe, inconsistent connected CPU results,
-and a diagnostic that keeps the same app and worker processes alive. The
-candidate remains unmerged while the higher fresh-process active CPU is investigated.
+records a cheaper executable-image probe, lower idle daemon CPU in three matched
+pairs, inconsistent connected CPU results, and a diagnostic that keeps the same
+app and worker processes alive. The daemon result does not establish whole-app
+energy savings; native comparisons still require a valid framework lifecycle.
 
 ## Core experiences and process resources
 

@@ -21,6 +21,25 @@ import connected_run
 
 
 class ConnectedRunnerPreflightTests(unittest.TestCase):
+    def test_locked_desktop_never_starts_the_stack_and_retains_rejection(self):
+        root = Path('/private/tmp') / ('harness-connected-locked-' + uuid.uuid4().hex)
+        args = SimpleNamespace(
+            root=root, app=Path('/private/tmp/harness-native-benchmark-not-built/Fixture.app'),
+            node=Path('/usr/bin/false'), tmux=Path('/usr/bin/false'),
+            sampler=Path(connected_run.__file__), terminals=1, bundle=None, label='locked-preflight',
+        )
+        with patch.object(connected_run, 'validate_benchmark_bundle'), \
+                patch.object(connected_run, 'console_session_state', return_value={'screenLocked': True}), \
+                patch.object(connected_run.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(RuntimeError, 'Unlock the desktop'):
+                connected_run.run(args)
+            spawn.assert_not_called()
+        self.assertFalse(root.exists())
+        receipt = json.loads(root.with_name(root.name + '.preflight.json').read_text())
+        self.assertFalse(receipt['success'])
+        self.assertTrue(receipt['consoleSession']['screenLocked'])
+        self.assertEqual(receipt['phases'], [])
+
     def test_missing_sampler_never_starts_the_stack(self):
         root = Path('/private/tmp') / ('harness-connected-preflight-' + uuid.uuid4().hex)
         args = SimpleNamespace(
