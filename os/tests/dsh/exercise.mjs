@@ -97,6 +97,12 @@ try {
         assert.equal(JSON.parse(read(join(cwd, '.harness/verdict.json'))).ready, true);
         await page.locator('#play').focus(); await page.keyboard.press('Enter');
         const frame = await until('playable frame', () => page.frames().find(f => f !== page.mainFrame() && !f.isDetached()));
+        assert.ok(await frame.evaluate(() => {
+          const board = document.querySelector('canvas').getBoundingClientRect();
+          const score = document.querySelector('#score').getBoundingClientRect();
+          return board.top >= 0 && board.height > 100 && board.bottom <= innerHeight &&
+            score.bottom <= innerHeight && document.documentElement.scrollHeight <= innerHeight + 1;
+        }), 'The entire board and score fit inside the shared viewer');
         await frame.locator('canvas').focus();
         await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight');
         assert.equal(await frame.evaluate(() => window.harnessGame.stats().score), 1);
