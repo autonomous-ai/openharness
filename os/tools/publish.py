@@ -116,7 +116,7 @@ def main():
         examples['dsh'] = {'run': dsh_run['html_url'], 'machines': dsh_receipts,
                            'checks': validate_examples(root / 'dsh-machines', 'dsh')}
     limitations = ['Physical ThinkPad, Wi-Fi, suspend and NVIDIA hardware remain unverified.',
-                   'Account-authenticated Claude/Codex model turns remain unverified; free OpenCode turns are recorded separately.',
+                   'Account-authenticated Claude/Codex model turns remain unverified. Bundled OpenCode default first-use turns are recorded in the machine evidence; upstream model availability may change.',
                    'Timing and memory measurements describe these VMs, not physical laptop power-on time.']
     validation = {'status': 'passed', 'image_run': image['html_url'], 'machine_run': run['html_url'],
                   'machines': receipts, 'examples': examples, 'limitations': limitations}
@@ -147,13 +147,13 @@ def main():
 
 Arch Linux with the LTS kernel, labwc, foot, and an on-demand browser. No desktop panels or preinstalled development stacks.
 
-To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. In an hn Terminal pane, run `sudo hn-os install`. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
+To try it: verify the ISO's SHA-256, write the whole ISO to a USB stick, and boot an x86-64 PC with Secure Boot disabled. On the USB welcome screen, press Enter to install or T to try Harness. Try opens Wi-Fi setup when needed, then bundled OpenCode with its upstream default settings. Ctrl+B then T opens a terminal directly; Ctrl+B then I opens the installer from a live session. This preview's installer erases the entire selected disk; it does not resize another OS. Encryption is enabled by default.
 
-{'The installer uses a keyboard disk picker, an encryption checkbox under the disk, and two password fields. Continue opens a separate confirmation with Back selected initially. Choose Erase and install to begin; no device-path typing is needed. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
+{'The installer has four aligned fields: disk, encryption, password, repeat password. Disk choices fit on one line. Activate Install to begin; there is no second confirmation screen or minimum password length. Empty passwords are rejected. The account is me@harness. The password initially protects both the local account and, when enabled, the encrypted disk. There is no first-boot account wizard.' if interactive_install else ''}
 
 {'Interrupted full OS updates now block ordinary package transactions until a full retry succeeds. Retrying keeps the original recovery checkpoint. This was exercised with a real failed repository refresh, blocked package upgrade, successful retry, and offline recovery. The bundled Harness runtime remains pinned to this preview; hn-os update updates Arch packages.' if update_retry else ''}
 
-BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM also installed a compiler on demand, built C, served a local Node preview, and installed and started the four agent executables. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
+BIOS/plain and UEFI/encrypted VM boot, clipboard, browser switching, offline installation and package-checkpoint recovery passed. The BIOS VM uses a Nehalem CPU profile without AVX2, starts bundled OpenCode, installs the other agent executables, installs a compiler on demand, builds C, and serves a local Node preview. See `validation.json` and `machine-evidence.zip` for the exact checks and measurements.
 
 {'Real free OpenCode agents built a Python CLI, a conference website, a keyboard game and a Fastify/SQLite application. Their unit tests and independent browser/API checks passed. The retained projects are in `programmer-examples.zip`, separate from the minimal ISO.' if 'workloads' in examples else ''}
 
@@ -168,7 +168,7 @@ Source: `{manifest['source_commit']}`. [Machine validation]({run['html_url']}).
                           'notes': str(notes), 'files': identities}, indent=2))
         return
     subprocess.run(['gh', 'release', 'create', tag, '--repo', args.repo, '--target', manifest['source_commit'],
-                    '--draft', '--prerelease', '--title', 'Programmer OS ' + version, '--notes-file', str(notes),
+                    '--draft', '--prerelease', '--title', 'Harness ' + version, '--notes-file', str(notes),
                     *map(str, assets)], check=True, timeout=900)
     try:
         subprocess.run(['gh', 'release', 'edit', tag, '--repo', args.repo, '--draft=false'], check=True, timeout=120)

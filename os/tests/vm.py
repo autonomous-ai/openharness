@@ -25,9 +25,11 @@ import uuid
 
 
 class VM:
-    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom'):
+    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
         self.live_transport = live_transport
+        self.cpu = cpu
+        self.unlock_count = 0
         self.process = None
         self.serial = None
         self.qmp = None
@@ -56,7 +58,7 @@ class VM:
         self.started = time.monotonic()
         acceleration = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
-                '-cpu', 'host' if acceleration == 'kvm' else 'max', '-device', 'virtio-vga',
+                '-cpu', self.cpu or ('host' if acceleration == 'kvm' else 'max'), '-device', 'virtio-vga',
                 '-display', 'none', '-no-reboot',
                 '-drive', f'file={self.disk},format=qcow2,if=none,id=target',
                 '-device', f'virtio-blk-pci,drive=target,serial=HN_OS_TEST,bootindex={2 if live else 1}',
@@ -145,11 +147,22 @@ class VM:
 
     def login_installed(self, config, unlock_delay=0):
         if config['encrypt']:
-            self.wait(r'(?:passphrase|Passphrase|Password)[^\r\n]*:', timeout=180)
+            self.unlock_count += 1
+            self.wait_unlock()
             if unlock_delay:
                 time.sleep(unlock_delay)
                 self.screenshot('delayed-disk-unlock')
-            self.send(config['password'] + '\n')
+                # A wrong password must return to the prompt, without losing
+                # the ability to unlock after the old device-timeout deadline.
+                self.type_probe('wrong-password')
+                self.keys('ret')
+                time.sleep(8)
+                self.wait_unlock()
+                self.screenshot('disk-unlock-retry')
+            self.type_probe(config['password'][:3])
+            self.screenshot(f'disk-unlock-{self.unlock_count}-masked')
+            self.type_probe(config['password'][3:])
+            self.keys('ret')
         self.wait(r'login:', timeout=180)
         self.send(config['username'] + '\n')
         self.wait(r'Password:')
@@ -165,6 +178,22 @@ class VM:
                 time.sleep(2)
         self.command('for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -x "hn|harness-tui" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=110)
         self.command('/usr/lib/harness-os/wait-runtime', timeout=160)
+
+    def wait_unlock(self):
+        # OCR reads the actual framebuffer; a process or serial prompt alone
+        # cannot prove the intended unlock screen was shown to the user.
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            name = f'disk-unlock-{self.unlock_count}'
+            self.screenshot(name)
+            text = subprocess.check_output(['tesseract', str(self.folder / (name + '.png')),
+                                            'stdout', '--psm', '11'], text=True,
+                                           stderr=subprocess.DEVNULL, timeout=10)
+            if 'enter your password' in text.lower():
+                (self.folder / (name + '.txt')).write_text(text)
+                return
+            time.sleep(2)
+        raise TimeoutError('The Harness graphical unlock prompt was not rendered.')
 
     def screenshot(self, name):
         ppm = self.folder / (name + '.ppm')
@@ -206,6 +235,8 @@ def check_graphical_keyboard(vm, name):
     """Prove the installed graphical surface accepts input and renders output."""
     started = time.monotonic()
     vm.command('pgrep -x labwc >/dev/null && pgrep -x foot >/dev/null')
+    vm.keys('ctrl', 'b')
+    vm.keys('shift', 't')
     marker = 'keyboard-' + name + '-ready'
     vm.type_probe('echo ' + marker)
     vm.keys('ret')
@@ -263,8 +294,8 @@ def check_console_fallback(vm, user, folder):
                    'exit 0; sleep 1; done; exit 1', timeout=20)
         vm.screenshot('03a-console-fallback')
     finally:
-        output, _ = vm.command('cat /home/programmer/.local/state/harness-os/display.log; '
-                               'ps -u programmer -o pid,ppid,tty,comm; cat /dev/vcs1', check=False)
+        output, _ = vm.command('cat /home/me/.local/state/harness-os/display.log; '
+                               'ps -u 1000 -o pid,ppid,tty,comm; cat /dev/vcs1', check=False)
         (folder / 'console-fallback.log').write_text(output)
         vm.command('rm -f ' + override + '; systemctl restart getty@tty1.service')
     vm.command(user("sh -c 'for n in $(seq 1 60); do systemctl --user is-active --quiet hn-screen && "
@@ -273,6 +304,65 @@ def check_console_fallback(vm, user, folder):
     vm.command('kill -0 "$(cat /tmp/hn-survivor.pid)"')
     vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
     vm.screenshot('03b-graphics-restored')
+
+
+def check_first_use(vm, user, folder):
+    """Operate the actual USB front door without a terminal command from the user."""
+    vm.command('test "$(hostname)" = harness && test "$(id -nu 1000)" = me && test -f /etc/harness-live')
+    vm.command('nmcli networking off')
+    version, _ = vm.command(user('/usr/bin/opencode --version'))
+    (folder / 'bundled-opencode-version.txt').write_text(version)
+    vm.command('test ! -e /home/me/.config/opencode/opencode.json')
+    vm.keys('t')
+    vm.command('for n in $(seq 1 30); do pgrep -x "nmtui|nmtui-connect" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=40)
+    vm.command('! pgrep -u 1000 -x opencode')
+    vm.screenshot('01a-try-needs-network')
+    vm.keys('esc')
+    vm.command('for n in $(seq 1 15); do ! pgrep -x "nmtui|nmtui-connect" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=20)
+    vm.keys('ret')
+    vm.command('sleep 1; ! pgrep -u 1000 -x opencode')
+    # Enter is Install, including while the network is disabled.
+    vm.keys('ret')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "All data on this disk will be erased" && exit 0; sleep 1; done; exit 1')), timeout=40)
+    vm.screenshot('01b-direct-install-offline')
+    vm.keys('esc')
+    vm.command('sleep 1; test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+    # New terminal is a shell immediately, without agent/project/task fields.
+    vm.keys('ctrl', 'b')
+    vm.keys('shift', 't')
+    vm.type_probe('echo terminal-ready')
+    vm.keys('ret')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
+    vm.screenshot('01c-direct-terminal')
+    vm.keys('ctrl', 'd')
+    vm.command('nmcli networking on; for n in $(seq 1 30); do test "$(nmcli -t -f STATE general)" = connected && exit 0; sleep 1; done; exit 1', timeout=40)
+    vm.keys('t')
+    vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
+    time.sleep(5)
+    vm.screenshot('01d-bundled-opencode')
+    # No model flag/config, API key, account, or installer. Validate a real
+    # upstream-default reply; preserve all events rather than just the exit code.
+    prompt = 'What is six times seven? Reply with only the decimal number. Do not use tools.'
+    command = 'timeout 120 /usr/bin/opencode run --format json ' + shlex.quote(prompt) + ' > /tmp/hn-first-chat.jsonl 2>/tmp/hn-first-chat.err'
+    _, status = vm.command(user('sh -c ' + shlex.quote(command)), timeout=140, check=False)
+    output, _ = vm.command('cat /tmp/hn-first-chat.jsonl')
+    errors, _ = vm.command('cat /tmp/hn-first-chat.err')
+    (folder / 'first-opencode-chat.jsonl').write_text(output)
+    (folder / 'first-opencode-chat.stderr.txt').write_text(errors)
+    events = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    reply = ''.join(e.get('part', {}).get('text', '') for e in events if e.get('type') == 'text').strip()
+    assert status == 0 and reply == '42', f'Bundled OpenCode default conversation failed: exit={status}, reply={reply!r}'
+    vm.keys('ctrl', 'c')
+    time.sleep(.3)
+    vm.keys('ctrl', 'c')
+    vm.command('for n in $(seq 1 15); do ! pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=20)
 
 
 def install_interactively(vm, config, folder):
@@ -303,21 +393,20 @@ installer.install(actual, installer.live_payload(), Path('/mnt/harness-os'))
         transcript.append(output)
         return output
     try:
-        wait('Esc cancel')
+        wait(r'All data on this disk will be erased')
         vm.send('\n')
-        wait('Enter choose   Esc back')
+        wait(r'Select disk')
+        vm.send('\x1b')
+        wait(r'All data on this disk will be erased')
         vm.send('\n')
-        wait('Esc cancel')
+        wait(r'Select disk')
+        vm.send('\n')
+        wait(r'All data on this disk will be erased')
         vm.send('\t' + ('' if config['encrypt'] else ' ') + '\t')
         vm.send(config['password'] + '\n' + config['password'] + '\n')
-        wait('Enter confirm   Esc back')
-        # The default button is Back. Both Enter and Esc return without erasing.
-        for back in ('\n', '\x1b'):
-            vm.send(back)
-            wait('Esc cancel')
-            vm.send('\n')
-            wait('Enter confirm   Esc back')
-        vm.send('\t\n')
+        # Password entry focuses Install. Only its explicit activation starts it.
+        time.sleep(.25)
+        vm.send('\n')
         output = wait(r'\r?\n' + marker + r':\d+\r?\n', timeout=900)
         status = int(re.search(r'\r?\n' + marker + r':(\d+)\r?\n', output).group(1))
         assert status == 0, 'Interactive installation failed; see installer-ui.log'
@@ -332,6 +421,7 @@ def main():
     parser.add_argument('--encrypt', action='store_true')
     parser.add_argument('--memory', type=int, default=2048)
     parser.add_argument('--live-transport', choices=['cdrom', 'usb'], default='cdrom')
+    parser.add_argument('--cpu', help='Optional QEMU CPU model, for an older instruction-set baseline')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
     parser.add_argument('--workloads', action='store_true', help='Opt in to real free-model project builds and browser acceptance after --agents')
@@ -350,7 +440,7 @@ def main():
     folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
-              'live_transport': args.live_transport,
+              'live_transport': args.live_transport, 'cpu': args.cpu or 'native/default',
               'scope': 'live session only' if args.live_only else 'live session, offline installation and recovery',
               'started_at_unix': time.time(), 'checks': [], 'status': 'running'}
     manifest = json.loads((args.iso.parent / 'manifest.json').read_text())
@@ -362,8 +452,8 @@ def main():
     result['image_source_commit'] = manifest['source_commit']
     result['test_source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     result['test_script_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    vm = VM(folder, args.iso.resolve(), args.firmware, args.memory, args.live_transport)
-    user = lambda cmd: 'runuser -u programmer -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
+    vm = VM(folder, args.iso.resolve(), args.firmware, args.memory, args.live_transport, args.cpu)
+    user = lambda cmd: 'runuser -u "$(id -nu 1000)" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus ' + cmd
     try:
         vm.start(live=True)
         vm.wait(r'root@[^\r\n]*[#] ')
@@ -390,7 +480,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
 '''
             encoded = base64.b64encode(probe.encode()).decode()
             vm.command('printf %s ' + encoded + ' | base64 -d | python3')
-            result['checks'].append('The unmounted writable Programmer OS USB is rejected as an installation target in RAM mode')
+            result['checks'].append('The unmounted writable Harness USB is rejected as an installation target in RAM mode')
         vm.command('foot --check-config --config=/usr/share/harness-os/foot.ini')
         vm.command(user("sh -c 'for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -u 1000 -x \"hn|harness-tui\" >/dev/null && exit 0; sleep 1; done; systemctl --user --no-pager status hn-screen harness-daemon; exit 1'"), timeout=110)
         vm.command(user('/usr/lib/harness-os/wait-runtime'), timeout=160)
@@ -411,6 +501,9 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.screenshot('01-live-hn')
         output, _ = vm.command(user('hn-os measure'))
         (folder / 'live-measurement.txt').write_text(output)
+        check_first_use(vm, user, folder)
+        result['checks'].append('USB Enter opens Install offline; Try opens network setup while disconnected; direct terminal accepts physical keyboard input')
+        result['checks'].append('Bundled OpenCode starts offline and its upstream-default clean-profile conversation returns the independently checked answer')
         vm.keys('meta_l', 'b')
         vm.command("for n in $(seq 1 45); do pgrep -x chromium >/dev/null && break; sleep 1; done; pgrep -x chromium", timeout=60)
         time.sleep(3)
@@ -453,7 +546,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         # Installation must work with the NIC down, using the ISO's immutable payload.
         vm.command('nmcli networking off')
         install_interactively(vm, config, folder)
-        result['checks'].append('Keyboard disk selection, encryption checkbox, password entry, Back and Esc, and explicit erase confirmation work on the guest terminal')
+        result['checks'].append('Keyboard disk selection, encryption checkbox, masked password entry and a single Install action work on the guest terminal')
         result['checks'].append('Offline installer completed on disposable disk')
         vm.command('sync')
         vm.stop()
@@ -462,14 +555,14 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.login_installed(config, unlock_delay=unlock_delay)
         result['deliberate_unlock_delay_seconds'] = unlock_delay
         if unlock_delay:
-            result['checks'].append('Encrypted disk still unlocks after waiting more than the default device timeout')
+            result['checks'].append('Harness unlock screen renders, masks input, accepts a retry after a wrong password, and unlocks after the deliberate 100-second wait')
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         result['installed_keyboard_readiness'] = check_graphical_keyboard(vm, 'installed')
         result['checks'].append('Installed graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
         vm.command('test "$(id -un)" = ' + shlex.quote(config['username']) +
                    ' && test "$HOME" = ' + shlex.quote('/home/' + config['username']) +
                    ' && test "$(uname -n)" = ' + shlex.quote(config['hostname']))
-        vm.command('test ! -e /etc/sudoers.d/10-live && ! sudo -n true')
+        vm.command('test ! -e /etc/sudoers.d/10-live && test ! -e /etc/harness-live && ! sudo -n true')
         vm.command('! pgrep -x chromium')
         vm.command('test "$(npm prefix -g)" = "$HOME/.local"')
         vm.command('findmnt -n -o FSTYPE / | grep -qx btrfs')
@@ -558,7 +651,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             (folder / 'agent-installation.log').write_text(output)
             output, _ = vm.command('cat ~/.local/state/harness-os/agent-check/packages.json')
             (folder / 'agent-versions.txt').write_text(output)
-            result['checks'].append('Real Claude Code, Codex, OpenCode and pi install and report versions inside an hn terminal; model turns unverified')
+            result['checks'].append('Claude Code, Codex and pi install on demand; bundled OpenCode and all four agents report versions inside an hn terminal')
         if args.workloads:
             # Public fictional tasks only, in the disposable guest. No host keys,
             # accounts or workspaces are made available to the model.

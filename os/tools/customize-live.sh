@@ -5,28 +5,29 @@ foot --check-config --config=/usr/share/harness-os/foot.ini
 echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
 locale-gen
 echo 'LANG=en_US.UTF-8' > /etc/locale.conf
-echo programmer-live > /etc/hostname
+echo harness > /etc/hostname
+touch /etc/harness-live
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-useradd -m -G wheel,video,audio -s /bin/bash programmer
-passwd -d programmer
+useradd -m -G wheel,video,audio -s /bin/bash me
+passwd -d me
 passwd -d root
-mkdir -p /etc/sudoers.d /home/programmer/Projects /etc/systemd/system/getty@tty1.service.d
-echo 'programmer ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-live
+mkdir -p /etc/sudoers.d /home/me/Projects /etc/systemd/system/getty@tty1.service.d
+echo 'me ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-live
 chmod 440 /etc/sudoers.d/10-live
-chown programmer:programmer /home/programmer/Projects
+chown me:me /home/me/Projects
 systemctl enable NetworkManager systemd-resolved systemd-timesyncd getty@tty1.service
 systemctl enable harness-keyring.service
 # hn-screen starts the daemon after labwc has published the display environment.
 # Linger keeps that runtime alive if its graphical client is restarted.
 mkdir -p /var/lib/systemd/linger
-touch /var/lib/systemd/linger/programmer
+touch /var/lib/systemd/linger/me
 # Agent auth and browser downloads never block boot. No SSH listener by default.
 systemctl disable NetworkManager-wait-online.service || true
 systemctl disable archlinux-keyring-wkd-sync.timer
 systemctl mask systemd-networkd.service systemd-networkd-wait-online.service
 ln -sf /usr/lib/systemd/system/multi-user.target /etc/systemd/system/default.target
-printf '[Service]\nExecStart=\nExecStart=-/usr/bin/agetty --autologin programmer --noclear %%I $TERM\n' > /etc/systemd/system/getty@tty1.service.d/autologin.conf
+printf '[Service]\nExecStart=\nExecStart=-/usr/bin/agetty --autologin me --noclear %%I $TERM\n' > /etc/systemd/system/getty@tty1.service.d/autologin.conf
 # A serial console is useful for recovering a live USB; never carried into the install.
 mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
 printf '[Service]\nExecStart=\nExecStart=-/usr/bin/agetty --autologin root --noclear %%I 115200\n' > /etc/systemd/system/serial-getty@ttyS0.service.d/live.conf

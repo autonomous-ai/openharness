@@ -1201,6 +1201,26 @@ fn back(app: &mut App, form: &mut Form) -> bool {
         false
     }
 }
+fn terminal_selected(form: &Form) -> bool {
+    form.child_active && form.child.as_ref().is_some_and(|child|
+        child.kind == Choice::Agent && child.picker.current_id().as_deref() == Some("engine:terminal"))
+}
+
+fn open_terminal(app: &mut App, mut form: Box<Form>) {
+    let machine = form.draft.machine.clone();
+    let cwd = match &form.draft.project {
+        Project::Folder(path) if !path.is_empty() => Some(path.clone()),
+        _ => (!form.home.is_empty()).then(|| form.home.clone()),
+    };
+    // Terminal is an immediate action. Keep the agent draft (including its task)
+    // for when New Harness is reopened; never send that task to a shell.
+    form.child = None;
+    form.child_active = false;
+    form.trail.clear();
+    app.new_harness_draft = Some(form);
+    crate::input::new_shell_from(app, Some((machine, String::new())), crate::app::Placement::Auto(None), cwd, None);
+}
+
 pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) {
@@ -1221,6 +1241,10 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
         if check {
             start(app);
         }
+        return;
+    }
+    if key.code == KeyCode::Enter && terminal_selected(&form) {
+        open_terminal(app, form);
         return;
     }
     let mut launch = false;
@@ -1427,6 +1451,10 @@ pub fn mouse(app: &mut App, mouse: MouseEvent) {
                     task::click(&mut c.picker, form.child_area, pos);
                 } else if let Some((_, index)) = c.picker.row_at.iter().find(|(y, _)| *y == mouse.row) {
                     c.picker.cursor = *index;
+                    if terminal_selected(&form) {
+                        open_terminal(app, form);
+                        return;
+                    }
                     choose(app, &mut form);
                 }
             } else if let Some((_, field)) = form.hits.iter().find(|(r, _)| r.contains(pos)) {

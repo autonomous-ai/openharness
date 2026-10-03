@@ -251,23 +251,21 @@ try:
     print('PASS New Harness: machine-scoped profiles and explicit model routes', flush=True)
 
     # Blender asks for its coding agent next in the same side chooser.
-    new_form(); field('Agent'); type_text('Blender'); keys('Enter'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
+    new_form(); field('Agent|Harness'); type_text('Blender'); keys('Enter'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
     submit(before + 6)
     assert state()['created'][-1]['dsh'] == 'example/blender'
-    new_form(); choose_field('Harness', 'Terminal')
-    snapshot('new-harness-terminal')
-    assert not re.search(field_at('Model|Approvals|Profile'), form_screen()), 'Terminal omits irrelevant settings\n' + screen()
-    # Return focus to the action without accepting any of the disabled Git rows.
+    new_form()
     before_terminal = placement()
-    field('Start Terminal')
-    wait(lambda: create_count() == before + 7 and not form_visible(), 'terminal launch')
+    field('Harness'); type_text('Terminal'); keys('Enter')
+    wait(lambda: create_count() == before + 7 and not form_visible(), 'Terminal choice opens a shell immediately')
+    snapshot('new-harness-terminal')
     placed_in_current_window(before_terminal)
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and request.get('permissionMode') is None, request
     assert not any(k in request for k in ('dsh', 'prompt', 'gridModel', 'gitSource', 'codexHome')), request
     print('PASS New Harness: specialized harness compatibility and ordinary Terminal launch', flush=True)
 
-    new_form(); field('Agent'); type_text('claude'); keys('Enter'); choose_field('Approvals', 'plan'); shows('Plan first')
+    new_form(); field('Agent|Harness'); type_text('claude'); keys('Enter'); choose_field('Approvals', 'plan'); shows('Plan first')
     keys('Escape'); new_form(); shows('Plan first')
     count = create_count()
     for w, h in [(80, 24), (45, 14), (22, 5), (1, 1), (150, 42)] * 3:
@@ -296,10 +294,15 @@ try:
     snapshot('new-harness-flat-task')
     tmux('resize-window', '-t', 'test', '-x', '80', '-y', '24'); settle_ui()
     snapshot('new-harness-flat-narrow')
-    # Clearing the task allows an unsupported engine; it must never silently discard one.
-    choose_field('Agent', 'Terminal'); field('Start Terminal'); shows('This agent cannot start with a task')
-    assert create_count() == count, 'an unsupported task is rejected before creating a harness'
-    field('Task'); keys('C-a', 'C-k', 'Enter'); choose_field('Agent', 'claude')
+    # A terminal starts immediately and leaves the agent draft intact. Never run
+    # the retained natural-language task as a shell command.
+    field('Agent|Harness'); type_text('Terminal'); keys('Enter')
+    wait(lambda: create_count() == count + 1 and not form_visible(), 'terminal launch with retained agent draft')
+    request = state()['created'][-1]
+    assert request['engine'] == 'terminal' and 'prompt' not in request and 'command' not in request, request
+    count += 1
+    new_form(); shows('Improve the New Harness keyboard flow.')
+    field('Task'); keys('C-a', 'C-k', 'Enter'); choose_field('Agent|Harness', 'claude')
     field('Task'); type_text('x' * 2001); keys('Enter'); field('Start Claude Code'); shows('Task is too long')
     assert create_count() == count, 'an overlong task is rejected before creating a harness'
     field('Task'); keys('C-a', 'C-k', 'Enter')

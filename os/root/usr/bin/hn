@@ -4,4 +4,10 @@ export HARNESS_TUI_BIN=/usr/lib/harness/hn
 # of keeping a second Node process resident for the lifetime of the screen.
 export HARNESS_CLI=/usr/bin/harness
 export HARNESS_CLI_ARGS='[]'
+if [ -f /etc/harness-live ]; then
+    export HARNESS_OS_LIVE=1
+    export HARNESS_TUI_TMUX_CONF=/usr/share/harness-os/tmux-live.conf
+else
+    unset HARNESS_OS_LIVE
+fi
 exec /usr/lib/harness/hn "$@"

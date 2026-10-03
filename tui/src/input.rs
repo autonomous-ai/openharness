@@ -526,6 +526,24 @@ pub fn resume_external_as(app: &mut App, x: &crate::app::External, placement: Pl
 
 /// A window with no harness in it has no pane to take keys from, so plain letters work here.
 fn home_key(app: &mut App, key: KeyEvent) {
+    if app.os_session && (app.os_live || home_rows(app).is_empty()) {
+        let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+        if plain {
+            let command = match key.code {
+                KeyCode::Enter if app.os_live => Some(Some("sudo /usr/bin/harness install")),
+                KeyCode::Char('i' | 'I') if app.os_live => Some(Some("sudo /usr/bin/harness install")),
+                KeyCode::Enter => Some(Some("/usr/bin/hn-os try")),
+                KeyCode::Char('t' | 'T') if app.os_live => Some(Some("/usr/bin/hn-os try")),
+                KeyCode::Char('w' | 'W') => Some(Some("/usr/bin/hn-os wifi")),
+                KeyCode::Char('t' | 'T') => Some(None),
+                _ => None,
+            };
+            if let Some(command) = command {
+                new_shell_from(app, None, Placement::Auto(None), None, command.map(str::to_string));
+            }
+        }
+        return;
+    }
     let rows = home_rows(app);
     let open = |app: &mut App, index: usize| {
         match rows.get(index).cloned() {

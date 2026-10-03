@@ -18,6 +18,7 @@ dosfstools
 e2fsprogs
 btrfs-progs
 cryptsetup
+plymouth
 gptfdisk
 squashfs-tools
 sudo
@@ -60,3 +61,4 @@ less
 which
 unzip
 harness-os
+opencode

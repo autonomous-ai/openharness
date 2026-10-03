@@ -1,12 +1,12 @@
-# Programmer OS
+# Harness
 
 The user works in hn agent panes. Keep the system small. Install the tools needed
 for the current task, and use terminal output, diffs and tests to review the work.
 Open `hn-browser URL` only when a browser helps. Add tools and services when the
 current task needs them; run extra services on demand unless the task needs them
 persistently. Keep the desktop shell, launcher and panels absent unless the user
-requests that interface. Ordinary terminal panes remain available with Ctrl+B,
-then N → Terminal.
+requests that interface. Open a new terminal immediately with Ctrl+B, then T. No agent or project setup
+is required.
 
 ## System operations
 
@@ -41,7 +41,7 @@ then N → Terminal.
 ## Network and hardware
 
 - Ethernet uses NetworkManager automatically. For Wi-Fi, use
-  `nmcli device wifi list` and `sudo nmcli --ask device wifi connect SSID`.
+  `hn-os wifi`, which opens NetworkManager’s keyboard interface.
   Keep passwords out of shell arguments and transcripts.
 - Audio uses PipeWire. Clipboard uses `wl-copy` and `wl-paste`.
 - npm installs into `~/.local`. The initial npm configuration permits the vendor

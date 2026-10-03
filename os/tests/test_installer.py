@@ -171,13 +171,13 @@ class InteractiveInstall(unittest.TestCase):
         self.secret = 'test-password-123'
 
     def fill_passwords(self):
-        # Disk -> encryption -> password -> repeat -> Continue via Enter.
+        # Disk -> encryption -> password -> repeat -> Install button via Enter.
         self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *self.secret, '\n'])
 
     def confirm(self):
-        self.screen.keys.extend(['\t', '\n'])  # Back -> Erase and install.
+        self.screen.keys.append('\n')  # Activate Install; no second confirmation screen.
 
-    def test_normal_install_masks_password_and_confirms_selected_disk(self):
+    def test_install_button_masks_password_and_installs_selected_disk(self):
         self.fill_passwords()
         self.confirm()
         installer.main()
@@ -186,11 +186,24 @@ class InteractiveInstall(unittest.TestCase):
         self.assertEqual(config['confirm_erase'], '/dev/vda')
         self.assertEqual(config['expected_serial'], 'HN_TEST')
         self.assertEqual(config['password'], self.secret)
-        self.assertIn('[x] Encrypt disk', self.screen.frames[0])
+        self.assertIn('Encryption        [x]', self.screen.frames[0])
+        first = self.screen.frames[0]
+        for clutter in ('me@', '/dev/', 'HN_TEST', 'Tab move', 'Space toggle', 'eight characters'):
+            self.assertNotIn(clutter, first)
+        for label in ('Disk', 'Encryption', 'Password', 'Repeat password'):
+            self.assertTrue(any(row.startswith(f'{label:18}') for row in first.splitlines()))
         for frame in self.screen.frames:
             self.assertNotIn(self.secret, frame)
-            if 'All data on this disk' in frame:
-                self.assertNotIn('Encrypt disk', frame)
+
+    def test_short_password_is_accepted_but_empty_password_is_not(self):
+        self.secret = 'a'
+        self.fill_passwords()
+        self.confirm()
+        installer.main()
+        self.assertEqual(self.install.call_args.args[0]['password'], 'a')
+        config = dict(self.install.call_args.args[0], password='')
+        with self.assertRaisesRegex(ValueError, 'Enter a password'):
+            installer.validate_config(config)
 
     def test_command_line_keeps_explicit_unencrypted_and_custom_account_installation(self):
         self.argv.extend(['--no-encryption', '--username', 'sam', '--hostname', 'workbox'])
@@ -199,7 +212,7 @@ class InteractiveInstall(unittest.TestCase):
         installer.main()
         config = self.install.call_args.args[0]
         self.assertEqual((config['username'], config['hostname'], config['encrypt']), ('sam', 'workbox', False))
-        self.assertIn('[ ] Encrypt disk', self.screen.frames[0])
+        self.assertIn('Encryption        [ ]', self.screen.frames[0])
 
     def test_main_form_checkbox_can_disable_encryption(self):
         self.screen.keys.extend(['\t', ' ', '\t', *self.secret, '\n', *self.secret, '\n'])
@@ -207,24 +220,27 @@ class InteractiveInstall(unittest.TestCase):
         installer.main()
         self.assertFalse(self.install.call_args.args[0]['encrypt'])
 
-    def test_enter_defaults_to_back_and_escape_returns_without_installing(self):
+    def test_finishing_passwords_only_focuses_install_and_escape_cancels(self):
         self.fill_passwords()
-        self.screen.keys.extend(['\n', '\n', '\x1b', '\x1b'])
+        self.screen.keys.append('\x1b')
         with self.assertRaises(KeyboardInterrupt):
             installer.main()
         self.install.assert_not_called()
-        reviews = [f for f in self.screen.frames if 'All data on this disk' in f]
-        self.assertEqual(len(reviews), 2)
+        self.assertTrue(all('Install Harness on this disk?' not in f for f in self.screen.frames))
 
-    def test_back_allows_selecting_another_disk_and_requires_its_confirmation(self):
+    def test_selecting_another_disk_does_not_start_installation(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
+        self.screen.keys.extend(['\n', installer.curses.KEY_DOWN, '\n'])
         self.fill_passwords()
-        self.screen.keys.extend(['\n', '\t', '\n', installer.curses.KEY_DOWN, '\n', installer.curses.KEY_BTAB, '\n'])
         self.confirm()
         installer.main()
         config = self.install.call_args.args[0]
         self.assertEqual((config['disk'], config['confirm_erase'], config['expected_serial']),
                          ('/dev/vdb', '/dev/vdb', 'SECOND_DISK'))
+        picker = next(f for f in self.screen.frames if f.startswith('Select disk'))
+        disk_rows = [r for r in picker.splitlines() if '/dev/' in r]
+        self.assertEqual(len(disk_rows), 2)
+        self.assertTrue(all('Test SSD' in r and 'GB' in r for r in disk_rows))
 
     def test_escaping_disk_picker_preserves_original_selection(self):
         self.inventory.return_value.append(dict(self.disk, name='/dev/vdb', serial='SECOND_DISK'))
@@ -235,7 +251,7 @@ class InteractiveInstall(unittest.TestCase):
         self.assertEqual(self.install.call_args.args[0]['disk'], '/dev/vda')
 
     def test_password_mismatch_can_be_corrected_without_restarting(self):
-        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *'different', '\n', '\x15', *self.secret, '\n'])
+        self.screen.keys.extend(['\t', '\t', *self.secret, '\n', *'different', '\n', '\n', installer.curses.KEY_BTAB, '\x15', *self.secret, '\n'])
         self.confirm()
         installer.main()
         self.assertTrue(any('Passwords do not match.' in frame for frame in self.screen.frames))
@@ -265,15 +281,15 @@ class InteractiveInstall(unittest.TestCase):
         self.install.assert_not_called()
         self.wrapper.assert_not_called()
 
-    def test_disk_replacement_after_selection_never_reaches_confirmation(self):
+    def test_disk_replacement_is_rejected_when_install_is_pressed(self):
         self.inventory.side_effect = [[self.disk], [dict(self.disk, serial='REPLACED')]]
         self.fill_passwords()
+        self.confirm()
         self.screen.keys.append('\x1b')
         with self.assertRaises(KeyboardInterrupt):
             installer.main()
         self.install.assert_not_called()
         self.assertTrue(any('Disk serial does not match' in frame for frame in self.screen.frames))
-        self.assertFalse(any('All data on this disk' in frame for frame in self.screen.frames))
 
     def test_small_terminal_can_cancel_without_starting_installation(self):
         self.screen.size = (12, 40)

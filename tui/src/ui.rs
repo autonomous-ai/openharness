@@ -584,6 +584,7 @@ fn box_style(app: &App, id: u64) -> Style {
 const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀", "█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█"];
 
 fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
+    if app.os_session && (app.os_live || home_rows(app).is_empty()) { os_welcome(buf, app, area); return }
     let rows = home_rows(app);
     let (_, theme_fg, _) = crate::theme::palette();
     let width = area.width.min(84).saturating_sub(4);
@@ -657,7 +658,7 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
     // Typing here is a shell's (as after tmux's C-b c); the rows by number, or the arrows and Enter;
     // the rest on the prefix's keys, as everywhere.
     let hint = |c: &str| app.keymap.hint(c).unwrap_or_default();
-    let keys: Vec<(String, &str)> = vec![("1-9".into(), "open"), ("↑↓ enter".into(), "choose"), ("type".into(), "a shell here"), (hint("choose-tree -Zs"), "harnesses"), (hint("new-harness"), "new"), (hint("choose-tree -a"), "waiting"), (hint("choose-tree -m"), "machines")];
+    let keys: Vec<(String, &str)> = vec![("1-9".into(), "open"), ("↑↓ enter".into(), "choose"), ("type".into(), "a shell here"), (hint("new-terminal"), "new terminal"), (hint("choose-tree -Zs"), "harnesses"), (hint("new-harness"), "new agent"), (hint("choose-tree -a"), "waiting"), (hint("choose-tree -m"), "machines")];
     let keys: Vec<(String, &str)> = keys.into_iter().filter(|(k, _)| !k.is_empty()).collect();
     let mut row: Vec<Span> = Vec::new();
     let mut row_w = 0;
@@ -683,6 +684,65 @@ fn empty_window(buf: &mut Buffer, app: &App, area: Rect) {
         buf.set_line(x, y, line, area.width.saturating_sub(x - area.x));
     }
     themed_home(buf, area);
+}
+
+fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
+    let mut lines = Vec::new();
+    if area.height >= 24 {
+        for word in WORDMARK { lines.push(Line::styled(word, fg(theme::accent()))) }
+    } else { lines.push(Line::styled("harness", bold(theme::accent()))) }
+    lines.push(Line::raw(""));
+    let centered = lines.len();
+    let actions = if app.os_live { vec![("Enter", "Install Harness"), ("T", "Try without installing")] }
+        else { vec![("Enter", "Start OpenCode"), ("T", "New terminal"), ("W", "Connect to Wi-Fi")] };
+    for (key, action) in actions {
+        lines.push(Line::from(vec![Span::styled(format!("{key:7}"), bold(theme::accent())), Span::styled(action, bold(theme::TEXT))]));
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::raw(""));
+    let prefix = crate::keys::name(&app.keymap.prefix);
+    lines.push(Line::styled(format!("{prefix} T terminal · {prefix} W Wi-Fi · Super+B browser"), fg(theme::MUTED)));
+    if app.os_live { lines.push(Line::styled(format!("Inside a session: {prefix} I install"), fg(theme::MUTED))) }
+    let width = area.width.saturating_sub(4).min(58);
+    let left = area.x + area.width.saturating_sub(width) / 2;
+    let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
+    for (index, line) in lines.iter().enumerate() {
+        let y = top + index as u16;
+        if y >= area.y + area.height { break }
+        let x = if index < centered { area.x + area.width.saturating_sub(line.width() as u16) / 2 } else { left };
+        buf.set_line(x, y, line, area.width.saturating_sub(x - area.x));
+    }
+}
+
+#[cfg(test)]
+mod os_welcome_tests {
+    use super::*;
+
+    #[test]
+    fn usb_prioritizes_install_and_installed_home_never_offers_it() {
+        for (width, height) in [(80, 24), (60, 18), (120, 40)] {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19789, sink, (width, height));
+            app.handed_over = true;
+            app.os_session = true;
+            for live in [true, false] {
+                app.os_live = live;
+                let area = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(area);
+                empty_window(&mut buf, &app, area);
+                let text = (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
+                if live {
+                    assert!(text.contains("Enter  Install Harness"), "{text}");
+                    assert!(text.contains("T      Try without installing"), "{text}");
+                    assert!(!text.contains("Nothing running"), "{text}");
+                } else {
+                    assert!(text.contains("Start OpenCode"), "{text}");
+                    assert!(text.contains("New terminal"), "{text}");
+                    assert!(!text.contains("Install Harness"), "{text}");
+                }
+            }
+        }
+    }
 }
 
 // ── a theme over the panes ──

@@ -40,8 +40,10 @@ def validate_config(config):
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', config.get('hostname', '')):
         raise ValueError('Invalid hostname.')
     password = config.get('password', '')
-    if len(password) < 8 or any(c in password for c in '\r\n\0'):
-        raise ValueError('Use a password of at least eight characters without line breaks.')
+    if not password:
+        raise ValueError('Enter a password.')
+    if any(c in password for c in '\r\n\0'):
+        raise ValueError('The password cannot contain line breaks or null characters.')
     if type(config.get('encrypt')) is not bool:
         raise ValueError('encrypt must be true or false.')
     if not re.fullmatch(r'/dev/[a-zA-Z0-9_-]+', config.get('disk', '')):
@@ -61,7 +63,7 @@ def validate_disk(device, expected_serial=None):
         return (node.get('fstype') == 'iso9660' and node.get('label') == 'HN_OS') or any(
             live_medium(c) for c in node.get('children', []))
     if live_medium(device):
-        raise ValueError('The Programmer OS USB cannot be an installation target, even when booted into RAM.')
+        raise ValueError('The Harness USB cannot be an installation target, even when booted into RAM.')
     if expected_serial is not None and str(device.get('serial') or '').strip() != expected_serial:
         raise ValueError('Disk serial does not match the unattended installation configuration.')
 
@@ -79,7 +81,7 @@ def live_payload(source=None):
         if candidate.is_file():
             return candidate
     checked = ', '.join(str(path) for path in candidates)
-    raise ValueError(f'Live system payload is missing (checked {checked}); boot the Programmer OS USB.')
+    raise ValueError(f'Live system payload is missing (checked {checked}); boot the Harness USB.')
 
 
 def selected_disk(config):
@@ -103,7 +105,7 @@ def chroot(root, *args, **kwargs):
 
 def validate_image_account(passwd, username):
     names = {line.split(':', 1)[0] for line in passwd.splitlines()}
-    if username != 'programmer' and username in names:
+    if username != 'me' and username in names:
         raise ValueError(f'The image reserves the username {username}; choose a different account name.')
 
 
@@ -111,11 +113,11 @@ def preflight(config, source):
     for command in ['sgdisk', 'udevadm', 'mkfs.fat', 'mkfs.btrfs', 'cryptsetup',
                     'mount', 'umount', 'btrfs', 'unsquashfs', 'arch-chroot', 'blkid']:
         if not shutil.which(command):
-            raise ValueError(f'The installer is missing {command}. Boot an intact Programmer OS image.')
+            raise ValueError(f'The installer is missing {command}. Boot an intact Harness image.')
     validate_image_account(run('unsquashfs', '-cat', source, 'etc/passwd', capture=True), config['username'])
     lock = json.loads(run('unsquashfs', '-cat', source, 'usr/share/harness-os/lock.json', capture=True))
     if lock.get('architecture') != 'x86_64' or not lock.get('version'):
-        raise ValueError('The source is not a Programmer OS x86_64 image.')
+        raise ValueError('The source is not a Harness x86_64 image.')
     kernel = json.loads(run('unsquashfs', '-cat', source, 'usr/share/harness-os/kernel.json', capture=True))
     if not re.fullmatch(r'usr/lib/modules/[a-zA-Z0-9._+-]+/vmlinuz', kernel.get('path', '')) or not re.fullmatch(r'[a-f0-9]{64}', kernel.get('sha256', '')):
         raise ValueError('The image has an invalid kernel manifest.')
@@ -130,7 +132,7 @@ def install(config, source, target):
     # Inspect again immediately before partitioning, rather than trusting the picker.
     selected_disk(config)
     if not source.is_file():
-        raise ValueError('Live system payload is missing; boot the Programmer OS USB.')
+        raise ValueError('Live system payload is missing; boot the Harness USB.')
     if target.exists() and any(target.iterdir()):
         raise ValueError('Installation mountpoint is not empty.')
     if config.get('confirm_erase') != config['disk']:
@@ -145,7 +147,7 @@ def install(config, source, target):
     opened = False
     mounted = False
     try:
-        print(f'Erasing {disk} and installing Programmer OS...', flush=True)
+        print(f'Erasing {disk} and installing Harness...', flush=True)
         run('sgdisk', '--zap-all', disk)
         run('sgdisk', '-n', '1:1MiB:+2MiB', '-t', '1:ef02', '-c', '1:HN BIOS',
             '-n', '2:0:+1GiB', '-t', '2:ef00', '-c', '2:HN BOOT',
@@ -196,27 +198,32 @@ def install(config, source, target):
         # The live image is immutable. No live passwords, SSH keys or sessions are copied.
         for path in ['etc/sudoers.d/10-live', 'etc/mkinitcpio.conf.d/archiso.conf',
                      'etc/systemd/system/serial-getty@ttyS0.service.d/live.conf',
-                     'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh']:
+                     'etc/pacman.d/hooks/99-harness-live.hook', 'root/setup-live.sh', 'etc/harness-live']:
             (target / path).unlink(missing_ok=True)
         for path in ['etc/systemd/system/getty@tty1.service.d', 'root/.ssh']:
             shutil.rmtree(target / path, ignore_errors=True)
-        if (target / 'etc/passwd').read_text().find('\nprogrammer:') >= 0:
-            chroot(target, 'userdel', '-r', 'programmer')
+        if (target / 'etc/passwd').read_text().find('\nme:') >= 0:
+            chroot(target, 'userdel', '-r', 'me')
         chroot(target, 'useradd', '-m', '-G', 'wheel,video,audio', '-s', '/bin/bash', config['username'])
         chroot(target, 'chpasswd', input=f"{config['username']}:{config['password']}\n".encode())
         chroot(target, 'passwd', '-l', 'root')
-        (target / 'var/lib/systemd/linger/programmer').unlink(missing_ok=True)
+        (target / 'var/lib/systemd/linger/me').unlink(missing_ok=True)
         write(target, f'/var/lib/systemd/linger/{config["username"]}', '')
         home = target / 'home' / config['username']
         (home / 'Projects').mkdir(exist_ok=True)
         chroot(target, 'chown', '-R', f"{config['username']}:{config['username']}", f"/home/{config['username']}")
-        write(target, '/etc/sudoers.d/10-programmer', '%wheel ALL=(ALL:ALL) ALL\n', 0o440)
+        write(target, '/etc/sudoers.d/10-harness', '%wheel ALL=(ALL:ALL) ALL\n', 0o440)
         write(target, '/etc/hostname', config['hostname'] + '\n')
         write(target, '/etc/hosts', f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {config['hostname']}\n")
         write(target, '/etc/machine-id', '')
         write(target, '/etc/mkinitcpio.conf',
-              'HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
+              'HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole '
+              + ('plymouth ' if config['encrypt'] else '')
+              + 'block sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
         write(target, '/etc/vconsole.conf', 'KEYMAP=us\n')
+        if config['encrypt']:
+            write(target, '/etc/plymouth/plymouthd.conf',
+                  '[Daemon]\nTheme=harness\nShowDelay=0\nDeviceTimeout=5\n')
         root_uuid = run('blkid', '-s', 'UUID', '-o', 'value', root_device, capture=True)
         boot_uuid = run('blkid', '-s', 'UUID', '-o', 'value', boot, capture=True)
         write(target, '/etc/fstab',
@@ -234,11 +241,11 @@ def install(config, source, target):
         root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
         kernel_args = f'quiet loglevel=3 rootflags={root_flags}'
         if config.get('serial_console'):
-            kernel_args += ' console=tty0 console=ttyS0,115200'
+            kernel_args += ' console=tty0 console=ttyS0,115200 plymouth.ignore-serial-consoles'
         if luks_uuid:
-            kernel_args += f' rd.luks.name={luks_uuid}=cryptroot'
+            kernel_args += f' rd.luks.name={luks_uuid}=cryptroot splash'
         write(target, '/etc/default/grub',
-              'GRUB_DEFAULT=0\nGRUB_TIMEOUT=1\nGRUB_DISTRIBUTOR="Programmer OS"\n'
+              'GRUB_DEFAULT=0\nGRUB_TIMEOUT=1\nGRUB_DISTRIBUTOR="Harness"\n'
               'GRUB_DISABLE_OS_PROBER=true\n' + f'GRUB_CMDLINE_LINUX="{kernel_args}"\n')
         lock = json.loads((target / 'usr/share/harness-os/lock.json').read_text())
         snapshot = lock['arch_snapshot']
@@ -281,7 +288,7 @@ def display_text(value):
 
 def disk_label(disk):
     size = f"{int(disk['size']) / 1_000_000_000:.1f}".removesuffix('.0')
-    return f"{display_text(disk.get('model')) or 'Disk'} - {size} GB"
+    return f"{display_text(disk.get('model')) or 'Disk'}  {size} GB"
 
 
 class InstallForm:
@@ -318,16 +325,15 @@ class InstallForm:
         else:
             self.screen.erase()
         height, width = self.screen.getmaxyx()
-        if height < 22 or width < 60:
+        if height < 18 or width < 54:
             self.cursor(False)
-            self.line(0, 'Resize terminal to at least 60 columns and 22 rows.')
+            self.line(0, 'Resize terminal to at least 54 columns and 18 rows.')
             self.line(2, 'Esc cancels. No disk has been changed.')
             self.screen.refresh()
             if self.key() == '\x1b':
                 raise KeyboardInterrupt('Cancelled.')
             return False
         self.line(1, title, bold=True)
-        self.line(2, f'{self.username}@{self.hostname}')
         return True
 
     def key(self):
@@ -346,15 +352,12 @@ class InstallForm:
             if not self.begin('Select disk'):
                 continue
             height, _ = self.screen.getmaxyx()
-            count = max(1, (height - 10) // 2)
+            count = max(1, height - 8)
             start = (selected // count) * count
             for index in range(start, min(start + count, len(self.disks))):
                 disk = self.disks[index]
-                row = 5 + (index - start) * 2
-                self.line(row, ('> ' if index == selected else '  ') + disk_label(disk), index == selected)
-                self.line(row + 1, f"  {disk['name']}  {display_text(disk.get('serial'))}")
-            self.line(height - 4, f'Disk {selected + 1} of {len(self.disks)}')
-            self.line(height - 2, 'Up/Down select   Enter choose   Esc back')
+                row = 4 + index - start
+                self.line(row, ('> ' if index == selected else '  ') + disk_label(disk) + '  ' + disk['name'], index == selected)
             self.cursor(False)
             self.screen.refresh()
             key = self.key()
@@ -389,52 +392,27 @@ class InstallForm:
         self.passwords[index], self.positions[index] = value, position
         self.error = ''
 
-    def review(self, config, disk):
-        focus = 0  # Back. Repeated Enter must never consent to erasing a disk.
-        while True:
-            if not self.begin('Install Harness on this disk?'):
-                continue
-            self.line(5, disk_label(disk), bold=True)
-            self.line(6, f"{disk['name']}  {display_text(disk.get('serial'))}")
-            self.line(8, 'All data on this disk will be erased.')
-            self.line(12, '[ Back ]', focus == 0)
-            self.screen.addstr(12, 14, '[ Erase and install ]', curses.A_REVERSE if focus == 1 else curses.A_NORMAL)
-            self.line(20, 'Tab/Arrows choose   Enter confirm   Esc back')
-            self.cursor(False)
-            self.screen.refresh()
-            key = self.key()
-            if key == '\x1b' or self.enter(key) and focus == 0:
-                return None
-            if self.enter(key) and focus == 1:
-                config['confirm_erase'] = disk['name']
-                return config
-            if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN,
-                       curses.KEY_LEFT, curses.KEY_RIGHT):
-                focus = 1 - focus
-
     def run(self):
         self.screen.keypad(True)
         while True:
             if not self.begin('Install Harness'):
                 continue
             disk = self.disks[self.selected]
-            self.line(5, f"{'Disk':18}[ {disk_label(disk)} ]", self.focus == 0)
-            self.line(6, f"{'':18}{disk['name']}  {display_text(disk.get('serial'))}")
-            self.line(8, f"{'':18}[{'x' if self.encrypt else ' '}] Encrypt disk", self.focus == 1)
-            capacity = self.screen.getmaxyx()[1] - 24
+            self.line(4, f"{'Disk':18}{disk_label(disk)}", self.focus == 0)
+            self.line(6, f"{'Encryption':18}[{'x' if self.encrypt else ' '}]", self.focus == 1)
+            capacity = min(32, self.screen.getmaxyx()[1] - 24)
             for index, label in enumerate(('Password', 'Repeat password')):
                 position = self.positions[index]
                 offset = max(0, position - capacity + 1)
                 mask = '*' * len(self.passwords[index][offset:offset + capacity])
-                self.line(11 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
-            self.line(15, 'Use at least eight characters.')
-            self.line(16, self.error)
-            self.line(18, f"{'':18}[ Continue ]", self.focus == 4)
-            self.line(20, 'Tab move   Space toggle   Enter continue   Esc cancel')
+                self.line(8 + index * 2, f'{label:<18}[{mask:<{capacity}}]', self.focus == index + 2)
+            self.line(12, self.error)
+            self.line(14, f"{'':18}[ Install ]", self.focus == 4)
+            self.line(16, 'All data on this disk will be erased.')
             self.cursor(self.focus in (2, 3))
             if self.focus in (2, 3):
                 position = self.positions[self.focus - 2]
-                self.screen.move(11 + (self.focus - 2) * 2, 21 + min(position, capacity - 1))
+                self.screen.move(8 + (self.focus - 2) * 2, 21 + min(position, capacity - 1))
             self.screen.refresh()
             key = self.key()
             if key == '\x1b':
@@ -450,8 +428,8 @@ class InstallForm:
                     self.pick_disk()
                 elif self.focus == 1:
                     self.encrypt = not self.encrypt
-                elif self.focus == 2:
-                    self.focus = 3
+                elif self.focus in (2, 3):
+                    self.focus += 1
                 else:
                     config = dict(disk=disk['name'], username=self.username, hostname=self.hostname,
                                   encrypt=self.encrypt, password=self.passwords[0],
@@ -464,10 +442,8 @@ class InstallForm:
                     except ValueError as error:
                         self.error = str(error)
                         continue
-                    confirmed = self.review(config, disk)
-                    if confirmed:
-                        return confirmed
-                    self.focus = 4
+                    config['confirm_erase'] = disk['name']
+                    return config
             elif self.focus in (2, 3):
                 self.edit_password(self.focus - 2, key)
 
@@ -500,7 +476,7 @@ def main():
     parser.add_argument('--source', type=Path, help='Override the automatically detected live system image')
     args = parser.parse_args()
     if os.geteuid() != 0:
-        raise SystemExit('Run sudo hn-os install from the live USB.')
+        raise SystemExit('Run sudo harness install from the live USB.')
     if args.config:
         if args.username is not None or args.hostname is not None or args.no_encryption:
             raise ValueError('With --config, set account names and encryption in that file instead of command-line overrides.')

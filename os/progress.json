@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T07:37:46.727698+00:00",
+  "last_updated_utc": "2026-10-03T08:55:37.599357+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -886,7 +886,86 @@
       "Record process readiness and keyboard-confirmed readiness separately, including automated typing overhead; inspect final screenshots"
     ],
     "local_validation": "39 portable tests and Python/JSON/XML/shell syntax passed; git diff --check passed",
-    "native_status": "not yet dispatched",
-    "remaining_physical_work": "ThinkPad issue details promised by user; Wi-Fi, suspend and GPU evidence still unavailable."
+    "native_status": "passed",
+    "remaining_physical_work": "ThinkPad issue details promised by user; Wi-Fi, suspend and GPU evidence still unavailable.",
+    "test_source_commit": "909ca1ac43654875c256a024406d6f87ddc823eb",
+    "native_run_id": 37108853927,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37108853927",
+    "native_validation_started_utc": "2026-10-03T08:11:19Z",
+    "native_validation_completed_utc": "2026-10-03T08:18:10Z",
+    "visual_review_utc": "2026-10-03T08:28:25.074631+00:00",
+    "visual_review": "Installed and recovered terminal screenshots show the physical-keyboard probe and response in both firmware modes; installed home screenshots show hn after closing the pane.",
+    "measurements": {
+      "uefi-encrypted": {
+        "installed_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 118.341,
+          "probe_seconds_including_automated_typing": 6.057
+        },
+        "recovered_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 18.086,
+          "probe_seconds_including_automated_typing": 6.053
+        }
+      },
+      "bios-plain": {
+        "installed_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 25.056,
+          "probe_seconds_including_automated_typing": 6.045
+        },
+        "recovered_keyboard_readiness": {
+          "confirmed_seconds_since_boot": 24.67,
+          "probe_seconds_including_automated_typing": 6.042
+        }
+      }
+    },
+    "limitations": "Encrypted installed boot includes the intentional 100-second password delay. Readiness times include about six seconds of automated typing. These are VM observations, not ThinkPad boot measurements."
+  },
+  "usb_first_use_revision": {
+    "request_received_utc": null,
+    "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
+    "status": "ready for native validation",
+    "implementation_complete_utc": "2026-10-03T08:55:37.599357+00:00",
+    "validation_complete_utc": null,
+    "publication_utc": null,
+    "requirements": [
+      "Product name Harness; live and installed hostname harness",
+      "Try launches bundled OpenCode; when disconnected offer network setup first; install remains usable offline",
+      "Keep terminal available, other agents installed on demand, and normal work restoration after install",
+      "USB account me and hostname harness; remove Programmer OS from visible product branding",
+      "New terminal opens a shell immediately; retain an existing agent draft without sending its task to the shell",
+      "sudo harness install is the command equivalent of the direct Install action",
+      "Installer has four aligned fields: Disk, Encryption, Password, Repeat password; no account text, password minimum length, decorative separators or navigation-hint clutter",
+      "Single-line disk choices include the device path on the same line; Install starts directly with no second confirmation; keep one inline disk-erasure disclosure",
+      "Encrypted boot should show Harness branding and a friendly masked password prompt before entering hn",
+      "Keyboard-first interface with optional mouse support; hide pointer while typing",
+      "USB welcome prioritizes Enter = Install Harness; T = Try without installing. Network setup is only required by Try, never by offline installation.",
+      "Bundle OpenCode with its upstream default setup. Do not pin any specific model or override its model selection. Verify its actual clean first launch."
+    ],
+    "validation_plan": [
+      "Portable installer safety and first-use helper tests, shell/Python/JSON/XML syntax and workflow lint",
+      "Affected TUI tests and full native TUI suite in the exact image build; existing CLI typecheck/engine install and launch checks",
+      "Inspect actual SquashFS for bundled signed OpenCode package, live marker/account and exact runtime",
+      "Boot USB with BIOS/plain and UEFI/encrypted; physically activate Wi-Fi, Try, Install and direct terminal; verify single-form offline install, friendly encrypted unlock, and removal of live-only actions after install",
+      "Clean-profile real free-model turn with bundled OpenCode and old-CPU startup check; distinguish virtual network checks from physical Wi-Fi",
+      "Inspect screenshots; verify published assets using the existing publication receipt without duplicate full downloads"
+    ],
+    "waiting": [],
+    "local_validation": "45 portable tests plus Python/JSON/XML/shell syntax and git diff --check passed. Native TUI and image/machine validation pending.",
+    "implemented_in_source": [
+      "Install-first live welcome and direct system shortcuts",
+      "Harness branding and me@harness live identity",
+      "Direct terminal action in the chooser, preserving the agent draft",
+      "Single-form installer and harness install alias",
+      "Signed snapshot OpenCode package input, with no custom OpenCode configuration",
+      "NetworkManager keyboard UI and connection check before trying OpenCode",
+      "foot hide-when-typing enabled",
+      "Five-line ASCII Harness Plymouth theme for encrypted boot; standard systemd/Plymouth password handling, awaiting boot verification",
+      "Fresh installed home offers Start OpenCode, New terminal and Wi-Fi; live-only Install action removed after installation"
+    ],
+    "remaining": [
+      "Exact-source native TUI build/tests and artifact inspection",
+      "BIOS/plain old-CPU and UEFI/encrypted USB journeys including real default OpenCode replies",
+      "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
+      "Update release/download documentation and publish only after required evidence passes"
+    ]
   }
 }

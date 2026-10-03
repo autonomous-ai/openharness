@@ -76,7 +76,7 @@ cat > "$BUILD_DIR/package/.PKGINFO" <<EOF
 pkgname = harness-os
 pkgbase = harness-os
 pkgver = $PACKAGE_VERSION-1
-pkgdesc = Programmer OS session and verified Harness runtime
+pkgdesc = Harness session and verified Harness runtime
 url = https://github.com/autonomous-ai/openharness
 builddate = ${SOURCE_DATE_EPOCH:-$(date +%s)}
 packager = OpenHarness
@@ -99,16 +99,16 @@ Operation = Install
 Type = Package
 Target = harness-os
 [Action]
-Description = Preparing the Programmer OS live session
+Description = Preparing the Harness live session
 When = PostTransaction
 Exec = /bin/bash /root/setup-live.sh
 EOF
 cat >> "$PROFILE/profiledef.sh" <<EOF
 
-iso_name="programmer-os"
+iso_name="harness"
 iso_label="HN_OS"
 iso_publisher="OpenHarness"
-iso_application="Programmer OS: boot into hn"
+iso_application="Harness: boot into hn"
 iso_version="$VERSION"
 airootfs_image_type="squashfs"
 airootfs_image_tool_options=("-comp" "zstd" "-Xcompression-level" "6" "-b" "1M")
@@ -127,7 +127,7 @@ for d in ['syslinux', 'efiboot', 'grub']:
             try: s = f.read_text()
             except UnicodeDecodeError: continue
             s = s.replace('vmlinuz-linux', 'vmlinuz-linux-lts').replace('initramfs-linux.img', 'initramfs-linux-lts.img')
-            s = s.replace('Arch Linux install medium', 'Programmer OS - try or install')
+            s = s.replace('Arch Linux install medium', 'Harness - try or install')
             # The 256 MiB Archiso default cannot install even one current agent.
             # tmpfs grows on demand; this is a ceiling, not reserved memory.
             s = s.replace('archisobasedir=%INSTALL_DIR%', 'archisobasedir=%INSTALL_DIR% cow_spacesize=50%')
@@ -136,7 +136,7 @@ for d in ['syslinux', 'efiboot', 'grub']:
             s = re.sub(r'(?m)^TIMEOUT\s+\d+', 'TIMEOUT 10', s)  # Syslinux uses tenths of a second.
             s = re.sub(r'(?m)^beep on$', 'beep off', s)
             s = re.sub(r'(?m)^play .*$', '', s)
-            s = s.replace('MENU TITLE Arch Linux', 'MENU TITLE Programmer OS')
+            s = s.replace('MENU TITLE Arch Linux', 'MENU TITLE Harness')
             s = re.sub(r'(?m)^MENU BACKGROUND .*\n', '', s)
             f.write_text(s)
 PY

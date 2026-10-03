@@ -119,7 +119,7 @@ def boot_hashes(folder):
 def installed():
     receipt = Path('/var/lib/harness-os/install.json')
     if not receipt.is_file() or run('findmnt', '-n', '-o', 'FSTYPE', '/', capture=True).strip() != 'btrfs':
-        raise ValueError('This operation requires an installed Programmer OS system.')
+        raise ValueError('This operation requires an installed Harness system.')
     info = read_json(receipt)
     for mount in ['/', '/.snapshots']:
         actual = run('findmnt', '-n', '-o', 'UUID', '--mountpoint', mount, capture=True).strip()

@@ -672,6 +672,8 @@ pub struct App {
     /// The OS's primary screen: keep a home screen when empty and refuse client detach/suspend.
     /// This controls the interface, not the user's ability to administer their machine.
     pub os_session: bool,
+    /// A disposable USB session offers direct try, install and network actions on its home.
+    pub os_live: bool,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
     /// The session asked for at start (`hn new -A -s main`, `hn attach -t work`).
@@ -878,6 +880,7 @@ impl App {
             sessions_sig: String::new(),
             headless: false,
             os_session: std::env::var("HARNESS_OS").as_deref() == Ok("1"),
+            os_live: std::env::var("HARNESS_OS").as_deref() == Ok("1") && std::env::var("HARNESS_OS_LIVE").as_deref() == Ok("1"),
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
             last_cli: Instant::now(),

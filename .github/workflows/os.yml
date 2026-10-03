@@ -1,4 +1,4 @@
-name: Programmer OS
+name: Harness OS
 
 on:
   workflow_dispatch:
@@ -141,9 +141,11 @@ jobs:
           - firmware: bios
             encryption: ''
             agents: '--agents'
+            cpu: '--cpu Nehalem'
           - firmware: uefi
             encryption: '--encrypt'
             agents: ''
+            cpu: ''
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v6
@@ -155,7 +157,7 @@ jobs:
       - name: Install VM test tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Restore prior generated workload projects
         if: ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' }}
@@ -170,7 +172,7 @@ jobs:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
           OS_LIVE_TRANSPORT: ${{ inputs.live_transport || 'cdrom' }}
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
       - name: Show machine failure diagnostics
         if: failure()
         run: |

@@ -67,7 +67,7 @@ def main():
     path_arg = lambda path: str(path).replace(',', ',,')
     with tempfile.TemporaryDirectory(prefix='hn-os-', dir='/tmp') as control:
         control = Path(control)
-        command = [qemu, '-name', 'Programmer OS', '-accel', accel,
+        command = [qemu, '-name', 'Harness', '-accel', accel,
                    '-cpu', 'max' if accel == 'tcg' else 'host', '-m', str(args.memory), '-smp', '2',
                    '-device', 'virtio-vga', '-display', display,
                    '-drive', f'file={path_arg(disk)},format=qcow2,if=none,id=target',
