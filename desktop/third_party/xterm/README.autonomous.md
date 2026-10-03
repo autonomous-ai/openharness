@@ -14,9 +14,12 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
 ## Local patches
 
 - **Single-byte output avoids a code-point list copy**
-  (`lib/src/utils/byte_consumer.dart`). Latin-1 strings use their immutable
-  code-unit view, whose entries already equal their Unicode code points.
-  Wider text retains the original rune decoder. Queue positions, rollback,
+  (`lib/src/utils/byte_consumer.dart`). On native runtimes, Latin-1 strings use
+  their immutable code-unit view, whose entries already equal their Unicode
+  code points.
+  Wider text and browser runtimes retain the original rune decoder: mixed
+  queue-list types slowed Unicode parsing in the JavaScript benchmark.
+  Queue positions, rollback,
   split escape sequences and supplementary characters keep their existing
   semantics. Regressions: `test/terminal_byte_consumer_test.dart`, also run in
   Chrome. Compare an earlier revision with the working tree using
