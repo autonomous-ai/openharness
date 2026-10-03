@@ -142,6 +142,18 @@ def placed_in_current_window(before):
     assert placement() == (window, windows, panes + 1), 'New Harness must add a pane in the current window'
     # Keep room for the next launch as this suite creates several harnesses in one window.
     hn('select-layout', 'tiled')
+def end_new_terminal(previous_agents, previous_placement):
+    created = {a['id'] for a in state()['agents']} - previous_agents
+    assert len(created) == 1, created
+    agent = created.pop()
+    wait(lambda: any(s['agent'] == agent for c in state('reconnect')['connections'] for s in c['streams']), 'new terminal stream is open')
+    request = urllib.request.Request(f'http://127.0.0.1:{PORT}/test/reconnect',
+        data=json.dumps({'action': 'close', 'agent': agent, 'reason': 'process exited'}).encode(),
+        headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=2) as response:
+        assert json.load(response)['data']['ok']
+    wait(lambda: placement() == previous_placement, 'exited terminal removes its pane')
+    assert 'The terminal closed' not in screen(), 'an ordinary shell must not leave an agent error card'
 def submit(count):
     # Git discovery is asynchronous. Wait for its answer before accepting the visible draft.
     time.sleep(.15)
@@ -257,6 +269,7 @@ try:
     assert state()['created'][-1]['dsh'] == 'example/blender'
     new_form()
     before_terminal = placement()
+    previous_agents = {a['id'] for a in state()['agents']}
     field('Harness'); type_text('Terminal'); keys('Enter')
     wait(lambda: create_count() == before + 7 and not form_visible(), 'Terminal choice opens a shell immediately')
     snapshot('new-harness-terminal')
@@ -264,7 +277,20 @@ try:
     request = state()['created'][-1]
     assert request['engine'] == 'terminal' and request.get('permissionMode') is None, request
     assert not any(k in request for k in ('dsh', 'prompt', 'gridModel', 'gitSource', 'codexHome')), request
+    end_new_terminal(previous_agents, before_terminal)
     print('PASS New Harness: specialized harness compatibility and ordinary Terminal launch', flush=True)
+
+    # The keyboard shortcut owns the same shell lifecycle as the chooser.
+    # Its normal exit closes its view, rather than showing an agent error card.
+    previous_agents = {a['id'] for a in state()['agents']}
+    count = create_count()
+    keys('C-b', 'T')
+    wait(lambda: create_count() == count + 1 and not form_visible(), 'Ctrl+B T opens a terminal directly')
+    placed_in_current_window(before_terminal)
+    request = state()['created'][-1]
+    assert request['engine'] == 'terminal' and 'prompt' not in request and 'dsh' not in request, request
+    end_new_terminal(previous_agents, before_terminal)
+    print('PASS New terminal: chooser and Ctrl+B T both close their views on normal shell exit', flush=True)
 
     new_form(); field('Agent|Harness'); type_text('claude'); keys('Enter'); choose_field('Approvals', 'plan'); shows('Plan first')
     keys('Escape'); new_form(); shows('Plan first')

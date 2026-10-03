@@ -6,7 +6,7 @@
   "merge_utc": null,
   "publication_utc": "2026-10-03T02:03:47Z",
   "completion_utc": null,
-  "status": "Preview 3 published and all eight public downloads verified. Exact-source optical and RAM-copy USB checks passed in BIOS/plain and UEFI/encrypted modes. User confirms preview 2 installation with workaround and internal-disk boot on ThinkPad; details of remaining physical issues pending.",
+  "status": "Preview 3 remains public. Preview 4 first-use changes and Naming System are committed or ready; VM-discovered terminal lifecycle regression is fixed in source and awaits the next exact-source build.",
   "evidence": [
     {
       "scope": "Installer/recovery guard tests, real-shell VM command framing, and Python/JSON/XML/Bash syntax",
@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T08:55:37.599357+00:00",
+  "last_updated_utc": "2026-10-03T10:03:53.212354+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "Exact image build passed; BIOS/plain and UEFI/encrypted USB journeys running. Naming System approved and documented.",
+    "status": "Preview 4 source corrections ready for a fresh native build; publication remains gated on full machine journeys.",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -1000,16 +1000,27 @@
         "result": "Both machine journeys stopped at first-use identity assertion: hostname command is absent from the minimal image. Serial prompt already shows harness, but remaining identity assertions and first-use journeys did not run.",
         "passed": "Image job including portable checks, native CLI/TUI checks, all native fixtures, ISO build and SquashFS inspection.",
         "remedy": "Read kernel hostname with existing coreutils uname -n; no package added. Rebuild latest source to include separately added installer completion screen, then rerun BIOS/plain and UEFI/encrypted journeys."
+      },
+      {
+        "run_id": 37113924838,
+        "source_commit": "ca24088bae5e648becabdfa3f4c150059e038c53",
+        "started_utc": "2026-10-03T09:41:57Z",
+        "failed_utc": "2026-10-03T09:57:17Z",
+        "result": "Both machine journeys stopped after Ctrl+B T / Ctrl+D: the shortcut used the generic agent launch path and left a closed-terminal card. Try never received its key, so OpenCode did not launch.",
+        "passed": "Image build and inspection; native CLI/TUI checks including all ten fixtures. Both VMs passed live identity, offline bundled OpenCode version (including Nehalem), disconnected Try/network UI, offline Install/cancel and physical input in a new terminal.",
+        "remedy": "Use the owned shell path for the New terminal shortcut, matching the chooser. Add native stream-exit regression and an actual VM pane-disappearance assertion. Also retain interactive installer errors until acknowledgement."
       }
     ],
     "isolation_revision_ready_utc": "2026-10-03T09:11:28.017223+00:00",
     "positioning": "Harness is built around agents as the primary interface: conversation directs work; terminal output, diffs and browser make results inspectable. Programmers first; broader uses later. Product name remains Harness.",
     "post_build_source_changes": [],
-    "post_build_local_checks": "Publication guard tests (3) and syntax passed; landing assets/fragment references passed; visual website review remains unverified.",
-    "native_validation_complete_utc": "2026-10-03T09:16:55Z",
+    "post_build_local_checks": "31 installer tests passed; changed Python files compile and git diff --check passed. Native terminal regression and updated machine journey require the new source build.",
+    "native_validation_complete_utc": "2026-10-03T09:57:17Z",
     "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
     "pending_source_changes": [
-      "Interactive installation now retains a completion screen with Shut down and Back to Harness; it cannot disappear immediately when its hn pane exits. 27 installer tests and source syntax passed; VM main-entry completion coverage added but not yet run. A subsequent image build is required before publishing these changes."
+      "New terminal shortcut uses the same owned-shell launch path as the Terminal chooser, closes its pane on exit, and inherits the focused working directory.",
+      "Interactive installer errors remain visible until Enter; unattended and piped errors exit immediately. Completion screen remains in source.",
+      "Native regression checks both terminal launch paths; VM covers retained installer errors and Ctrl+D pane removal. Failure diagnostics retain full process command lines."
     ],
     "branding_review": {
       "status": "approved and documented",
@@ -1042,9 +1053,10 @@
         "publication_utc": null
       }
     },
-    "next_step": "Build and test current source including completion screen and corrected machine identity check; inspect first-use and unlock screenshots before publication.",
-    "last_recorded_utc": "2026-10-03T09:41:12.744184+00:00",
-    "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys."
+    "next_step": "Fresh BIOS/plain Nehalem and UEFI/encrypted 4 GiB USB image validation, with native terminal lifecycle regressions before image assembly. Inspect actual default OpenCode conversation, installation completion, and masked unlock/retry before publishing.",
+    "last_recorded_utc": "2026-10-03T10:03:53.212354+00:00",
+    "first_use_visual_review": "Reviewed actual BIOS and UEFI screenshots from run 37112874271: Harness wordmark, Install Harness primary action, Try without installing secondary action, and harness hostname appear. This only covers the welcome screen, not subsequent first-use journeys.",
+    "revision_ready_utc": "2026-10-03T10:03:53.212354+00:00"
   },
-  "previous_goal_turn_classification": "progress: corrected minimal-image hostname test, committed and pushed ca24088ba, started verified native build 37113924838, and completed terminology research and proposal."
+  "previous_goal_turn_classification": "progress: documented approved Naming System and diagnosed/fixed the Ctrl+B T normal-exit regression; interactive installer error retention and machine regressions prepared."
 }

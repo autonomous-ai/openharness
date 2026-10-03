@@ -345,5 +345,43 @@ class InteractiveInstall(unittest.TestCase):
         self.wrapper.assert_not_called()
 
 
+class InstallerExit(unittest.TestCase):
+    def exercise(self, failure, config=None, tty=True):
+        with patch.object(installer, 'arguments', return_value=installer.argparse.Namespace(config=config)), \
+             patch.object(installer, 'main', side_effect=failure), \
+             patch.object(installer.sys.stdin, 'isatty', return_value=tty), \
+             patch.object(installer.sys, 'stderr') as stderr, \
+             patch('builtins.input') as acknowledge:
+            stderr.isatty.return_value = tty
+            status = installer.entrypoint()
+            return status, acknowledge, ''.join(str(call.args[0]) for call in stderr.write.call_args_list)
+
+    def test_interactive_failure_waits_for_acknowledgement_before_pane_closes(self):
+        status, acknowledge, error = self.exercise(ValueError('Target disk was not found.'))
+        self.assertEqual(status, 1)
+        self.assertIn('Installation stopped: Target disk was not found.', error)
+        acknowledge.assert_called_once_with('Press Enter to return to Harness.')
+
+    def test_unattended_and_piped_failures_never_wait(self):
+        for config, tty in [(Path('/tmp/install.json'), True), (None, False)]:
+            with self.subTest(config=config, tty=tty):
+                status, acknowledge, error = self.exercise(OSError('fixture read failure'), config, tty)
+                self.assertEqual(status, 1)
+                self.assertIn('fixture read failure', error)
+                acknowledge.assert_not_called()
+
+    def test_deliberate_cancel_does_not_open_an_error_prompt(self):
+        status, acknowledge, error = self.exercise(KeyboardInterrupt())
+        self.assertEqual(status, 130)
+        self.assertEqual(error, '')
+        acknowledge.assert_not_called()
+
+    def test_success_keeps_zero_status_without_an_extra_prompt(self):
+        status, acknowledge, error = self.exercise(None)
+        self.assertEqual(status, 0)
+        self.assertEqual(error, '')
+        acknowledge.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

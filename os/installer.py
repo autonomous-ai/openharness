@@ -496,7 +496,7 @@ def completion(screen):
             return selected == 0
 
 
-def main():
+def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--username', help='Override the default local account name (me)')
@@ -504,7 +504,11 @@ def main():
     parser.add_argument('--no-encryption', action='store_true', help='Explicitly install without disk encryption')
     parser.add_argument('--yes-erase-disk', action='store_true')
     parser.add_argument('--source', type=Path, help='Override the automatically detected live system image')
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main(args=None):
+    args = arguments() if args is None else args
     if os.geteuid() != 0:
         raise SystemExit('Run sudo harness install from the live USB.')
     if args.config:
@@ -529,9 +533,25 @@ def main():
             run('systemctl', 'poweroff')
 
 
-if __name__ == '__main__':
+def entrypoint():
+    args = arguments()
     try:
-        main()
-    except (ValueError, curses.error, subprocess.CalledProcessError, KeyboardInterrupt) as error:
-        print(f'Installation stopped: {error}', file=sys.stderr)
-        sys.exit(1)
+        main(args)
+    except KeyboardInterrupt:
+        return 130
+    except (ValueError, OSError, curses.error, subprocess.CalledProcessError) as error:
+        print(f'Installation stopped: {error}', file=sys.stderr, flush=True)
+        # An installer launched from the USB welcome owns its pane. Retain the
+        # error until it has been read instead of closing the pane immediately.
+        # Unattended configuration files and piped callers never wait for input.
+        if not args.config and sys.stdin.isatty() and sys.stderr.isatty():
+            try:
+                input('Press Enter to return to Harness.')
+            except (EOFError, KeyboardInterrupt):
+                pass
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(entrypoint())

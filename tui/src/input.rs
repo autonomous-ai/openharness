@@ -904,8 +904,8 @@ pub fn run(app: &mut App, command: &str) {
         "store" => launch(app, "*", Filter::All),
         "new" => crate::new_harness::open(app, None, None),
         "terminal" => {
-            let machine = focused_agent(app).map(|(m, _)| m).unwrap_or(app.fleet.local_id.clone());
-            create(app, machine, What { engine: "terminal".into(), dsh: None, label: "Terminal".into() }, None, None);
+            let focused = focused_agent(app);
+            new_shell_from(app, focused, Placement::Auto(None), None, None);
         }
         "send" => prompt(app, PromptKind::Send, "Send to harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", "", false),
         "broadcast" => {

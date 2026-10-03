@@ -327,6 +327,14 @@ def check_first_use(vm, user, folder):
     vm.screenshot('01b-direct-install-offline')
     vm.keys('esc')
     vm.command('sleep 1; test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
+    # A preflight error must remain visible in a command-owned pane until read.
+    vm.command(user('hn new-window -n install-error ' + shlex.quote('sudo /usr/bin/harness install --source /run/hn-missing-image')))
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 15); do hn capture-pane -p | grep -q "Press Enter to return to Harness" && exit 0; sleep 1; done; exit 1')), timeout=20)
+    installer_process = '^/usr/bin/python3 /usr/lib/harness-os/install[.]py --source /run/hn-missing-image$'
+    vm.command('pgrep -f ' + shlex.quote(installer_process))
+    vm.screenshot('01b-install-error')
+    vm.keys('ret')
+    vm.command('for n in $(seq 1 15); do ! pgrep -f ' + shlex.quote(installer_process) + ' && exit 0; sleep 1; done; exit 1', timeout=20)
     # New terminal is a shell immediately, without agent/project/task fields.
     vm.keys('ctrl', 'b')
     vm.keys('shift', 't')
@@ -334,7 +342,13 @@ def check_first_use(vm, user, folder):
     vm.keys('ret')
     vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -qx terminal-ready && exit 0; sleep 1; done; exit 1')), timeout=30)
     vm.screenshot('01c-direct-terminal')
+    output, _ = vm.command(user('hn display-message -p "HN_FIRST_TERMINAL=#{pane_id}"'))
+    pane = re.search(r'HN_FIRST_TERMINAL=(%\d+)', output)
+    assert pane, 'New terminal must identify its actual pane'
     vm.keys('ctrl', 'd')
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do '
+        'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(pane.group(1)) +
+        ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=15)
     vm.command('nmcli networking on; for n in $(seq 1 30); do test "$(nmcli -t -f STATE general)" = connected && exit 0; sleep 1; done; exit 1', timeout=40)
     vm.keys('t')
     vm.command('for n in $(seq 1 90); do pgrep -u 1000 -x opencode >/dev/null && exit 0; sleep 1; done; exit 1', timeout=100)
@@ -508,6 +522,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         (folder / 'live-measurement.txt').write_text(output)
         check_first_use(vm, user, folder)
         result['checks'].append('USB Enter opens Install offline; Try opens network setup while disconnected; direct terminal accepts physical keyboard input')
+        result['checks'].append('Installer errors remain visible until acknowledged; exiting a direct terminal removes its pane')
         result['checks'].append('Bundled OpenCode starts offline and its upstream-default clean-profile conversation returns the independently checked answer')
         vm.keys('meta_l', 'b')
         vm.command("for n in $(seq 1 45); do pgrep -x chromium >/dev/null && break; sleep 1; done; pgrep -x chromium", timeout=60)
@@ -721,7 +736,7 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         result['error'] = str(error)
         if vm.shell_ready:
             try:
-                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; cat /home/*/.local/state/harness-os/display.log; ps -ef', timeout=20, check=False)
+                diagnostics, _ = vm.command('journalctl -b --no-pager -n 350; systemctl --failed --no-pager; cat /home/*/.local/state/harness-os/display.log; ps -efww', timeout=20, check=False)
                 (folder / 'guest-diagnostics.log').write_text(diagnostics)
             except Exception:
                 pass
