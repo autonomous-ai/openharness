@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import tarfile
 import time
 import uuid
 
@@ -187,8 +189,11 @@ def main():
     parser.add_argument('--memory', type=int, default=2048)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--agents', action='store_true', help='Install and start real agent executables after recovery; no accounts/API calls')
+    parser.add_argument('--workloads', action='store_true', help='Opt in to real free-model project builds and browser acceptance after --agents')
     parser.add_argument('--live-only', action='store_true', help='Development probe: stop after the live-session checks, without installing')
     args = parser.parse_args()
+    if args.workloads and not args.agents:
+        parser.error('--workloads requires --agents')
     folder = (args.output or Path(__file__).resolve().parents[1] / 'test-results' / (args.firmware + ('-encrypted' if args.encrypt else '-plain'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     result = {'firmware': args.firmware, 'encrypted': args.encrypt, 'memory_mib': args.memory,
@@ -248,7 +253,7 @@ def main():
         # A long-lived terminal process proves a screen restart does not kill the work.
         survivor = "echo $$ > /tmp/hn-survivor.pid; exec sleep 1800"
         vm.command(user("hn new-window -n persistence " + shlex.quote(survivor)))
-        vm.command('test -s /tmp/hn-survivor.pid')
+        vm.command('for n in $(seq 1 15); do test -s /tmp/hn-survivor.pid && exit 0; sleep 1; done; exit 1', timeout=20)
         clipboard_probe = 'printf hn-pane-clipboard | wl-copy; test "$(wl-paste --no-newline)" = hn-pane-clipboard && touch /tmp/hn-pane-clipboard-passed'
         vm.command(user('hn new-window -n clipboard ' + shlex.quote(clipboard_probe)))
         vm.command('for n in $(seq 1 15); do test -e /tmp/hn-pane-clipboard-passed && exit 0; sleep 1; done; exit 1', timeout=20)
@@ -356,6 +361,31 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
             output, _ = vm.command('cat ~/.local/state/harness-os/agent-check/packages.json')
             (folder / 'agent-versions.txt').write_text(output)
             result['checks'].append('Real Claude Code, Codex, OpenCode and pi install and report versions inside an hn terminal; model turns unverified')
+        if args.workloads:
+            # Public fictional tasks only, in the disposable guest. No host keys,
+            # accounts or workspaces are made available to the model.
+            package = io.BytesIO()
+            with tarfile.open(fileobj=package, mode='w:gz') as archive:
+                archive.add(Path(__file__).with_name('workloads'), arcname='workloads')
+            encoded = base64.b64encode(package.getvalue()).decode()
+            vm.command(': > /tmp/hn-workloads.b64')
+            for offset in range(0, len(encoded), 2000):
+                vm.command('printf %s ' + encoded[offset:offset + 2000] + ' >> /tmp/hn-workloads.b64')
+            vm.command('base64 -d /tmp/hn-workloads.b64 | tar -xz -C /tmp; rm /tmp/hn-workloads.b64')
+            vm.command('hn new-window -n programmer-workloads ' + shlex.quote('bash /tmp/workloads/run.sh > "$HOME/.local/state/harness-os/workloads.log" 2>&1'))
+            output, _ = vm.command('for n in $(seq 1 3300); do test -s ~/.local/state/harness-os/workloads/status && break; sleep 1; done; cat ~/.local/state/harness-os/workloads.log', timeout=3320)
+            (folder / 'workloads.log').write_text(output)
+            # Keep both successful and failed model output for review; exclude
+            # install caches and dependencies from the small source archive.
+            vm.command('tar --exclude=node_modules --exclude=.git --exclude=__pycache__ -czf /tmp/hn-workloads-results.tgz -C "$HOME" Projects/os-workloads .local/state/harness-os/workloads', timeout=60)
+            output, _ = vm.command("printf 'HN_WORKLOAD_ARCHIVE='; base64 -w0 /tmp/hn-workloads-results.tgz; printf '\\n'", timeout=120)
+            packed = base64.b64decode(re.search(r'HN_WORKLOAD_ARCHIVE=([A-Za-z0-9+/=]+)', output).group(1), validate=True)
+            destination = folder / 'workloads'
+            destination.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(packed), mode='r:gz') as archive:
+                archive.extractall(destination, filter='data')
+            vm.command('test "$(cat ~/.local/state/harness-os/workloads/status)" = 0')
+            result['checks'].append('Free OpenCode built four projects; independent CLI, keyboard browser, game and persistent API checks passed')
         result['status'] = 'passed'
     except Exception as error:
         result['status'] = 'failed'

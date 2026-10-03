@@ -11,6 +11,11 @@ on:
         description: 'Publish a previously passed and visually reviewed machine-test run; image_run_id may identify its image build'
         required: false
         type: string
+      workloads:
+        description: 'Opt in to real free OpenCode model calls, four project builds and browser/API acceptance in the disposable BIOS VM'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -99,7 +104,7 @@ jobs:
     needs: image
     if: ${{ always() && !inputs.publish_run_id && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
@@ -124,7 +129,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Boot, operate, install and reboot the real image
-        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }}
+        run: python3 os/tests/vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ inputs.workloads && matrix.firmware == 'bios' && '--workloads' || '' }}
       - name: Show machine failure diagnostics
         if: failure()
         run: |
@@ -139,6 +144,7 @@ jobs:
             os/test-results/**/*.log
             os/test-results/**/*.txt
             os/test-results/**/*.json
+            os/test-results/**/workloads/**
           retention-days: 14
 
   publish:
