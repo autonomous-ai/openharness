@@ -162,6 +162,9 @@ arm64/x86_64 slices, signatures and hardened runtime are checked before publicat
 still receives both app and DMG notarization, with the stapled app inside the DMG. Separate scratch
 manifests are combined only after all macOS and Linux builds succeed, followed by verification of
 all six public downloads. `macos-build-timings` records the bounded build and per-variant phases.
+App copies and DMG staging use independent APFS clones when available. The temporary
+notarization ZIP uses faster compression; the downloadable ZIP retains normal compression
+and is rebuilt from the stapled app. Signing and both notarization checks remain the same.
 
 `scripts/publish-macos-variant.sh intel|apple-silicon <version>` remains the single-variant entry
 point. With `--no-build`, `APP_BUNDLE` selects an existing bundle; the uploader's `OUTPUT_DIR`

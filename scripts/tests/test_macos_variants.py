@@ -72,7 +72,7 @@ print("published fixture")
         for script, tool in (("publish-macos-variant.sh", "variant.py"), ("upload-desktop.sh", "upload.py")):
             (scripts / script).write_text(f'exec "{sys.executable}" tools/{tool} "$@"\n')
         ditto = self.bin / "ditto"
-        ditto.write_text(f"#!{sys.executable}\nimport shutil,sys\nshutil.copytree(sys.argv[1],sys.argv[2])\n")
+        ditto.write_text(f"#!{sys.executable}\nimport shutil,sys\nargs=sys.argv[1:]\nif args[0]=='--clone':args.pop(0)\nshutil.copytree(*args)\n")
         ditto.chmod(0o755)
         self.environment = mock.patch.dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"])
         self.environment.start()

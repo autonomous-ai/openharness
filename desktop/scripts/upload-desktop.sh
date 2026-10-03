@@ -222,7 +222,16 @@ mkdir -p "$OUTPUT_DIR"
 ZIP="$OUTPUT_DIR/Harness-macos-$VER.zip"
 rm -f "$ZIP"
 echo ">> packaging $ZIP"
-( cd "$(dirname "$APP_BUNDLE")" && ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP_BUNDLE")" "$ZIP" )
+package_zip() {
+  ( cd "$(dirname "$APP_BUNDLE")" && ditto -c -k --sequesterRsrc --keepParent "$@" "$(basename "$APP_BUNDLE")" "$ZIP" )
+}
+if [ "$DO_NOTARIZE" -eq 1 ]; then
+  # This upload is discarded after stapling. Spend less CPU compressing it;
+  # the final downloadable ZIP below still uses ditto's normal compression.
+  package_zip --zlibCompressionLevel 1
+else
+  package_zip
+fi
 
 # --- Step 3b: notarize + staple ---
 # Apple's notary service inspects a zip (or the .app directly) and returns a ticket; stapling
@@ -248,7 +257,7 @@ if [ "$DO_NOTARIZE" -eq 1 ]; then
 
   echo ">> re-packaging $ZIP with the stapled ticket"
   rm -f "$ZIP"
-  ( cd "$(dirname "$APP_BUNDLE")" && ditto -c -k --sequesterRsrc --keepParent "$(basename "$APP_BUNDLE")" "$ZIP" )
+  package_zip
 
   # Fails closed rather than silently shipping a build Gatekeeper would reject on someone else's Mac.
   spctl -a -vv --type execute "$APP_BUNDLE" || {
@@ -271,7 +280,7 @@ DMG="$OUTPUT_DIR/Harness-macos-$VER.dmg"
 DMG_STAGE="$(mktemp -d)"   # removed by cleanup() on EXIT
 echo ">> packaging $DMG"
 rm -f "$DMG"
-cp -R "$APP_BUNDLE" "$DMG_STAGE/"
+ditto --clone "$APP_BUNDLE" "$DMG_STAGE/$(basename "$APP_BUNDLE")"
 ln -s /Applications "$DMG_STAGE/Applications"
 hdiutil create -quiet -srcfolder "$DMG_STAGE" -volname "Harness" -fs HFS+ -format UDZO -ov "$DMG"
 

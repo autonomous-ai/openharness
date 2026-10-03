@@ -101,7 +101,9 @@ def build(version, defines, desktop, output, receipt):
         if bundle.exists():
             shutil.rmtree(bundle)
         bundle.parent.mkdir(parents=True, exist_ok=True)
-        copies.append(check(f"copy-{variant}", ["ditto", str(source), str(bundle)], 60))
+        # APFS clones keep independent files without rewriting the same app bytes.
+        # ditto falls back to copying where cloning is unavailable.
+        copies.append(check(f"copy-{variant}", ["ditto", "--clone", str(source), str(bundle)], 60))
     phase(copies, desktop, output, receipt)
     phase([check(f"renderer-{variant}", ["env", f"APP_BUNDLE={output / variant / 'Harness.app'}",
                                          "bash", variant_script, variant, version, "--no-build", "--build-only"], 120)
