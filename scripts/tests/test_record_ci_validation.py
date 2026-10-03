@@ -308,6 +308,11 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("desktop_summary", result)
         self.assertEqual(result["artifact"]["id"], 987)
         self.assertEqual(result["desktop_artifact"]["id"], 988)
+        optional = next(job for job in self.jobs if job["name"] == "companion-subsystems")
+        optional["conclusion"] = "skipped"
+        with self.assertRaisesRegex(ValueError, "required job was skipped: companion-subsystems"):
+            self.collect(scope="full")
+        optional["conclusion"] = "success"
         self.artifacts.pop()
         with self.assertRaisesRegex(ValueError, "Desktop coverage summary"):
             self.collect(scope="full")

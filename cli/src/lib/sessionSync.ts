@@ -7,8 +7,8 @@ export interface SessionSyncDeps {
   project(session: RegisteredSession): Promise<AgentFrame>
   send(frame: { type: string; payload: Record<string, unknown> }): void
   sendCommander(frame: { type: string; payload: Record<string, unknown> }): void
-  onUnavailable(agentId: string): void
-  onFailed(agentId: string, detail: string): void
+  onUnavailable?(agentId: string): void
+  onFailed?(agentId: string, detail: string): void
   warn(error: unknown): void
 }
 
@@ -19,7 +19,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
     // removes the old dial row explicitly while keeping the shell available to the app.
     const device = opts.device !== false && !isTerminalEngine(session.engine)
     if (!deps.terminalAvailable(session.agentId)) {
-      deps.onUnavailable(session.agentId)
+      deps.onUnavailable?.(session.agentId)
       // load() clears terminal verification at every daemon start. Metadata can sync before
       // discovery restores it, so an app deletion here would permanently remove a live pane
       // from the shared desk. Only confirmed removal/retirement may send that deletion.
@@ -27,7 +27,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
       if (device) deps.sendCommander({ type: 'agent_deleted', payload: { agentId: session.agentId } })
       return
     }
-    if (session.launch?.state === 'failed') deps.onFailed(session.agentId, session.launch.detail ?? session.launch.error)
+    if (session.launch?.state === 'failed') deps.onFailed?.(session.agentId, session.launch.detail ?? session.launch.error)
     try {
       const agent = await deps.project(session)
       const frame = { type: 'agent_synced', payload: { agent } }

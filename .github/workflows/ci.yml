@@ -238,6 +238,34 @@ jobs:
           node scripts/test-process-images-bundled.mjs
           npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts --maxWorkers=1
 
+  # The optional product has its own dependencies, bundle and suites. CLI-only CI
+  # deliberately checks core without installing or building this package.
+  companion-subsystems:
+    if: ${{ (inputs.scope || 'full') == 'full' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: companions
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            cli/package-lock.json
+            companions/package-lock.json
+      # Shared source helpers retain their own dependency resolution during typecheck.
+      - run: npm ci --prefix ../cli --ignore-scripts
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:bundle
+      # CPU-budget fuzz runs alone, separate from subprocess-heavy fixture tests.
+      - run: npx vitest run src/shared/guard.fuzz.spec.ts --maxWorkers=1
+      - run: npm test -- --exclude src/shared/guard.fuzz.spec.ts --maxWorkers=3
+
   # Typecheck and contract checks run alongside the default suite's four shards.
   cli-contracts:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
@@ -304,12 +332,6 @@ jobs:
       - name: Native helper build-input and portable bundle contracts
         run: node --test scripts/test-process-image-bundle.mjs
 
-      # The guard fuzz suite measures a wall-clock CPU budget. Sibling workers running
-      # subprocess fixtures can deschedule it past that bound on a shared runner.
-      # Keep it outside the default-suite shards, with the same assertions and deadline.
-      - name: Guard fuzz and bounded hostile-input time
-        run: npx vitest run src/pair/learn/guard.fuzz.spec.ts
-
       - name: Concurrent registry discovery, hooks and durable close intents
         run: node scripts/registry-observation-e2e.mjs "$RUNNER_TEMP/registry-observation-e2e"
 
@@ -347,9 +369,9 @@ jobs:
       # existing worker cap/isolation: subprocess fixtures still need spare CPUs.
       # Opt-in real-engine suites retain their existing explicit skips.
       - name: Discover the complete default-suite inventory
-        run: npx vitest list --config vitest.ci.config.ts --filesOnly --exclude src/pair/learn/guard.fuzz.spec.ts --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
+        run: npx vitest list --config vitest.ci.config.ts --filesOnly --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
       - name: Run default-suite shard
-        run: npx vitest run --config vitest.ci.config.ts --exclude src/pair/learn/guard.fuzz.spec.ts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-${{ matrix.shard }}.json"
+        run: npx vitest run --config vitest.ci.config.ts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/result-${{ matrix.shard }}.json"
       - name: Preserve inventory and test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

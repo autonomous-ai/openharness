@@ -148,18 +148,15 @@ async function collect(response: Record<string, unknown> = {}): Promise<{ port: 
 }
 
 describe('hook notify terminal scope', () => {
-  it.each(['claude', 'codex'] as const)('acknowledges an emitted %s memory packet without copying the prompt or claim into the receipt', async engine => {
+  it.each(['claude', 'codex'] as const)('ignores a stale %s memory response and only reports ordinary session registration', async engine => {
     const additionalContext = 'Historical coding memory: keep review changes small.'
     const memoryReceiptId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const { port, requests } = await collect({ ok: true, additionalContext, memoryReceiptId })
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
-    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })
-    expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start', '/api/hook/memory-emitted'])
-    expect(requests[1].body).toMatchObject({ engine, sessionId: input.session_id, memoryReceiptId })
-    expect(requests[1].body).not.toHaveProperty('prompt')
-    expect(requests[1].body).not.toHaveProperty('additionalContext')
+    expect(stdout).toBe('')
+    expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start'])
   })
 
   it('never acknowledges a receipt without emitted user-turn context', async () => {
@@ -169,13 +166,13 @@ describe('hook notify terminal scope', () => {
     expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start'])
   })
 
-  it.each(['claude', 'codex'] as const)('adds daemon-verified companion context to the actual %s user turn', async engine => {
+  it.each(['claude', 'codex'] as const)('does not inject companion context returned by an older adapter into a %s user turn', async engine => {
     const additionalContext = 'Companions collection context: selected GNU; retain this conversation.'
     const { port, requests } = await collect({ ok: true, additionalContext })
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
-    expect(JSON.parse(stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })
+    expect(stdout).toBe('')
     expect(requests[0]?.body.prompt).toBe(input.prompt)
     expect(await runHook({ port, engine, tmuxPane: '%42', input: { ...input, hook_event_name: 'SessionStart' } })).toBe('')
   })
@@ -1133,7 +1130,6 @@ describe('hook notify Command Code re-registration', () => {
       cwd: '/tmp/demo',
       title: 'Greeting',
     })
-    expect(requests[1].body).toMatchObject({ sessionId: '53955d6d' })
   })
 
   it('omits a transcript path that does not exist yet', async () => {

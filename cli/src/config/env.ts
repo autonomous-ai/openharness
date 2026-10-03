@@ -411,10 +411,6 @@ const envSchema = z.object({
   // Where the `harness` launcher lives. Same name (and default) `scripts/install-cli.sh` uses, so a
   // sandboxed install and this process agree on which launcher they are talking about.
   HARNESS_BIN_DIR: z.string().default(adapterBinDir),
-  // The lessons your daemons learned (pair/learn, daemons/LEARNING.md): a git-backed folder outside any
-  // repo, created on the first lesson, never before.
-  HARNESS_LESSONS_DIR: z.string().default(join(adapterRootDir, 'lessons')),
-
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────
   // Set 'true' to leave the serial port alone entirely. The port is exclusive, so this is what a
   // developer flips before running esptool or a serial monitor against the dial.

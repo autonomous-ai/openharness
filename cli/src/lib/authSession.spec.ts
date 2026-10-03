@@ -76,37 +76,18 @@ describe('sign-in epoch', () => {
   })
 })
 
-describe('AuthSessionManager', () => {
-  it('binds the memory owner to a verified sign-in, preserves it across refresh, and rejects stale responses', async () => {
-    writeAuthSession(baseSession())
-    const manager = new AuthSessionManager('https://api.example.test')
-    const owner = await manager.bindMemoryOwner('user-one', 'old-access', 'prod')
-    expect(owner).toMatch(/^[a-f0-9]{64}$/)
-    expect(readAuthSession()?.memoryOwner?.key).toBe(owner)
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
-      success: true, data: { token: 'refreshed-access', refreshToken: 'refreshed-refresh', expiresIn: 3600 },
-    }))))
-    await manager.accessToken()
-    expect(readAuthSession()?.memoryOwner?.key).toBe(owner)
-    expect(await manager.bindMemoryOwner('another-user', 'old-access', 'prod')).toBeNull()
-    expect(readAuthSession()?.memoryOwner?.key).toBe(owner)
-    const signedIn = readAuthSession()!
-    writeAuthSession({ ...signedIn, accessToken: 'different-login' })
-    expect(readAuthSession()?.memoryOwner).toBeUndefined()
-    expect(await manager.bindMemoryOwner('user-two', 'different-login', 'prod')).not.toBe(owner)
-  })
+it('reads a legacy session without interpreting optional metadata or rewriting the sign-in', async () => {
+  const saved = { ...baseSession(), memoryOwner: { profileId: 'legacy-preview', owner: 'fixture' },
+    futureMetadata: { value: 'preserved-on-disk' } }
+  await writeFile(AUTH_SESSION_FILE, JSON.stringify(saved), { mode: 0o600 })
+  const bytes = await readFile(AUTH_SESSION_FILE, 'utf8')
+  expect(readAuthSession()).toMatchObject({ accessToken: saved.accessToken, refreshToken: saved.refreshToken,
+    computerId: saved.computerId, machineId: saved.machineId })
+  expect(readAuthSession()).not.toHaveProperty('memoryOwner')
+  expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(bytes)
+})
 
-  it('does not reuse the same memory owner across server environments or after sign-out', async () => {
-    writeAuthSession(baseSession())
-    const manager = new AuthSessionManager('https://api.example.test')
-    const owner = await manager.bindMemoryOwner('user-one', 'old-access', 'prod')
-    writeAuthSession({ ...readAuthSession()!, autonomousEnv: 'stag' })
-    expect(readAuthSession()?.memoryOwner).toBeUndefined()
-    expect(await manager.bindMemoryOwner('user-one', 'old-access', 'prod')).toBeNull()
-    expect(await manager.bindMemoryOwner('user-one', 'old-access', 'stag')).not.toBe(owner)
-    clearAuthSession()
-    expect(await manager.bindMemoryOwner('user-one', 'old-access', 'stag')).toBeNull()
-  })
+describe('AuthSessionManager', () => {
 
   it('coalesces concurrent expired-token refreshes into one request and persists the rotated tokens', async () => {
     writeAuthSession(baseSession())

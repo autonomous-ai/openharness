@@ -15,8 +15,6 @@ import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
 import { managedNodePath } from './nodeRuntime.js'
-import { opencodeMemoryPluginSource } from './opencodeMemoryPlugin.js'
-import { opencodeRecallPluginSource } from './opencodeRecallPlugin.js'
 
 const SETTINGS_PATH = join(homedir(), '.claude', 'settings.json')
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
@@ -451,12 +449,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
       })
     } catch {}
   }
-${engine === 'opencode' ? opencodeMemoryPluginSource(port) : ''}
-${engine === 'opencode' ? opencodeRecallPluginSource(port) : ''}
   return {
-    ${engine === 'opencode' ? `"chat.message": async (input, output) => { await memoryMessage(input, output); await recallMessage(input, output) },
-    "chat.params": memoryParams, "experimental.chat.messages.transform": recallTransform,
-    "experimental.session.compacting": recallCompacting, "experimental.compaction.autocontinue": recallAutoContinue,` : ''}
     event: async ({ event }) => {
       if (!event) return
       if (event.type === "session.created" || event.type === "session.updated") {

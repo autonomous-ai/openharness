@@ -25,7 +25,7 @@ TUI_JOBS = {"tui-test (ubuntu-latest, x86_64-unknown-linux-musl)", "tui-test (ub
 DESKTOP_PLATFORMS = {"ubuntu-22.04", "macos-15"}
 DESKTOP_JOBS = {"desktop-test-summary"} | {f"desktop-tests ({platform}, {index})" for platform in DESKTOP_PLATFORMS for index in range(1, 5)}
 SCOPES = {"cli": CLI_JOBS, "tui": TUI_JOBS, "backend": {"backend-desk"}, "desktop": DESKTOP_JOBS, "process": set()}
-SCOPES["full"] = CLI_JOBS | TUI_JOBS | SCOPES["backend"] | DESKTOP_JOBS
+SCOPES["full"] = CLI_JOBS | TUI_JOBS | SCOPES["backend"] | DESKTOP_JOBS | {"companion-subsystems"}
 
 # These are the source boundaries enforced by CI's sparse checkouts. Keep the
 # whole workflow/action and helper trees: a changed test, toolchain pin, cache
