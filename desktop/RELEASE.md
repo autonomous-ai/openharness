@@ -260,10 +260,10 @@ For one macOS build, `publish-macos-variant.sh`:
    publishing anything.
 6. Packages the `.app` with `ditto -c -k --sequesterRsrc --keepParent` (keeps the bundle structure and
    extended attributes intact — a plain `zip` does not).
-7. Notarizes the zip, staples the ticket into the `.app`, re-zips from the stapled bundle, and
-   asserts Gatekeeper accepts it (`spctl`).
+7. Notarizes the zip, staples the ticket into the `.app`, and asserts Gatekeeper accepts it (`spctl`).
 8. Packages a `.dmg` from that same stapled bundle — a staging folder holding `Harness.app` plus an
    `/Applications` symlink, imaged with `hdiutil` — then signs, notarizes and staples the image too.
+   The final ZIP is rebuilt during DMG notarization; both artifacts must finish and pass their checks.
 9. Uploads **both** artifacts with a year-long immutable `Cache-Control` (see "GCS layout").
 10. Download-merge-reuploads `metadata.json` in a single write, touching only that build's two keys.
 
