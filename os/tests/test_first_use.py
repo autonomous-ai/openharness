@@ -13,6 +13,19 @@ loader.exec_module(hn_os)
 
 
 class FirstUse(unittest.TestCase):
+    def test_old_cpu_gets_an_explanation_before_network_setup_or_agent_launch(self):
+        for cpu, ready in [('flags : sse sse2 ssse3\n', False), ('flags : sse4_2\n', True),
+                           ('Features : fp asimd\n', True)]:
+            with self.subTest(cpu=cpu), patch.object(hn_os.Path, 'read_text', return_value=cpu):
+                self.assertEqual(hn_os.opencode_cpu_ready(), ready)
+        with patch.object(hn_os, 'opencode_cpu_ready', return_value=False), \
+             patch.object(hn_os.sys.stdin, 'isatty', return_value=True), patch('builtins.input') as wait, \
+             patch.object(hn_os, 'connected') as connected, patch.object(hn_os.os, 'execv') as execute:
+            hn_os.try_harness()
+            connected.assert_not_called()
+            execute.assert_not_called()
+            wait.assert_called_once()
+
     def test_connected_machine_starts_bundled_agent_without_model_or_config_override(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(hn_os.Path, 'home', return_value=Path(temp)), \
              patch.object(hn_os, 'connected', return_value=True), patch.object(hn_os, 'wifi') as wifi, \

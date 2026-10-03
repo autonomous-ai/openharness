@@ -32,7 +32,25 @@ def wifi():
     return subprocess.call(['sudo', 'nmtui-connect'])
 
 
+def opencode_cpu_ready():
+    try:
+        lines = Path('/proc/cpuinfo').read_text().splitlines()
+    except OSError:
+        return True
+    for line in lines:
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'flags':
+            return 'sse4_2' in value.split()
+    return True  # The x86 instruction check does not apply to an ARM CPU.
+
+
 def try_harness():
+    if not opencode_cpu_ready():
+        print('The bundled OpenCode needs a newer CPU (SSE4.2).')
+        print('Open a terminal to work locally or connect to a remote agent.')
+        if sys.stdin.isatty():
+            input('Press Enter to return to Harness.')
+        return
     if not connected():
         if wifi() != 0 or not connected():
             print('OpenCode needs an internet connection. Connect to Wi-Fi or plug in Ethernet, then try again.')

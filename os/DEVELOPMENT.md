@@ -252,6 +252,12 @@ installed only when the radio needs them. The cache is removed from every
 installed system. The standard package hooks then rebuild wl on kernel updates.
 The driver bundle is built in a disposable root using the same complete Arch
 snapshot as the image; none of its build packages enter the normal image base.
+This selection happens during a fresh installation. Updating an older installed
+preview adds the device policy and report, but does not silently download driver
+packages. On a connected older installation that needs wl, an agent can first
+complete `sudo hn-os update`, then install `broadcom-wl-dkms linux-lts-headers`
+with pacman from that same snapshot and reboot. A working native interface needs
+neither package.
 
 [Native preparation run 37145711377](https://github.com/autonomous-ai/openharness/actions/runs/37145711377)
 used the exact preview 5 kernel, `6.18.54-1-lts`. Its signed extra closure was
@@ -282,6 +288,8 @@ reached the USB welcome and successfully ran hn, Node and Chromium version
 commands, but OpenCode exited with SIGILL (132). This is an instruction-set
 finding, not physical Mac or full browser validation. Older CPUs need a separately
 validated agent path; do not describe them as ready for the default trial.
+The OS Try action detects this limitation before Wi-Fi setup and explains it,
+instead of launching a binary that immediately fails with an illegal instruction.
 [Bun's executable targets](https://bun.com/docs/bundler/executables) document the
 SSE4.2 baseline used by its compiled runtime.
 

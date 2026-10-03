@@ -68,6 +68,25 @@ The welcome screen offers **Enter — Install Harness** and **T — Try without
 installing**. No account or password is needed to use the live session. Work in
 the USB session is temporary and is not copied during installation.
 
+### Trying an older Intel Mac
+
+Intel Macs with a 64-bit EFI and no T2 chip are an experimental target. The USB
+includes optional support for selected Broadcom radios, but no physical Mac
+model has passed our complete hardware checks yet. This image is not the
+Apple Silicon or T2 installation path. Core 2 CPUs cannot run bundled OpenCode;
+Try explains that limitation before attempting to start it.
+
+Shut down, insert the USB, then hold **Option (⌥)** while turning on the Mac.
+Choose the external **EFI Boot** entry. Apple's
+[startup-key guide](https://support.apple.com/en-us/102603) describes that menu.
+Start with **T — Try without installing** and check built-in keyboard, trackpad,
+Wi-Fi, brightness and sound before choosing the internal disk. Installation uses
+the same form below and erases the whole selected disk, including macOS.
+
+For a hardware report, open a terminal and run `harness hardware`. Keep that
+report with the Mac's model and the behavior you observed. It contains device
+IDs and driver names, without serial numbers or Wi-Fi passwords.
+
 ## 5. Install
 
 Press **Enter** on the welcome screen. You do not need to open a terminal or type
