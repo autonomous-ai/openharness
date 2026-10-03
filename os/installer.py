@@ -466,6 +466,36 @@ def interactive(username='me', hostname='harness', encrypt=True):
     return curses.wrapper(lambda screen: InstallForm(screen, candidates, username, hostname, encrypt).run())
 
 
+def completion(screen):
+    """Keep success visible when the installer owns an hn pane, then shut down on request."""
+    screen.keypad(True)
+    curses.flushinp()
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+    selected = 0
+    while True:
+        screen.erase()
+        height, width = screen.getmaxyx()
+        rows = [(1, 'Harness is installed.', curses.A_BOLD),
+                (4, 'Remove the USB after shutdown.', curses.A_NORMAL),
+                (5, 'Then turn on this computer.', curses.A_NORMAL),
+                (8, '[ Shut down ]', curses.A_REVERSE if selected == 0 else curses.A_NORMAL),
+                (10, 'Back to Harness', curses.A_REVERSE if selected == 1 else curses.A_NORMAL)]
+        for row, text, attr in rows:
+            if row < height and width >= 5:
+                screen.addnstr(row, 2, text, width - 4, attr)
+        screen.refresh()
+        key = screen.get_wch()
+        if key in ('\x1b', '\x03'):
+            return False
+        if key in ('\t', curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN):
+            selected = 1 - selected
+        elif InstallForm.enter(key):
+            return selected == 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path)
@@ -494,6 +524,9 @@ def main():
                              hostname=args.hostname if args.hostname is not None else 'harness',
                              encrypt=not args.no_encryption)
     install(config, source, Path('/mnt/harness-os'))
+    if not args.config:
+        if curses.wrapper(completion):
+            run('systemctl', 'poweroff')
 
 
 if __name__ == '__main__':

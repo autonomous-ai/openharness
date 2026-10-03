@@ -922,7 +922,7 @@
   "usb_first_use_revision": {
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
-    "status": "image inspection symlink fix ready; rebuilding",
+    "status": "rebuilding after correcting symlink inspection; branding inventory and hardware context under discussion",
     "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
@@ -969,10 +969,10 @@
       "Visual review of welcome, network, installer, terminal and masked unlock/retry screenshots",
       "Update release/download documentation and publish only after required evidence passes"
     ],
-    "native_run_id": 37112220215,
-    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37112220215",
-    "source_commit": "0b3073e6ad6dc5a25858b48a088bbf9c19b4770e",
-    "native_validation_started_utc": "2026-10-03T09:11:39Z",
+    "native_run_id": 37112874271,
+    "native_run_url": "https://github.com/autonomous-ai/openharness/actions/runs/37112874271",
+    "source_commit": "7fc8c9c2294254b608fadb7a1060f5a749f090ae",
+    "native_validation_started_utc": "2026-10-03T09:23:17Z",
     "validation_attempts": [
       {
         "run_id": 37111342650,
@@ -998,6 +998,30 @@
     "post_build_source_changes": [],
     "post_build_local_checks": "Publication guard tests (3) and syntax passed; landing assets/fragment references passed; visual website review remains unverified.",
     "native_validation_complete_utc": "2026-10-03T09:16:55Z",
-    "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e."
+    "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
+    "pending_source_changes": [
+      "Interactive installation now retains a completion screen with Shut down and Back to Harness; it cannot disappear immediately when its hn pane exits. 27 installer tests and source syntax passed; VM main-entry completion coverage added but not yet run. A subsequent image build is required before publishing these changes."
+    ],
+    "branding_review": {
+      "status": "discussion, no global terminology migration approved",
+      "sources": [
+        "https://github.com/autonomous-ai/autonomous-computer",
+        "https://github.com/autonomous-ai/autonomous-grid",
+        "docs/terminology.md",
+        "README.md#harness-device",
+        "devices/harness-device/firmware/README.md"
+      ],
+      "photos": "User supplied five square-device / monitor / compute-box concepts. Device has Harness/TUI voice and navigation, browser keyboard and pointer controls. These are design concepts, not evidence of implemented square-device integration.",
+      "confirmed": [
+        "Product name Harness; programmer OS is audience shorthand only",
+        "Bring your own computer remains supported; first-party computer/device combination is optional",
+        "Ordinary hn on macOS and other Linux does not expose OS installation actions"
+      ],
+      "open": [
+        "Whether to keep the existing lowercase harness term for both reusable setups and running sessions",
+        "Device variant names and exact integration scope",
+        "Local-model out-of-box claim requires tested drivers, inference engine and model provisioning; these are not currently bundled in the minimal ISO"
+      ]
+    }
   }
 }

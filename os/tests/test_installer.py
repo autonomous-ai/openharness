@@ -148,6 +148,18 @@ class Screen:
         return self.keys.pop(0)
 
 
+class InstallationCompletion(unittest.TestCase):
+    def test_success_stays_visible_until_shutdown_or_return_is_chosen(self):
+        for keys, shutdown in [(['\n'], True), (['\t', '\n'], False), (['\x1b'], False)]:
+            screen = Screen()
+            screen.keys = keys
+            with self.subTest(keys=keys), patch.object(installer.curses, 'curs_set'), patch.object(installer.curses, 'flushinp') as flush:
+                self.assertEqual(installer.completion(screen), shutdown)
+                flush.assert_called_once()
+                self.assertIn('Harness is installed.', screen.frames[0])
+                self.assertIn('Remove the USB after shutdown.', screen.frames[0])
+
+
 class InteractiveInstall(unittest.TestCase):
     def setUp(self):
         context = ExitStack()
@@ -161,6 +173,8 @@ class InteractiveInstall(unittest.TestCase):
                          model='Test SSD', mountpoints=[None], serial='HN_TEST', children=[])
         self.inventory = context.enter_context(patch.object(installer, 'inventory', return_value=[self.disk]))
         self.screen = Screen()
+        context.enter_context(patch.object(installer.curses, 'flushinp'))
+        self.completion = context.enter_context(patch.object(installer, 'completion', return_value=False))
         self.wrapper = context.enter_context(patch.object(installer.curses, 'wrapper', side_effect=lambda fn: fn(self.screen)))
         context.enter_context(patch.object(installer.curses, 'curs_set'))
         context.enter_context(patch.object(installer.curses, 'set_escdelay'))
@@ -204,6 +218,24 @@ class InteractiveInstall(unittest.TestCase):
         config = dict(self.install.call_args.args[0], password='')
         with self.assertRaisesRegex(ValueError, 'Enter a password'):
             installer.validate_config(config)
+
+    def test_shutdown_is_offered_only_after_a_successful_install(self):
+        self.fill_passwords()
+        self.confirm()
+        self.completion.return_value = True
+        with patch.object(installer, 'run') as command:
+            command.side_effect = lambda *args: self.install.assert_called_once()
+            installer.main()
+            command.assert_called_once_with('systemctl', 'poweroff')
+        self.screen.keys = []
+        self.fill_passwords()
+        self.confirm()
+        self.completion.reset_mock()
+        self.install.side_effect = ValueError('fixture disk failure')
+        with patch.object(installer, 'run') as command, self.assertRaisesRegex(ValueError, 'fixture disk failure'):
+            installer.main()
+        self.completion.assert_not_called()
+        command.assert_not_called()
 
     def test_command_line_keeps_explicit_unencrypted_and_custom_account_installation(self):
         self.argv.extend(['--no-encryption', '--username', 'sam', '--hostname', 'workbox'])

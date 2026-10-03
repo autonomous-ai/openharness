@@ -375,10 +375,13 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 expected = {config!r}
 installer.selected_disk(expected)
-actual = installer.interactive()
-assert actual == {{k: v for k, v in expected.items() if k != 'serial_console'}}, 'Interactive installation choices differ from test input'
-actual['serial_console'] = True
-installer.install(actual, installer.live_payload(), Path('/mnt/harness-os'))
+original_install = installer.install
+def observed_install(actual, source, target):
+    assert actual == {{k: v for k, v in expected.items() if k != 'serial_console'}}, 'Interactive installation choices differ from test input'
+    actual['serial_console'] = True
+    return original_install(actual, source, target)
+installer.install = observed_install
+installer.main()
 '''
     encoded = base64.b64encode(bootstrap.encode()).decode()
     assert len(encoded) < 3000, 'Keep serial-console commands below the line discipline limit.'
@@ -407,6 +410,8 @@ installer.install(actual, installer.live_payload(), Path('/mnt/harness-os'))
         # Password entry focuses Install. Only its explicit activation starts it.
         time.sleep(.25)
         vm.send('\n')
+        wait(r'Harness is installed', timeout=900)
+        vm.send('\x1b')  # Completion remains visible; return to the live system for the receipt.
         output = wait(r'\r?\n' + marker + r':\d+\r?\n', timeout=900)
         status = int(re.search(r'\r?\n' + marker + r':(\d+)\r?\n', output).group(1))
         assert status == 0, 'Interactive installation failed; see installer-ui.log'
