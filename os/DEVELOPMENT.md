@@ -336,13 +336,28 @@ or network addresses. No additional daemon or settings application is needed.
 | Native Harness app/TUI on macOS | Existing arm64 and x64 app/runtime releases | Separate from installing the Linux OS |
 
 The initial Intel scope excludes 32-bit-only CPUs/EFI. The bundled OpenCode trial
-also requires SSE4.2. A preview 4 probe under actual Core 2 Duo TCG execution
-reached the USB welcome and successfully ran hn, Node and Chromium version
-commands, but OpenCode exited with SIGILL (132). This is an instruction-set
-finding, not physical Mac or full browser validation. Older CPUs need a separately
-validated agent path; do not describe them as ready for the default trial.
-The OS Try action detects this limitation before Wi-Fi setup and explains it,
-instead of launching a binary that immediately fails with an illegal instruction.
+also requires SSE4.2. October 3 CPU checks used the unchanged preview 4 ISO under
+QEMU TCG with `-cpu core2duo`: a Core 2 Duo T7700 instruction set with SSSE3,
+without SSE4.1, SSE4.2 or AVX. The later check used 4 GiB of guest RAM and installed
+the listed agent versions on demand in the disposable USB session.
+
+| Component | Result under Core 2 instruction execution |
+| --- | --- |
+| hn and Node 22.23.3 | USB welcome and terminal worked; Node started |
+| Chromium 153.0.8010.52 | Rendered a local page, ran JavaScript, accepted QMP keyboard input and returned to hn; no `--no-sandbox` flag |
+| Codex 0.160.0 | Installation, `--version` and `--help` succeeded |
+| pi 1.0.1 (`@earendil-works/pi-coding-agent`) | Installation with `--ignore-scripts`, `--version` and `--help` succeeded |
+| Claude Code 2.1.288 | Installation succeeded; `--version` and `--help` exited with SIGILL (132) |
+| OpenCode 2.0.21 | The earlier preview 4 probe exited with SIGILL (132) |
+
+These checks establish specific CPU startup limits, not physical Mac support,
+authenticated agent turns or full browser/media/GPU compatibility. They do not
+replace preview 6 installation testing or show that every future vendor binary
+will retain the same baseline. Codex and pi still need real model-turn validation
+on this CPU before being recommended as its trial path.
+
+The OS Try action detects the OpenCode limitation before Wi-Fi setup and explains
+it, instead of launching a binary that immediately fails with an illegal instruction.
 [Bun's executable targets](https://bun.com/docs/bundler/executables) document the
 SSE4.2 baseline used by its compiled runtime.
 
