@@ -162,7 +162,15 @@ if [ "$DO_NOTARIZE" -eq 1 ]; then
   command -v xcrun >/dev/null 2>&1 || { echo "error: xcrun not found — install Xcode command line tools" >&2; exit 1; }
 fi
 
-cleanup() { rm -f "${SRC:-}" "${DST:-}"; [ -n "${DMG_STAGE:-}" ] && rm -rf "$DMG_STAGE"; return 0; }
+ZIP_PID=""
+cleanup() {
+  # Reap the compression worker even when DMG creation/notarization fails. The
+  # coordinator's existing deadline still bounds this script and its children.
+  [ -z "$ZIP_PID" ] || wait "$ZIP_PID" || true
+  rm -f "${SRC:-}" "${DST:-}"
+  [ -n "${DMG_STAGE:-}" ] && rm -rf "$DMG_STAGE"
+  return 0
+}
 trap cleanup EXIT
 
 # --- Step 1: resolve the version (source of truth = remote metadata.json) ---
@@ -225,10 +233,18 @@ echo ">> packaging $ZIP"
 package_zip() {
   ( cd "$(dirname "$APP_BUNDLE")" && ditto -c -k --sequesterRsrc --keepParent "$@" "$(basename "$APP_BUNDLE")" "$ZIP" )
 }
+packaging_time() {
+  local name="$1" started="$SECONDS" status=0
+  shift
+  "$@" || status=$?
+  # Only fixed phase names and elapsed seconds: never arguments or credentials.
+  echo ">> packaging timing: $name start=$started end=$SECONDS status=$status" >&2
+  return "$status"
+}
 if [ "$DO_NOTARIZE" -eq 1 ]; then
   # This upload is discarded after stapling. Spend less CPU compressing it;
   # the final downloadable ZIP below still uses ditto's normal compression.
-  package_zip --zlibCompressionLevel 1
+  packaging_time notarization-zip package_zip --zlibCompressionLevel 1
 else
   package_zip
 fi
@@ -243,7 +259,7 @@ if [ "$DO_NOTARIZE" -eq 1 ]; then
   # `submit --wait` exits 0 once it has a TERMINAL status, even if that status is "Invalid" — a
   # rejected submission is not a tool failure as far as its own exit code is concerned, so the
   # verdict has to be read out of the response instead of trusted from $?.
-  NOTARY_JSON="$(xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)"
+  NOTARY_JSON="$(packaging_time app-notarization xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)"
   echo "$NOTARY_JSON"
   NOTARY_STATUS="$(printf '%s' "$NOTARY_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
   NOTARY_ID="$(printf '%s' "$NOTARY_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
@@ -254,10 +270,6 @@ if [ "$DO_NOTARIZE" -eq 1 ]; then
   fi
   echo ">> stapling notarization ticket to $APP_BUNDLE"
   xcrun stapler staple "$APP_BUNDLE"
-
-  echo ">> re-packaging $ZIP with the stapled ticket"
-  rm -f "$ZIP"
-  package_zip
 
   # Fails closed rather than silently shipping a build Gatekeeper would reject on someone else's Mac.
   spctl -a -vv --type execute "$APP_BUNDLE" || {
@@ -282,7 +294,7 @@ echo ">> packaging $DMG"
 rm -f "$DMG"
 ditto --clone "$APP_BUNDLE" "$DMG_STAGE/$(basename "$APP_BUNDLE")"
 ln -s /Applications "$DMG_STAGE/Applications"
-hdiutil create -quiet -srcfolder "$DMG_STAGE" -volname "Harness" -fs HFS+ -format UDZO -ov "$DMG"
+packaging_time dmg-create hdiutil create -quiet -srcfolder "$DMG_STAGE" -volname "Harness" -fs HFS+ -format UDZO -ov "$DMG"
 
 # Sign the image itself. The app inside is already signed and stapled; this is about the FILE the
 # browser hands the user — an unsigned disk image is what turns a clean install into a scary one.
@@ -290,11 +302,19 @@ echo ">> signing $DMG ($SIGN_IDENTITY)"
 codesign --sign "$SIGN_IDENTITY" --timestamp "$DMG"
 
 if [ "$DO_NOTARIZE" -eq 1 ]; then
+  # The stapled app is now immutable. Compress its final ZIP during the DMG's
+  # network/service wait, after DMG compression has finished competing for CPU.
+  # Neither artifact is uploaded until this worker and every DMG check pass.
+  echo ">> re-packaging $ZIP with the stapled ticket during DMG notarization"
+  rm -f "$ZIP"
+  packaging_time final-zip package_zip &
+  ZIP_PID=$!
+
   # A second submission, and it cannot be avoided: stapling only attaches a ticket to the exact thing
   # that was submitted, so the zip's ticket does not cover this image. Apple has already seen this
   # app's cdhash from the first submission, so this pass is usually the quick one.
   echo ">> submitting the dmg for notarization (keychain profile: $NOTARY_PROFILE)"
-  DMG_NOTARY_JSON="$(xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)"
+  DMG_NOTARY_JSON="$(packaging_time dmg-notarization xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)"
   echo "$DMG_NOTARY_JSON"
   # Same trap as the zip above: `--wait` exits 0 on any TERMINAL status, "Invalid" included, so the
   # verdict is read out of the JSON rather than inferred from $?.
@@ -312,6 +332,12 @@ if [ "$DO_NOTARIZE" -eq 1 ]; then
     echo "error: Gatekeeper assessment failed on the dmg" >&2
     exit 1
   }
+  if ! packaging_time final-zip-wait wait "$ZIP_PID"; then
+    ZIP_PID=""
+    echo "error: final ZIP compression failed — nothing uploaded" >&2
+    exit 1
+  fi
+  ZIP_PID=""
 else
   echo ">> skipping dmg notarization (--no-notarize) — Developer ID signed only"
 fi

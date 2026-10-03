@@ -164,7 +164,9 @@ manifests are combined only after all macOS and Linux builds succeed, followed b
 all six public downloads. `macos-build-timings` records the bounded build and per-variant phases.
 App copies and DMG staging use independent APFS clones when available. The temporary
 notarization ZIP uses faster compression; the downloadable ZIP retains normal compression
-and is rebuilt from the stapled app. Signing and both notarization checks remain the same.
+and is rebuilt from the stapled app while DMG notarization runs. Compression failures stop
+publication; uploads wait for both artifacts and their checks. Packaging phase timings are
+printed in the build log. Signing and both notarization checks remain the same.
 
 `scripts/publish-macos-variant.sh intel|apple-silicon <version>` remains the single-variant entry
 point. With `--no-build`, `APP_BUNDLE` selects an existing bundle; the uploader's `OUTPUT_DIR`
