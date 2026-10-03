@@ -60,6 +60,7 @@ class VM:
         self.boot_count += 1
         self.boot_event('start', live=live)
         acceleration = 'kvm' if os.access('/dev/kvm', os.R_OK | os.W_OK) else 'tcg'
+        self.acceleration = acceleration
         args = ['qemu-system-x86_64', '-accel', acceleration, '-m', str(self.memory), '-smp', '2',
                 '-cpu', self.cpu or ('host' if acceleration == 'kvm' else 'max'), '-device', 'virtio-vga',
                 '-display', 'none', '-no-reboot',
@@ -141,6 +142,7 @@ class VM:
                      seconds=round(time.monotonic() - self.started, 3), **details)
         with (self.folder / 'boot-events.jsonl').open('a') as log:
             log.write(json.dumps(event) + '\n')
+        return event
 
     def boot_diagnostics(self, config, name):
         # Keep the initrd journal as well as userspace timings. A single overall
@@ -148,8 +150,8 @@ class VM:
         output, _ = self.command('printf %s ' + shlex.quote(config['password'] + '\n') +
                                  ' | sudo -S journalctl -b -o short-monotonic --no-pager', timeout=60)
         (self.folder / (name + '-boot-journal.log')).write_text(output)
-        output, _ = self.command('systemd-analyze; systemd-analyze blame; '
-                                 'systemd-analyze critical-chain; systemctl --failed --no-pager')
+        output, _ = self.command('systemd-analyze --no-pager; systemd-analyze --no-pager blame; '
+                                 'systemd-analyze --no-pager critical-chain; systemctl --failed --no-pager')
         (self.folder / (name + '-boot-analysis.txt')).write_text(output)
 
     def command(self, command, timeout=90, check=True):
@@ -168,7 +170,7 @@ class VM:
         if config['encrypt']:
             self.unlock_count += 1
             self.wait_unlock()
-            self.boot_event('unlock-prompt')
+            self.unlock_prompt_seconds = self.boot_event('unlock-prompt')['seconds']
             if unlock_delay:
                 time.sleep(unlock_delay)
                 self.screenshot('delayed-disk-unlock')
@@ -639,6 +641,7 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         vm.login_installed(config, unlock_delay=unlock_delay)
         result['deliberate_unlock_delay_seconds'] = unlock_delay
         if unlock_delay:
+            result['installed_unlock_prompt_seconds'] = vm.unlock_prompt_seconds
             result['checks'].append('Harness unlock screen renders, masks input, accepts a retry after a wrong password, and unlocks after the deliberate 100-second wait')
         result['installed_hn_ready_seconds_including_test_login'] = round(time.monotonic() - vm.started, 3)
         result['installed_keyboard_readiness'] = check_graphical_keyboard(vm, 'installed')
@@ -660,6 +663,9 @@ assert str(i.live_payload()) == '/run/archiso/copytoram/airootfs.sfs'
         output, _ = vm.command('sleep 45; for n in 1 2 3; do hn-os measure; done', timeout=65)
         (folder / 'installed-idle-measurements.txt').write_text(output)
         vm.boot_diagnostics(config, 'installed')
+        if config['encrypt'] and vm.acceleration == 'kvm':
+            assert vm.unlock_prompt_seconds < 30, 'Unlock prompt exceeded 30 seconds; see boot-events.jsonl and installed-boot-journal.log'
+            result['checks'].append('Encrypted unlock prompt appears within 30 seconds on the native x86 VM')
         # A disposable failure exercises actual root + boot restoration, including
         # an encrypted root in the UEFI row. The project's separate subvolume survives.
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
@@ -706,6 +712,10 @@ pacman --noconfirm -U /tmp/hn-os-recovery-probe-1-1-any.pkg.tar.zst
         vm.start(live=False)
         vm.login_installed(config)
         vm.boot_diagnostics(config, 'recovered')
+        if config['encrypt']:
+            result['recovered_unlock_prompt_seconds'] = vm.unlock_prompt_seconds
+            if vm.acceleration == 'kvm':
+                assert vm.unlock_prompt_seconds < 30, 'Recovered unlock prompt exceeded 30 seconds; see recovered-boot-journal.log'
         vm.command('test ! -e /etc/hn-os-recovery-probe && test -x /usr/lib/harness/harness-tui && test "$(cat ~/Projects/recovery-probe.txt)" = keep-my-project')
         vm.command('test ! -e /var/lib/pacman/db.lck && ! pacman -Q hn-os-recovery-probe')
         result['recovered_keyboard_readiness'] = check_graphical_keyboard(vm, 'recovered')

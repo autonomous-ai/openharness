@@ -243,7 +243,10 @@ def install(config, source, target):
         root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
         kernel_args = f'quiet loglevel=3 rootflags={root_flags}'
         if config.get('serial_console'):
-            kernel_args += ' console=tty0 console=ttyS0,115200 plymouth.ignore-serial-consoles'
+            # Keep the screen as /dev/console, as on an ordinary installation.
+            # Making the diagnostic serial port primary can introduce serial-TTY
+            # setup delays before Plymouth can display its unlock prompt.
+            kernel_args += ' console=ttyS0,115200 console=tty0 plymouth.ignore-serial-consoles'
         if luks_uuid:
             kernel_args += f' rd.luks.name={luks_uuid}=cryptroot splash'
         write(target, '/etc/default/grub',

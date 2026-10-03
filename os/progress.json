@@ -257,7 +257,7 @@
     "Mac VM visual validation: user approved, but native computer-use tool still denies the application; test VM stopped safely",
     "Physical ThinkPad boot, installation, Wi-Fi, suspend and hardware verification; user will test manually"
   ],
-  "last_updated_utc": "2026-10-03T11:12:50.086227+00:00",
+  "last_updated_utc": "2026-10-03T11:24:15.435201+00:00",
   "remote_build_commit": "dfbb815f05a0cbe3c01e474ff83edce5315f6142",
   "local_commit_before_latest_test_changes": "9476a2e11cdbc9f83681b3b591f51588e6e7a842",
   "build_attempts": [
@@ -923,7 +923,7 @@
     "request_received_utc": null,
     "first_recorded_utc": "2026-10-03T08:28:25.074631+00:00",
     "status": "Full CLI and image passed. Full DSH journey passed; investigating encrypted initrd delay and 1 GiB extractor OOM before publication.",
-    "implementation_complete_utc": "2026-10-03T09:23:12.711637+00:00",
+    "implementation_complete_utc": "2026-10-03T11:24:15.435201+00:00",
     "validation_complete_utc": null,
     "publication_utc": null,
     "requirements": [
@@ -1060,7 +1060,8 @@
     "isolation_validation": "Normal hn (including a stray live flag), installed OS and live USB UI/action regression tests passed in run 37112220215. The native terminal lifecycle validation step, including all ten fixtures, passed on source 0b3073e6ad6dc5a25858b48a088bbf9c19b4770e.",
     "pending_source_changes": [
       "Cap unsquashfs extraction caches at 64 MiB instead of the packaged default 512 MiB. Both 1 GiB failures show kernel OOM killing this process. Real low-memory installation must rerun on the resulting image.",
-      "Locate generated game controls by their visible keyboard instructions, not an undocumented .legend CSS class. All previous model-built project tests remain recorded; independent browser acceptance must rerun."
+      "Locate generated game controls by their visible keyboard instructions, not an undocumented .legend CSS class. All previous model-built project tests remain recorded; independent browser acceptance must rerun.",
+      "Keep tty0 as the primary console when an unattended test enables serial logging; normal install kernel arguments are unchanged."
     ],
     "branding_review": {
       "status": "approved and documented",
@@ -1093,8 +1094,8 @@
         "publication_utc": null
       }
     },
-    "next_step": "Run targeted boot diagnostics against the unchanged verified image; cap extraction memory and correct the independent game selector before the next image.",
-    "last_recorded_utc": "2026-10-03T11:12:50.086227+00:00",
+    "next_step": "Build and inspect a fresh exact-source image with bounded extraction caches and corrected diagnostic console order; run native 4 GiB and constrained 1 GiB installation/recovery and project/DSH acceptance. Reuse passed full CLI evidence because CLI/TUI sources and dependencies are unchanged.",
+    "last_recorded_utc": "2026-10-03T11:24:15.435201+00:00",
     "first_use_visual_review": "Inspected BIOS 01d-bundled-opencode.png and failure.png from run 37116595898: upstream-default Fledge Alpha Free is shown without a plugin warning; after Ctrl+C twice, the clean Harness Install/Try welcome is visible. Both firmware JSONL replies are 42. The retained process in each is /usr/bin/opencode serve --service.",
     "revision_ready_utc": "2026-10-03T10:29:26.198461+00:00",
     "development_acceptance_revision": {
@@ -1207,7 +1208,15 @@
       "next_step": "Record unlock prompt/password/serial login/Harness readiness timestamps and installed/recovered initrd journals. Do not attribute the delay to Plymouth until logs establish the cause.",
       "diagnostic_run_id": 37118718782,
       "diagnostic_test_source": "6fe521be4d98a1ae1a0da0005f517632a54177ae",
-      "diagnostic_started_utc": "2026-10-03T11:08:47Z"
+      "diagnostic_started_utc": "2026-10-03T11:08:47Z",
+      "diagnostic_status": "failed in diagnostic test pager; initial installed boot journal and timestamps retained",
+      "unlock_prompt_seconds": 97.764,
+      "password_submitted_seconds": 210.139,
+      "serial_login_seconds": 218.782,
+      "harness_ready_seconds": 220.004,
+      "finding": "Delay precedes the graphical prompt. The initrd journal shows serial-primary virtual console setup stalled around 30-second intervals. The test adds console=tty0 console=ttyS0; ordinary installation does not add a serial console. Change diagnostic argument order to keep tty0 primary and test the resulting image before attributing a physical-device regression.",
+      "diagnostic_fix": "Disable systemd-analyze paging, retain journals and boot-stage events, and enforce a sub-30-second unlock-prompt gate on native x86 VMs.",
+      "serial_console_reference": "https://www.kernel.org/doc/html/latest/admin-guide/serial-console.html"
     },
     "extraction_cache_reference": "https://github.com/plougher/squashfs-tools/blob/master/Documentation/4.7.5/USAGE-UNSQUASHFS",
     "post_diagnostic_local_checks": {
