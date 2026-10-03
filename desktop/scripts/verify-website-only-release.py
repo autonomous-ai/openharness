@@ -4,7 +4,6 @@ import json
 import re
 import subprocess
 import sys
-import urllib.request
 
 
 def verify(manifest, published):
@@ -30,11 +29,12 @@ def main():
         ["git", "show", f"{sys.argv[1]}:website/harness-web-release.json"], timeout=15))
     published = manifest
     if sys.argv[2] == "live":
-        request = urllib.request.Request(
-            "https://harness.autonomous.ai/harness-web/release.json",
-            headers={"Cache-Control": "no-cache"})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            published = json.load(response)
+        # Use the same HTTP client as the other release scripts. The production
+        # edge rejects urllib's default user agent even for this public manifest.
+        published = json.loads(subprocess.check_output([
+            "curl", "--fail", "--silent", "--show-error", "--max-time", "20",
+            "--header", "Cache-Control: no-cache",
+            "https://harness.autonomous.ai/harness-web/release.json"], timeout=25))
     print(verify(manifest, published))
 
 
