@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -180,16 +181,25 @@ def placement_restart_journey(command, alpha):
     assert len(requests('agent_create')) == 1
     made = requests('agent_create')[0]['payload']['creationId']
     replacement = next(a['id'] for a in api()['agents'][api()['local']] if a['name'] == 'Alpha task' and a['status'] != 'stopped')
+    sessions_file = BASE / '.harness' / 'tui' / f'sessions-{PREFIX}.json'
+    wait(lambda: sessions_file.exists() and any(r.get('agent') == replacement for r in json.loads(sessions_file.read_text()).get('pending_workspace', [])), 'pending view is saved before client exit')
     snapshot('placement-pending-before-restart')
     tmux('set-window-option', '-t', TARGET, 'remain-on-exit', 'on')
-    hn('hn-hand-over')
-    wait(lambda: tmux('display-message', '-p', '-t', TARGET, '#{pane_dead}').strip() == '1', 'client exits for placement restart')
-    tmux('respawn-pane', '-k', '-t', TARGET, command)
-    shown('Alpha task terminal')
-    assert value('#{pane_current_command}', alpha) == 'claude'
-    assert hn('list-panes', '-F', '#{pane_id}').splitlines() == original_panes
-    assert value('#{window_id}') == original_window
-    assert value('#{window_layout}') == original_layout
+    for crash in (False, True):
+        if crash:
+            pid = int(value('#{pid}'))
+            process = subprocess.check_output(['ps', '-p', str(pid), '-o', 'command='], text=True)
+            assert pid > 1 and str(HN) in process, 'refusing to terminate a process outside this disposable fixture'
+            os.kill(pid, signal.SIGKILL)
+        else:
+            hn('hn-hand-over')
+        wait(lambda: tmux('display-message', '-p', '-t', TARGET, '#{pane_dead}').strip() == '1', 'client exits for placement restart')
+        tmux('respawn-pane', '-k', '-t', TARGET, command)
+        shown('Alpha task terminal')
+        assert value('#{pane_current_command}', alpha) == 'claude'
+        assert hn('list-panes', '-F', '#{pane_id}').splitlines() == original_panes
+        assert value('#{window_id}') == original_window
+        assert value('#{window_layout}') == original_layout
     hn('workspace-menu')
     shown('Retry workspace sync')
     api({'action': 'config', 'patch': {'deskFailures': 0}})
