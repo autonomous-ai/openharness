@@ -46,11 +46,12 @@ on:
         required: false
         default: false
         type: boolean
-      session_checks:
-        description: 'Test password locking, keyboard isolation and actual ACPI suspend/resume on both installed firmware modes'
+      checks:
+        description: 'Image journey, focused lock/suspend checks, or simulated Wi-Fi/audio essentials; use image_run_id to reuse an image'
         required: false
-        default: false
-        type: boolean
+        default: image
+        type: choice
+        options: [image, session, essentials]
   push:
     branches: ['os/**']
     paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
@@ -60,7 +61,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.session_checks && 'session' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
+  group: programmer-os-${{ github.ref }}-${{ inputs.memory_mib || '2048' }}-${{ inputs.live_transport || 'cdrom' }}-${{ inputs.development_update && 'update' || inputs.checks == 'session' && 'session' || inputs.checks == 'essentials' && 'essentials' || inputs.dsh && 'dsh' || inputs.workloads && 'workloads' || 'image' }}
   cancel-in-progress: false
 
 jobs:
@@ -141,7 +142,7 @@ jobs:
 
   machine:
     needs: image
-    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    if: ${{ always() && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'essentials' && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     strategy:
@@ -170,7 +171,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Check the focused session test and workflow
-        if: ${{ inputs.session_checks }}
+        if: ${{ inputs.checks == 'session' }}
         run: |
           make -C os check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
@@ -183,14 +184,14 @@ jobs:
           run-id: ${{ inputs.workload_seed_run_id }}
           github-token: ${{ github.token }}
       - name: Boot, operate, install and reboot the real image
-        if: ${{ !inputs.session_checks }}
+        if: ${{ inputs.checks != 'session' }}
         env:
           OS_WORKLOAD_SOURCE_RUN: ${{ inputs.workload_seed_run_id }}
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
           OS_LIVE_TRANSPORT: ${{ inputs.live_transport || 'cdrom' }}
         run: python3 os/tests/vm.py --iso os/dist/*.iso --memory "$OS_MEMORY_MIB" --live-transport "$OS_LIVE_TRANSPORT" --firmware '${{ matrix.firmware }}' ${{ matrix.encryption }} ${{ matrix.agents }} ${{ matrix.cpu }} ${{ (inputs.workloads || inputs.workload_seed_run_id != '') && matrix.firmware == 'bios' && '--workloads' || '' }} ${{ inputs.dsh && matrix.firmware == 'bios' && '--dsh' || '' }} ${{ inputs.workload_seed_run_id != '' && matrix.firmware == 'bios' && '--workload-seed os/work/workload-seed' || '' }}
       - name: Exercise password lock and actual suspend/resume
-        if: ${{ inputs.session_checks }}
+        if: ${{ inputs.checks == 'session' }}
         run: python3 os/tests/session_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --session-file os/root/usr/lib/harness-os/session
       - name: Show machine failure diagnostics
         if: failure()
@@ -209,6 +210,43 @@ jobs:
             os/test-results/**/*.jsonl
             os/test-results/**/workloads/**
             os/test-results/**/dsh/**
+          retention-days: 14
+
+  essentials:
+    needs: image
+    if: ${{ always() && inputs.checks == 'essentials' && !inputs.publish_run_id && !inputs.development_update && (needs.image.result == 'success' || inputs.image_run_id != '') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: programmer-os-x86_64
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Validate test and workflow
+        run: |
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
+      - name: Install VM test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Exercise Wi-Fi and audio in the real image
+        run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso
+      - name: Retain hardware plumbing evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-essentials
+          path: |
+            os/test-results/essentials/*.json
+            os/test-results/essentials/*.txt
+            os/test-results/essentials/*.log
+            os/test-results/essentials/*.png
+            os/test-results/essentials/*.wav
           retention-days: 14
 
   development-update:

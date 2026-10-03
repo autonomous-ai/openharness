@@ -25,13 +25,14 @@ import uuid
 
 
 class VM:
-    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga'):
+    def __init__(self, folder, iso, firmware, memory, live_transport='cdrom', cpu=None, video='virtio-vga', audio=False):
         self.folder, self.iso, self.firmware, self.memory = folder, iso, firmware, memory
         self.live_transport = live_transport
         self.cpu = cpu
         if video not in ('virtio-vga', 'VGA'):
             raise ValueError('Unsupported test display: ' + video)
         self.video = video
+        self.audio = audio
         self.unlock_count = 0
         self.boot_count = 0
         self.process = None
@@ -72,6 +73,9 @@ class VM:
                 '-device', 'virtio-net-pci,netdev=net', '-netdev', 'user,id=net',
                 '-serial', f'unix:{self.control_path / "serial.sock"},server=on,wait=off',
                 '-qmp', f'unix:{self.control_path / "qmp.sock"},server=on,wait=off']
+        if self.audio:
+            args += ['-audiodev', f'wav,id=sound,path={self.folder / ("audio-" + str(self.boot_count) + ".wav")}',
+                     '-device', 'intel-hda', '-device', 'hda-duplex,audiodev=sound']
         if live:
             # UEFI remembers the installed disk in NVRAM. Explicit device boot
             # indices are needed to select the recovery ISO again on later boots.

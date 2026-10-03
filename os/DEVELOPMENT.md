@@ -31,7 +31,7 @@ not introduce a desktop, control panel, background updater or extra launcher.
    an honest compatibility table; upstream driver availability is not a physical
    Harness test.
 
-`session_checks=true` with an `image_run_id` in the Harness OS workflow exercises
+`checks=session` with an `image_run_id` in the Harness OS workflow exercises
 the published image's live session, then its installed session with the candidate
 `os/root/usr/lib/harness-os/session` launcher. The receipt records both the base
 image and that file's hash; a reboot activates the candidate before lock,
@@ -47,6 +47,13 @@ process but no visible output after S3; the pinned Virtio GPU driver has no
 freeze/restore callbacks. Keep that VM limitation separate from physical laptop
 acceptance. `--video virtio-vga` reproduces that configuration; do not count an
 unavailable display as successful sleep/wake.
+
+`checks=essentials` reuses the chosen image to test NetworkManager and PipeWire.
+The fixture adds a simulated WPA2 access point in an isolated guest network
+namespace and a virtual HDA codec, operates the actual hn network form and media
+keys, and checks DHCP, DNS, HTTP, reconnection and non-silent audio output. Access
+point tools are installed only inside the disposable guest, never in the ISO.
+Physical radio, backlight, speaker and microphone tests remain separate.
 
 ## The feedback loop
 
