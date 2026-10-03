@@ -265,7 +265,9 @@ pub fn pane_menu(app: &mut App, pane: u64, at: Option<(u16, u16)>) {
     let Some(token) = capture(app, tab, Some(pane)) else { return };
     let item = |label: &str, key: &str, verb: &str| menu::item(label, key, format!("pane-control {token} {verb}"));
     let close = app.panes.get(&pane).map(|p| {
-        if app.fleet.machine(&p.machine_id).is_some_and(|m| m.shared) { "Close pane" }
+        let view_only = app.fleet.machine(&p.machine_id).is_some_and(|m| m.shared)
+            || app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.status == "stopped" || a.dsh_id == "autonomous/harness-monitor");
+        if view_only { "Close pane" }
         else if crate::session_close::managed_pane(app, pane) { "Stop Harness" } else { "Close terminal" }
     }).unwrap_or("Close pane");
     let mut model = item("Change model…", "m", "models");
