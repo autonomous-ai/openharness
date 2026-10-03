@@ -325,8 +325,9 @@ changed paths outside that scope. Review those changes and run any checks they
 require separately. This is a source-input comparison, not a file-extension rule:
 Desktop documentation inside `desktop/` and artwork inside `docs/images/` remain
 inputs. Other CI scopes and older runs without an input receipt still require
-whole-tree equality. A malformed receipt cannot authorize reuse. Rerun all jobs
-when rerunning a workflow so its input receipt belongs to the current attempt.
+whole-tree equality. A malformed receipt cannot authorize reuse. After a partial
+rerun, the receipt must match the actual successful process job's attempt; a
+stale receipt from a replaced process job is rejected.
 
 Keep routine validation evidence in these receipts, CI artifacts and the PR body.
 Do not add a documentation commit or recreate all raw logs just to record another
